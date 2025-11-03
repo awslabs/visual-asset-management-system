@@ -10,6 +10,7 @@ from typing import List, Optional
 import click
 
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import (
     VamsCLIError, InvalidFileError, FileTooLargeError, PreviewFileError,
     UploadSequenceError, FileUploadError, FileNotFoundError, FileOperationError,
@@ -30,8 +31,9 @@ from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS
 class ProgressDisplay:
     """Display upload progress in the terminal."""
     
-    def __init__(self, hide_progress: bool = False):
-        self.hide_progress = hide_progress
+    def __init__(self, hide_progress: bool = False, json_output: bool = False):
+        self.hide_progress = hide_progress or json_output  # Suppress progress in JSON mode
+        self.json_output = json_output
         self.last_update = 0
         self.update_interval = 0.5  # Update every 500ms
         
@@ -221,8 +223,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         )
         
         # Collect files
-        if not hide_progress:
-            click.echo("Collecting files...")
+        output_status("Collecting files...", json_output or hide_progress)
             
         if file_source[0] == "directory":
             files = collect_files_from_directory(
@@ -244,27 +245,27 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         except UploadSequenceError as e:
             # Provide helpful guidance for constraint violations
             error_msg = str(e)
+            helpful_message = None
+            
             if "Too many files" in error_msg:
                 from ..constants import MAX_FILES_PER_REQUEST
-                click.echo(f"❌ {error_msg}")
-                click.echo(f"\n💡 Tip: You can split your upload by using multiple commands:")
-                click.echo(f"   vamscli file upload -d {database_id} -a {asset_id} file1.ext file2.ext ... (up to {MAX_FILES_PER_REQUEST} files)")
-                click.echo(f"   vamscli file upload -d {database_id} -a {asset_id} file{MAX_FILES_PER_REQUEST + 1}.ext ...")
+                helpful_message = f"You can split your upload by using multiple commands (up to {MAX_FILES_PER_REQUEST} files per command)."
             elif "Total parts across all files" in error_msg:
                 from ..constants import MAX_TOTAL_PARTS_PER_REQUEST
-                click.echo(f"❌ {error_msg}")
-                click.echo(f"\n💡 Tip: Reduce the number of large files or split into smaller uploads.")
-                click.echo(f"   Each upload can have at most {MAX_TOTAL_PARTS_PER_REQUEST} parts total.")
+                helpful_message = f"Reduce the number of large files or split into smaller uploads. Each upload can have at most {MAX_TOTAL_PARTS_PER_REQUEST} parts total."
             elif "requires" in error_msg and "parts" in error_msg:
                 from ..constants import MAX_PARTS_PER_FILE
-                click.echo(f"❌ {error_msg}")
-                click.echo(f"\n💡 Tip: Individual files cannot exceed {MAX_PARTS_PER_FILE} parts.")
-                click.echo(f"   Consider compressing very large files before upload.")
-            else:
-                click.echo(f"❌ Upload validation failed: {error_msg}")
+                helpful_message = f"Individual files cannot exceed {MAX_PARTS_PER_FILE} parts. Consider compressing very large files before upload."
+            
+            output_error(
+                e,
+                json_output,
+                error_type="Upload Validation Error",
+                helpful_message=helpful_message
+            )
             sys.exit(1)
         
-        if not hide_progress:
+        if not json_output and not hide_progress:
             click.echo(f"\nUpload Summary:")
             click.echo(f"  Files: {summary['total_files']} ({summary['regular_files']} regular, {summary['preview_files']} preview)")
             click.echo(f"  Total Size: {summary['total_size_formatted']}")
@@ -292,7 +293,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         
         # Run upload
         async def run_upload():
-            progress_display = ProgressDisplay(hide_progress)
+            progress_display = ProgressDisplay(hide_progress, json_output)
             
             async with UploadManager(
                 api_client=api_client,
@@ -307,13 +308,12 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
                 )
         
         # Execute upload
-        if not hide_progress:
-            click.echo("Starting upload...")
+        output_status("Starting upload...", json_output or hide_progress)
             
         result = asyncio.run(run_upload())
         
-        # Clear progress display
-        if not hide_progress:
+        # Clear progress display (only in CLI mode)
+        if not json_output and not hide_progress:
             click.echo('\033[2K\033[1A' * 10, nl=False)  # Clear progress lines
         
         # Check for large file asynchronous handling across all completion results
@@ -324,42 +324,53 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
                 has_large_file_async_handling = True
                 break
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            # Human-readable output
-            if result["overall_success"]:
-                click.echo(f"✅ Upload completed successfully!")
-            elif result["successful_files"] > 0:
-                click.echo(f"⚠️  Upload completed with some failures")
-            else:
-                click.echo(f"❌ Upload failed")
+        # Format upload result
+        def format_upload_result(data):
+            """Format upload result for CLI display."""
+            lines = []
             
             # Show large file async handling message if detected
             if has_large_file_async_handling:
-                click.echo(f"\n📋 Large File Processing:")
-                click.echo(f"   Your upload contains large files that will undergo separate asynchronous processing.")
-                click.echo(f"   This may take some time, so files may take longer to appear in the asset.")
-                click.echo(f"   You can check the asset files later using: vamscli file list -d {database_id} -a {asset_id}")
+                lines.append("\n📋 Large File Processing:")
+                lines.append("   Your upload contains large files that will undergo separate asynchronous processing.")
+                lines.append("   This may take some time, so files may take longer to appear in the asset.")
+                lines.append(f"   You can check the asset files later using: vamscli file list -d {database_id} -a {asset_id}")
+                lines.append("")
             
-            click.echo(f"\nResults:")
-            click.echo(f"  Successful files: {result['successful_files']}/{result['total_files']}")
-            if result["failed_files"] > 0:
-                click.echo(f"  Failed files: {result['failed_files']}")
-            click.echo(f"  Total size: {result['total_size_formatted']}")
-            click.echo(f"  Duration: {format_duration(result['upload_duration'])}")
-            click.echo(f"  Average speed: {result['average_speed_formatted']}")
+            lines.append("Results:")
+            lines.append(f"  Successful files: {data['successful_files']}/{data['total_files']}")
+            if data["failed_files"] > 0:
+                lines.append(f"  Failed files: {data['failed_files']}")
+            lines.append(f"  Total size: {data['total_size_formatted']}")
+            lines.append(f"  Duration: {format_duration(data['upload_duration'])}")
+            lines.append(f"  Average speed: {data['average_speed_formatted']}")
             
             # Show failed files if any
             failed_files = []
-            for seq_result in result["sequence_results"]:
+            for seq_result in data["sequence_results"]:
                 failed_files.extend(seq_result.get("failed_files", []))
             
             if failed_files:
-                click.echo(f"\nFailed files:")
+                lines.append("\nFailed files:")
                 for failed_file in failed_files:
-                    click.echo(f"  - {failed_file}")
+                    lines.append(f"  - {failed_file}")
+            
+            return '\n'.join(lines)
+        
+        # Determine success message
+        if result["overall_success"]:
+            success_msg = "✅ Upload completed successfully!"
+        elif result["successful_files"] > 0:
+            success_msg = "⚠️  Upload completed with some failures"
+        else:
+            success_msg = None  # Will show as error
+        
+        output_result(
+            result,
+            json_output,
+            success_message=success_msg,
+            cli_formatter=format_upload_result
+        )
         
         # Exit with appropriate code
         if not result["overall_success"]:
@@ -370,10 +381,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
     except (InvalidFileError, FileTooLargeError, PreviewFileError, 
             UploadSequenceError, FileUploadError) as e:
         # Only handle file-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(f"❌ {e}", err=True)
+        output_error(e, json_output, error_type="File Upload Error")
         sys.exit(1)
 
 
@@ -413,25 +421,28 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
-        # Call API
-        result = api_client.create_folder(database_id, asset_id, {"keyPath": folder_path})
+        output_status(f"Creating folder '{folder_path}'...", json_output)
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ Folder created successfully!", fg='green', bold=True))
-            click.echo(f"Path: {folder_path}")
+        # Call API
+        result = api_client.create_folder(database_id, asset_id, {"relativeKey": folder_path})
+        
+        def format_folder_result(data):
+            """Format folder creation result for CLI display."""
+            return f"  Path: {folder_path}"
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Folder created successfully!",
+            cli_formatter=format_folder_result
+        )
         
         return result
         
     except (AssetNotFoundError, InvalidAssetDataError, InvalidPathError, FileAlreadyExistsError) as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="Folder Creation Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('list')
@@ -485,38 +496,45 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
         if starting_token:
             params['startingToken'] = starting_token
         
+        output_status("Retrieving files...", json_output)
+        
         # Call API
         result = api_client.list_asset_files(database_id, asset_id, params)
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            items = result.get('items', [])
-            click.echo(click.style(f"✓ Found {len(items)} files", fg='green', bold=True))
+        def format_files_list(data):
+            """Format files list for CLI display."""
+            items = data.get('items', [])
+            if not items:
+                return "No files found."
             
-            if items:
-                click.echo("\nFiles:")
-                for item in items:
-                    file_type = "📁" if item.get('isFolder') else "📄"
-                    archived = " (archived)" if item.get('isArchived') else ""
-                    size_info = f" ({item.get('size', 0)} bytes)" if not item.get('isFolder') else ""
-                    primary_type = f" [{item.get('primaryType')}]" if item.get('primaryType') else ""
-                    
-                    click.echo(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{archived}")
+            lines = [f"\nFound {len(items)} file(s):", ""]
             
-            if result.get('nextToken'):
-                click.echo(f"\nNext token: {result['nextToken']}")
+            for item in items:
+                file_type = "📁" if item.get('isFolder') else "📄"
+                archived = " (archived)" if item.get('isArchived') else ""
+                size_info = f" ({item.get('size', 0)} bytes)" if not item.get('isFolder') else ""
+                primary_type = f" [{item.get('primaryType')}]" if item.get('primaryType') else ""
+                
+                lines.append(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{archived}")
+            
+            if data.get('nextToken'):
+                lines.append(f"\nNext token: {data['nextToken']}")
+            
+            return '\n'.join(lines)
+        
+        output_result(result, json_output, cli_formatter=format_files_list)
         
         return result
         
     except AssetNotFoundError as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message="Use 'vamscli assets list' to see available assets."
+        )
+        raise click.ClickException(str(e))
 
 
 @file.command('revert')
@@ -563,30 +581,35 @@ def revert_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
+        output_status(f"Reverting file '{file_path}'...", json_output)
+        
         # Call API
         result = api_client.revert_file_version(database_id, asset_id, version_id, {
             "filePath": file_path
         })
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ File reverted successfully!", fg='green', bold=True))
-            click.echo(f"File: {file_path}")
-            click.echo(f"Reverted from version: {result.get('revertedFromVersionId', version_id)}")
-            if result.get('newVersionId'):
-                click.echo(f"New version ID: {result.get('newVersionId')}")
+        def format_revert_result(data):
+            """Format revert result for CLI display."""
+            lines = []
+            lines.append(f"  File: {file_path}")
+            lines.append(f"  Reverted from version: {data.get('revertedFromVersionId', version_id)}")
+            if data.get('newVersionId'):
+                lines.append(f"  New version ID: {data.get('newVersionId')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ File reverted successfully!",
+            cli_formatter=format_revert_result
+        )
         
         return result
         
     except (AssetNotFoundError, InvalidAssetDataError, InvalidVersionError) as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="File Revert Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('set-primary')
@@ -655,30 +678,38 @@ def set_primary_file(ctx: click.Context, database_id: str, asset_id: str, file_p
         if primary_type == 'other' and type_other:
             primary_data["primaryTypeOther"] = type_other
         
+        output_status(f"Setting primary type for '{file_path}'...", json_output)
+        
         # Call API
         result = api_client.set_primary_file(database_id, asset_id, primary_data)
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
+        def format_primary_result(data):
+            """Format primary type result for CLI display."""
+            lines = []
             if primary_type == '':
-                click.echo(click.style("✓ Primary type removed successfully!", fg='green', bold=True))
+                lines.append(f"  File: {file_path}")
+                lines.append("  Primary type removed")
             else:
                 final_type = type_other if primary_type == 'other' else primary_type
-                click.echo(click.style("✓ Primary type set successfully!", fg='green', bold=True))
-                click.echo(f"Type: {final_type}")
-            click.echo(f"File: {file_path}")
+                lines.append(f"  File: {file_path}")
+                lines.append(f"  Type: {final_type}")
+            return '\n'.join(lines)
+        
+        success_msg = "✓ Primary type removed successfully!" if primary_type == '' else "✓ Primary type set successfully!"
+        
+        output_result(
+            result,
+            json_output,
+            success_message=success_msg,
+            cli_formatter=format_primary_result
+        )
         
         return result
         
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="Primary Type Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('delete-preview')
@@ -717,25 +748,28 @@ def delete_asset_preview(ctx: click.Context, database_id: str, asset_id: str, js
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
+        output_status(f"Deleting asset preview for '{asset_id}'...", json_output)
+        
         # Call API
         result = api_client.delete_asset_preview(database_id, asset_id)
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ Asset preview deleted successfully!", fg='green', bold=True))
-            click.echo(f"Asset: {asset_id}")
+        def format_preview_result(data):
+            """Format preview deletion result for CLI display."""
+            return f"  Asset: {asset_id}"
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset preview deleted successfully!",
+            cli_formatter=format_preview_result
+        )
         
         return result
         
     except AssetNotFoundError as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="Asset Preview Deletion Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('delete-auxiliary')
@@ -778,29 +812,34 @@ def delete_auxiliary_files(ctx: click.Context, database_id: str, asset_id: str, 
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
+        output_status(f"Deleting auxiliary files for '{file_path}'...", json_output)
+        
         # Call API
         result = api_client.delete_auxiliary_preview_files(database_id, asset_id, {
             "filePath": file_path
         })
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ Auxiliary preview files deleted successfully!", fg='green', bold=True))
-            click.echo(f"Path prefix: {file_path}")
-            if result.get('deletedCount'):
-                click.echo(f"Files deleted: {result.get('deletedCount')}")
+        def format_auxiliary_result(data):
+            """Format auxiliary deletion result for CLI display."""
+            lines = []
+            lines.append(f"  Path prefix: {file_path}")
+            if data.get('deletedCount'):
+                lines.append(f"  Files deleted: {data.get('deletedCount')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Auxiliary preview files deleted successfully!",
+            cli_formatter=format_auxiliary_result
+        )
         
         return result
         
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="Auxiliary Files Deletion Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('info')
@@ -854,50 +893,56 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
             'includeVersions': 'true' if include_versions else 'false'
         }
         
+        output_status(f"Retrieving file information for '{file_path}'...", json_output)
+        
         # Call API
         result = api_client.get_file_info(database_id, asset_id, params)
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ File information retrieved", fg='green', bold=True))
-            click.echo(f"\nFile: {result.get('fileName', 'N/A')}")
-            click.echo(f"Path: {result.get('relativePath', 'N/A')}")
-            click.echo(f"Type: {'Folder' if result.get('isFolder') else 'File'}")
+        def format_file_info(data):
+            """Format file info for CLI display."""
+            lines = []
+            lines.append(f"\nFile: {data.get('fileName', 'N/A')}")
+            lines.append(f"Path: {data.get('relativePath', 'N/A')}")
+            lines.append(f"Type: {'Folder' if data.get('isFolder') else 'File'}")
             
-            if not result.get('isFolder'):
-                click.echo(f"Size: {result.get('size', 0)} bytes")
-                click.echo(f"Content Type: {result.get('contentType', 'N/A')}")
-                if result.get('primaryType'):
-                    click.echo(f"Primary Type: {result.get('primaryType')}")
+            if not data.get('isFolder'):
+                lines.append(f"Size: {data.get('size', 0)} bytes")
+                lines.append(f"Content Type: {data.get('contentType', 'N/A')}")
+                if data.get('primaryType'):
+                    lines.append(f"Primary Type: {data.get('primaryType')}")
             
-            click.echo(f"Last Modified: {result.get('lastModified', 'N/A')}")
-            click.echo(f"Storage Class: {result.get('storageClass', 'N/A')}")
-            click.echo(f"Archived: {'Yes' if result.get('isArchived') else 'No'}")
+            lines.append(f"Last Modified: {data.get('lastModified', 'N/A')}")
+            lines.append(f"Storage Class: {data.get('storageClass', 'N/A')}")
+            lines.append(f"Archived: {'Yes' if data.get('isArchived') else 'No'}")
             
-            if result.get('previewFile'):
-                click.echo(f"Preview File: {result.get('previewFile')}")
+            if data.get('previewFile'):
+                lines.append(f"Preview File: {data.get('previewFile')}")
             
-            if include_versions and result.get('versions'):
-                click.echo(f"\nVersions ({len(result['versions'])}):")
-                for version in result['versions']:
+            if include_versions and data.get('versions'):
+                lines.append(f"\nVersions ({len(data['versions'])}):")
+                for version in data['versions']:
                     status = "Current" if version.get('isLatest') else "Previous"
                     archived = " (archived)" if version.get('isArchived') else ""
-                    click.echo(f"  {version.get('versionId', 'N/A')} - {status}{archived}")
-                    click.echo(f"    Modified: {version.get('lastModified', 'N/A')}")
-                    if not result.get('isFolder'):
-                        click.echo(f"    Size: {version.get('size', 0)} bytes")
+                    lines.append(f"  {version.get('versionId', 'N/A')} - {status}{archived}")
+                    lines.append(f"    Modified: {version.get('lastModified', 'N/A')}")
+                    if not data.get('isFolder'):
+                        lines.append(f"    Size: {version.get('size', 0)} bytes")
+            
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ File information retrieved",
+            cli_formatter=format_file_info
+        )
         
         return result
         
     except AssetNotFoundError as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="File Info Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('move')
@@ -944,34 +989,40 @@ def move_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
+        output_status(f"Moving file from '{source}' to '{dest}'...", json_output)
+        
         # Call API
         result = api_client.move_file(database_id, asset_id, {
             "sourcePath": source,
             "destinationPath": dest
         })
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ File moved successfully!", fg='green', bold=True))
-            click.echo(f"From: {source}")
-            click.echo(f"To: {dest}")
+        def format_move_result(data):
+            """Format move result for CLI display."""
+            lines = []
+            lines.append(f"  From: {source}")
+            lines.append(f"  To: {dest}")
             
-            if result.get('affectedFiles'):
-                affected_count = len(result['affectedFiles'])
+            if data.get('affectedFiles'):
+                affected_count = len(data['affectedFiles'])
                 if affected_count > 2:  # More than just source and dest
-                    click.echo(f"Additional files affected: {affected_count - 2}")
+                    lines.append(f"  Additional files affected: {affected_count - 2}")
+            
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ File moved successfully!",
+            cli_formatter=format_move_result
+        )
         
         return result
         
     except (AssetNotFoundError, InvalidAssetDataError, InvalidPathError, FileAlreadyExistsError) as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="File Move Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('copy')
@@ -1031,33 +1082,39 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
         if dest_asset:
             copy_data["destinationAssetId"] = dest_asset
         
+        output_status(f"Copying file from '{source}' to '{dest}'...", json_output)
+        
         # Call API
         result = api_client.copy_file(database_id, asset_id, copy_data)
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ File copied successfully!", fg='green', bold=True))
-            click.echo(f"From: {source}")
-            click.echo(f"To: {dest}")
+        def format_copy_result(data):
+            """Format copy result for CLI display."""
+            lines = []
+            lines.append(f"  From: {source}")
+            lines.append(f"  To: {dest}")
             if dest_asset:
-                click.echo(f"Destination Asset: {dest_asset}")
+                lines.append(f"  Destination Asset: {dest_asset}")
             
-            if result.get('affectedFiles'):
-                affected_count = len(result['affectedFiles'])
+            if data.get('affectedFiles'):
+                affected_count = len(data['affectedFiles'])
                 if affected_count > 1:  # More than just the main file
-                    click.echo(f"Additional files copied: {affected_count - 1}")
+                    lines.append(f"  Additional files copied: {affected_count - 1}")
+            
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ File copied successfully!",
+            cli_formatter=format_copy_result
+        )
         
         return result
         
     except (AssetNotFoundError, InvalidAssetDataError, InvalidPathError, FileAlreadyExistsError) as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="File Copy Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('archive')
@@ -1105,34 +1162,40 @@ def archive_file(ctx: click.Context, database_id: str, asset_id: str, file_path:
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
+        output_status(f"Archiving file(s) at '{file_path}'...", json_output)
+        
         # Call API
         result = api_client.archive_file(database_id, asset_id, {
             "filePath": file_path,
             "isPrefix": prefix
         })
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ File(s) archived successfully!", fg='green', bold=True))
-            click.echo(f"Path: {file_path}")
+        def format_archive_result(data):
+            """Format archive result for CLI display."""
+            lines = []
+            lines.append(f"  Path: {file_path}")
             if prefix:
-                click.echo("Operation: Archive all files under prefix")
+                lines.append("  Operation: Archive all files under prefix")
             
-            if result.get('affectedFiles'):
-                affected_count = len(result['affectedFiles'])
-                click.echo(f"Files archived: {affected_count}")
+            if data.get('affectedFiles'):
+                affected_count = len(data['affectedFiles'])
+                lines.append(f"  Files archived: {affected_count}")
+            
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ File(s) archived successfully!",
+            cli_formatter=format_archive_result
+        )
         
         return result
         
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="File Archive Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('unarchive')
@@ -1175,32 +1238,38 @@ def unarchive_file(ctx: click.Context, database_id: str, asset_id: str, file_pat
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
+        output_status(f"Unarchiving file '{file_path}'...", json_output)
+        
         # Call API
         result = api_client.unarchive_file(database_id, asset_id, {
             "filePath": file_path
         })
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ File unarchived successfully!", fg='green', bold=True))
-            click.echo(f"Path: {file_path}")
+        def format_unarchive_result(data):
+            """Format unarchive result for CLI display."""
+            lines = []
+            lines.append(f"  Path: {file_path}")
             
-            if result.get('affectedFiles'):
-                affected_count = len(result['affectedFiles'])
+            if data.get('affectedFiles'):
+                affected_count = len(data['affectedFiles'])
                 if affected_count > 1:
-                    click.echo(f"Additional files unarchived: {affected_count - 1}")
+                    lines.append(f"  Additional files unarchived: {affected_count - 1}")
+            
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ File unarchived successfully!",
+            cli_formatter=format_unarchive_result
+        )
         
         return result
         
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="File Unarchive Error")
+        raise click.ClickException(str(e))
 
 
 @file.command('delete')
@@ -1252,6 +1321,8 @@ def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
+        output_status(f"Deleting file(s) at '{file_path}'...", json_output)
+        
         # Call API
         result = api_client.delete_file(database_id, asset_id, {
             "filePath": file_path,
@@ -1259,25 +1330,29 @@ def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
             "confirmPermanentDelete": True
         })
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ File(s) deleted permanently!", fg='green', bold=True))
-            click.echo(f"Path: {file_path}")
+        def format_delete_result(data):
+            """Format delete result for CLI display."""
+            lines = []
+            lines.append(f"  Path: {file_path}")
             if prefix:
-                click.echo("Operation: Delete all files under prefix")
+                lines.append("  Operation: Delete all files under prefix")
             
-            if result.get('affectedFiles'):
-                affected_count = len(result['affectedFiles'])
-                click.echo(f"Files deleted: {affected_count}")
+            if data.get('affectedFiles'):
+                affected_count = len(data['affectedFiles'])
+                lines.append(f"  Files deleted: {affected_count}")
+            
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ File(s) deleted permanently!",
+            cli_formatter=format_delete_result
+        )
         
         return result
         
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="File Deletion Error")
+        raise click.ClickException(str(e))

@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 
 from ..utils.api_client import APIClient
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import (
     AssetVersionError, AssetVersionNotFoundError, AssetVersionOperationError,
     InvalidAssetVersionDataError, AssetVersionRevertError, AssetNotFoundError,
@@ -259,43 +260,41 @@ def create(ctx: click.Context, database: str, asset: str, comment: str, use_late
             elif files and use_latest_files:
                 raise click.BadParameter("Cannot specify --files when --use-latest-files is true")
         
-        click.echo(f"Creating new version for asset '{asset}' in database '{database}'...")
+        output_status(f"Creating new version for asset '{asset}' in database '{database}'...", json_output)
         
         # Create the version
         result = api_client.create_asset_version(database, asset, request_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(format_operation_output(result))
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset version created successfully!",
+            cli_formatter=lambda r: format_operation_output(r, json_output=False)
+        )
         
         return result
         
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists."
         )
-        click.echo(f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
     except InvalidAssetVersionDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Version Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Version Data")
         raise click.ClickException(str(e))
     except AssetVersionOperationError as e:
-        click.echo(
-            click.style(f"✗ Version Creation Failed: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Version Creation Failed")
         raise click.ClickException(str(e))
 
 
@@ -339,50 +338,49 @@ def revert(ctx: click.Context, database: str, asset: str, version: str, comment:
             if comment:
                 request_data['comment'] = comment
         
-        click.echo(f"Reverting asset '{asset}' in database '{database}' to version '{version}'...")
+        output_status(f"Reverting asset '{asset}' in database '{database}' to version '{version}'...", json_output)
         
         # Revert the version
         result = api_client.revert_asset_version(database, asset, version, request_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(format_operation_output(result))
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset version reverted successfully!",
+            cli_formatter=lambda r: format_operation_output(r, json_output=False)
+        )
         
         return result
         
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists."
         )
-        click.echo(f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists.")
         raise click.ClickException(str(e))
     except AssetVersionNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Version Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Version Not Found",
+            helpful_message=f"Use 'vamscli asset-version list -d {database} -a {asset}' to see available versions."
         )
-        click.echo(f"Use 'vamscli asset-version list -d {database} -a {asset}' to see available versions.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
     except InvalidAssetVersionDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Revert Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Revert Data")
         raise click.ClickException(str(e))
     except AssetVersionRevertError as e:
-        click.echo(
-            click.style(f"✗ Version Revert Failed: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Version Revert Failed")
         raise click.ClickException(str(e))
 
 
@@ -420,31 +418,34 @@ def list(ctx: click.Context, database: str, asset: str, max_items: int, starting
         if starting_token:
             params['startingToken'] = starting_token
         
-        click.echo(f"Retrieving versions for asset '{asset}' in database '{database}'...")
+        output_status(f"Retrieving versions for asset '{asset}' in database '{database}'...", json_output)
         
         # Get the versions
         result = api_client.get_asset_versions(database, asset, params)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(format_version_list_output(result))
+        output_result(
+            result,
+            json_output,
+            cli_formatter=lambda r: format_version_list_output(r, json_output=False)
+        )
         
         return result
         
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists."
         )
-        click.echo(f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
 
 
@@ -472,36 +473,40 @@ def get(ctx: click.Context, database: str, asset: str, version: str, json_output
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        click.echo(f"Retrieving details for version '{version}' of asset '{asset}' in database '{database}'...")
+        output_status(f"Retrieving details for version '{version}' of asset '{asset}' in database '{database}'...", json_output)
         
         # Get the version details
         result = api_client.get_asset_version(database, asset, version)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(format_version_details_output(result))
+        output_result(
+            result,
+            json_output,
+            cli_formatter=lambda r: format_version_details_output(r, json_output=False)
+        )
         
         return result
         
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists."
         )
-        click.echo(f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists.")
         raise click.ClickException(str(e))
     except AssetVersionNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Version Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Version Not Found",
+            helpful_message=f"Use 'vamscli asset-version list -d {database} -a {asset}' to see available versions."
         )
-        click.echo(f"Use 'vamscli asset-version list -d {database} -a {asset}' to see available versions.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))

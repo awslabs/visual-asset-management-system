@@ -15,6 +15,7 @@ from ..constants import (
 )
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
+from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
 from ..utils.exceptions import (
     AssetNotFoundError, AssetAlreadyExistsError, DatabaseNotFoundError,
     InvalidAssetDataError, AssetAlreadyArchivedError, AssetDeletionError, 
@@ -127,7 +128,7 @@ class DownloadProgressDisplay:
             
         self.last_update = current_time
         
-        # Clear previous lines
+        # Clear previous lines (using click.echo directly for terminal control sequences)
         click.echo('\033[2K\033[1A' * 10, nl=False)  # Clear up to 10 lines
         
         # Overall progress
@@ -140,14 +141,14 @@ class DownloadProgressDisplay:
         filled = int(bar_width * overall_pct / 100)
         bar = '█' * filled + '░' * (bar_width - filled)
         
-        click.echo(f"\nOverall Progress: [{bar}] {overall_pct:.1f}% ({completed_size_str}/{total_size_str})")
+        output_info(f"\nOverall Progress: [{bar}] {overall_pct:.1f}% ({completed_size_str}/{total_size_str})", False)
         
         # Speed and ETA
         speed_str = format_file_size(int(progress.download_speed)) + "/s"
         eta = progress.estimated_time_remaining
         eta_str = format_duration(eta) if eta else "calculating..."
         
-        click.echo(f"Speed: {speed_str} | Active: {progress.active_downloads} | ETA: {eta_str}")
+        output_info(f"Speed: {speed_str} | Active: {progress.active_downloads} | ETA: {eta_str}", False)
         
         # File progress (show up to 5 files)
         files_shown = 0
@@ -155,7 +156,7 @@ class DownloadProgressDisplay:
             if files_shown >= 5:
                 remaining = len(progress.file_progress) - files_shown
                 if remaining > 0:
-                    click.echo(f"... and {remaining} more files")
+                    output_info(f"... and {remaining} more files", False)
                 break
                 
             file_pct = (file_progress["completed_size"] / file_progress["total_size"]) * 100 if file_progress["total_size"] > 0 else 0
@@ -171,7 +172,7 @@ class DownloadProgressDisplay:
             if len(display_name) > 50:
                 display_name = "..." + display_name[-47:]
                 
-            click.echo(f"  {status_icon} {display_name}: {file_pct:.1f}%")
+            output_info(f"  {status_icon} {display_name}: {file_pct:.1f}%", False)
             files_shown += 1
 
 
@@ -248,43 +249,47 @@ def create(ctx: click.Context, database_id: str, name: Optional[str],
             if bucket_key:
                 asset_data['bucketExistingKey'] = bucket_key
         
-        click.echo("Creating asset...")
+        output_status("Creating asset...", json_output)
         
         # Create the asset
         result = api_client.create_asset(asset_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset created successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Asset ID: {result.get('assetId')}")
-            click.echo(f"  Database: {database_id}")
-            click.echo(f"  Message: {result.get('message', 'Asset created')}")
+        def format_create_result(data):
+            """Format create result for CLI display."""
+            lines = []
+            lines.append(f"  Asset ID: {data.get('assetId')}")
+            lines.append(f"  Database: {database_id}")
+            lines.append(f"  Message: {data.get('message', 'Asset created')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset created successfully!",
+            cli_formatter=format_create_result
+        )
         
         # Return result for use by wrapper commands
         return result
         
     except AssetAlreadyExistsError as e:
-        click.echo(
-            click.style(f"✗ Asset Already Exists: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Already Exists",
+            helpful_message="Use 'vamscli assets get' to view the existing asset or choose a different asset ID."
         )
-        click.echo("Use 'vamscli assets get' to view the existing asset or choose a different asset ID.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
     except InvalidAssetDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Asset Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Asset Data")
         raise click.ClickException(str(e))
 
 
@@ -327,48 +332,56 @@ def archive(ctx: click.Context, asset_id: str, database: str, reason: Optional[s
             except json.JSONDecodeError as e:
                 raise click.BadParameter(f"Invalid JSON in input file: {e}")
         
-        click.echo(f"Archiving asset '{asset_id}' in database '{database}'...")
+        output_status(f"Archiving asset '{asset_id}' in database '{database}'...", json_output)
         
         # Archive the asset
         result = api_client.archive_asset(database, asset_id, reason)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset archived successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Asset ID: {asset_id}")
-            click.echo(f"  Database: {database}")
-            click.echo(f"  Operation: {result.get('operation', 'archive')}")
-            click.echo(f"  Timestamp: {result.get('timestamp', 'N/A')}")
-            click.echo(f"  Message: {result.get('message', 'Asset archived')}")
-            click.echo()
-            click.echo("The asset has been moved to archived state and will not appear in normal listings.")
-            click.echo("Use 'vamscli assets get --show-archived' to view archived assets.")
+        def format_archive_result(data):
+            """Format archive result for CLI display."""
+            lines = []
+            lines.append(f"  Asset ID: {asset_id}")
+            lines.append(f"  Database: {database}")
+            lines.append(f"  Operation: {data.get('operation', 'archive')}")
+            lines.append(f"  Timestamp: {data.get('timestamp', 'N/A')}")
+            lines.append(f"  Message: {data.get('message', 'Asset archived')}")
+            lines.append("")
+            lines.append("The asset has been moved to archived state and will not appear in normal listings.")
+            lines.append("Use 'vamscli assets get --show-archived' to view archived assets.")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset archived successfully!",
+            cli_formatter=format_archive_result
+        )
         
         return result
         
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset_id}' to check if the asset exists."
         )
-        click.echo(f"Use 'vamscli assets get -d {database} {asset_id}' to check if the asset exists.")
         raise click.ClickException(str(e))
     except AssetAlreadyArchivedError as e:
-        click.echo(
-            click.style(f"✗ Asset Already Archived: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Already Archived",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset_id} --show-archived' to view the archived asset."
         )
-        click.echo(f"Use 'vamscli assets get -d {database} {asset_id} --show-archived' to view the archived asset.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
 
 
@@ -419,72 +432,74 @@ def delete(ctx: click.Context, asset_id: str, database: str, reason: Optional[st
         
         # Require confirmation for permanent deletion
         if not confirm:
-            click.echo(
-                click.style("⚠️  Permanent deletion requires explicit confirmation!", fg='yellow', bold=True)
-            )
-            click.echo("This action cannot be undone and will permanently delete:")
-            click.echo("  • The asset and all its metadata")
-            click.echo("  • All asset files and versions")
-            click.echo("  • All asset links and relationships")
-            click.echo("  • All comments and version history")
-            click.echo()
-            click.echo("Use --confirm flag to proceed with permanent deletion.")
+            output_warning("⚠️  Permanent deletion requires explicit confirmation!", json_output)
+            output_info("This action cannot be undone and will permanently delete:", json_output)
+            output_info("  • The asset and all its metadata", json_output)
+            output_info("  • All asset files and versions", json_output)
+            output_info("  • All asset links and relationships", json_output)
+            output_info("  • All comments and version history", json_output)
+            output_info("", json_output)
+            output_info("Use --confirm flag to proceed with permanent deletion.", json_output)
             raise click.ClickException("Confirmation required for permanent deletion")
         
-        # Additional confirmation prompt for safety
-        if not json_input:  # Skip interactive prompt if using JSON input
-            click.echo(
-                click.style(f"⚠️  You are about to permanently delete asset '{asset_id}' from database '{database}'", fg='red', bold=True)
-            )
-            click.echo("This action cannot be undone!")
+        # Additional confirmation prompt for safety (only in CLI mode)
+        if not json_input and not json_output:  # Skip interactive prompt if using JSON input or JSON output
+            output_warning(f"⚠️  You are about to permanently delete asset '{asset_id}' from database '{database}'", False)
+            output_warning("This action cannot be undone!", False)
             
             if not click.confirm("Are you sure you want to proceed?"):
-                click.echo("Deletion cancelled.")
+                output_info("Deletion cancelled.", False)
                 return
         
-        click.echo(f"Permanently deleting asset '{asset_id}' from database '{database}'...")
+        output_status(f"Permanently deleting asset '{asset_id}' from database '{database}'...", json_output)
         
         # Delete the asset
         result = api_client.delete_asset_permanent(database, asset_id, reason, confirm)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset permanently deleted!", fg='green', bold=True)
-            )
-            click.echo(f"  Asset ID: {asset_id}")
-            click.echo(f"  Database: {database}")
-            click.echo(f"  Operation: {result.get('operation', 'delete')}")
-            click.echo(f"  Timestamp: {result.get('timestamp', 'N/A')}")
-            click.echo(f"  Message: {result.get('message', 'Asset deleted')}")
-            click.echo()
-            click.echo(
-                click.style("The asset and all associated data have been permanently removed.", fg='yellow')
-            )
+        def format_delete_result(data):
+            """Format delete result for CLI display."""
+            lines = []
+            lines.append(f"  Asset ID: {asset_id}")
+            lines.append(f"  Database: {database}")
+            lines.append(f"  Operation: {data.get('operation', 'delete')}")
+            lines.append(f"  Timestamp: {data.get('timestamp', 'N/A')}")
+            lines.append(f"  Message: {data.get('message', 'Asset deleted')}")
+            lines.append("")
+            lines.append(click.style("The asset and all associated data have been permanently removed.", fg='yellow'))
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset permanently deleted!",
+            cli_formatter=format_delete_result
+        )
         
         return result
         
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset_id} --show-archived' to check if the asset exists."
         )
-        click.echo(f"Use 'vamscli assets get -d {database} {asset_id} --show-archived' to check if the asset exists.")
         raise click.ClickException(str(e))
     except AssetDeletionError as e:
-        click.echo(
-            click.style(f"✗ Deletion Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Deletion Error",
+            helpful_message="Ensure you have provided the --confirm flag for permanent deletion."
         )
-        click.echo("Ensure you have provided the --confirm flag for permanent deletion.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
 
 
@@ -542,43 +557,47 @@ def update(ctx: click.Context, asset_id: str, database_id: str, name: Optional[s
                     "Use --name, --description, --distributable, --tags, or --json-input."
                 )
         
-        click.echo(f"Updating asset '{asset_id}' in database '{database_id}'...")
+        output_status(f"Updating asset '{asset_id}' in database '{database_id}'...", json_output)
         
         # Update the asset
         result = api_client.update_asset(database_id, asset_id, update_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset updated successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Asset ID: {result.get('assetId', asset_id)}")
-            click.echo(f"  Operation: {result.get('operation', 'update')}")
-            click.echo(f"  Timestamp: {result.get('timestamp', 'N/A')}")
-            click.echo(f"  Message: {result.get('message', 'Asset updated')}")
+        def format_update_result(data):
+            """Format update result for CLI display."""
+            lines = []
+            lines.append(f"  Asset ID: {data.get('assetId', asset_id)}")
+            lines.append(f"  Operation: {data.get('operation', 'update')}")
+            lines.append(f"  Timestamp: {data.get('timestamp', 'N/A')}")
+            lines.append(f"  Message: {data.get('message', 'Asset updated')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset updated successfully!",
+            cli_formatter=format_update_result
+        )
         
         return result
         
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database_id} {asset_id}' to check if the asset exists."
         )
-        click.echo(f"Use 'vamscli assets get -d {database_id} {asset_id}' to check if the asset exists.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
     except InvalidAssetDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Update Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Update Data")
         raise click.ClickException(str(e))
 
 
@@ -607,32 +626,34 @@ def get(ctx: click.Context, asset_id: str, database_id: str, show_archived: bool
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
+        output_status(f"Retrieving asset '{asset_id}' from database '{database_id}'...", json_output)
+        
         # Get the asset
         result = api_client.get_asset(database_id, asset_id, show_archived)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(f"Retrieving asset '{asset_id}' from database '{database_id}'...")
-            click.echo(format_asset_output(result))
+        output_result(result, json_output, cli_formatter=format_asset_output)
         
         return result
         
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
-        )
+        helpful_msg = f"Use 'vamscli assets list -d {database_id}' to see available assets."
         if not show_archived:
-            click.echo("Try using --show-archived to include archived assets.")
-        click.echo(f"Use 'vamscli assets list -d {database_id}' to see available assets.")
+            helpful_msg = "Try using --show-archived to include archived assets.\n" + helpful_msg
+        
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=helpful_msg
+        )
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
 
 @assets.command()
@@ -670,48 +691,51 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, js
         if show_archived:
             params['showArchived'] = 'true'
         
+        output_status(status_msg, json_output)
+        
         # Get the assets
         response = api_client.get(endpoint, include_auth=True, params=params)
         result = response.json()
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(status_msg)
-            # Format for CLI display
-            items = result.get('Items', [])
+        def format_assets_list(data):
+            """Format assets list for CLI display."""
+            items = data.get('Items', [])
             if not items:
-                click.echo("No assets found.")
-            else:
-                click.echo(f"\nFound {len(items)} asset(s):")
-                click.echo("-" * 80)
+                return "No assets found."
+            
+            lines = [f"\nFound {len(items)} asset(s):", "-" * 80]
+            
+            for asset in items:
+                lines.append(f"ID: {asset.get('assetId', 'N/A')}")
+                lines.append(f"Database: {asset.get('databaseId', 'N/A')}")
+                lines.append(f"Name: {asset.get('assetName', 'N/A')}")
+                lines.append(f"Description: {asset.get('description', 'N/A')}")
+                lines.append(f"Distributable: {'Yes' if asset.get('isDistributable') else 'No'}")
+                lines.append(f"Status: {asset.get('status', 'Active').title()}")
                 
-                for asset in items:
-                    click.echo(f"ID: {asset.get('assetId', 'N/A')}")
-                    click.echo(f"Database: {asset.get('databaseId', 'N/A')}")
-                    click.echo(f"Name: {asset.get('assetName', 'N/A')}")
-                    click.echo(f"Description: {asset.get('description', 'N/A')}")
-                    click.echo(f"Distributable: {'Yes' if asset.get('isDistributable') else 'No'}")
-                    click.echo(f"Status: {asset.get('status', 'Active').title()}")
-                    
-                    tags = asset.get('tags', [])
-                    if tags:
-                        click.echo(f"Tags: {', '.join(tags)}")
-                    
-                    click.echo("-" * 80)
+                tags = asset.get('tags', [])
+                if tags:
+                    lines.append(f"Tags: {', '.join(tags)}")
                 
-                # Show pagination info if available
-                if result.get('NextToken'):
-                    click.echo(f"More results available. Use pagination to see additional assets.")
+                lines.append("-" * 80)
+            
+            # Show pagination info if available
+            if data.get('NextToken'):
+                lines.append("More results available. Use pagination to see additional assets.")
+            
+            return '\n'.join(lines)
+        
+        output_result(result, json_output, cli_formatter=format_assets_list)
         
         return result
         
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
 
 
@@ -799,6 +823,10 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
         timeout = json_data.get('timeout', timeout)
         hide_progress = json_data.get('hide_progress', hide_progress)
         
+        # Suppress progress display in JSON mode
+        if json_output:
+            hide_progress = True
+        
         # Validate arguments
         if not shareable_links_only and not local_path:
             raise click.ClickException("Local path is required for downloads (not needed for --shareable-links-only)")
@@ -820,7 +848,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
         if recursive and not file_key:
             raise click.ClickException("--recursive requires --file-key to be specified")
         
-        # Simple implementation for now - just return shareable links
+        # Handle shareable links only mode
         if shareable_links_only:
             if asset_preview:
                 # Get asset preview link
@@ -890,72 +918,413 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                 except Exception as e:
                     raise AssetDownloadError(f"Failed to generate shareable links: {e}")
         else:
-            # For actual downloads, show a message that full implementation is coming
-            click.echo(click.style("✓ Download command structure implemented!", fg='green', bold=True))
-            click.echo("Full download functionality with parallel downloads and progress bars will be completed in the next iteration.")
-            click.echo(f"Parameters received:")
-            click.echo(f"  Database: {database}")
-            click.echo(f"  Asset: {asset}")
-            click.echo(f"  Local path: {local_path}")
-            if file_key:
-                click.echo(f"  File key: {file_key}")
-            if recursive:
-                click.echo(f"  Recursive: {recursive}")
-            if flatten_download_tree:
-                click.echo(f"  Flatten tree: {flatten_download_tree}")
-            if asset_preview:
-                click.echo(f"  Asset preview: {asset_preview}")
-            if file_previews:
-                click.echo(f"  File previews: {file_previews}")
-            if asset_link_children_tree_depth:
-                click.echo(f"  Tree depth: {asset_link_children_tree_depth}")
-            
-            result = {
-                "overall_success": True,
-                "message": "Download command structure implemented successfully"
-            }
+            # Actual file downloads
+            try:
+                # Determine what to download
+                files_to_download = []
+                
+                if asset_preview:
+                    # Download asset preview only
+                    output_status("Fetching asset preview...", json_output)
+                    download_response = api_client.download_asset_preview(database, asset)
+                    
+                    # Create download info for asset preview
+                    preview_filename = f"assetpreview_{Path(download_response.get('key', 'preview')).name}"
+                    local_file_path = Path(local_path) / preview_filename
+                    
+                    files_to_download.append(DownloadFileInfo(
+                        relative_key="asset_preview",
+                        local_path=local_file_path,
+                        download_url=download_response.get('downloadUrl'),
+                        file_size=download_response.get('size')
+                    ))
+                    
+                elif asset_link_children_tree_depth is not None:
+                    # Download asset tree
+                    output_status(f"Traversing asset tree (depth: {asset_link_children_tree_depth})...", json_output)
+                    
+                    # Use async function to traverse tree
+                    async def traverse_tree_async():
+                        traverser = AssetTreeTraverser(api_client)
+                        return await traverser.traverse_asset_tree(
+                            database, asset, asset_link_children_tree_depth
+                        )
+                    
+                    assets_to_download = asyncio.run(traverse_tree_async())
+                    
+                    # For each asset in tree, get its files
+                    for asset_info in assets_to_download:
+                        asset_db = asset_info['databaseId']
+                        asset_id = asset_info['assetId']
+                        depth = asset_info['depth']
+                        
+                        # Create subdirectory for this asset
+                        asset_dir = Path(local_path) / asset_id
+                        
+                        # Get files for this asset
+                        files_response = api_client.list_asset_files(asset_db, asset_id, {
+                            'includeArchived': 'false',
+                            'maxItems': 1000
+                        })
+                        
+                        asset_files = files_response.get('items', [])
+                        target_files = [f for f in asset_files if not f.get('isFolder')]
+                        
+                        # Generate download info for each file
+                        for file_item in target_files:
+                            relative_path = file_item.get('relativePath', '')
+                            file_local_path = asset_dir / relative_path.lstrip('/')
+                            
+                            try:
+                                download_response = api_client.download_asset_file(asset_db, asset_id, relative_path)
+                                files_to_download.append(DownloadFileInfo(
+                                    relative_key=f"{asset_id}/{relative_path}",
+                                    local_path=file_local_path,
+                                    download_url=download_response.get('downloadUrl'),
+                                    file_size=file_item.get('size')
+                                ))
+                            except Exception as e:
+                                output_warning(f"Skipping file {relative_path} from asset {asset_id}: {e}", json_output)
+                    
+                elif file_key:
+                    # Download specific file or folder
+                    output_status(f"Fetching file(s) for key: {file_key}...", json_output)
+                    
+                    if recursive or file_key.endswith('/'):
+                        # Download folder contents
+                        files_response = api_client.list_asset_files(database, asset, {
+                            'includeArchived': 'false',
+                            'maxItems': 1000
+                        })
+                        
+                        all_files = files_response.get('items', [])
+                        
+                        # Get files under the specified prefix
+                        target_files = FileTreeBuilder.get_files_under_prefix(
+                            all_files, file_key, recursive
+                        )
+                        
+                        if not target_files:
+                            raise FileDownloadError(f"No files found under '{file_key}'")
+                        
+                        # Handle flattening
+                        if flatten_download_tree:
+                            target_files = FileTreeBuilder.flatten_file_list(target_files)
+                        
+                        # Generate download info for each file
+                        for file_item in target_files:
+                            relative_path = file_item.get('relativePath', '')
+                            
+                            if flatten_download_tree:
+                                # Save to root of local path
+                                file_local_path = Path(local_path) / Path(relative_path).name
+                            else:
+                                # Preserve directory structure
+                                file_local_path = Path(local_path) / relative_path.lstrip('/')
+                            
+                            try:
+                                download_response = api_client.download_asset_file(database, asset, relative_path)
+                                files_to_download.append(DownloadFileInfo(
+                                    relative_key=relative_path,
+                                    local_path=file_local_path,
+                                    download_url=download_response.get('downloadUrl'),
+                                    file_size=file_item.get('size')
+                                ))
+                            except Exception as e:
+                                output_warning(f"Skipping file {relative_path}: {e}", json_output)
+                        
+                        # Download file previews if requested
+                        if file_previews:
+                            for file_item in target_files:
+                                relative_path = file_item.get('relativePath', '')
+                                # Try to get preview for this file
+                                try:
+                                    preview_response = api_client.download_asset_file(
+                                        database, asset, f"{relative_path}_preview"
+                                    )
+                                    
+                                    if flatten_download_tree:
+                                        preview_local_path = Path(local_path) / Path(relative_path).name
+                                    else:
+                                        preview_local_path = Path(local_path) / relative_path.lstrip('/')
+                                    
+                                    files_to_download.append(DownloadFileInfo(
+                                        relative_key=f"{relative_path}_preview",
+                                        local_path=preview_local_path,
+                                        download_url=preview_response.get('downloadUrl'),
+                                        file_size=None
+                                    ))
+                                except Exception:
+                                    # Preview doesn't exist, skip silently
+                                    pass
+                    else:
+                        # Download single file
+                        download_response = api_client.download_asset_file(database, asset, file_key)
+                        
+                        if flatten_download_tree:
+                            file_local_path = Path(local_path) / Path(file_key).name
+                        else:
+                            file_local_path = Path(local_path) / file_key.lstrip('/')
+                        
+                        files_to_download.append(DownloadFileInfo(
+                            relative_key=file_key,
+                            local_path=file_local_path,
+                            download_url=download_response.get('downloadUrl'),
+                            file_size=None
+                        ))
+                        
+                        # Download file preview if requested
+                        if file_previews:
+                            try:
+                                preview_response = api_client.download_asset_file(
+                                    database, asset, f"{file_key}_preview"
+                                )
+                                
+                                files_to_download.append(DownloadFileInfo(
+                                    relative_key=f"{file_key}_preview",
+                                    local_path=file_local_path,  # Same name as source file
+                                    download_url=preview_response.get('downloadUrl'),
+                                    file_size=None
+                                ))
+                            except Exception:
+                                # Preview doesn't exist, skip silently
+                                pass
+                else:
+                    # Download all files from asset
+                    output_status("Fetching all files from asset...", json_output)
+                    
+                    files_response = api_client.list_asset_files(database, asset, {
+                        'includeArchived': 'false',
+                        'maxItems': 1000
+                    })
+                    
+                    all_files = files_response.get('items', [])
+                    target_files = [f for f in all_files if not f.get('isFolder')]
+                    
+                    if not target_files:
+                        raise FileDownloadError(f"Asset '{asset}' currently has no files to download")
+                    
+                    # Generate download info for each file
+                    for file_item in target_files:
+                        relative_path = file_item.get('relativePath', '')
+                        file_local_path = Path(local_path) / relative_path.lstrip('/')
+                        
+                        try:
+                            download_response = api_client.download_asset_file(database, asset, relative_path)
+                            files_to_download.append(DownloadFileInfo(
+                                relative_key=relative_path,
+                                local_path=file_local_path,
+                                download_url=download_response.get('downloadUrl'),
+                                file_size=file_item.get('size')
+                            ))
+                        except Exception as e:
+                            output_warning(f"Skipping file {relative_path}: {e}", json_output)
+                
+                if not files_to_download:
+                    raise FileDownloadError("No files to download")
+                
+                # Check for conflicts if flattening
+                if flatten_download_tree and len(files_to_download) > 1:
+                    filenames = [f.local_path.name for f in files_to_download]
+                    if len(filenames) != len(set(filenames)):
+                        # Conflicts detected
+                        conflicts = [name for name in filenames if filenames.count(name) > 1]
+                        unique_conflicts = list(set(conflicts))
+                        
+                        if not json_output:
+                            output_warning(f"Filename conflicts detected: {', '.join(unique_conflicts)}", False)
+                            output_info("Options:", False)
+                            output_info("  1. Skip conflicting files", False)
+                            output_info("  2. Overwrite existing files", False)
+                            output_info("  3. Rename with numeric suffix", False)
+                            output_info("  4. Abort download", False)
+                            
+                            choice = click.prompt("Choose an option", type=int, default=4)
+                            
+                            if choice == 4:
+                                raise click.ClickException("Download aborted due to filename conflicts")
+                            elif choice == 1:
+                                # Remove duplicates, keep first occurrence
+                                seen = set()
+                                filtered_files = []
+                                for f in files_to_download:
+                                    if f.local_path.name not in seen:
+                                        seen.add(f.local_path.name)
+                                        filtered_files.append(f)
+                                files_to_download = filtered_files
+                            elif choice == 3:
+                                # Rename with numeric suffix
+                                name_counts = {}
+                                renamed_files = []
+                                for f in files_to_download:
+                                    name = f.local_path.name
+                                    if name in name_counts:
+                                        name_counts[name] += 1
+                                        stem = f.local_path.stem
+                                        suffix = f.local_path.suffix
+                                        new_name = f"{stem}_{name_counts[name]}{suffix}"
+                                        new_path = f.local_path.parent / new_name
+                                        renamed_files.append(DownloadFileInfo(
+                                            relative_key=f.relative_key,
+                                            local_path=new_path,
+                                            download_url=f.download_url,
+                                            file_size=f.file_size
+                                        ))
+                                    else:
+                                        name_counts[name] = 0
+                                        renamed_files.append(f)
+                                files_to_download = renamed_files
+                            # Option 2 (overwrite) - no changes needed
+                        else:
+                            raise FileDownloadError(
+                                f"Filename conflicts detected in flattened download: {', '.join(unique_conflicts)}. "
+                                "Use CLI mode for interactive conflict resolution."
+                            )
+                
+                # Perform downloads
+                output_status(f"Downloading {len(files_to_download)} file(s)...", json_output)
+                
+                # Create progress callback
+                progress_display = DownloadProgressDisplay(hide_progress=hide_progress)
+                
+                def progress_callback(progress: DownloadProgress):
+                    progress_display.update(progress)
+                
+                # Use async download manager
+                async def download_files_async():
+                    async with DownloadManager(
+                        api_client,
+                        max_parallel=parallel_downloads,
+                        max_retries=retry_attempts,
+                        timeout=timeout,
+                        progress_callback=progress_callback
+                    ) as manager:
+                        return await manager.download_files(files_to_download)
+                
+                # Run async download
+                result = asyncio.run(download_files_async())
+                
+                # Verify downloaded files
+                verified_files = []
+                verification_failures = []
+                
+                for file_info in files_to_download:
+                    if file_info.local_path.exists():
+                        actual_size = file_info.local_path.stat().st_size
+                        expected_size = file_info.file_size
+                        
+                        if expected_size is None or actual_size == expected_size:
+                            verified_files.append(str(file_info.local_path))
+                        else:
+                            verification_failures.append({
+                                'path': str(file_info.local_path),
+                                'expected_size': expected_size,
+                                'actual_size': actual_size,
+                                'reason': 'size_mismatch'
+                            })
+                    else:
+                        # Check if this file was in the failed downloads
+                        failed = any(
+                            f['relative_key'] == file_info.relative_key 
+                            for f in result.get('failed_downloads', [])
+                        )
+                        if not failed:
+                            verification_failures.append({
+                                'path': str(file_info.local_path),
+                                'reason': 'file_missing'
+                            })
+                
+                # Add verification info to result
+                result['verified_files'] = len(verified_files)
+                result['verification_failures'] = verification_failures
+                
+                # Format output
+                def format_download_result(data):
+                    """Format download result for CLI display."""
+                    lines = []
+                    lines.append(f"Total files: {data.get('total_files', 0)}")
+                    lines.append(f"Successful: {data.get('successful_files', 0)}")
+                    lines.append(f"Failed: {data.get('failed_files', 0)}")
+                    lines.append(f"Verified: {data.get('verified_files', 0)}")
+                    
+                    if data.get('verification_failures'):
+                        lines.append(f"\nVerification failures: {len(data['verification_failures'])}")
+                        for failure in data['verification_failures'][:5]:
+                            lines.append(f"  • {failure['path']}: {failure['reason']}")
+                    
+                    lines.append(f"\nTotal size: {data.get('total_size_formatted', 'N/A')}")
+                    lines.append(f"Duration: {format_duration(data.get('download_duration', 0))}")
+                    lines.append(f"Average speed: {data.get('average_speed_formatted', 'N/A')}")
+                    
+                    if data.get('failed_downloads'):
+                        lines.append(f"\nFailed downloads:")
+                        for failed in data['failed_downloads'][:5]:
+                            lines.append(f"  • {failed['relative_key']}: {failed['error']}")
+                        
+                        if len(data['failed_downloads']) > 5:
+                            lines.append(f"  ... and {len(data['failed_downloads']) - 5} more")
+                    
+                    return '\n'.join(lines)
+                
+                success_msg = "✓ Download completed successfully!" if result['overall_success'] else "⚠ Download completed with errors"
+                
+                output_result(
+                    result,
+                    json_output,
+                    success_message=success_msg,
+                    cli_formatter=format_download_result
+                )
+                
+            except asyncio.TimeoutError as e:
+                raise DownloadError(f"Download operation timed out: {e}")
+            except Exception as e:
+                if isinstance(e, (FileDownloadError, DownloadError, AssetDownloadError)):
+                    raise
+                raise DownloadError(f"Download failed: {e}")
         
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        elif shareable_links_only:
-            # Display shareable links
-            links = result.get("shareableLinks", [])
-            click.echo(click.style("✓ Shareable links generated successfully!", fg='green', bold=True))
-            click.echo(f"\nFiles ({len(links)}):")
-            
-            for link in links:
-                file_path = link.get("filePath", "")
-                download_url = link.get("downloadUrl", "")
-                expires_in = link.get("expiresIn", 86400)
+        # Output shareable links results
+        if shareable_links_only:
+            def format_shareable_links(data):
+                """Format shareable links for CLI display."""
+                links = data.get("shareableLinks", [])
+                lines = [f"\nFiles ({len(links)}):"]
                 
-                # Truncate long URLs for display
-                display_url = download_url
-                if len(display_url) > 80:
-                    display_url = display_url[:77] + "..."
+                for link in links:
+                    file_path = link.get("filePath", "")
+                    download_url = link.get("downloadUrl", "")
+                    expires_in = link.get("expiresIn", 86400)
+                    
+                    # Truncate long URLs for display
+                    display_url = download_url
+                    if len(display_url) > 80:
+                        display_url = display_url[:77] + "..."
+                    
+                    lines.append(f"  📄 {file_path}")
+                    lines.append(f"     URL: {display_url}")
+                    lines.append(f"     Expires: in {expires_in // 3600} hours")
+                    lines.append("")
                 
-                click.echo(f"  📄 {file_path}")
-                click.echo(f"     URL: {display_url}")
-                click.echo(f"     Expires: in {expires_in // 3600} hours")
-                click.echo()
+                lines.append(f"Total: {len(links)} file(s)")
+                if links:
+                    lines.append(f"Links expire in: {links[0].get('expiresIn', 86400) // 3600} hours")
+                
+                return '\n'.join(lines)
             
-            click.echo(f"Total: {len(links)} file(s)")
-            click.echo(f"Links expire in: {links[0].get('expiresIn', 86400) // 3600} hours" if links else "")
+            output_result(
+                result,
+                json_output,
+                success_message="✓ Shareable links generated successfully!",
+                cli_formatter=format_shareable_links
+            )
         
         return result
         
     except (FileDownloadError, DownloadError, AssetDownloadError, PreviewNotFoundError,
             AssetNotDistributableError, DownloadTreeError) as e:
         # Handle download-specific business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="Download Error")
+        raise click.ClickException(str(e))
     except (AssetNotFoundError, DatabaseNotFoundError) as e:
         # Handle asset/database business logic errors
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        output_error(e, json_output, error_type="Resource Not Found")
+        raise click.ClickException(str(e))

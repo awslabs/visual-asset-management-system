@@ -8,14 +8,10 @@ from datetime import datetime
 
 from ..utils.api_client import APIClient
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import (
     AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError
 )
-
-
-
-
-
 
 def validate_metadata_type(metadata_type: str) -> str:
     """Validate metadata type and return normalized value."""
@@ -199,26 +195,6 @@ def load_json_input(json_input_file: str) -> Dict[str, Any]:
         raise click.ClickException(f"Error reading JSON input file: {e}")
 
 
-def format_metadata_output(metadata_list: list, json_output: bool = False) -> None:
-    """Format and display metadata output."""
-    if json_output:
-        click.echo(json.dumps(metadata_list, indent=2))
-        return
-    
-    if not metadata_list:
-        click.echo("No metadata found for this asset link.")
-        return
-    
-    click.echo(f"Asset Link Metadata ({len(metadata_list)} items):")
-    click.echo("=" * 50)
-    
-    for metadata in metadata_list:
-        click.echo(f"Key: {metadata.get('metadataKey', 'N/A')}")
-        click.echo(f"Value: {metadata.get('metadataValue', 'N/A')}")
-        click.echo(f"Type: {metadata.get('metadataValueType', 'N/A')}")
-        click.echo("-" * 30)
-
-
 @click.group()
 def asset_links_metadata():
     """Manage metadata for asset links."""
@@ -246,28 +222,42 @@ def list(ctx: click.Context, asset_link_id: str, json_output: bool):
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        
         # Get metadata
         result = api_client.get_asset_link_metadata(asset_link_id)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            metadata_list = result.get('metadata', [])
-            format_metadata_output(metadata_list)
+        def format_list_output(data):
+            """Format metadata list for CLI display."""
+            metadata_list = data.get('metadata', [])
+            if not metadata_list:
+                return "No metadata found for this asset link."
+            
+            lines = [f"Asset Link Metadata ({len(metadata_list)} items):", "=" * 50]
+            
+            for metadata in metadata_list:
+                lines.append(f"Key: {metadata.get('metadataKey', 'N/A')}")
+                lines.append(f"Value: {metadata.get('metadataValue', 'N/A')}")
+                lines.append(f"Type: {metadata.get('metadataValueType', 'N/A')}")
+                lines.append("-" * 30)
+            
+            return '\n'.join(lines)
         
+        output_result(result, json_output, cli_formatter=format_list_output)
         return result
         
     except AssetLinkNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Link Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Error",
+            helpful_message="Verify the asset link ID is correct."
         )
         raise click.ClickException(str(e))
     except AssetLinkPermissionError as e:
-        click.echo(
-            click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Permission Error",
+            helpful_message="Ensure you have permission to access this asset link."
         )
         raise click.ClickException(str(e))
 
@@ -386,38 +376,48 @@ def create(ctx: click.Context, asset_link_id: str, key: Optional[str],
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        
         # Create metadata
         result = api_client.create_asset_link_metadata(asset_link_id, metadata_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset link metadata created successfully!", fg='green', bold=True)
-            )
-            click.echo(f"Key: {metadata_data['metadataKey']}")
-            click.echo(f"Value: {metadata_data['metadataValue']}")
-            click.echo(f"Type: {metadata_data['metadataValueType']}")
+        def format_create_output(data):
+            """Format create result for CLI display."""
+            lines = []
+            lines.append(f"Key: {metadata_data['metadataKey']}")
+            lines.append(f"Value: {metadata_data['metadataValue']}")
+            lines.append(f"Type: {metadata_data['metadataValueType']}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset link metadata created successfully!",
+            cli_formatter=format_create_output
+        )
         
         return result
         
     except AssetLinkNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Link Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Error",
+            helpful_message="Verify the asset link ID is correct."
         )
         raise click.ClickException(str(e))
     except AssetLinkValidationError as e:
-        click.echo(
-            click.style(f"✗ Validation Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Validation Error",
+            helpful_message="Check that the metadata key doesn't already exist or that the value format is correct."
         )
         raise click.ClickException(str(e))
     except AssetLinkPermissionError as e:
-        click.echo(
-            click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Permission Error",
+            helpful_message="Ensure you have permission to create metadata for this asset link."
         )
         raise click.ClickException(str(e))
 
@@ -485,38 +485,48 @@ def update(ctx: click.Context, asset_link_id: str, metadata_key: str,
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        
         # Update metadata
         result = api_client.update_asset_link_metadata(asset_link_id, metadata_key, metadata_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset link metadata updated successfully!", fg='green', bold=True)
-            )
-            click.echo(f"Key: {metadata_key}")
-            click.echo(f"New Value: {metadata_data['metadataValue']}")
-            click.echo(f"Type: {metadata_data['metadataValueType']}")
+        def format_update_output(data):
+            """Format update result for CLI display."""
+            lines = []
+            lines.append(f"Key: {metadata_key}")
+            lines.append(f"New Value: {metadata_data['metadataValue']}")
+            lines.append(f"Type: {metadata_data['metadataValueType']}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset link metadata updated successfully!",
+            cli_formatter=format_update_output
+        )
         
         return result
         
     except AssetLinkNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Link Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Error",
+            helpful_message="Verify the asset link ID is correct."
         )
         raise click.ClickException(str(e))
     except AssetLinkValidationError as e:
-        click.echo(
-            click.style(f"✗ Validation Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Validation Error",
+            helpful_message="Check that the metadata key exists and the value format is correct."
         )
         raise click.ClickException(str(e))
     except AssetLinkPermissionError as e:
-        click.echo(
-            click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Permission Error",
+            helpful_message="Ensure you have permission to update metadata for this asset link."
         )
         raise click.ClickException(str(e))
 
@@ -543,35 +553,43 @@ def delete(ctx: click.Context, asset_link_id: str, metadata_key: str, json_outpu
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        
         # Delete metadata
         result = api_client.delete_asset_link_metadata(asset_link_id, metadata_key)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset link metadata deleted successfully!", fg='green', bold=True)
-            )
-            click.echo(f"Deleted key: {metadata_key}")
+        def format_delete_output(data):
+            """Format delete result for CLI display."""
+            return f"Deleted key: {metadata_key}"
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset link metadata deleted successfully!",
+            cli_formatter=format_delete_output
+        )
         
         return result
         
     except AssetLinkNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Link Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Error",
+            helpful_message="Verify the asset link ID is correct."
         )
         raise click.ClickException(str(e))
     except AssetLinkValidationError as e:
-        click.echo(
-            click.style(f"✗ Validation Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Validation Error",
+            helpful_message="Check that the metadata key exists for this asset link."
         )
         raise click.ClickException(str(e))
     except AssetLinkPermissionError as e:
-        click.echo(
-            click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Permission Error",
+            helpful_message="Ensure you have permission to delete metadata for this asset link."
         )
         raise click.ClickException(str(e))

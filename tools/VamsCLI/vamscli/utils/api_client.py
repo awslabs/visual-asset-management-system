@@ -280,9 +280,16 @@ class APIClient:
             
     def _try_refresh_token(self) -> bool:
         """Try to refresh the authentication token or re-authenticate using saved credentials."""
+        from .logging import log_auth_diagnostic, log_config_diagnostic
+        
         try:
             auth_profile = self.profile_manager.load_auth_profile()
             if not auth_profile or 'refresh_token' not in auth_profile:
+                log_auth_diagnostic(
+                    auth_type="token_refresh",
+                    status="no_refresh_token",
+                    details={'has_auth_profile': bool(auth_profile)}
+                )
                 # No refresh token available, try re-authentication with saved credentials
                 return self._try_reauth_with_saved_credentials()
             
@@ -290,11 +297,23 @@ class APIClient:
             config = self.profile_manager.load_config()
             amplify_config = config.get('amplify_config', {})
             
+            # Log configuration diagnostic
+            log_config_diagnostic(config, self.profile_manager.profile_name)
+            
             region = amplify_config.get('region')
             user_pool_id = amplify_config.get('cognitoUserPoolId')
             client_id = amplify_config.get('cognitoAppClientId')
             
             if not all([region, user_pool_id, client_id]):
+                log_auth_diagnostic(
+                    auth_type="token_refresh",
+                    status="incomplete_config",
+                    details={
+                        'has_region': bool(region),
+                        'has_user_pool_id': bool(user_pool_id),
+                        'has_client_id': bool(client_id)
+                    }
+                )
                 return self._try_reauth_with_saved_credentials()
             
             # Import here to avoid circular imports
@@ -309,19 +328,47 @@ class APIClient:
             auth_profile.update(new_tokens)
             self.profile_manager.save_auth_profile(auth_profile)
             
+            log_auth_diagnostic(
+                auth_type="token_refresh",
+                status="success",
+                details={'profile_name': self.profile_manager.profile_name}
+            )
+            
             return True
             
-        except Exception:
+        except Exception as e:
+            log_auth_diagnostic(
+                auth_type="token_refresh",
+                status="failure",
+                details={'profile_name': self.profile_manager.profile_name},
+                error=e
+            )
             # If refresh fails, try re-authentication with saved credentials
             return self._try_reauth_with_saved_credentials()
     
     def _try_reauth_with_saved_credentials(self) -> bool:
         """Try to re-authenticate using saved credentials."""
+        from .logging import log_auth_diagnostic
+        
         try:
             # Check if we have saved credentials
             saved_credentials = self.profile_manager.load_credentials()
             if not saved_credentials or 'username' not in saved_credentials or 'password' not in saved_credentials:
+                log_auth_diagnostic(
+                    auth_type="reauth_saved_creds",
+                    status="no_saved_credentials",
+                    details={'has_credentials': bool(saved_credentials)}
+                )
                 return False
+            
+            log_auth_diagnostic(
+                auth_type="reauth_saved_creds",
+                status="attempting",
+                details={
+                    'user_id': saved_credentials['username'],
+                    'profile_name': self.profile_manager.profile_name
+                }
+            )
             
             # Load configuration to get Cognito settings
             config = self.profile_manager.load_config()
@@ -332,6 +379,15 @@ class APIClient:
             client_id = amplify_config.get('cognitoAppClientId')
             
             if not all([region, user_pool_id, client_id]):
+                log_auth_diagnostic(
+                    auth_type="reauth_saved_creds",
+                    status="incomplete_config",
+                    details={
+                        'has_region': bool(region),
+                        'has_user_pool_id': bool(user_pool_id),
+                        'has_client_id': bool(client_id)
+                    }
+                )
                 return False
             
             # Import here to avoid circular imports
@@ -359,17 +415,49 @@ class APIClient:
                 try:
                     feature_switches_result = self.get_feature_switches()
                     self.profile_manager.save_feature_switches(feature_switches_result)
-                except Exception:
-                    # Feature switches fetch failure is non-blocking
-                    pass
                     
-            except Exception:
+                    log_auth_diagnostic(
+                        auth_type="reauth_saved_creds",
+                        status="success",
+                        details={
+                            'user_id': saved_credentials['username'],
+                            'profile_name': self.profile_manager.profile_name,
+                            'feature_switches': feature_switches_result
+                        }
+                    )
+                except Exception as fs_error:
+                    # Feature switches fetch failure is non-blocking
+                    log_auth_diagnostic(
+                        auth_type="reauth_saved_creds",
+                        status="success_partial",
+                        details={
+                            'user_id': saved_credentials['username'],
+                            'profile_name': self.profile_manager.profile_name,
+                            'feature_switches_error': str(fs_error)
+                        }
+                    )
+                    
+            except Exception as lp_error:
                 # If login profile API fails, we still have valid tokens
-                pass
+                log_auth_diagnostic(
+                    auth_type="reauth_saved_creds",
+                    status="success_partial",
+                    details={
+                        'user_id': saved_credentials['username'],
+                        'profile_name': self.profile_manager.profile_name,
+                        'login_profile_error': str(lp_error)
+                    }
+                )
             
             return True
             
-        except Exception:
+        except Exception as e:
+            log_auth_diagnostic(
+                auth_type="reauth_saved_creds",
+                status="failure",
+                details={'profile_name': self.profile_manager.profile_name},
+                error=e
+            )
             # If re-authentication fails, return False
             return False
         

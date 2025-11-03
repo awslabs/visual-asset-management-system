@@ -149,7 +149,8 @@ class TestProfileListCommand:
         result = cli_runner.invoke(cli, ['profile', 'list'])
         
         assert result.exit_code == 0  # Command handles error gracefully
-        assert 'Error listing profiles' in result.output
+        assert 'Profile List Error' in result.output
+        assert 'Profile access error' in result.output
 
 
 class TestProfileSwitchCommand:
@@ -455,7 +456,8 @@ class TestProfileCurrentCommand:
         result = cli_runner.invoke(cli, ['profile', 'current'])
         
         assert result.exit_code == 0  # Command handles error gracefully
-        assert 'Error getting current profile' in result.output
+        assert 'Profile Current Error' in result.output
+        assert 'Profile access error' in result.output
 
 
 class TestProfileManagerIntegration:

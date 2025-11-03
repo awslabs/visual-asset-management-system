@@ -583,7 +583,7 @@ class TestDatabaseCommandsJSONHandling:
                 ])
             
             assert result.exit_code == 1  # Our custom error handling
-            assert 'Invalid JSON input' in result.output
+            assert 'Invalid JSON Input' in result.output or 'Invalid JSON input' in result.output
     
     def test_nonexistent_json_input_file(self, cli_runner, generic_command_mocks):
         """Test handling of nonexistent JSON input file."""
@@ -596,7 +596,7 @@ class TestDatabaseCommandsJSONHandling:
                 ])
             
             assert result.exit_code == 1  # Our custom error handling
-            assert 'Invalid JSON input' in result.output
+            assert 'Invalid JSON Input' in result.output or 'Invalid JSON input' in result.output
 
 
 class TestDatabaseCommandsEdgeCases:

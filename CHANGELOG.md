@@ -86,6 +86,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Fix backend bug in `/upload` that was preventing multiple zero-byte files from being uploaded/completed in the same request.
 -   Added additional check in create asset API to validate there is no forward slash in the assetId (if provided)
 -   Added additional check in create asset API to validate assetId does not conflict with an existing key in the default S3 bucket or that a custom bucketKey provided does exist in S3 when provided
+-   Added extra checks to create database/tag/tagType APIs to help prevent duplicate IDs being created
 
 ### Chores
 

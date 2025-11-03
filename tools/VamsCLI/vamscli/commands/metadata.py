@@ -8,6 +8,7 @@ from typing import Dict, Any
 import click
 
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.json_output import output_status, output_result, output_error, output_info
 from ..utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError
 )
@@ -50,8 +51,22 @@ def parse_value(value_str: str) -> Any:
         return value_str
 
 
-def collect_metadata_interactively() -> Dict[str, Any]:
-    """Collect metadata key-value pairs interactively."""
+def collect_metadata_interactively(json_output: bool = False) -> Dict[str, Any]:
+    """Collect metadata key-value pairs interactively.
+    
+    Args:
+        json_output: If True, suppress interactive prompts (not compatible with JSON mode)
+    
+    Returns:
+        Dictionary of metadata key-value pairs
+    """
+    # Interactive collection is not compatible with JSON output mode
+    if json_output:
+        raise click.ClickException(
+            "Interactive metadata collection is not available in JSON output mode. "
+            "Please use --json-input to provide metadata."
+        )
+    
     metadata = {}
     
     click.echo("Enter metadata key-value pairs (values can be JSON objects/arrays):")
@@ -151,38 +166,49 @@ def get(ctx: click.Context, database_id: str, asset_id: str, file_path: str, jso
     if not asset_id:
         raise click.ClickException("Asset ID is required (-a/--asset)")
     
-    # Get profile manager and API client
+    # Get profile manager and API client (setup/auth already validated by decorator)
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Call API
     try:
+        output_status("Retrieving metadata...", json_output)
+        
+        # Call API
         result = api_client.get_metadata(database_id, asset_id, file_path)
+        
+        def format_get_result(data):
+            """Format get result for CLI display."""
+            lines = []
+            target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
+            lines.append(f"Target: {target} in database '{database_id}'")
+            
+            metadata = data.get('metadata', {})
+            if metadata:
+                lines.append("\nMetadata:")
+                lines.append(format_metadata_output(metadata, indent=1))
+            else:
+                lines.append("\nNo metadata found.")
+            
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Metadata retrieved successfully",
+            cli_formatter=format_get_result
+        )
+        
+        return result
+        
     except (AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
+        output_error(
+            e,
+            json_output,
+            error_type=type(e).__name__.replace('Error', ' Error'),
+            helpful_message="Use 'vamscli assets list' or 'vamscli database list' to see available resources."
+        )
         raise click.ClickException(str(e))
-    
-    # Output results
-    if json_output:
-        click.echo(json.dumps(result, indent=2))
-    else:
-        click.echo(click.style("✓ Metadata retrieved successfully", fg='green', bold=True))
-        
-        target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-        click.echo(f"Target: {target} in database '{database_id}'")
-        
-        metadata = result.get('metadata', {})
-        if metadata:
-            click.echo(f"\nMetadata:")
-            click.echo(format_metadata_output(metadata, indent=1))
-        else:
-            click.echo("\nNo metadata found.")
-    
-    return result
 
 
 @metadata.command()
@@ -223,6 +249,13 @@ def create(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
     if not asset_id:
         raise click.ClickException("Asset ID is required (-a/--asset)")
     
+    # JSON output mode requires JSON input
+    if json_output and not json_input:
+        raise click.ClickException(
+            "JSON output mode requires JSON input. "
+            "Please provide metadata using --json-input option."
+        )
+    
     # Get metadata from JSON input or collect interactively
     if json_input and 'metadata' in json_data:
         metadata = json_data['metadata']
@@ -231,40 +264,49 @@ def create(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
         metadata = {k: v for k, v in json_data.items() 
                    if k not in ['database_id', 'asset_id', 'file_path']}
     else:
-        # Collect metadata interactively
-        metadata = collect_metadata_interactively()
+        # Collect metadata interactively (not compatible with JSON output mode)
+        metadata = collect_metadata_interactively(json_output)
     
     if not metadata:
         raise click.ClickException("No metadata provided")
     
-    # Get profile manager and API client
+    # Get profile manager and API client (setup/auth already validated by decorator)
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Call API
     try:
+        output_status("Creating metadata...", json_output)
+        
+        # Call API
         result = api_client.create_metadata(database_id, asset_id, metadata, file_path)
+        
+        def format_create_result(data):
+            """Format create result for CLI display."""
+            lines = []
+            target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
+            lines.append(f"Target: {target} in database '{database_id}'")
+            lines.append("\nCreated metadata:")
+            lines.append(format_metadata_output(metadata, indent=1))
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Metadata created successfully!",
+            cli_formatter=format_create_result
+        )
+        
+        return result
+        
     except (AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
+        output_error(
+            e,
+            json_output,
+            error_type=type(e).__name__.replace('Error', ' Error'),
+            helpful_message="Use 'vamscli assets list' or 'vamscli database list' to see available resources."
+        )
         raise click.ClickException(str(e))
-    
-    # Output results
-    if json_output:
-        click.echo(json.dumps(result, indent=2))
-    else:
-        click.echo(click.style("✓ Metadata created successfully!", fg='green', bold=True))
-        
-        target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-        click.echo(f"Target: {target} in database '{database_id}'")
-        
-        click.echo(f"\nCreated metadata:")
-        click.echo(format_metadata_output(metadata, indent=1))
-    
-    return result
 
 
 @metadata.command()
@@ -305,6 +347,13 @@ def update(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
     if not asset_id:
         raise click.ClickException("Asset ID is required (-a/--asset)")
     
+    # JSON output mode requires JSON input
+    if json_output and not json_input:
+        raise click.ClickException(
+            "JSON output mode requires JSON input. "
+            "Please provide metadata using --json-input option."
+        )
+    
     # Get metadata from JSON input or collect interactively
     if json_input and 'metadata' in json_data:
         metadata = json_data['metadata']
@@ -313,40 +362,49 @@ def update(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
         metadata = {k: v for k, v in json_data.items() 
                    if k not in ['database_id', 'asset_id', 'file_path']}
     else:
-        # Collect metadata interactively
-        metadata = collect_metadata_interactively()
+        # Collect metadata interactively (not compatible with JSON output mode)
+        metadata = collect_metadata_interactively(json_output)
     
     if not metadata:
         raise click.ClickException("No metadata provided")
     
-    # Get profile manager and API client
+    # Get profile manager and API client (setup/auth already validated by decorator)
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Call API
     try:
+        output_status("Updating metadata...", json_output)
+        
+        # Call API
         result = api_client.update_metadata(database_id, asset_id, metadata, file_path)
+        
+        def format_update_result(data):
+            """Format update result for CLI display."""
+            lines = []
+            target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
+            lines.append(f"Target: {target} in database '{database_id}'")
+            lines.append("\nUpdated metadata:")
+            lines.append(format_metadata_output(metadata, indent=1))
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Metadata updated successfully!",
+            cli_formatter=format_update_result
+        )
+        
+        return result
+        
     except (AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
+        output_error(
+            e,
+            json_output,
+            error_type=type(e).__name__.replace('Error', ' Error'),
+            helpful_message="Use 'vamscli assets list' or 'vamscli database list' to see available resources."
+        )
         raise click.ClickException(str(e))
-    
-    # Output results
-    if json_output:
-        click.echo(json.dumps(result, indent=2))
-    else:
-        click.echo(click.style("✓ Metadata updated successfully!", fg='green', bold=True))
-        
-        target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-        click.echo(f"Target: {target} in database '{database_id}'")
-        
-        click.echo(f"\nUpdated metadata:")
-        click.echo(format_metadata_output(metadata, indent=1))
-    
-    return result
 
 
 @metadata.command()
@@ -384,32 +442,42 @@ def delete(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
     if not asset_id:
         raise click.ClickException("Asset ID is required (-a/--asset)")
     
-    # Confirm deletion
+    # Confirm deletion (suppress in JSON output mode)
     target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-    if not click.confirm(f"Are you sure you want to delete all metadata for {target} in database '{database_id}'?"):
-        click.echo("Operation cancelled.")
-        return None
+    if not json_output:
+        if not click.confirm(f"Are you sure you want to delete all metadata for {target} in database '{database_id}'?"):
+            output_info("Operation cancelled.", json_output)
+            return None
     
-    # Get profile manager and API client
+    # Get profile manager and API client (setup/auth already validated by decorator)
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Call API
     try:
+        output_status("Deleting metadata...", json_output)
+        
+        # Call API
         result = api_client.delete_metadata(database_id, asset_id, file_path)
+        
+        def format_delete_result(data):
+            """Format delete result for CLI display."""
+            return f"Target: {target} in database '{database_id}'"
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Metadata deleted successfully!",
+            cli_formatter=format_delete_result
+        )
+        
+        return result
+        
     except (AssetNotFoundError, DatabaseNotFoundError) as e:
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
+        output_error(
+            e,
+            json_output,
+            error_type=type(e).__name__.replace('Error', ' Error'),
+            helpful_message="Use 'vamscli assets list' or 'vamscli database list' to see available resources."
+        )
         raise click.ClickException(str(e))
-    
-    # Output results
-    if json_output:
-        click.echo(json.dumps(result, indent=2))
-    else:
-        click.echo(click.style("✓ Metadata deleted successfully!", fg='green', bold=True))
-        click.echo(f"Target: {target} in database '{database_id}'")
-    
-    return result

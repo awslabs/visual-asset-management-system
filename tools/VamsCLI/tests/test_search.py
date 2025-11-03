@@ -597,7 +597,7 @@ class TestSearchMappingCommand:
         assert 'Get search index mapping' in result.output
         assert 'dual-index system' in result.output
         assert '--output-format' in result.output
-        assert '--jsonOutput' in result.output
+        assert '--json-output' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_mapping_success(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -656,7 +656,7 @@ class TestSearchMappingCommand:
             }
             mocks['api_client'].get_search_mapping.return_value = mock_search_mapping
             
-            result = cli_runner.invoke(cli, ['search', 'mapping', '--jsonOutput'])
+            result = cli_runner.invoke(cli, ['search', 'mapping', '--json-output'])
             
             assert result.exit_code == 0
             

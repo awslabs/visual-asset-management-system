@@ -9,6 +9,7 @@ import click
 
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
+from ..utils.json_output import output_status, output_result, output_error, output_info
 from ..utils.exceptions import (
     SearchError, SearchDisabledError, SearchUnavailableError, 
     InvalidSearchParametersError, SearchQueryError, SearchMappingError
@@ -327,12 +328,12 @@ def _format_mapping_csv(mapping: Dict[str, Any]) -> str:
     return output.getvalue()
 
 
-def _check_search_availability(profile_manager):
+def _check_search_availability(profile_manager, json_output: bool = False):
     """Check if search is available (not disabled by NOOPENSEARCH feature)."""
     if is_feature_enabled(FEATURE_NOOPENSEARCH, profile_manager):
         raise SearchDisabledError(
             "Search functionality is disabled for this environment. "
-            "Use 'vamscli assets list'  instead."
+            "Use 'vamscli assets list' instead."
         )
 
 
@@ -372,14 +373,14 @@ def search():
 @click.option('--include-archived', is_flag=True, help='Include archived assets')
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
               help='Output format (default: table)')
-@click.option('--jsonOutput', is_flag=True, help='Output raw API response as JSON (legacy)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[str],
            metadata_mode: str, include_metadata: bool, explain_results: bool,
            sort_field: Optional[str], sort_desc: bool, from_offset: int, size: int,
            filters: Optional[str], include_archived: bool,
-           output_format: str, jsonoutput: bool):
+           output_format: str, json_output: bool):
     """
     Search assets using OpenSearch with advanced filter support.
     
@@ -409,16 +410,22 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
         vamscli search assets --filters 'str_assettype:"3d-model" AND list_tags:"training"'
         vamscli search assets -q "model" --metadata-query "MD_str_category:Training"
         vamscli search assets -q "model" --output-format csv > results.csv
-        vamscli search assets -q "model" --explain-results
+        vamscli search assets -q "model" --explain-results --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
+    # Handle legacy jsonOutput flag
+    if output_format == 'json':
+        json_output = True
+    
     try:
         # Check if search is available
-        _check_search_availability(profile_manager)
+        _check_search_availability(profile_manager, json_output)
+        
+        output_status("Building search request...", json_output)
         
         # Build search request using new SearchRequestModel format
         search_request = {
@@ -445,49 +452,59 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
             parsed_filters = _parse_filters(filters)
             search_request["filters"] = parsed_filters
         
+        output_status("Executing search...", json_output)
+        
         # Execute search
         result = api_client.search_query(search_request)
         
         # Handle output format
-        if jsonoutput or output_format == 'json':
-            click.echo(json.dumps(result, indent=2))
+        if json_output:
+            output_result(result, json_output)
         elif output_format == 'table':
             total = result.get("hits", {}).get("total", {}).get("value", 0)
-            click.echo(f"\nFound {total} assets\n")
-            table_output = _format_table_output(result, "asset")
-            click.echo(table_output)
-            click.echo(
-                click.style(f"\n✓ Search completed. Found {total} assets.", fg='green', bold=True)
+            
+            def format_assets_table(data):
+                """Format assets search results for CLI display."""
+                lines = [f"\nFound {total} assets\n"]
+                lines.append(_format_table_output(data, "asset"))
+                return '\n'.join(lines)
+            
+            output_result(
+                result,
+                json_output,
+                success_message=f"✓ Search completed. Found {total} assets.",
+                cli_formatter=format_assets_table
             )
         elif output_format == 'csv':
             csv_output = _format_csv_output(result, "asset")
+            # CSV output goes directly to stdout without formatting
             click.echo(csv_output)
         
         return result
     
     except SearchDisabledError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Search Disabled",
+            helpful_message="Use 'vamscli assets list' instead."
         )
-        click.echo("Use 'vamscli assets list' instead.")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Invalid Parameters: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Invalid Parameters",
+            helpful_message="Check your search parameters and try again."
         )
-        click.echo("Check your search parameters and try again.")
         raise click.ClickException(str(e))
     except SearchQueryError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Search Query Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Search Query Error",
+            helpful_message="Use 'vamscli search mapping' to see available search fields."
         )
-        click.echo("Use 'vamscli search mapping' to see available search fields.")
         raise click.ClickException(str(e))
 
 
@@ -507,14 +524,14 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
 @click.option('--include-archived', is_flag=True, help='Include archived files')
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
               help='Output format (default: table)')
-@click.option('--jsonOutput', is_flag=True, help='Output raw API response as JSON (legacy)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str],
           metadata_mode: str, include_metadata: bool, explain_results: bool,
           sort_field: Optional[str], sort_desc: bool, from_offset: int, size: int,
           filters: Optional[str], include_archived: bool,
-          output_format: str, jsonoutput: bool):
+          output_format: str, json_output: bool):
     """
     Search files using OpenSearch with advanced filter support.
     
@@ -537,15 +554,22 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
         vamscli search files -q "texture" --filters 'str_databaseid:"my-db"'
         vamscli search files --filters 'str_fileext:"gltf"'
         vamscli search files -q "texture" --output-format csv > files.csv
+        vamscli search files -q "texture" --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
+    # Handle legacy jsonOutput flag
+    if output_format == 'json':
+        json_output = True
+    
     try:
         # Check if search is available
-        _check_search_availability(profile_manager)
+        _check_search_availability(profile_manager, json_output)
+        
+        output_status("Building search request...", json_output)
         
         # Build search request using new SearchRequestModel format
         search_request = {
@@ -572,49 +596,59 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
             parsed_filters = _parse_filters(filters)
             search_request["filters"] = parsed_filters
         
+        output_status("Executing search...", json_output)
+        
         # Execute search
         result = api_client.search_query(search_request)
         
         # Handle output format
-        if jsonoutput or output_format == 'json':
-            click.echo(json.dumps(result, indent=2))
+        if json_output:
+            output_result(result, json_output)
         elif output_format == 'table':
             total = result.get("hits", {}).get("total", {}).get("value", 0)
-            click.echo(f"\nFound {total} files\n")
-            table_output = _format_table_output(result, "file")
-            click.echo(table_output)
-            click.echo(
-                click.style(f"\n✓ Search completed. Found {total} files.", fg='green', bold=True)
+            
+            def format_files_table(data):
+                """Format files search results for CLI display."""
+                lines = [f"\nFound {total} files\n"]
+                lines.append(_format_table_output(data, "file"))
+                return '\n'.join(lines)
+            
+            output_result(
+                result,
+                json_output,
+                success_message=f"✓ Search completed. Found {total} files.",
+                cli_formatter=format_files_table
             )
         elif output_format == 'csv':
             csv_output = _format_csv_output(result, "file")
+            # CSV output goes directly to stdout without formatting
             click.echo(csv_output)
         
         return result
     
     except SearchDisabledError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Search Disabled",
+            helpful_message="Use 'vamscli assets list' instead."
         )
-        click.echo("Use 'vamscli assets list' instead.")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Invalid Parameters: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Invalid Parameters",
+            helpful_message="Check your search parameters and try again."
         )
-        click.echo("Check your search parameters and try again.")
         raise click.ClickException(str(e))
     except SearchQueryError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Search Query Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Search Query Error",
+            helpful_message="Use 'vamscli search mapping' to see available search fields."
         )
-        click.echo("Use 'vamscli search mapping' to see available search fields.")
         raise click.ClickException(str(e))
 
 
@@ -635,13 +669,14 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
 @click.option('--size', type=int, default=100, help='Results per page (default: 100, max: 1000)')
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
               help='Output format (default: table)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], asset_id: Optional[str],
            asset_type: Optional[str], file_key: Optional[str], file_ext: Optional[str],
            database: Optional[str], tags: Optional[str], metadata_key: Optional[str],
            metadata_value: Optional[str], entity_types: Optional[str], include_archived: bool,
-           from_offset: int, size: int, output_format: str):
+           from_offset: int, size: int, output_format: str, json_output: bool):
     """
     Simple search with user-friendly parameters.
     
@@ -655,15 +690,22 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         vamscli search simple --metadata-key "product" --metadata-value "Training"
         vamscli search simple -d my-database --tags "simulation,training"
         vamscli search simple -q "model" --output-format csv > results.csv
+        vamscli search simple -q "model" --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
+    # Handle legacy output format
+    if output_format == 'json':
+        json_output = True
+    
     try:
         # Check if search is available
-        _check_search_availability(profile_manager)
+        _check_search_availability(profile_manager, json_output)
+        
+        output_status("Building simple search request...", json_output)
         
         # Build simple search request
         search_request = {
@@ -696,51 +738,61 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         if entity_types:
             search_request["entityTypes"] = _parse_entity_types(entity_types)
         
+        output_status("Executing search...", json_output)
+        
         # Execute simple search
         result = api_client.search_simple(search_request)
         
         # Handle output format
-        if output_format == 'json':
-            click.echo(json.dumps(result, indent=2))
+        if json_output:
+            output_result(result, json_output)
         elif output_format == 'table':
             total = result.get("hits", {}).get("total", {}).get("value", 0)
-            click.echo(f"\nFound {total} results\n")
-            table_output = _format_table_output(result, "mixed")
-            click.echo(table_output)
-            click.echo(
-                click.style(f"\n✓ Search completed. Found {total} results.", fg='green', bold=True)
+            
+            def format_simple_table(data):
+                """Format simple search results for CLI display."""
+                lines = [f"\nFound {total} results\n"]
+                lines.append(_format_table_output(data, "mixed"))
+                return '\n'.join(lines)
+            
+            output_result(
+                result,
+                json_output,
+                success_message=f"✓ Search completed. Found {total} results.",
+                cli_formatter=format_simple_table
             )
         elif output_format == 'csv':
             csv_output = _format_csv_output(result, "mixed")
+            # CSV output goes directly to stdout without formatting
             click.echo(csv_output)
         
         return result
     
     except SearchDisabledError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Search Disabled",
+            helpful_message="Use 'vamscli assets list' instead."
         )
-        click.echo("Use 'vamscli assets list' instead.")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Invalid Parameters: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Invalid Parameters",
+            helpful_message="Check your search parameters and try again."
         )
-        click.echo("Check your search parameters and try again.")
         raise click.ClickException(str(e))
 
 
 @search.command()
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
               help='Output format (default: table)')
-@click.option('--jsonOutput', is_flag=True, help='Output raw mapping as JSON (legacy)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def mapping(ctx: click.Context, output_format: str, jsonoutput: bool):
+def mapping(ctx: click.Context, output_format: str, json_output: bool):
     """
     Get search index mapping (available fields and types).
     
@@ -751,49 +803,62 @@ def mapping(ctx: click.Context, output_format: str, jsonoutput: bool):
     Examples:
         vamscli search mapping
         vamscli search mapping --output-format csv
-        vamscli search mapping --jsonOutput
+        vamscli search mapping --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
+    # Handle legacy output format
+    if output_format == 'json':
+        json_output = True
+    
     try:
         # Check if search is available
-        _check_search_availability(profile_manager)
+        _check_search_availability(profile_manager, json_output)
+        
+        output_status("Retrieving search index mappings...", json_output)
         
         # Get search mapping
         mapping = api_client.get_search_mapping()
         
         # Handle output format
-        if jsonoutput or output_format == 'json':
-            click.echo(json.dumps(mapping, indent=2))
+        if json_output:
+            output_result(mapping, json_output)
         elif output_format == 'table':
-            click.echo("\nSearch Index Mappings\n")
-            table_output = _format_mapping_table(mapping)
-            click.echo(table_output)
-            click.echo(
-                click.style("\n✓ Retrieved search index mappings.", fg='green', bold=True)
+            def format_mapping_table_output(data):
+                """Format mapping for CLI display."""
+                lines = ["\nSearch Index Mappings\n"]
+                lines.append(_format_mapping_table(data))
+                return '\n'.join(lines)
+            
+            output_result(
+                mapping,
+                json_output,
+                success_message="✓ Retrieved search index mappings.",
+                cli_formatter=format_mapping_table_output
             )
         elif output_format == 'csv':
             csv_output = _format_mapping_csv(mapping)
+            # CSV output goes directly to stdout without formatting
             click.echo(csv_output)
         
         return mapping
     
     except SearchDisabledError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Search Disabled",
+            helpful_message="Use 'vamscli assets list' instead."
         )
-        click.echo("Use 'vamscli assets list'instead.")
         raise click.ClickException(str(e))
     except SearchMappingError as e:
-        # Command-specific business logic error
-        click.echo(
-            click.style(f"✗ Search Mapping Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Search Mapping Error",
+            helpful_message="Check if search is properly configured."
         )
-        click.echo("Check if search is properly configured.")
         raise click.ClickException(str(e))

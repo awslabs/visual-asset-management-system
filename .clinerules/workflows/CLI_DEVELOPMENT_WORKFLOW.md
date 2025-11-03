@@ -209,16 +209,22 @@ if not asset_exists:
 #### **Rule 6: User-Friendly Error Messages**
 
 ```python
-# ✅ CORRECT - Clear, actionable error messages
-try:
-    result = api_client.get_asset(asset_id)
-except AssetNotFoundError as e:
-    click.echo(
-        click.style(f"✗ Asset Error: {e}", fg='red', bold=True),
-        err=True
-    )
-    click.echo("Use 'vamscli assets list' to see available assets.")
-    raise click.ClickException(str(e))
+# ✅ CORRECT - Clear, actionable error messages with JSON output support
+from ..utils.json_output import output_error
+
+@command.command()
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+def my_command(json_output: bool):
+    try:
+        result = api_client.get_asset(asset_id)
+    except AssetNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Error",
+            helpful_message="Use 'vamscli assets list' to see available assets."
+        )
+        raise click.ClickException(str(e))
 ```
 
 ### **Testing Standards**
@@ -255,6 +261,7 @@ import click
 
 from ..utils.api_client import APIClient
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import [SpecificBusinessLogicError]
 
 
@@ -267,9 +274,10 @@ def [command_group]():
 @[command_group].command()
 @click.option('-u', '--user-id', help='User ID if required')
 @click.option('--option-name', help='Option description')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def [command_name](ctx: click.Context, user_id: str, option_name: str):
+def [command_name](ctx: click.Context, user_id: str, option_name: str, json_output: bool):
     """
     Brief command description.
 
@@ -277,7 +285,7 @@ def [command_name](ctx: click.Context, user_id: str, option_name: str):
 
     Examples:
         vamscli [command_group] [command_name] --option-name value
-        vamscli [command_group] [command_name] --help
+        vamscli [command_group] [command_name] --option-name value --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -285,20 +293,28 @@ def [command_name](ctx: click.Context, user_id: str, option_name: str):
     api_client = APIClient(config['api_gateway_url'], profile_manager)
 
     try:
+        # Status messages only in CLI mode
+        output_status("Processing request...", json_output)
+
         # Focus on business logic only
         result = api_client.[api_method]()
 
-        click.echo(
-            click.style("✓ Operation successful!", fg='green', bold=True)
+        # Output result (JSON or CLI formatted)
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Operation successful!",
+            cli_formatter=lambda r: f"Details: {r}"
         )
 
     except [SpecificBusinessLogicError] as e:
         # Only handle command-specific business logic errors
-        click.echo(
-            click.style(f"✗ [Error Type]: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="[Error Type]",
+            helpful_message="Use 'vamscli [related-command]' for more information."
         )
-        click.echo("Use 'vamscli [related-command]' for more information.")
         raise click.ClickException(str(e))
 ```
 
@@ -497,18 +513,23 @@ def my_command():
 ### **Rule 4: Error Handling MUST be Comprehensive**
 
 ```python
-# ✅ CORRECT - Handle specific errors
-try:
-    result = api_client.get_asset(asset_id)
-except AssetNotFoundError as e:
-    click.echo(click.style(f"✗ Asset Error: {e}", fg='red', bold=True), err=True)
-    raise click.ClickException(str(e))
-except AuthenticationError as e:
-    click.echo(click.style(f"✗ Auth Error: {e}", fg='red', bold=True), err=True)
-    raise click.ClickException(str(e))
-except Exception as e:
-    click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
-    raise click.ClickException(str(e))
+# ✅ CORRECT - Handle specific errors with JSON output support
+from ..utils.json_output import output_error
+
+@command.command()
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+def my_command(json_output: bool):
+    try:
+        result = api_client.get_asset(asset_id)
+    except AssetNotFoundError as e:
+        output_error(e, json_output, error_type="Asset Error")
+        raise click.ClickException(str(e))
+    except AuthenticationError as e:
+        output_error(e, json_output, error_type="Auth Error")
+        raise click.ClickException(str(e))
+    except Exception as e:
+        output_error(e, json_output, error_type="Unexpected Error")
+        raise click.ClickException(str(e))
 ```
 
 ### **Rule 5: Tests MUST be Written**
@@ -543,12 +564,14 @@ All new commands that require API access or configuration MUST support the profi
 
 ```python
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.json_output import output_status, output_result, output_error
 
 @command_group.command()
 @click.option('--required-param', required=True, help='Required parameter')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def new_command(ctx: click.Context, required_param: str):
+def new_command(ctx: click.Context, required_param: str, json_output: bool):
     """Command description with profile support."""
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -556,13 +579,18 @@ def new_command(ctx: click.Context, required_param: str):
     api_client = APIClient(config['api_gateway_url'], profile_manager)
 
     try:
+        # Status messages only in CLI mode
+        output_status("Processing request...", json_output)
+
         # Focus on business logic only
         result = api_client.some_operation(required_param)
-        click.echo("✓ Operation successful!")
+
+        # Output result (JSON or CLI formatted)
+        output_result(result, json_output, success_message="✓ Operation successful!")
 
     except SomeBusinessLogicError as e:
         # Only handle command-specific business logic errors
-        click.echo(f"✗ Business Logic Error: {e}")
+        output_error(e, json_output, error_type="Business Logic Error")
         raise click.ClickException(str(e))
 ```
 
@@ -930,21 +958,23 @@ def govcloud_command(ctx: click.Context):
 
 # ✅ CORRECT - Conditional feature logic
 from ..utils.features import is_feature_enabled
+from ..utils.json_output import output_info
 from ..constants import FEATURE_LOCATIONSERVICES
 
 @command_group.command()
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def location_aware_command(ctx: click.Context):
+def location_aware_command(ctx: click.Context, json_output: bool):
     """Command with location-aware functionality."""
     profile_manager = get_profile_manager_from_context(ctx)
 
     if is_feature_enabled(FEATURE_LOCATIONSERVICES, profile_manager):
         # Location services available
-        click.echo("Location services enabled - using enhanced features")
+        output_info("Location services enabled - using enhanced features", json_output)
     else:
         # Fallback behavior
-        click.echo("Location services disabled - using basic features")
+        output_info("Location services disabled - using basic features", json_output)
 
 # ❌ INCORRECT - Don't hardcode feature names
 @requires_feature("GOVCLOUD")  # VIOLATION - use FEATURE_GOVCLOUD constant
@@ -1062,11 +1092,14 @@ All VamsCLI commands MUST follow the new exception handling architecture that se
 #### **New Exception Handling Pattern:**
 
 ```python
-# ✅ CORRECT - New streamlined pattern
+# ✅ CORRECT - New streamlined pattern with JSON output support
+from ..utils.json_output import output_status, output_result, output_error
+
 @assets.command()
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth  # Handles all global validations
-def create(ctx: click.Context, ...):
+def create(ctx: click.Context, json_output: bool, ...):
     """Create an asset."""
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -1074,14 +1107,23 @@ def create(ctx: click.Context, ...):
     api_client = APIClient(config['api_gateway_url'], profile_manager)
 
     try:
+        # Status messages only in CLI mode
+        output_status("Creating asset...", json_output)
+
         # Focus on business logic only
         result = api_client.create_asset(data)
-        click.echo("✓ Asset created!")
+
+        # Output result (JSON or CLI formatted)
+        output_result(result, json_output, success_message="✓ Asset created!")
 
     except AssetAlreadyExistsError as e:
         # Only handle command-specific business logic errors
-        click.echo(f"✗ Asset Already Exists: {e}")
-        click.echo("Use 'vamscli assets get' to view the existing asset.")
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Already Exists",
+            helpful_message="Use 'vamscli assets get' to view the existing asset."
+        )
         raise click.ClickException(str(e))
 
 # ❌ INCORRECT - Old duplicated pattern
@@ -1102,7 +1144,7 @@ def create(ctx: click.Context, ...):
         result = api_client.create_asset(data)
 
     except AssetAlreadyExistsError as e:
-        # Command-specific error handling (correct)
+        # VIOLATION - Using click.echo instead of output_error
         click.echo(f"✗ Asset Already Exists: {e}")
         raise click.ClickException(str(e))
     except AuthenticationError as e:
@@ -1221,6 +1263,160 @@ def test_command_success(self, ...):  # VIOLATION - use fixtures instead
 -   **Individual test files**: File-specific fixtures that are only used within that test file
 -   **Fixture Documentation**: Document fixture purpose and usage in docstrings
 
+### **Rule 16: JSON Output MUST Be Pure**
+
+All commands with `--json-output` parameter MUST output ONLY valid JSON with no additional messages:
+
+#### **JSON Output Requirements:**
+
+-   [ ] **No Status Messages**: Suppress all status messages when `--json-output` is enabled
+-   [ ] **No CLI Formatting**: No colored text, emojis, or CLI-specific formatting in JSON mode
+-   [ ] **Pure JSON Only**: Only `json.dumps()` output should be sent to stdout
+-   [ ] **JSON Error Format**: Errors must be JSON-formatted when `--json-output` is enabled
+-   [ ] **Use JSON Utilities**: Use `vamscli.utils.json_output` helper functions
+
+#### **Correct JSON Output Pattern:**
+
+```python
+from ..utils.json_output import output_status, output_result, output_error
+
+@command_group.command()
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def my_command(ctx: click.Context, json_output: bool):
+    """Command with proper JSON output handling."""
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        # Status messages only in CLI mode
+        output_status("Processing request...", json_output)
+
+        # Business logic
+        result = api_client.some_operation()
+
+        # Output result (JSON or CLI formatted)
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Operation successful!",
+            cli_formatter=lambda r: format_cli_output(r)
+        )
+
+    except SomeBusinessLogicError as e:
+        # Error output (JSON or CLI formatted)
+        output_error(
+            e,
+            json_output,
+            error_type="Business Logic Error",
+            helpful_message="Use 'vamscli related-command' for more info."
+        )
+        raise click.ClickException(str(e))
+```
+
+#### **Anti-Patterns to Avoid:**
+
+```python
+# ❌ INCORRECT - Status message pollutes JSON output
+@command.command()
+@click.option('--json-output', is_flag=True)
+def bad_command(json_output: bool):
+    click.echo("Processing...")  # VIOLATION - always outputs
+    result = api_call()
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+
+# ❌ INCORRECT - Error message pollutes JSON output
+@command.command()
+@click.option('--json-output', is_flag=True)
+def bad_error_handling(json_output: bool):
+    try:
+        result = api_call()
+        if json_output:
+            click.echo(json.dumps(result, indent=2))
+    except Exception as e:
+        click.echo(f"Error: {e}")  # VIOLATION - not JSON formatted
+        raise
+
+# ❌ INCORRECT - Mixed output in JSON mode
+@command.command()
+@click.option('--json-output', is_flag=True)
+def bad_mixed_output(json_output: bool):
+    result = api_call()
+    if json_output:
+        click.echo("Success!")  # VIOLATION - text before JSON
+        click.echo(json.dumps(result, indent=2))
+```
+
+#### **JSON Output Testing Requirements:**
+
+```python
+# ✅ CORRECT - Test JSON output purity
+def test_command_json_output_pure(self, cli_runner, command_mocks):
+    """Test that JSON output contains ONLY valid JSON."""
+    with command_mocks as mocks:
+        mocks['api_client'].api_method.return_value = {'success': True}
+
+        result = cli_runner.invoke(cli, [
+            'command-group', 'command',
+            '--param', 'value',
+            '--json-output'
+        ])
+
+        assert result.exit_code == 0
+
+        # Verify output is pure JSON (no extra text)
+        try:
+            parsed = json.loads(result.output)
+            assert isinstance(parsed, dict)
+            assert parsed.get('success') == True
+        except json.JSONDecodeError:
+            pytest.fail(f"Output is not valid JSON: {result.output}")
+
+def test_command_json_error_format(self, cli_runner, command_mocks):
+    """Test that errors are JSON-formatted in JSON mode."""
+    with command_mocks as mocks:
+        mocks['api_client'].api_method.side_effect = SomeError("Test error")
+
+        result = cli_runner.invoke(cli, [
+            'command-group', 'command',
+            '--param', 'value',
+            '--json-output'
+        ])
+
+        assert result.exit_code == 1
+
+        # Verify error output is pure JSON
+        try:
+            parsed = json.loads(result.output)
+            assert 'error' in parsed
+            assert parsed['error'] == "Test error"
+        except json.JSONDecodeError:
+            pytest.fail(f"Error output is not valid JSON: {result.output}")
+```
+
+#### **Why JSON Output Purity Matters:**
+
+1. **Downstream Parsing**: Applications parsing CLI output expect pure JSON
+2. **Automation**: Scripts and CI/CD pipelines rely on machine-readable output
+3. **API Integration**: JSON output enables CLI-to-API bridging
+4. **Error Handling**: Consistent error format enables programmatic error handling
+5. **Testing**: Pure JSON output is easier to validate and test
+
+#### **JSON Output Utility Functions:**
+
+The `vamscli.utils.json_output` module provides:
+
+-   `output_result()`: Output results in JSON or CLI format
+-   `output_error()`: Output errors in JSON or CLI format
+-   `output_status()`: Output status messages (CLI only)
+-   `output_warning()`: Output warning messages (CLI only)
+-   `output_info()`: Output informational messages (CLI only)
+
+These utilities ensure consistent JSON output handling across all commands.
+
 ## 📚 **Detailed Implementation Guide**
 
 ### **Adding New API Endpoints**
@@ -1305,12 +1501,15 @@ def new_group():
 #### **Step 2: Implement Commands**
 
 ```python
+from ..utils.json_output import output_status, output_result, output_error
+
 @new_group.command()
 @click.option('-u', '--user-id', help='User ID if required')
 @click.option('--param', required=True, help='Required parameter')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def new_command(ctx: click.Context, user_id: str, param: str):
+def new_command(ctx: click.Context, user_id: str, param: str, json_output: bool):
     """
     Brief command description.
 
@@ -1318,7 +1517,7 @@ def new_command(ctx: click.Context, user_id: str, param: str):
 
     Examples:
         vamscli new-group new-command --param value
-        vamscli new-group new-command -u user@example.com --param value
+        vamscli new-group new-command -u user@example.com --param value --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -1326,20 +1525,23 @@ def new_command(ctx: click.Context, user_id: str, param: str):
     api_client = APIClient(config['api_gateway_url'], profile_manager)
 
     try:
+        # Status messages only in CLI mode
+        output_status("Processing request...", json_output)
+
         # Focus on business logic only
         result = api_client.call_new_endpoint(param)
 
-        click.echo(
-            click.style("✓ Operation successful!", fg='green', bold=True)
-        )
+        # Output result (JSON or CLI formatted)
+        output_result(result, json_output, success_message="✓ Operation successful!")
 
     except SpecificBusinessLogicError as e:
         # Only handle command-specific business logic errors
-        click.echo(
-            click.style(f"✗ Specific Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Specific Error",
+            helpful_message="Use 'vamscli [related-command]' for more information."
         )
-        click.echo("Use 'vamscli [related-command]' for more information.")
         raise click.ClickException(str(e))
 ```
 
@@ -1393,7 +1595,9 @@ __all__ = [
 # main.py
 from .utils.exceptions import NewSpecificError
 
-# Add to exception handler
+# Add to exception handler in main.py
+# Note: main.py exception handlers don't need JSON output support
+# as they handle global infrastructure errors before command execution
 except NewSpecificError as e:
     click.echo(
         click.style(f"✗ New Error: {e}", fg='red', bold=True),
@@ -1433,29 +1637,46 @@ except NewSpecificError as e:
 
 ## 🎯 **Common Patterns**
 
-### **New Streamlined Command Pattern**
+### **New Streamlined Command Pattern with JSON Output**
 
 ```python
-# ✅ NEW PATTERN - Using @requires_setup_and_auth decorator
+# ✅ NEW PATTERN - Using @requires_setup_and_auth decorator with JSON output support
+from ..utils.json_output import output_status, output_result, output_error
+
 @command_group.command()
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth  # Handles all global validations automatically
-def my_command(ctx: click.Context, ...):
-    """Command with streamlined exception handling."""
+def my_command(ctx: click.Context, json_output: bool, ...):
+    """Command with streamlined exception handling and JSON output support."""
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
 
     try:
+        # Status messages only in CLI mode
+        output_status("Processing request...", json_output)
+
         # Focus on business logic only
         result = api_client.api_method(parameters)
-        click.echo(click.style("✓ Success message", fg='green', bold=True))
+
+        # Output result (JSON or CLI formatted)
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Success message",
+            cli_formatter=lambda r: format_output(r)
+        )
 
     except SpecificBusinessLogicError as e:
         # Only handle command-specific business logic errors
-        click.echo(click.style(f"✗ Specific Error: {e}", fg='red', bold=True), err=True)
-        click.echo("Use 'vamscli [related-command]' for more information.")
+        output_error(
+            e,
+            json_output,
+            error_type="Specific Error",
+            helpful_message="Use 'vamscli [related-command]' for more information."
+        )
         raise click.ClickException(str(e))
 ```
 
@@ -1586,18 +1807,3 @@ python -c "from vamscli.main import main; import sys; sys.argv = ['vamscli', '--
 ```
 
 This workflow ensures that all VamsCLI development follows established patterns and maintains the high quality standards of the codebase.
-</response>
-<task_progress>
-
--   [x] Analyze current VamsCLI architecture and patterns
--   [x] Create comprehensive development workflow document
--   [x] Define API endpoint management rules
--   [x] Establish command implementation standards
--   [x] Document error handling requirements
--   [x] Create testing guidelines and templates
--   [x] Define documentation update requirements
--   [x] Create code quality checklist
--   [x] Provide command and API method templates
--   [x] Include authentication/setup validation guidelines
-        </task_progress>
-        </plan_mode_respond>

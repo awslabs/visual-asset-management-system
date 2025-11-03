@@ -3,6 +3,14 @@
 from .api_client import APIClient
 from .profile import ProfileManager
 from . import features
+from .json_output import (
+    output_result,
+    output_error,
+    output_status,
+    output_warning,
+    output_info,
+    ensure_json_output_purity
+)
 from .exceptions import (
     VamsCLIError,
     ConfigurationError,
@@ -55,6 +63,12 @@ __all__ = [
     'APIClient',
     'ProfileManager',
     'features',
+    'output_result',
+    'output_error',
+    'output_status',
+    'output_warning',
+    'output_info',
+    'ensure_json_output_purity',
     'VamsCLIError',
     'ConfigurationError',
     'AuthenticationError',

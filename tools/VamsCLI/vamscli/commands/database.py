@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional, List
 from ..constants import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
+from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import (
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
     BucketNotFoundError, InvalidDatabaseDataError
@@ -154,42 +155,40 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
     if starting_token:
         params['startingToken'] = starting_token
     
-    if not json_output:
-        click.echo("Retrieving databases...")
+    output_status("Retrieving databases...", json_output)
     
     # List databases
     result = api_client.list_databases(show_deleted=show_deleted, params=params)
     
-    if json_output:
-        click.echo(json.dumps(result, indent=2))
-    else:
-        # Format for CLI display
-        databases = result.get('Items', [])
+    def format_databases_list(data):
+        """Format databases list for CLI display."""
+        databases = data.get('Items', [])
         if not databases:
-            click.echo("No databases found.")
-            return result
+            return "No databases found."
         
-        click.echo(f"\nFound {len(databases)} database(s):")
-        click.echo("-" * 80)
+        lines = [f"\nFound {len(databases)} database(s):", "-" * 80]
         
         for database in databases:
-            click.echo(f"ID: {database.get('databaseId', 'N/A')}")
-            click.echo(f"Description: {database.get('description', 'N/A')}")
-            click.echo(f"Date Created: {database.get('dateCreated', 'N/A')}")
-            click.echo(f"Asset Count: {database.get('assetCount', 0)}")
-            click.echo(f"Default Bucket ID: {database.get('defaultBucketId', 'N/A')}")
+            lines.append(f"ID: {database.get('databaseId', 'N/A')}")
+            lines.append(f"Description: {database.get('description', 'N/A')}")
+            lines.append(f"Date Created: {database.get('dateCreated', 'N/A')}")
+            lines.append(f"Asset Count: {database.get('assetCount', 0)}")
+            lines.append(f"Default Bucket ID: {database.get('defaultBucketId', 'N/A')}")
             
             bucket_name = database.get('bucketName')
             if bucket_name:
-                click.echo(f"Bucket Name: {bucket_name}")
+                lines.append(f"Bucket Name: {bucket_name}")
             
-            click.echo("-" * 80)
+            lines.append("-" * 80)
         
         # Show pagination info if available
-        next_token = result.get('NextToken')
+        next_token = data.get('NextToken')
         if next_token:
-            click.echo(f"More results available. Use --starting-token '{next_token}' to see additional databases.")
+            lines.append(f"More results available. Use --starting-token '{next_token}' to see additional databases.")
+        
+        return '\n'.join(lines)
     
+    output_result(result, json_output, cli_formatter=format_databases_list)
     return result
 
 
@@ -245,47 +244,48 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
                 click.echo("No bucket ID provided. Please select from available buckets:")
                 database_data['defaultBucketId'] = prompt_bucket_selection(api_client)
         
-        click.echo(f"Creating database '{database_id}'...")
+        output_status(f"Creating database '{database_id}'...", json_output)
         
         # Create the database
         result = api_client.create_database(database_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Database created successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Database ID: {result.get('databaseId', database_id)}")
-            click.echo(f"  Message: {result.get('message', 'Database created')}")
+        def format_create_result(data):
+            """Format create result for CLI display."""
+            lines = []
+            lines.append(f"  Database ID: {data.get('databaseId', database_id)}")
+            lines.append(f"  Message: {data.get('message', 'Database created')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Database created successfully!",
+            cli_formatter=format_create_result
+        )
         
         return result
         
     except click.BadParameter as e:
-        click.echo(
-            click.style(f"✗ Invalid JSON input: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid JSON Input")
         raise click.ClickException(str(e))
     except DatabaseAlreadyExistsError as e:
-        click.echo(
-            click.style(f"✗ Database Already Exists: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Already Exists",
+            helpful_message="Use 'vamscli database get' to view the existing database or choose a different database ID."
         )
-        click.echo("Use 'vamscli database get' to view the existing database or choose a different database ID.")
         raise click.ClickException(str(e))
     except BucketNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Bucket Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Bucket Not Found",
+            helpful_message="Use 'vamscli database list-buckets' to see available buckets."
         )
-        click.echo("Use 'vamscli database list-buckets' to see available buckets.")
         raise click.ClickException(str(e))
     except InvalidDatabaseDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Database Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Database Data")
         raise click.ClickException(str(e))
 
 
@@ -340,47 +340,48 @@ def update(ctx: click.Context, database_id: str, description: Optional[str], def
                     "Use --description, --default-bucket-id, or --json-input."
                 )
         
-        click.echo(f"Updating database '{database_id}'...")
+        output_status(f"Updating database '{database_id}'...", json_output)
         
         # Update the database
         result = api_client.update_database(database_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Database updated successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Database ID: {result.get('databaseId', database_id)}")
-            click.echo(f"  Message: {result.get('message', 'Database updated')}")
+        def format_update_result(data):
+            """Format update result for CLI display."""
+            lines = []
+            lines.append(f"  Database ID: {data.get('databaseId', database_id)}")
+            lines.append(f"  Message: {data.get('message', 'Database updated')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Database updated successfully!",
+            cli_formatter=format_update_result
+        )
         
         return result
         
     except click.BadParameter as e:
-        click.echo(
-            click.style(f"✗ Invalid JSON input: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid JSON Input")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
     except BucketNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Bucket Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Bucket Not Found",
+            helpful_message="Use 'vamscli database list-buckets' to see available buckets."
         )
-        click.echo("Use 'vamscli database list-buckets' to see available buckets.")
         raise click.ClickException(str(e))
     except InvalidDatabaseDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Database Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Database Data")
         raise click.ClickException(str(e))
 
 
@@ -408,26 +409,26 @@ def get(ctx: click.Context, database_id: str, show_deleted: bool, json_output: b
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        click.echo(f"Retrieving database '{database_id}'...")
+        output_status(f"Retrieving database '{database_id}'...", json_output)
         
         # Get the database
         result = api_client.get_database(database_id, show_deleted)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(format_database_output(result))
+        output_result(result, json_output, cli_formatter=format_database_output)
         
         return result
         
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
-        )
+        helpful_msg = "Use 'vamscli database list' to see available databases."
         if not show_deleted:
-            click.echo("Try using --show-deleted to include deleted databases.")
-        click.echo("Use 'vamscli database list' to see available databases.")
+            helpful_msg = "Try using --show-deleted to include deleted databases.\n" + helpful_msg
+        
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message=helpful_msg
+        )
         raise click.ClickException(str(e))
 
 
@@ -479,35 +480,42 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
             click.echo("Deletion cancelled.")
             return None
         
-        click.echo(f"Deleting database '{database_id}'...")
+        output_status(f"Deleting database '{database_id}'...", json_output)
         
         # Delete the database
         result = api_client.delete_database(database_id)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Database deleted successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Database ID: {database_id}")
-            click.echo(f"  Message: {result.get('message', 'Database deleted')}")
+        def format_delete_result(data):
+            """Format delete result for CLI display."""
+            lines = []
+            lines.append(f"  Database ID: {database_id}")
+            lines.append(f"  Message: {data.get('message', 'Database deleted')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Database deleted successfully!",
+            cli_formatter=format_delete_result
+        )
         
         return result
         
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
     except DatabaseDeletionError as e:
-        click.echo(
-            click.style(f"✗ Database Deletion Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Deletion Error",
+            helpful_message="Ensure the database does not contain any active assets, workflows, or pipelines."
         )
-        click.echo("Ensure the database does not contain any active assets, workflows, or pipelines.")
         raise click.ClickException(str(e))
 
 
@@ -545,32 +553,31 @@ def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Option
     if starting_token:
         params['startingToken'] = starting_token
     
-    click.echo("Retrieving bucket configurations...")
+    output_status("Retrieving bucket configurations...", json_output)
     
     # List buckets
     result = api_client.list_buckets(params)
     
-    if json_output:
-        click.echo(json.dumps(result, indent=2))
-    else:
-        # Format for CLI display
-        buckets = result.get('Items', [])
+    def format_buckets_list(data):
+        """Format buckets list for CLI display."""
+        buckets = data.get('Items', [])
         if not buckets:
-            click.echo("No bucket configurations found.")
-            return result
+            return "No bucket configurations found."
         
-        click.echo(f"\nFound {len(buckets)} bucket configuration(s):")
-        click.echo("-" * 80)
+        lines = [f"\nFound {len(buckets)} bucket configuration(s):", "-" * 80]
         
         for bucket in buckets:
-            click.echo(f"ID: {bucket.get('bucketId', 'N/A')}")
-            click.echo(f"Name: {bucket.get('bucketName', 'N/A')}")
-            click.echo(f"Base Assets Prefix: {bucket.get('baseAssetsPrefix', 'N/A')}")
-            click.echo("-" * 80)
+            lines.append(f"ID: {bucket.get('bucketId', 'N/A')}")
+            lines.append(f"Name: {bucket.get('bucketName', 'N/A')}")
+            lines.append(f"Base Assets Prefix: {bucket.get('baseAssetsPrefix', 'N/A')}")
+            lines.append("-" * 80)
         
         # Show pagination info if available
-        next_token = result.get('NextToken')
+        next_token = data.get('NextToken')
         if next_token:
-            click.echo(f"More results available. Use --starting-token '{next_token}' to see additional buckets.")
+            lines.append(f"More results available. Use --starting-token '{next_token}' to see additional buckets.")
+        
+        return '\n'.join(lines)
     
+    output_result(result, json_output, cli_formatter=format_buckets_list)
     return result

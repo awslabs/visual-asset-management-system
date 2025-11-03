@@ -458,7 +458,7 @@ class TestTagTypeUpdateCommand:
                 # No fields to update
             ])
             
-            assert result.exit_code == 2  # Click parameter validation error
+            assert result.exit_code == 1  # Custom validation error
             assert 'At least one field must be provided for update' in result.output
     
     def test_update_invalid_tag_type_data(self, cli_runner, tag_type_command_mocks):
@@ -808,7 +808,7 @@ class TestTagTypeCommandsJSONHandling:
                 '--json-input', 'invalid json string'
             ])
             
-            assert result.exit_code == 2  # Click parameter validation error
+            assert result.exit_code == 1  # Custom validation error
             assert 'Invalid JSON input' in result.output
     
     def test_invalid_json_input_file(self, cli_runner, tag_type_command_mocks):
@@ -822,11 +822,9 @@ class TestTagTypeCommandsJSONHandling:
                     '--json-input', 'invalid.json'
                 ])
             
-            # Global exception handling - no output, just exception propagation
+            # Custom validation error for invalid JSON in file
             assert result.exit_code == 1
-            assert result.exception
-            # The error message will be a JSON decode error since the file contains invalid JSON
-            assert 'Expecting value' in str(result.exception)
+            assert 'Invalid' in result.output
     
     def test_nonexistent_json_input_file(self, cli_runner, tag_type_command_mocks):
         """Test handling of nonexistent JSON input file."""
@@ -839,7 +837,7 @@ class TestTagTypeCommandsJSONHandling:
                     '--json-input', 'nonexistent.json'
                 ])
             
-            assert result.exit_code == 2  # Click parameter validation error
+            assert result.exit_code == 1  # Custom validation error
             assert 'Invalid JSON input' in result.output
 
 

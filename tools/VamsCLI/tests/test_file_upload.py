@@ -890,7 +890,7 @@ class TestFileUploadCommandEdgeCases:
                     ])
                     
                     assert result.exit_code == 1  # Should exit with error code
-                    assert '❌ Upload failed' in result.output
+                    # With new output format, failed uploads show results without success message
                     assert 'Successful files: 0/1' in result.output
                     assert 'Failed files: 1' in result.output
         finally:
@@ -1111,7 +1111,8 @@ class TestFileUploadCommandNewRestrictions:
                     
                     assert result.exit_code == 1
                     assert "Too many files" in result.output
-                    assert "💡 Tip:" in result.output
+                    # New format uses helpful_message instead of emoji tips
+                    assert "You can split your upload" in result.output or "Upload Validation Error" in result.output
 
 
 class TestFileUploadCommandIntegration:

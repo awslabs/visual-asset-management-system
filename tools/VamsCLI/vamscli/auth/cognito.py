@@ -47,6 +47,22 @@ class CognitoAuthenticator(BaseAuthenticator):
         
     def authenticate(self, username: str, password: str) -> Dict[str, Any]:
         """Authenticate user using Cognito SRP."""
+        # Import logging here to avoid circular imports
+        from ..utils.logging import log_auth_diagnostic
+        
+        # Log authentication attempt
+        log_auth_diagnostic(
+            auth_type="cognito",
+            status="attempting",
+            details={
+                'user_id': username,
+                'region': self.region,
+                'user_pool_id': self.user_pool_id,
+                'client_id': self.client_id,
+                'has_client_secret': bool(self.client_secret)
+            }
+        )
+        
         try:
             # First try USER_PASSWORD_AUTH if available
             auth_params = {
@@ -58,6 +74,12 @@ class CognitoAuthenticator(BaseAuthenticator):
                 auth_params['SECRET_HASH'] = self._calculate_secret_hash(username)
             
             try:
+                log_auth_diagnostic(
+                    auth_type="cognito",
+                    status="trying_user_password_auth",
+                    details={'flow': 'USER_PASSWORD_AUTH'}
+                )
+                
                 response = self.client.initiate_auth(
                     ClientId=self.client_id,
                     AuthFlow='USER_PASSWORD_AUTH',
@@ -66,11 +88,16 @@ class CognitoAuthenticator(BaseAuthenticator):
                 
                 # Handle challenges if present
                 if 'ChallengeName' in response:
+                    log_auth_diagnostic(
+                        auth_type="cognito",
+                        status="challenge_required",
+                        details={'challenge': response['ChallengeName']}
+                    )
                     return self._handle_auth_challenge(response, username, password)
                     
                 # Extract tokens
                 auth_result = response['AuthenticationResult']
-                return {
+                result = {
                     'access_token': auth_result['AccessToken'],
                     'refresh_token': auth_result['RefreshToken'],
                     'id_token': auth_result['IdToken'],
@@ -79,8 +106,26 @@ class CognitoAuthenticator(BaseAuthenticator):
                     'expires_at': int(time.time()) + auth_result['ExpiresIn']
                 }
                 
+                log_auth_diagnostic(
+                    auth_type="cognito",
+                    status="success",
+                    details={
+                        'user_id': username,
+                        'token_type': result['token_type'],
+                        'expires_at': result['expires_at'],
+                        'flow': 'USER_PASSWORD_AUTH'
+                    }
+                )
+                
+                return result
+                
             except ClientError as e:
                 if 'USER_PASSWORD_AUTH flow not enabled' in str(e):
+                    log_auth_diagnostic(
+                        auth_type="cognito",
+                        status="fallback_to_srp",
+                        details={'reason': 'USER_PASSWORD_AUTH not enabled'}
+                    )
                     # Fall back to SRP authentication
                     return self._authenticate_with_srp(username, password)
                 else:
@@ -89,6 +134,16 @@ class CognitoAuthenticator(BaseAuthenticator):
         except ClientError as e:
             error_code = e.response['Error']['Code']
             error_message = e.response['Error']['Message']
+            
+            log_auth_diagnostic(
+                auth_type="cognito",
+                status="failure",
+                details={
+                    'error_code': error_code,
+                    'user_id': username
+                },
+                error=e
+            )
             
             if error_code == 'NotAuthorizedException':
                 raise AuthenticationError("Invalid username or password")
@@ -103,12 +158,30 @@ class CognitoAuthenticator(BaseAuthenticator):
     
     def _authenticate_with_srp(self, username: str, password: str) -> Dict[str, Any]:
         """Authenticate using SRP protocol."""
+        from ..utils.logging import log_auth_diagnostic
+        
         if not HAS_PYCOGNITO:
+            log_auth_diagnostic(
+                auth_type="cognito_srp",
+                status="failure",
+                details={'error': 'pycognito library not available'},
+                error=AuthenticationError("Missing pycognito library")
+            )
             raise AuthenticationError(
                 "SRP authentication requires the 'pycognito' library. "
                 "Please install it with: pip install pycognito\n\n"
                 "Alternatively, enable 'ALLOW_USER_PASSWORD_AUTH' in your Cognito User Pool App Client settings."
             )
+        
+        log_auth_diagnostic(
+            auth_type="cognito_srp",
+            status="attempting",
+            details={
+                'user_id': username,
+                'flow': 'USER_SRP_AUTH',
+                'has_pycognito': True
+            }
+        )
         
         try:
             # Create AWSSRP instance
@@ -130,6 +203,12 @@ class CognitoAuthenticator(BaseAuthenticator):
             
             # Handle PASSWORD_VERIFIER challenge
             if response.get("ChallengeName") == "PASSWORD_VERIFIER":
+                log_auth_diagnostic(
+                    auth_type="cognito_srp",
+                    status="password_verifier_challenge",
+                    details={'challenge': 'PASSWORD_VERIFIER'}
+                )
+                
                 challenge_response = aws_srp.process_challenge(
                     response["ChallengeParameters"], 
                     auth_params
@@ -142,11 +221,16 @@ class CognitoAuthenticator(BaseAuthenticator):
             
             # Handle any additional challenges
             if 'ChallengeName' in response:
+                log_auth_diagnostic(
+                    auth_type="cognito_srp",
+                    status="additional_challenge",
+                    details={'challenge': response['ChallengeName']}
+                )
                 return self._handle_auth_challenge(response, username, password)
                 
             # Extract tokens
             auth_result = response['AuthenticationResult']
-            return {
+            result = {
                 'access_token': auth_result['AccessToken'],
                 'refresh_token': auth_result['RefreshToken'],
                 'id_token': auth_result['IdToken'],
@@ -155,9 +239,32 @@ class CognitoAuthenticator(BaseAuthenticator):
                 'expires_at': int(time.time()) + auth_result['ExpiresIn']
             }
             
+            log_auth_diagnostic(
+                auth_type="cognito_srp",
+                status="success",
+                details={
+                    'user_id': username,
+                    'token_type': result['token_type'],
+                    'expires_at': result['expires_at'],
+                    'flow': 'USER_SRP_AUTH'
+                }
+            )
+            
+            return result
+            
         except ClientError as e:
             error_code = e.response['Error']['Code']
             error_message = e.response['Error']['Message']
+            
+            log_auth_diagnostic(
+                auth_type="cognito_srp",
+                status="failure",
+                details={
+                    'error_code': error_code,
+                    'user_id': username
+                },
+                error=e
+            )
             
             if error_code == 'NotAuthorizedException':
                 raise AuthenticationError("Invalid username or password")
@@ -223,6 +330,14 @@ class CognitoAuthenticator(BaseAuthenticator):
             
     def refresh_token(self, refresh_token: str) -> Dict[str, Any]:
         """Refresh access token using refresh token."""
+        from ..utils.logging import log_auth_diagnostic
+        
+        log_auth_diagnostic(
+            auth_type="cognito_refresh",
+            status="attempting",
+            details={'flow': 'REFRESH_TOKEN_AUTH'}
+        )
+        
         try:
             auth_params = {
                 'REFRESH_TOKEN': refresh_token
@@ -239,7 +354,7 @@ class CognitoAuthenticator(BaseAuthenticator):
             )
             
             auth_result = response['AuthenticationResult']
-            return {
+            result = {
                 'access_token': auth_result['AccessToken'],
                 'id_token': auth_result['IdToken'],
                 'token_type': auth_result['TokenType'],
@@ -247,8 +362,28 @@ class CognitoAuthenticator(BaseAuthenticator):
                 'expires_at': int(time.time()) + auth_result['ExpiresIn']
             }
             
+            log_auth_diagnostic(
+                auth_type="cognito_refresh",
+                status="success",
+                details={
+                    'token_type': result['token_type'],
+                    'expires_at': result['expires_at']
+                }
+            )
+            
+            return result
+            
         except ClientError as e:
+            error_code = e.response['Error']['Code']
             error_message = e.response['Error']['Message']
+            
+            log_auth_diagnostic(
+                auth_type="cognito_refresh",
+                status="failure",
+                details={'error_code': error_code},
+                error=e
+            )
+            
             raise AuthenticationError(f"Token refresh failed: {error_message}")
             
     def is_token_valid(self, token_data: Dict[str, Any]) -> bool:

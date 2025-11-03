@@ -369,7 +369,7 @@ class TestAssetLinksUpdateCommand:
                 '--asset-link-id', '12345678-1234-1234-1234-123456789012'
             ])
             
-            assert result.exit_code == 2  # Click parameter error
+            assert result.exit_code == 1  # ClickException (new pattern)
             assert 'At least one field must be provided' in result.output
 
 
@@ -648,7 +648,7 @@ class TestAssetLinksCommandsJSONHandling:
                 '--json-input', 'invalid json'
             ])
             
-            assert result.exit_code == 2  # Click parameter error
+            assert result.exit_code == 1  # ClickException (new pattern)
             assert 'Invalid JSON input' in result.output
     
     def test_nonexistent_json_input_file(self, cli_runner, asset_links_command_mocks):
@@ -664,7 +664,7 @@ class TestAssetLinksCommandsJSONHandling:
                 '--json-input', 'nonexistent.json'
             ])
             
-            assert result.exit_code == 2  # Click parameter error
+            assert result.exit_code == 1  # ClickException (new pattern)
             assert 'Invalid JSON input' in result.output
 
 
@@ -826,7 +826,7 @@ class TestAssetLinksCreateWithAlias:
                 '--alias-id', 'should-fail'
             ])
 
-            assert result.exit_code == 2  # Click parameter error
+            assert result.exit_code == 1  # ClickException (new pattern)
             assert 'can only be used with' in result.output or 'parentChild' in result.output
 
     def test_create_with_alias_json_input(self, cli_runner, asset_links_command_mocks):

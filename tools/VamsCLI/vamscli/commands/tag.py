@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 
 from ..utils.api_client import APIClient
 from ..utils.decorators import get_profile_manager_from_context, requires_setup_and_auth
+from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import (
     TagNotFoundError, TagAlreadyExistsError, TagTypeNotFoundError,
     InvalidTagDataError
@@ -25,6 +26,10 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
         except (FileNotFoundError, IOError):
             raise click.BadParameter(
                 f"Invalid JSON input: '{json_input}' is neither valid JSON nor a readable file path"
+            )
+        except json.JSONDecodeError:
+            raise click.BadParameter(
+                f"Invalid JSON in file '{json_input}': file contains invalid JSON format"
             )
 
 
@@ -130,41 +135,45 @@ def create(ctx: click.Context, tag_name: Optional[str], description: Optional[st
                 }]
             }
         
-        click.echo("Creating tag(s)...")
+        output_status("Creating tag(s)...", json_output)
         
         # Create the tag(s)
         result = api_client.create_tags(tags_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Tag(s) created successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Message: {result.get('message', 'Tags created')}")
+        def format_create_result(data):
+            """Format create result for CLI display."""
+            return f"  Message: {data.get('message', 'Tags created')}"
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Tag(s) created successfully!",
+            cli_formatter=format_create_result
+        )
         
         return result
         
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid Input")
+        raise click.ClickException(str(e))
     except TagAlreadyExistsError as e:
-        click.echo(
-            click.style(f"✗ Tag Already Exists: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Tag Already Exists",
+            helpful_message="Use 'vamscli tag list' to view existing tags."
         )
-        click.echo("Use 'vamscli tag list' to view existing tags.")
         raise click.ClickException(str(e))
     except TagTypeNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Tag Type Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Tag Type Not Found",
+            helpful_message="Use 'vamscli tag-type list' to see available tag types.\nCreate the tag type first with 'vamscli tag-type create'."
         )
-        click.echo("Use 'vamscli tag-type list' to see available tag types.")
-        click.echo("Create the tag type first with 'vamscli tag-type create'.")
         raise click.ClickException(str(e))
     except InvalidTagDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Tag Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Tag Data")
         raise click.ClickException(str(e))
 
 
@@ -213,6 +222,7 @@ def update(ctx: click.Context, tag_name: Optional[str], description: Optional[st
                 )
             
             # We need to get the current tag data first to preserve unchanged fields
+            output_status("Retrieving current tag data...", json_output)
             current_tags = api_client.get_tags()
             current_tag = None
             
@@ -237,40 +247,45 @@ def update(ctx: click.Context, tag_name: Optional[str], description: Optional[st
         
         # Get tag name for progress message
         update_tag_name = tag_name if tag_name else tags_data.get('tags', [{}])[0].get('tagName', 'unknown')
-        click.echo(f"Updating tag '{update_tag_name}'...")
+        output_status(f"Updating tag '{update_tag_name}'...", json_output)
         
         # Update the tag(s)
         result = api_client.update_tags(tags_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Tag(s) updated successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Message: {result.get('message', 'Tags updated')}")
+        def format_update_result(data):
+            """Format update result for CLI display."""
+            return f"  Message: {data.get('message', 'Tags updated')}"
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Tag(s) updated successfully!",
+            cli_formatter=format_update_result
+        )
         
         return result
         
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid Input")
+        raise click.ClickException(str(e))
     except TagNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Tag Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Tag Not Found",
+            helpful_message="Use 'vamscli tag list' to see available tags."
         )
-        click.echo("Use 'vamscli tag list' to see available tags.")
         raise click.ClickException(str(e))
     except TagTypeNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Tag Type Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Tag Type Not Found",
+            helpful_message="Use 'vamscli tag-type list' to see available tag types."
         )
-        click.echo("Use 'vamscli tag-type list' to see available tag types.")
         raise click.ClickException(str(e))
     except InvalidTagDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Tag Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Tag Data")
         raise click.ClickException(str(e))
 
 
@@ -299,34 +314,41 @@ def delete(ctx: click.Context, tag_name: str, confirm: bool, json_output: bool):
     try:
         # Require confirmation for deletion
         if not confirm:
-            click.echo(
-                click.style("⚠️  Tag deletion requires explicit confirmation!", fg='yellow', bold=True)
-            )
-            click.echo("Use --confirm flag to proceed with tag deletion.")
+            if not json_output:
+                click.echo(
+                    click.style("⚠️  Tag deletion requires explicit confirmation!", fg='yellow', bold=True)
+                )
+                click.echo("Use --confirm flag to proceed with tag deletion.")
             raise click.ClickException("Confirmation required for tag deletion")
         
-        click.echo(f"Deleting tag '{tag_name}'...")
+        output_status(f"Deleting tag '{tag_name}'...", json_output)
         
         # Delete the tag
         result = api_client.delete_tag(tag_name)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Tag deleted successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Tag: {tag_name}")
-            click.echo(f"  Message: {result.get('message', 'Tag deleted')}")
+        def format_delete_result(data):
+            """Format delete result for CLI display."""
+            lines = []
+            lines.append(f"  Tag: {tag_name}")
+            lines.append(f"  Message: {data.get('message', 'Tag deleted')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Tag deleted successfully!",
+            cli_formatter=format_delete_result
+        )
         
         return result
         
     except TagNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Tag Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Tag Not Found",
+            helpful_message="Use 'vamscli tag list' to see available tags."
         )
-        click.echo("Use 'vamscli tag list' to see available tags.")
         raise click.ClickException(str(e))
 
 
@@ -351,16 +373,15 @@ def list(ctx: click.Context, tag_type: Optional[str], json_output: bool):
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    click.echo("Retrieving tags...")
+    output_status("Retrieving tags...", json_output)
     
     # Get the tags
     result = api_client.get_tags()
     
-    if json_output:
-        click.echo(json.dumps(result, indent=2))
-    else:
+    def format_tags_result(data):
+        """Format tags result for CLI display."""
         # Extract tags from the response
-        tags_list = result.get('message', {}).get('Items', [])
+        tags_list = data.get('message', {}).get('Items', [])
         
         # Filter by tag type if specified
         if tag_type:
@@ -374,15 +395,16 @@ def list(ctx: click.Context, tag_type: Optional[str], json_output: bool):
             tags_list = filtered_tags
             
             if not tags_list:
-                click.echo(f"No tags found for tag type '{tag_type}'.")
-                return result
+                return f"No tags found for tag type '{tag_type}'."
         
         # Format for CLI display
-        click.echo(format_tags_list_output(tags_list, json_output))
+        output = format_tags_list_output(tags_list, json_output)
         
         # Show pagination info if available
-        if result.get('message', {}).get('NextToken'):
-            click.echo(f"\nMore results available. Use pagination to see additional tags.")
+        if data.get('message', {}).get('NextToken'):
+            output += "\n\nMore results available. Use pagination to see additional tags."
+        
+        return output
     
+    output_result(result, json_output, cli_formatter=format_tags_result)
     return result
-

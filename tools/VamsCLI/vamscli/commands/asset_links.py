@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 
 from ..utils.api_client import APIClient
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.json_output import output_status, output_result, output_error, output_warning
 from ..utils.exceptions import (
     AssetLinkError, AssetLinkNotFoundError, AssetLinkValidationError, 
     AssetLinkPermissionError, CycleDetectionError, AssetLinkAlreadyExistsError,
@@ -27,6 +28,10 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
         except (FileNotFoundError, IOError):
             raise click.BadParameter(
                 f"Invalid JSON input: '{json_input}' is neither valid JSON nor a readable file path"
+            )
+        except json.JSONDecodeError:
+            raise click.BadParameter(
+                f"Invalid JSON in file '{json_input}': file contains invalid JSON format"
             )
 
 
@@ -221,7 +226,6 @@ def create(ctx: click.Context, from_asset_id: str, from_database_id: str,
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        
         # Validate alias_id usage
         if alias_id and relationship_type.lower() != 'parentchild':
             raise click.BadParameter(
@@ -247,68 +251,73 @@ def create(ctx: click.Context, from_asset_id: str, from_database_id: str,
             if alias_id:
                 link_data['assetLinkAliasId'] = alias_id
         
-        if not json_output:
-            click.echo("Creating asset link...")
+        output_status("Creating asset link...", json_output)
         
         # Create the asset link
         result = api_client.create_asset_link(link_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset link created successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Asset Link ID: {result.get('assetLinkId')}")
-            click.echo(f"  Relationship: {link_data.get('relationshipType')}")
-            click.echo(f"  From: {link_data.get('fromAssetId')} ({link_data.get('fromAssetDatabaseId')}) → To: {link_data.get('toAssetId')} ({link_data.get('toAssetDatabaseId')})")
+        def format_create_result(data):
+            """Format create result for CLI display."""
+            lines = []
+            lines.append(f"  Asset Link ID: {data.get('assetLinkId')}")
+            lines.append(f"  Relationship: {link_data.get('relationshipType')}")
+            lines.append(f"  From: {link_data.get('fromAssetId')} ({link_data.get('fromAssetDatabaseId')}) → To: {link_data.get('toAssetId')} ({link_data.get('toAssetDatabaseId')})")
             if link_data.get('assetLinkAliasId'):
-                click.echo(f"  Alias ID: {link_data.get('assetLinkAliasId')}")
+                lines.append(f"  Alias ID: {link_data.get('assetLinkAliasId')}")
             if link_data.get('tags'):
-                click.echo(f"  Tags: {', '.join(link_data.get('tags'))}")
-            click.echo(f"  Message: {result.get('message', 'Asset link created')}")
+                lines.append(f"  Tags: {', '.join(link_data.get('tags'))}")
+            lines.append(f"  Message: {data.get('message', 'Asset link created')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset link created successfully!",
+            cli_formatter=format_create_result
+        )
         
         return result
         
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid Parameter")
+        raise click.ClickException(str(e))
     except AssetLinkAlreadyExistsError as e:
-        click.echo(
-            click.style(f"✗ Asset Link Already Exists: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Already Exists",
+            helpful_message="A relationship already exists between these assets."
         )
-        click.echo("A relationship already exists between these assets.")
         raise click.ClickException(str(e))
     except CycleDetectionError as e:
-        click.echo(
-            click.style(f"✗ Cycle Detection Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Cycle Detection Error",
+            helpful_message="Creating this parent-child relationship would create a cycle in the asset hierarchy."
         )
-        click.echo("Creating this parent-child relationship would create a cycle in the asset hierarchy.")
         raise click.ClickException(str(e))
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message="Ensure both assets exist before creating a link between them."
         )
-        click.echo("Ensure both assets exist before creating a link between them.")
         raise click.ClickException(str(e))
     except AssetLinkPermissionError as e:
-        click.echo(
-            click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Permission Error",
+            helpful_message="You need permissions on both assets to create a link between them."
         )
-        click.echo("You need permissions on both assets to create a link between them.")
         raise click.ClickException(str(e))
     except AssetLinkValidationError as e:
-        click.echo(
-            click.style(f"✗ Validation Error: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Validation Error")
         raise click.ClickException(str(e))
     except InvalidRelationshipTypeError as e:
-        click.echo(
-            click.style(f"✗ Invalid Relationship Type: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Relationship Type")
         raise click.ClickException(str(e))
 
 
@@ -334,33 +343,30 @@ def get(ctx: click.Context, asset_link_id: str, json_output: bool):
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        
-        if not json_output:
-            click.echo(f"Retrieving asset link '{asset_link_id}'...")
+        output_status(f"Retrieving asset link '{asset_link_id}'...", json_output)
         
         # Get the asset link
         result = api_client.get_single_asset_link(asset_link_id)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(format_asset_link_output(result))
+        output_result(result, json_output, cli_formatter=format_asset_link_output)
         
         return result
         
     except AssetLinkNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Link Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Not Found",
+            helpful_message="Use 'vamscli asset-links list' to see available asset links."
         )
-        click.echo("Use 'vamscli asset-links list' to see available asset links.")
         raise click.ClickException(str(e))
     except AssetLinkPermissionError as e:
-        click.echo(
-            click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Permission Error",
+            helpful_message="You need permissions on the linked assets to view this asset link."
         )
-        click.echo("You need permissions on the linked assets to view this asset link.")
         raise click.ClickException(str(e))
 
 
@@ -392,7 +398,6 @@ def update(ctx: click.Context, asset_link_id: str, alias_id: Optional[str], tags
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        
         # Build update data
         if json_input:
             # Use JSON input
@@ -416,45 +421,52 @@ def update(ctx: click.Context, asset_link_id: str, alias_id: Optional[str], tags
                     "Use --alias-id, --tags, or --json-input."
                 )
         
-        click.echo(f"Updating asset link '{asset_link_id}'...")
+        output_status(f"Updating asset link '{asset_link_id}'...", json_output)
         
         # Update the asset link
         result = api_client.update_asset_link(asset_link_id, update_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset link updated successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Asset Link ID: {asset_link_id}")
+        def format_update_result(data):
+            """Format update result for CLI display."""
+            lines = []
+            lines.append(f"  Asset Link ID: {asset_link_id}")
             if 'assetLinkAliasId' in update_data:
-                click.echo(f"  New Alias ID: {update_data.get('assetLinkAliasId')}")
+                lines.append(f"  New Alias ID: {update_data.get('assetLinkAliasId')}")
             if update_data.get('tags'):
-                click.echo(f"  New Tags: {', '.join(update_data.get('tags'))}")
-            click.echo(f"  Message: {result.get('message', 'Asset link updated')}")
+                lines.append(f"  New Tags: {', '.join(update_data.get('tags'))}")
+            lines.append(f"  Message: {data.get('message', 'Asset link updated')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset link updated successfully!",
+            cli_formatter=format_update_result
+        )
         
         return result
         
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid Parameter")
+        raise click.ClickException(str(e))
     except AssetLinkNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Link Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Not Found",
+            helpful_message="Use 'vamscli asset-links list' to see available asset links."
         )
-        click.echo("Use 'vamscli asset-links list' to see available asset links.")
         raise click.ClickException(str(e))
     except AssetLinkPermissionError as e:
-        click.echo(
-            click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Permission Error",
+            helpful_message="You need permissions on both linked assets to update this asset link."
         )
-        click.echo("You need permissions on both linked assets to update this asset link.")
         raise click.ClickException(str(e))
     except AssetLinkValidationError as e:
-        click.echo(
-            click.style(f"✗ Validation Error: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Validation Error")
         raise click.ClickException(str(e))
 
 
@@ -480,46 +492,54 @@ def delete(ctx: click.Context, asset_link_id: str, json_output: bool):
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
+        # Confirmation prompt for safety (suppress in JSON mode)
+        if not json_output:
+            output_warning(
+                f"⚠️  You are about to delete asset link '{asset_link_id}'",
+                json_output
+            )
+            click.echo("This will remove the relationship and all associated metadata.")
+            
+            if not click.confirm("Are you sure you want to proceed?"):
+                click.echo("Deletion cancelled.")
+                return None
         
-        # Confirmation prompt for safety
-        click.echo(
-            click.style(f"⚠️  You are about to delete asset link '{asset_link_id}'", fg='yellow', bold=True)
-        )
-        click.echo("This will remove the relationship and all associated metadata.")
-        
-        if not click.confirm("Are you sure you want to proceed?"):
-            click.echo("Deletion cancelled.")
-            return None
-        
-        click.echo(f"Deleting asset link '{asset_link_id}'...")
+        output_status(f"Deleting asset link '{asset_link_id}'...", json_output)
         
         # Delete the asset link
         result = api_client.delete_asset_link(asset_link_id)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Asset link deleted successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Asset Link ID: {asset_link_id}")
-            click.echo(f"  Message: {result.get('message', 'Asset link deleted')}")
+        def format_delete_result(data):
+            """Format delete result for CLI display."""
+            lines = []
+            lines.append(f"  Asset Link ID: {asset_link_id}")
+            lines.append(f"  Message: {data.get('message', 'Asset link deleted')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset link deleted successfully!",
+            cli_formatter=format_delete_result
+        )
         
         return result
         
     except AssetLinkNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Link Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Not Found",
+            helpful_message="Use 'vamscli asset-links list' to see available asset links."
         )
-        click.echo("Use 'vamscli asset-links list' to see available asset links.")
         raise click.ClickException(str(e))
     except AssetLinkPermissionError as e:
-        click.echo(
-            click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Permission Error",
+            helpful_message="You need permissions on both linked assets to delete this asset link."
         )
-        click.echo("You need permissions on both linked assets to delete this asset link.")
         raise click.ClickException(str(e))
 
 
@@ -548,39 +568,44 @@ def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: b
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        
-        click.echo(f"Retrieving asset links for '{asset_id}' in database '{database_id}'...")
+        output_status(f"Retrieving asset links for '{asset_id}' in database '{database_id}'...", json_output)
         
         # Get asset links
         result = api_client.get_asset_links_for_asset(database_id, asset_id, tree_view)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(f"\nAsset Links for {asset_id} in database {database_id}:")
-            click.echo("=" * 60)
-            click.echo(format_asset_links_list_output(result))
+        def format_list_result(data):
+            """Format list result for CLI display."""
+            lines = []
+            lines.append(f"\nAsset Links for {asset_id} in database {database_id}:")
+            lines.append("=" * 60)
+            lines.append(format_asset_links_list_output(data))
+            return '\n'.join(lines)
+        
+        output_result(result, json_output, cli_formatter=format_list_result)
         
         return result
         
     except AssetNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database_id} {asset_id}' to check if the asset exists."
         )
-        click.echo(f"Use 'vamscli assets get -d {database_id} {asset_id}' to check if the asset exists.")
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
         )
-        click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
     except AssetLinkPermissionError as e:
-        click.echo(
-            click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Permission Error",
+            helpful_message="You need permissions on the asset to view its links."
         )
-        click.echo("You need permissions on the asset to view its links.")
         raise click.ClickException(str(e))

@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 
 from ..utils.api_client import APIClient
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import DatabaseNotFoundError
 
 
@@ -29,11 +30,8 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
             )
 
 
-def format_metadata_schema_output(schema_data: Dict[str, Any], json_output: bool = False) -> str:
+def format_metadata_schema_output(schema_data: Dict[str, Any]) -> str:
     """Format metadata schema data for CLI output."""
-    if json_output:
-        return json.dumps(schema_data, indent=2)
-    
     # Extract the actual schema items from the response
     message = schema_data.get('message', {})
     items = message.get('Items', []) if isinstance(message, dict) else []
@@ -109,42 +107,43 @@ def get(ctx: click.Context, database: str, max_items: int, page_size: int,
         vamscli metadata-schema get -d my-database --json-input pagination.json
         vamscli metadata-schema get -d my-database --json-input '{"maxItems":100,"pageSize":50}'
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Handle JSON input for pagination parameters
-    if json_input:
-        json_data = parse_json_input(json_input)
-        
-        # Override pagination parameters from JSON input
-        max_items = json_data.get('maxItems', max_items)
-        page_size = json_data.get('pageSize', page_size)
-        starting_token = json_data.get('startingToken', starting_token)
-    
-    if not json_output:
-        click.echo(f"Retrieving metadata schema for database '{database}'...")
-    
-    # Get metadata schema
     try:
+        # Handle JSON input for pagination parameters
+        if json_input:
+            json_data = parse_json_input(json_input)
+            
+            # Override pagination parameters from JSON input
+            max_items = json_data.get('maxItems', max_items)
+            page_size = json_data.get('pageSize', page_size)
+            starting_token = json_data.get('startingToken', starting_token)
+        
+        output_status(f"Retrieving metadata schema for database '{database}'...", json_output)
+        
+        # Get metadata schema
         result = api_client.get_metadata_schema(
             database_id=database,
             max_items=max_items,
             page_size=page_size,
             starting_token=starting_token
         )
-    except DatabaseNotFoundError as e:
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Database Not Found: {e}", fg='red', bold=True), err=True)
-            click.echo("Use 'vamscli database list' to see available databases.")
+        
+        output_result(result, json_output, cli_formatter=format_metadata_schema_output)
+        
+        return result
+        
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid JSON Input")
         raise click.ClickException(str(e))
-    
-    if json_output:
-        click.echo(json.dumps(result, indent=2))
-    else:
-        formatted_output = format_metadata_schema_output(result)
-        click.echo(formatted_output)
-    
-    return result
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))

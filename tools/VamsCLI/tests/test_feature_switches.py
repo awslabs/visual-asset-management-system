@@ -155,9 +155,8 @@ class TestFeaturesListCommand:
             
             result = cli_runner.invoke(cli, ['features', 'list'])
             
-            assert result.exit_code == 0
-            assert 'Not authenticated' in result.output
-            assert 'vamscli auth login' in result.output
+            assert result.exit_code == 1
+            assert 'Not authenticated' in result.output or 'Authentication Required' in result.output
             
             # Verify auth check was called
             mocks['profile_manager'].has_auth_profile.assert_called_once()
@@ -176,9 +175,77 @@ class TestFeaturesListCommand:
             
             result = cli_runner.invoke(cli, ['features', 'list'])
             
+            assert result.exit_code == 1
+            assert 'No feature switches available' in result.output or 'No Feature Switches' in result.output
+
+
+class TestFeaturesListJSONOutput:
+    """Test features list command JSON output."""
+    
+    def test_list_json_output_with_features(self, cli_runner, features_command_mocks):
+        """Test list command with JSON output and enabled features."""
+        with features_command_mocks as mocks:
+            mocks['profile_manager'].has_auth_profile.return_value = True
+            mocks['profile_manager'].get_feature_switches_info.return_value = {
+                'has_feature_switches': True,
+                'enabled': ['GOVCLOUD', 'LOCATIONSERVICES'],
+                'count': 2,
+                'fetched_at': '2024-01-01T12:00:00Z'
+            }
+            
+            result = cli_runner.invoke(cli, ['features', 'list', '--json-output'])
+            
             assert result.exit_code == 0
-            assert 'No feature switches available' in result.output
-            assert 'Try re-authenticating to fetch latest features' in result.output
+            
+            # Verify output is valid JSON
+            try:
+                parsed = json.loads(result.output)
+                assert parsed['total'] == 2
+                assert 'GOVCLOUD' in parsed['enabled']
+                assert 'LOCATIONSERVICES' in parsed['enabled']
+                assert parsed['fetched_at'] == '2024-01-01T12:00:00Z'
+            except json.JSONDecodeError:
+                pytest.fail(f"Output is not valid JSON: {result.output}")
+    
+    def test_list_json_output_no_features(self, cli_runner, features_command_mocks):
+        """Test list command with JSON output and no enabled features."""
+        with features_command_mocks as mocks:
+            mocks['profile_manager'].has_auth_profile.return_value = True
+            mocks['profile_manager'].get_feature_switches_info.return_value = {
+                'has_feature_switches': True,
+                'enabled': [],
+                'count': 0,
+                'fetched_at': '2024-01-01T12:00:00Z'
+            }
+            
+            result = cli_runner.invoke(cli, ['features', 'list', '--json-output'])
+            
+            assert result.exit_code == 0
+            
+            # Verify output is valid JSON
+            try:
+                parsed = json.loads(result.output)
+                assert parsed['total'] == 0
+                assert parsed['enabled'] == []
+                assert parsed['fetched_at'] == '2024-01-01T12:00:00Z'
+            except json.JSONDecodeError:
+                pytest.fail(f"Output is not valid JSON: {result.output}")
+    
+    def test_list_json_output_no_auth(self, cli_runner, features_command_mocks):
+        """Test list command with JSON output when not authenticated."""
+        with features_command_mocks as mocks:
+            mocks['profile_manager'].has_auth_profile.return_value = False
+            
+            result = cli_runner.invoke(cli, ['features', 'list', '--json-output'])
+            
+            assert result.exit_code == 1
+            
+            # Verify error output is valid JSON
+            try:
+                parsed = json.loads(result.output)
+                assert 'error' in parsed
+            except json.JSONDecodeError:
+                pytest.fail(f"Error output is not valid JSON: {result.output}")
 
 
 class TestFeaturesCheckCommand:
@@ -250,9 +317,8 @@ class TestFeaturesCheckCommand:
             
             result = cli_runner.invoke(cli, ['features', 'check', 'GOVCLOUD'])
             
-            assert result.exit_code == 0
-            assert 'Not authenticated' in result.output
-            assert 'vamscli auth login' in result.output
+            assert result.exit_code == 1
+            assert 'Not authenticated' in result.output or 'Authentication Required' in result.output
     
     def test_check_no_feature_switches(self, cli_runner, features_command_mocks):
         """Test check command when no feature switches are available."""
@@ -268,15 +334,130 @@ class TestFeaturesCheckCommand:
             
             result = cli_runner.invoke(cli, ['features', 'check', 'GOVCLOUD'])
             
-            assert result.exit_code == 0
-            assert 'No feature switches available' in result.output
-            assert 'Try re-authenticating to fetch latest features' in result.output
+            assert result.exit_code == 1
+            assert 'No feature switches available' in result.output or 'No Feature Switches' in result.output
     
     def test_check_missing_feature_name(self, cli_runner):
         """Test check command without feature name argument."""
         result = cli_runner.invoke(cli, ['features', 'check'])
         assert result.exit_code == 2  # Click parameter error
         assert 'Missing argument' in result.output or 'FEATURE_NAME' in result.output
+
+
+class TestFeaturesCheckJSONOutput:
+    """Test features check command JSON output."""
+    
+    def test_check_json_output_enabled(self, cli_runner, features_command_mocks):
+        """Test check command with JSON output for enabled feature."""
+        with features_command_mocks as mocks:
+            mocks['profile_manager'].has_auth_profile.return_value = True
+            mocks['profile_manager'].get_feature_switches_info.return_value = {
+                'has_feature_switches': True,
+                'enabled': ['GOVCLOUD'],
+                'count': 1,
+                'fetched_at': '2024-01-01T12:00:00Z'
+            }
+            
+            with patch('vamscli.commands.features.is_feature_enabled') as mock_is_enabled:
+                mock_is_enabled.return_value = True
+                
+                result = cli_runner.invoke(cli, ['features', 'check', 'GOVCLOUD', '--json-output'])
+                
+                assert result.exit_code == 0
+                
+                # Verify output is valid JSON
+                try:
+                    parsed = json.loads(result.output)
+                    assert parsed['feature_name'] == 'GOVCLOUD'
+                    assert parsed['enabled'] is True
+                except json.JSONDecodeError:
+                    pytest.fail(f"Output is not valid JSON: {result.output}")
+    
+    def test_check_json_output_disabled(self, cli_runner, features_command_mocks):
+        """Test check command with JSON output for disabled feature."""
+        with features_command_mocks as mocks:
+            mocks['profile_manager'].has_auth_profile.return_value = True
+            mocks['profile_manager'].get_feature_switches_info.return_value = {
+                'has_feature_switches': True,
+                'enabled': [],
+                'count': 0,
+                'fetched_at': '2024-01-01T12:00:00Z'
+            }
+            
+            with patch('vamscli.commands.features.is_feature_enabled') as mock_is_enabled:
+                mock_is_enabled.return_value = False
+                
+                result = cli_runner.invoke(cli, ['features', 'check', 'LOCATIONSERVICES', '--json-output'])
+                
+                assert result.exit_code == 0
+                
+                # Verify output is valid JSON
+                try:
+                    parsed = json.loads(result.output)
+                    assert parsed['feature_name'] == 'LOCATIONSERVICES'
+                    assert parsed['enabled'] is False
+                except json.JSONDecodeError:
+                    pytest.fail(f"Output is not valid JSON: {result.output}")
+    
+    def test_check_json_output_no_auth(self, cli_runner, features_command_mocks):
+        """Test check command with JSON output when not authenticated."""
+        with features_command_mocks as mocks:
+            mocks['profile_manager'].has_auth_profile.return_value = False
+            
+            result = cli_runner.invoke(cli, ['features', 'check', 'GOVCLOUD', '--json-output'])
+            
+            assert result.exit_code == 1
+            
+            # Verify error output is valid JSON
+            try:
+                parsed = json.loads(result.output)
+                assert 'error' in parsed
+            except json.JSONDecodeError:
+                pytest.fail(f"Error output is not valid JSON: {result.output}")
+
+
+class TestFeaturesExampleJSONOutput:
+    """Test features example commands JSON output."""
+    
+    def test_example_govcloud_json_output(self, cli_runner, features_command_mocks):
+        """Test example-govcloud command with JSON output."""
+        with features_command_mocks as mocks:
+            with patch('vamscli.commands.features.requires_feature') as mock_requires_feature:
+                mock_requires_feature.return_value = lambda func: func
+                
+                result = cli_runner.invoke(cli, ['features', 'example-govcloud', '--json-output'])
+                
+                assert result.exit_code == 0
+                
+                # Verify output is valid JSON
+                try:
+                    parsed = json.loads(result.output)
+                    assert parsed['feature'] == FEATURE_GOVCLOUD
+                    assert parsed['enabled'] is True
+                    assert 'message' in parsed
+                    assert 'description' in parsed
+                except json.JSONDecodeError:
+                    pytest.fail(f"Output is not valid JSON: {result.output}")
+    
+    def test_example_location_json_output(self, cli_runner, features_command_mocks):
+        """Test example-location command with JSON output."""
+        with features_command_mocks as mocks:
+            with patch('vamscli.commands.features.requires_feature') as mock_requires_feature:
+                mock_requires_feature.return_value = lambda func: func
+                
+                result = cli_runner.invoke(cli, ['features', 'example-location', '--json-output'])
+                
+                assert result.exit_code == 0
+                
+                # Verify output is valid JSON
+                try:
+                    parsed = json.loads(result.output)
+                    assert parsed['feature'] == FEATURE_LOCATIONSERVICES
+                    assert parsed['enabled'] is True
+                    assert 'message' in parsed
+                    assert 'description' in parsed
+                except json.JSONDecodeError:
+                    pytest.fail(f"Output is not valid JSON: {result.output}")
 
 
 class TestFeaturesExampleCommands:

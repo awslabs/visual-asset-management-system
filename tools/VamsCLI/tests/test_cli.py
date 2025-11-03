@@ -509,7 +509,7 @@ class TestAuthCommands:
             
             assert result.exit_code == 0
             assert '✓ Cognito authentication successful!' in result.output
-            assert 'expires in 3600 seconds' in result.output
+            assert 'Access token expires in: 3600 seconds' in result.output
             assert 'User profile refreshed' in result.output
             assert 'Feature switches updated' in result.output
             
@@ -545,7 +545,7 @@ class TestAuthCommands:
                 ])
             
             assert result.exit_code == 1
-            assert '✗ Cognito authentication failed' in result.output
+            assert '✗ Cognito Authentication Error' in result.output
             assert 'Invalid credentials' in result.output
     
     def test_auth_login_with_password_and_save_credentials(self, cli_runner, auth_command_mocks):
@@ -653,7 +653,7 @@ class TestAuthCommands:
             result = cli_runner.invoke(cli, ['auth', 'status'])
             
             assert result.exit_code == 0
-            assert 'Authentication Status:' in result.output
+            # The new format doesn't have "Authentication Status:" header
             assert 'Type: Cognito Token' in result.output
             assert 'User ID: test@example.com' in result.output
             assert 'Status: ✓ Valid' in result.output
@@ -723,7 +723,7 @@ class TestAuthCommands:
             ])
             
             assert result.exit_code == 0
-            assert '✓ Override token saved and validated successfully!' in result.output
+            assert '✓ Override token saved successfully!' in result.output
             assert 'User profile refreshed' in result.output
             assert 'Feature switches updated' in result.output
             
@@ -816,7 +816,7 @@ class TestAuthCommands:
             
             assert result.exit_code == 0
             assert '✓ Token override authentication successful!' in result.output
-            assert 'Token expires in 1 hour' in result.output
+            assert 'Token expires in: 1 hour' in result.output
             
             # Verify API calls
             mocks['profile_manager'].save_override_token.assert_called_once_with('override-token-123', 'test@example.com', '+3600')
@@ -844,7 +844,7 @@ class TestAuthCommands:
             ])
             
             assert result.exit_code == 1
-            assert '✗ Token override authentication failed' in result.output
+            assert '✗ Token Override Authentication Error' in result.output
             assert 'Invalid token' in result.output
     
     def test_auth_login_token_override_with_save_credentials_error(self, cli_runner, auth_command_mocks):

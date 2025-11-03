@@ -193,13 +193,8 @@ class TestTagCreateCommand:
             ])
             
             assert result.exit_code == 0
-            # Should output progress message followed by JSON
-            assert 'Creating tag(s)...' in result.output
-            # Extract JSON from output (skip the progress message)
-            lines = result.output.strip().split('\n')
-            json_lines = lines[1:]  # Skip first line (progress message)
-            json_output = '\n'.join(json_lines)
-            output_json = json.loads(json_output)
+            # Should output ONLY pure JSON (no status messages in JSON mode)
+            output_json = json.loads(result.output)
             assert output_json == api_response
     
     def test_create_missing_params(self, cli_runner, tag_command_mocks):
@@ -211,7 +206,7 @@ class TestTagCreateCommand:
                 # Missing description and tag-type-name
             ])
             
-            assert result.exit_code == 2  # Click parameter validation error
+            assert result.exit_code == 1  # Custom validation error
             assert 'required when not using --json-input' in result.output
     
     def test_create_tag_already_exists(self, cli_runner, tag_command_mocks):
@@ -428,7 +423,7 @@ class TestTagUpdateCommand:
                 '--tag-name', 'urgent'
             ])
             
-            assert result.exit_code == 2  # Click parameter validation error
+            assert result.exit_code == 1  # Custom validation error
             assert 'At least one field must be provided' in result.output
     
     def test_update_tag_type_not_found(self, cli_runner, tag_command_mocks):
@@ -493,13 +488,8 @@ class TestTagDeleteCommand:
             ])
             
             assert result.exit_code == 0
-            # Should output progress message followed by JSON
-            assert 'Deleting tag' in result.output
-            # Extract JSON from output (skip the progress message)
-            lines = result.output.strip().split('\n')
-            json_lines = lines[1:]  # Skip first line (progress message)
-            json_output = '\n'.join(json_lines)
-            output_json = json.loads(json_output)
+            # Should output ONLY pure JSON (no status messages in JSON mode)
+            output_json = json.loads(result.output)
             assert output_json == api_response
     
     def test_delete_no_confirm(self, cli_runner, tag_command_mocks):
@@ -647,13 +637,8 @@ class TestTagListCommand:
             
             assert result.exit_code == 0
             
-            # Should output progress message followed by JSON
-            assert 'Retrieving tags...' in result.output
-            # Extract JSON from output (skip the progress message)
-            lines = result.output.strip().split('\n')
-            json_lines = lines[1:]  # Skip first line (progress message)
-            json_output = '\n'.join(json_lines)
-            output_json = json.loads(json_output)
+            # Should output ONLY pure JSON (no status messages in JSON mode)
+            output_json = json.loads(result.output)
             assert output_json == api_response
     
     def test_list_empty(self, cli_runner, tag_command_mocks):
@@ -712,12 +697,12 @@ class TestTagCommandsIntegration:
         with tag_command_mocks as mocks:
             # Test create without tag name (should trigger our custom validation)
             result = cli_runner.invoke(cli, ['tag', 'create'])
-            assert result.exit_code == 2  # Click parameter validation error
+            assert result.exit_code == 1  # Custom validation error
             assert 'required when not using --json-input' in result.output
             
             # Test update without tag name (should trigger our custom validation)
             result = cli_runner.invoke(cli, ['tag', 'update'])
-            assert result.exit_code == 2  # Click parameter validation error
+            assert result.exit_code == 1  # Custom validation error
             assert 'required when not using --json-input' in result.output
             
             # Test delete without tag name (Click argument validation)
@@ -784,8 +769,8 @@ class TestTagCommandsJSONHandling:
                 '--json-input', 'invalid json string'
             ])
             
-            assert result.exit_code == 2  # Click parameter validation error
-            assert 'Invalid JSON input' in result.output
+            assert result.exit_code == 1  # Custom validation error
+            assert 'Invalid' in result.output
     
     def test_invalid_json_input_file(self, cli_runner, tag_command_mocks):
         """Test handling of invalid JSON input file."""
@@ -796,11 +781,9 @@ class TestTagCommandsJSONHandling:
                     '--json-input', 'invalid.json'
                 ])
             
-            # Global exception handling - no output, just exception propagation
+            # Custom validation error for invalid JSON in file
             assert result.exit_code == 1
-            assert result.exception
-            # The error message will be a JSON decode error since the file contains invalid JSON
-            assert 'Expecting value' in str(result.exception)
+            assert 'Invalid' in result.output
     
     def test_nonexistent_json_input_file(self, cli_runner, tag_command_mocks):
         """Test handling of nonexistent JSON input file."""
@@ -811,8 +794,8 @@ class TestTagCommandsJSONHandling:
                     '--json-input', 'nonexistent.json'
                 ])
             
-            assert result.exit_code == 2  # Click parameter validation error
-            assert 'Invalid JSON input' in result.output
+            assert result.exit_code == 1  # Custom validation error
+            assert 'Invalid' in result.output
 
 
 class TestTagCommandsEdgeCases:

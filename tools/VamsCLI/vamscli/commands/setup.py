@@ -8,6 +8,7 @@ import click
 from ..utils.api_client import APIClient
 from ..utils.decorators import get_profile_manager_from_context
 from ..utils.exceptions import ConfigurationError
+from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
 from ..version import get_version
 
 
@@ -29,8 +30,9 @@ def validate_base_url(url: str) -> bool:
 @click.argument('base_url')
 @click.option('--force', '-f', is_flag=True, help='Force setup even if configuration exists')
 @click.option('--skip-version-check', is_flag=True, help='Skip version mismatch confirmation prompts')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bool):
+def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bool, json_output: bool):
     """
     Setup VamsCLI with VAMS base URL.
     
@@ -56,6 +58,9 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
         
         # Force overwrite existing configuration
         vamscli --profile dev setup https://dev-vams.example.com --force
+        
+        # JSON output mode
+        vamscli setup https://vams.example.com --json-output
     """
     # Get profile manager from context
     profile_manager = get_profile_manager_from_context(ctx)
@@ -63,56 +68,68 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
     # Check if configuration already exists
     if profile_manager.has_config() and not force:
         profile_name = profile_manager.profile_name
-        click.echo(f"Configuration already exists for profile '{profile_name}'. Use --force to overwrite.")
+        message = f"Configuration already exists for profile '{profile_name}'. Use --force to overwrite."
+        
+        if json_output:
+            result = {
+                'status': 'skipped',
+                'message': message,
+                'profile': profile_name,
+                'force_required': True
+            }
+            output_result(result, json_output)
+        else:
+            output_info(message, json_output)
         return
     
     # Validate URL format
     if not validate_base_url(base_url):
-        raise click.BadParameter(
+        error = click.BadParameter(
             "Invalid base URL. Please provide a valid HTTP/HTTPS URL."
         )
+        output_error(error, json_output, error_type="Invalid URL")
+        raise error
     
     # Ensure URL doesn't end with slash
     base_url = base_url.rstrip('/')
     
     profile_name = profile_manager.profile_name
-    click.echo(f"Setting up VamsCLI with base URL: {base_url}")
-    click.echo(f"Profile: {profile_name}")
+    
+    # Status messages only in CLI mode
+    output_status(f"Setting up VamsCLI with base URL: {base_url}", json_output)
+    output_status(f"Profile: {profile_name}", json_output)
     
     try:
         # Create API client with base URL to fetch amplify config
         api_client = APIClient(base_url, profile_manager)
         
         # Check API version
-        click.echo("Checking API version...")
+        output_status("Checking API version...", json_output)
         version_info = api_client.check_version()
         
         if not version_info['match']:
-            click.echo(
-                click.style(
-                    "WARNING: Version mismatch detected:", 
-                    fg='yellow', bold=True
-                )
+            output_warning(
+                "WARNING: Version mismatch detected:",
+                json_output
             )
-            click.echo(f"   CLI version: {version_info['cli_version']}")
-            click.echo(f"   API version: {version_info['api_version']}")
-            click.echo("   This may cause compatibility issues.")
+            output_info(f"   CLI version: {version_info['cli_version']}", json_output)
+            output_info(f"   API version: {version_info['api_version']}", json_output)
+            output_info("   This may cause compatibility issues.", json_output)
             
-            if not skip_version_check and not click.confirm("Continue with setup?"):
-                click.echo("Setup cancelled.")
-                return
+            if not skip_version_check and not json_output:
+                if not click.confirm("Continue with setup?"):
+                    output_info("Setup cancelled.", json_output)
+                    return
             elif skip_version_check:
-                click.echo("   Skipping version check confirmation (--skip-version-check enabled)")
+                output_info("   Skipping version check confirmation (--skip-version-check enabled)", json_output)
         else:
-            click.echo(
-                click.style(
-                    f"✓ Version match: {version_info['cli_version']}", 
-                    fg='green'
-                )
+            output_status(
+                f"✓ Version match: {version_info['cli_version']}", 
+                json_output
             )
         
         # Fetch Amplify configuration
-        click.echo("Fetching Amplify configuration...")
+        output_status("Fetching Amplify configuration...", json_output)
         amplify_config = api_client.get_amplify_config()
         
         # Extract API Gateway URL from amplify config
@@ -132,41 +149,64 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
         # Ensure extracted API Gateway URL doesn't end with slash
         api_gateway_url = api_gateway_url.rstrip('/')
         
-        click.echo(f"✓ Extracted API Gateway URL: {api_gateway_url}")
+        output_status(f"✓ Extracted API Gateway URL: {api_gateway_url}", json_output)
         
         # Wipe existing profile configuration if force is used
         if force:
-            click.echo("Removing existing configuration...")
+            output_status("Removing existing configuration...", json_output)
             profile_manager.wipe_profile()
         
         # Save configuration with both base URL and extracted API Gateway URL
-        from datetime import datetime
+        from datetime import datetime, timezone
         config = {
             'base_url': base_url,
             'api_gateway_url': api_gateway_url,
             'amplify_config': amplify_config,
             'cli_version': get_version(),
-            'setup_timestamp': datetime.utcnow().isoformat()
+            'setup_timestamp': datetime.now(timezone.utc).isoformat()
         }
         
         profile_manager.save_config(config)
         
-        click.echo(
-            click.style("Setup completed successfully!", fg='green', bold=True)
+        # Prepare result
+        result = {
+            'status': 'success',
+            'message': 'Setup completed successfully!',
+            'profile': profile_name,
+            'base_url': base_url,
+            'api_gateway_url': api_gateway_url,
+            'cli_version': version_info['cli_version'],
+            'api_version': version_info['api_version'],
+            'version_match': version_info['match'],
+            'config_path': str(profile_manager.config_dir)
+        }
+        
+        def format_setup_result(data):
+            """Format setup result for CLI display."""
+            lines = []
+            lines.append(f"Configuration saved to: {data['config_path']}")
+            lines.append("\nNext steps:")
+            if profile_name != 'default':
+                lines.append(f"1. Run 'vamscli --profile {profile_name} auth login -u <username>' to authenticate")
+                lines.append(f"2. Use 'vamscli --profile {profile_name} --help' to see available commands")
+            else:
+                lines.append("1. Run 'vamscli auth login -u <username>' to authenticate")
+                lines.append("2. Use 'vamscli --help' to see available commands")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="Setup completed successfully!",
+            cli_formatter=format_setup_result
         )
-        click.echo(f"Configuration saved to: {profile_manager.config_dir}")
-        click.echo("\nNext steps:")
-        if profile_name != 'default':
-            click.echo(f"1. Run 'vamscli --profile {profile_name} auth login -u <username>' to authenticate")
-            click.echo(f"2. Use 'vamscli --profile {profile_name} --help' to see available commands")
-        else:
-            click.echo("1. Run 'vamscli auth login -u <username>' to authenticate")
-            click.echo("2. Use 'vamscli --help' to see available commands")
         
     except ConfigurationError as e:
         # Only handle setup-specific business logic errors
-        click.echo(
-            click.style(f"✗ Configuration Error: {e}", fg='red', bold=True), 
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Configuration Error",
+            helpful_message="Please verify the base URL points to a valid VAMS deployment."
         )
         raise click.ClickException(str(e))

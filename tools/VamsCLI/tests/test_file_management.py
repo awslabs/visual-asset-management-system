@@ -249,7 +249,7 @@ class TestFileCreateFolderCommand:
             
             # Verify API call
             mocks['api_client'].create_folder.assert_called_once_with(
-                'test-db', 'test-asset', {'keyPath': '/models/subfolder/'}
+                'test-db', 'test-asset', {'relativeKey': '/models/subfolder/'}
             )
     
     def test_create_folder_no_setup(self, cli_runner, file_no_setup_mocks):
@@ -295,7 +295,7 @@ class TestFileCreateFolderCommand:
             
             # Verify API call with JSON data (JSON overrides CLI values)
             mocks['api_client'].create_folder.assert_called_once_with(
-                'test-db', 'test-asset', {'keyPath': '/models/'}
+                'test-db', 'test-asset', {'relativeKey': '/models/'}
             )
     
     def test_create_folder_asset_not_found(self, cli_runner, file_command_mocks):
@@ -358,7 +358,7 @@ class TestFileListCommand:
             ])
             
             assert result.exit_code == 0
-            assert '✓ Found 2 files' in result.output
+            assert 'Found 2 file(s):' in result.output
             assert '📄 /model.gltf (1024 bytes) [primary]' in result.output
             assert '📁 /textures/' in result.output
             
@@ -410,7 +410,7 @@ class TestFileListCommand:
             ])
             
             assert result.exit_code == 0
-            assert '✓ Found 1 files' in result.output
+            assert 'Found 1 file(s):' in result.output
             assert '(archived)' in result.output
             
             # Verify API call with filters
@@ -1066,7 +1066,7 @@ class TestFileCommandsEdgeCases:
             ])
             
             assert result.exit_code == 0
-            assert '✓ Found 0 files' in result.output
+            assert 'No files found.' in result.output
     
     def test_file_operation_with_invalid_path(self, cli_runner, file_command_mocks):
         """Test file operation with invalid path."""

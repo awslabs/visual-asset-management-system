@@ -357,7 +357,7 @@ class TestMetadataSchemaJSONHandling:
                 '--json-input', 'invalid json string'
             ])
             
-            assert result.exit_code == 2  # Click parameter error
+            assert result.exit_code == 1  # Click exception error
             assert 'Invalid JSON input' in result.output
     
     def test_invalid_json_input_file(self, cli_runner, metadata_schema_command_mocks):
@@ -370,7 +370,7 @@ class TestMetadataSchemaJSONHandling:
                     '--json-input', 'invalid.json'
                 ])
             
-            assert result.exit_code == 2  # Click parameter error
+            assert result.exit_code == 1  # Click exception error
             assert 'Invalid JSON' in result.output
     
     def test_nonexistent_json_input_file(self, cli_runner, metadata_schema_command_mocks):
@@ -383,7 +383,7 @@ class TestMetadataSchemaJSONHandling:
                     '--json-input', 'nonexistent.json'
                 ])
             
-            assert result.exit_code == 2  # Click parameter error
+            assert result.exit_code == 1  # Click exception error
             assert 'Invalid JSON input' in result.output
 
 
@@ -420,7 +420,7 @@ class TestMetadataSchemaFormatting:
             }
         }
         
-        result = format_metadata_schema_output(schema_data, json_output=False)
+        result = format_metadata_schema_output(schema_data)
         
         assert 'Metadata Schema for Database (3 field(s)):' in result
         assert 'Field Name' in result
@@ -441,7 +441,7 @@ class TestMetadataSchemaFormatting:
         assert 'next-token' in result
     
     def test_format_metadata_schema_output_json(self):
-        """Test JSON formatting of metadata schema output."""
+        """Test JSON formatting of metadata schema output - now handled by output_result."""
         from vamscli.commands.metadata_schema import format_metadata_schema_output
         
         schema_data = {
@@ -457,11 +457,13 @@ class TestMetadataSchemaFormatting:
             }
         }
         
-        result = format_metadata_schema_output(schema_data, json_output=True)
+        # The format function now only handles CLI output
+        # JSON output is handled by output_result utility
+        result = format_metadata_schema_output(schema_data)
         
-        # Should return JSON string
-        parsed_result = json.loads(result)
-        assert parsed_result == schema_data
+        # Should return CLI-formatted string
+        assert 'Metadata Schema for Database' in result
+        assert 'title' in result
     
     def test_format_metadata_schema_output_empty(self):
         """Test formatting of empty metadata schema."""
@@ -473,7 +475,7 @@ class TestMetadataSchemaFormatting:
             }
         }
         
-        result = format_metadata_schema_output(schema_data, json_output=False)
+        result = format_metadata_schema_output(schema_data)
         
         assert result == "No metadata schema fields found for this database."
     
@@ -483,12 +485,12 @@ class TestMetadataSchemaFormatting:
         
         # Test with missing message field
         schema_data = {}
-        result = format_metadata_schema_output(schema_data, json_output=False)
+        result = format_metadata_schema_output(schema_data)
         assert result == "No metadata schema fields found for this database."
         
         # Test with non-dict message field
         schema_data = {'message': 'not a dict'}
-        result = format_metadata_schema_output(schema_data, json_output=False)
+        result = format_metadata_schema_output(schema_data)
         assert result == "No metadata schema fields found for this database."
 
 

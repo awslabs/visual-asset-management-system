@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 
 from ..utils.api_client import APIClient
 from ..utils.decorators import get_profile_manager_from_context, requires_setup_and_auth
+from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import (
     TagTypeNotFoundError, TagTypeAlreadyExistsError, TagTypeInUseError,
     InvalidTagTypeDataError
@@ -25,6 +26,10 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
         except (FileNotFoundError, IOError):
             raise click.BadParameter(
                 f"Invalid JSON input: '{json_input}' is neither valid JSON nor a readable file path"
+            )
+        except json.JSONDecodeError:
+            raise click.BadParameter(
+                f"Invalid JSON in file '{json_input}': file contains invalid JSON format"
             )
 
 
@@ -133,33 +138,37 @@ def create(ctx: click.Context, tag_type_name: Optional[str], description: Option
                 }]
             }
         
-        click.echo("Creating tag type(s)...")
+        output_status("Creating tag type(s)...", json_output)
         
         # Create the tag type(s)
         result = api_client.create_tag_types(tag_types_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Tag type(s) created successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Message: {result.get('message', 'Tag types created')}")
+        def format_create_result(data):
+            """Format create result for CLI display."""
+            return f"  Message: {data.get('message', 'Tag types created')}"
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Tag type(s) created successfully!",
+            cli_formatter=format_create_result
+        )
         
         return result
         
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid Input")
+        raise click.ClickException(str(e))
     except TagTypeAlreadyExistsError as e:
-        click.echo(
-            click.style(f"✗ Tag Type Already Exists: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Tag Type Already Exists",
+            helpful_message="Use 'vamscli tag-type list' to view existing tag types."
         )
-        click.echo("Use 'vamscli tag-type list' to view existing tag types.")
         raise click.ClickException(str(e))
     except InvalidTagTypeDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Tag Type Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Tag Type Data")
         raise click.ClickException(str(e))
 
 
@@ -203,6 +212,7 @@ def update(ctx: click.Context, tag_type_name: str, description: Optional[str],
                 )
             
             # We need to get the current tag type data first to preserve unchanged fields
+            output_status("Retrieving current tag type data...", json_output)
             current_tag_types = api_client.get_tag_types()
             current_tag_type = None
             
@@ -225,33 +235,37 @@ def update(ctx: click.Context, tag_type_name: str, description: Optional[str],
                 }]
             }
         
-        click.echo(f"Updating tag type '{tag_type_name}'...")
+        output_status(f"Updating tag type '{tag_type_name}'...", json_output)
         
         # Update the tag type(s)
         result = api_client.update_tag_types(tag_types_data)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Tag type(s) updated successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Message: {result.get('message', 'Tag types updated')}")
+        def format_update_result(data):
+            """Format update result for CLI display."""
+            return f"  Message: {data.get('message', 'Tag types updated')}"
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Tag type(s) updated successfully!",
+            cli_formatter=format_update_result
+        )
         
         return result
         
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid Input")
+        raise click.ClickException(str(e))
     except TagTypeNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Tag Type Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Tag Type Not Found",
+            helpful_message="Use 'vamscli tag-type list' to see available tag types."
         )
-        click.echo("Use 'vamscli tag-type list' to see available tag types.")
         raise click.ClickException(str(e))
     except InvalidTagTypeDataError as e:
-        click.echo(
-            click.style(f"✗ Invalid Tag Type Data: {e}", fg='red', bold=True),
-            err=True
-        )
+        output_error(e, json_output, error_type="Invalid Tag Type Data")
         raise click.ClickException(str(e))
 
 
@@ -281,42 +295,49 @@ def delete(ctx: click.Context, tag_type_name: str, confirm: bool, json_output: b
     try:
         # Require confirmation for deletion
         if not confirm:
-            click.echo(
-                click.style("⚠️  Tag type deletion requires explicit confirmation!", fg='yellow', bold=True)
-            )
-            click.echo("Use --confirm flag to proceed with tag type deletion.")
+            if not json_output:
+                click.echo(
+                    click.style("⚠️  Tag type deletion requires explicit confirmation!", fg='yellow', bold=True)
+                )
+                click.echo("Use --confirm flag to proceed with tag type deletion.")
             raise click.ClickException("Confirmation required for tag type deletion")
         
-        click.echo(f"Deleting tag type '{tag_type_name}'...")
+        output_status(f"Deleting tag type '{tag_type_name}'...", json_output)
         
         # Delete the tag type
         result = api_client.delete_tag_type(tag_type_name)
         
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(
-                click.style("✓ Tag type deleted successfully!", fg='green', bold=True)
-            )
-            click.echo(f"  Tag Type: {tag_type_name}")
-            click.echo(f"  Message: {result.get('message', 'Tag type deleted')}")
+        def format_delete_result(data):
+            """Format delete result for CLI display."""
+            lines = []
+            lines.append(f"  Tag Type: {tag_type_name}")
+            lines.append(f"  Message: {data.get('message', 'Tag type deleted')}")
+            return '\n'.join(lines)
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Tag type deleted successfully!",
+            cli_formatter=format_delete_result
+        )
         
         return result
         
     except TagTypeNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Tag Type Not Found: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Tag Type Not Found",
+            helpful_message="Use 'vamscli tag-type list' to see available tag types."
         )
-        click.echo("Use 'vamscli tag-type list' to see available tag types.")
         raise click.ClickException(str(e))
     except TagTypeInUseError as e:
-        click.echo(
-            click.style(f"✗ Tag Type In Use: {e}", fg='red', bold=True),
-            err=True
+        output_error(
+            e,
+            json_output,
+            error_type="Tag Type In Use",
+            helpful_message="Delete all tags using this tag type before deleting the tag type.\nUse 'vamscli tag list --tag-type <name>' to see tags using this type."
         )
-        click.echo("Delete all tags using this tag type before deleting the tag type.")
-        click.echo("Use 'vamscli tag list --tag-type <name>' to see tags using this type.")
         raise click.ClickException(str(e))
 
 
@@ -342,34 +363,38 @@ def list(ctx: click.Context, show_tags: bool, json_output: bool):
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    click.echo("Retrieving tag types...")
+    output_status("Retrieving tag types...", json_output)
     
     # Get the tag types
     result = api_client.get_tag_types()
     
-    if json_output:
-        click.echo(json.dumps(result, indent=2))
-    else:
+    def format_tag_types_result(data):
+        """Format tag types result for CLI display."""
         # Extract tag types from the response
-        tag_types_list = result.get('message', {}).get('Items', [])
+        tag_types_list = data.get('message', {}).get('Items', [])
         
         # Format for CLI display
         if show_tags:
             # Show detailed view with tags
             if not tag_types_list:
-                click.echo("No tag types found.")
-                return
+                return "No tag types found."
             
+            output_lines = []
             for i, tag_type in enumerate(tag_types_list):
                 if i > 0:
-                    click.echo()  # Add spacing between tag types
-                click.echo(format_tag_type_output(tag_type, json_output))
+                    output_lines.append("")  # Add spacing between tag types
+                output_lines.append(format_tag_type_output(tag_type, json_output))
+            
+            output = '\n'.join(output_lines)
         else:
             # Show table view
-            click.echo(format_tag_types_list_output(tag_types_list, json_output))
+            output = format_tag_types_list_output(tag_types_list, json_output)
         
         # Show pagination info if available
-        if result.get('message', {}).get('NextToken'):
-            click.echo(f"\nMore results available. Use pagination to see additional tag types.")
+        if data.get('message', {}).get('NextToken'):
+            output += "\n\nMore results available. Use pagination to see additional tag types."
+        
+        return output
     
+    output_result(result, json_output, cli_formatter=format_tag_types_result)
     return result
