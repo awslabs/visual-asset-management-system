@@ -4,7 +4,14 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [2.3.0] (2025-10-31)
 
-This version includes significant enhancements to VAMS to include a new CLI tool
+Major Changes:
+• New VAMS CLI Tool - Complete command-line interface with robust file handling for large-scale automation and integration workflows
+• Overhauled Search & Asset Management - Redesigned asset and file search system with enhanced UI, advanced filtering, and improved location services integration
+• Advanced File Visualization System - New plugin-based viewer architecture with new CesiumJS, BabylonJS, PlayCanvas, PDF, Video, and Text viewers plus modal popup access
+• Enhanced Pipeline System - Auto-deployment registration capabilities, new CAD/Mesh extraction pipeline, Gaussian Splat toolkit, and streamlined backend dependencies
+• Improved Asset Links & Metadata - Extended support for 4x4 Matrix, WXYZ, JSON, GEOJSON, GEOPOINT types with multiple parent/child relationships
+• Performance & Security Improvements - Enhanced API Gateway authorizers with IP restrictions, asynchronous large file upload processing, and restored VPC lambda support
+• AI-Assisted Development - Integrated CLINE and Kiro workflow rules for AI-powered coding assistance and improved developer experience
 
 ### ⚠ BREAKING CHANGES
 
@@ -53,7 +60,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   New support for CDK configured IP range restrictions for API Gateway calls that are managed in the authorizer
 -   Added new uploadFile backend logic with an SQS queue to handle final processing of large >1GB files asynchronously. This prevented APIGateway->Lambda timeouts (30 seconds)
 -   Added WXYZ, Boolean, Date, 4x4 Matrix, Geoshape, GeoPoint, LLA (Latitude Longitude, Altitude), and JSON asset link metadata value types.
-    -   **UI** Added additional `Matrix` static asset link type metadata field of type 4x4 Matrix.
+    -   **Web** Added `Matrix` static asset link type metadata fields with relevent field types.
     -   **Web** Defaulted `rotation` static asset link metadata field to WXYZ field type (from XYZ)
 -   Asset link parent-child relationships now support an additional key of `assetLinkAliasId` that can be added to allow multiple parent->child relationships of the same assets. This is common in scene or engineering assembly build-outs where a parent may contain multiple of the same type of asset below it (i.e. same screws on a panel or same trees in a forest scene).
 -   **Web** Changed Pipeline Edit/Create to make Asset Type and Output Type a required string text field. This removes the last place that requires specific VAMS extensions to be preloaded. These fields usages are expected to be overhauled along with overall pipelines in a future release.
