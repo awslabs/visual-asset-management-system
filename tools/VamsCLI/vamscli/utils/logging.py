@@ -159,7 +159,7 @@ def log_command_start(command_name: str, args: Dict[str, Any] = None):
     safe_args = {}
     if args:
         for key, value in args.items():
-            if key.lower() in ['password', 'token', 'secret', 'key']:
+            if key.lower() in ['password', 'token', 'secret', 'key', 'authorizer', 'authorization']:
                 safe_args[key] = '***REDACTED***'
             else:
                 safe_args[key] = value

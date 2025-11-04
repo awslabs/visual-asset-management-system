@@ -80,14 +80,14 @@ def handle_global_exceptions():
             # Import logging utilities
             from .logging import (
                 get_logger, log_command_start, log_command_end,
-                log_error, _is_verbose_mode
+                log_error, log_debug, _is_verbose_mode
             )
             
             logger = get_logger()
             start_time = time.time()
             command_name = func.__name__
             
-            # Log command start
+            # Log command start with kwargs
             try:
                 log_command_start(command_name, kwargs)
             except Exception:
@@ -98,10 +98,16 @@ def handle_global_exceptions():
                 # Execute command
                 result = func(*args, **kwargs)
                 
-                # Log successful completion
+                # Log successful completion with result
                 duration = time.time() - start_time
                 try:
                     log_command_end(command_name, True, duration)
+                    # Log result (truncate if too large)
+                    result_str = str(result)
+                    if len(result_str) > 1000:
+                        log_debug(f"Global handler: Command '{command_name}' returned result (truncated): {result_str[:1000]}...")
+                    else:
+                        log_debug(f"Global handler: Command '{command_name}' returned result: {result_str}")
                 except Exception:
                     pass
                 

@@ -11,6 +11,7 @@ import click
 
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.json_output import output_status, output_result, output_error
+from ..utils.logging import log_debug
 from ..utils.exceptions import (
     VamsCLIError, InvalidFileError, FileTooLargeError, PreviewFileError,
     UploadSequenceError, FileUploadError, FileNotFoundError, FileOperationError,
@@ -195,6 +196,9 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         # Parse JSON input if provided
         json_data = parse_json_input(json_input) if json_input else {}
         
+        if json_data:
+            log_debug(f"Parsed JSON input with keys: {list(json_data.keys())}")
+        
         # Override arguments with JSON data
         database_id = json_data.get('database_id', database_id)
         asset_id = json_data.get('asset_id', asset_id)
@@ -211,37 +215,49 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             if files_or_directory or directory:
                 raise click.ClickException("Cannot specify both JSON files and command line file arguments")
             files_or_directory = tuple(json_data['files'])
+            log_debug(f"Using {len(files_or_directory)} files from JSON input")
         elif 'directory' in json_data:
             if files_or_directory or directory:
                 raise click.ClickException("Cannot specify both JSON directory and command line arguments")
             directory = json_data['directory']
+            log_debug(f"Using directory from JSON input: {directory}")
         
         # Validate arguments
+        log_debug(f"Validating upload arguments: database_id={database_id}, asset_id={asset_id}, asset_preview={asset_preview}")
         file_source = validate_upload_args(
             database_id, asset_id, files_or_directory, directory, 
             asset_preview, recursive
         )
+        log_debug(f"File source validated: type={file_source[0]}, source={file_source[1] if file_source[0] == 'directory' else f'{len(file_source[1])} files'}")
         
         # Collect files
         output_status("Collecting files...", json_output or hide_progress)
+        log_debug(f"Collecting files from {file_source[0]}: {file_source[1] if file_source[0] == 'directory' else 'file list'}")
             
         if file_source[0] == "directory":
             files = collect_files_from_directory(
                 Path(file_source[1]), recursive, asset_location
             )
+            log_debug(f"Collected {len(files)} files from directory (recursive={recursive})")
         else:
             files = collect_files_from_list(file_source[1], asset_location)
+            log_debug(f"Collected {len(files)} files from file list")
         
         # Validate files
         upload_type = "assetPreview" if asset_preview else "assetFile"
+        log_debug(f"Validating {len(files)} files for upload type: {upload_type}")
         
         for file_info in files:
             validate_file_for_upload(file_info.local_path, upload_type, file_info.relative_key)
         
+        log_debug(f"All {len(files)} files validated successfully")
+        
         # Create upload sequences with enhanced validation
+        log_debug(f"Creating upload sequences from {len(files)} files")
         try:
             sequences = create_upload_sequences(files)
             summary = get_upload_summary(sequences)
+            log_debug(f"Created {len(sequences)} upload sequences with {summary['total_parts']} total parts, {summary['total_size_formatted']} total size")
         except UploadSequenceError as e:
             # Provide helpful guidance for constraint violations
             error_msg = str(e)
@@ -289,9 +305,12 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
         config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
+        api_gateway_url = config['api_gateway_url']
+        log_debug(f"Initializing API client with gateway: {api_gateway_url}")
+        api_client = APIClient(api_gateway_url, profile_manager)
         
         # Run upload
+        log_debug(f"Starting upload manager with {parallel_uploads} parallel uploads, {retry_attempts} retry attempts, force_skip={force_skip}")
         async def run_upload():
             progress_display = ProgressDisplay(hide_progress, json_output)
             
@@ -309,8 +328,11 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         
         # Execute upload
         output_status("Starting upload...", json_output or hide_progress)
+        log_debug("Executing async upload operation")
             
         result = asyncio.run(run_upload())
+        
+        log_debug(f"Upload completed: {result['successful_files']}/{result['total_files']} files successful, duration={result.get('upload_duration', 0):.2f}s")
         
         # Clear progress display (only in CLI mode)
         if not json_output and not hide_progress:
@@ -322,6 +344,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             completion_result = seq_result.get("completion_result")
             if completion_result and completion_result.get("largeFileAsynchronousHandling"):
                 has_large_file_async_handling = True
+                log_debug("Large file asynchronous handling detected in upload result")
                 break
         
         # Format upload result
@@ -374,13 +397,16 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         
         # Exit with appropriate code
         if not result["overall_success"]:
+            log_debug(f"Upload failed: {result['failed_files']} files failed")
             sys.exit(1)
         
+        log_debug("Upload command completed successfully")
         return result
             
     except (InvalidFileError, FileTooLargeError, PreviewFileError, 
             UploadSequenceError, FileUploadError) as e:
         # Only handle file-specific business logic errors
+        log_debug(f"File upload error caught: {type(e).__name__}: {str(e)}")
         output_error(e, json_output, error_type="File Upload Error")
         sys.exit(1)
 

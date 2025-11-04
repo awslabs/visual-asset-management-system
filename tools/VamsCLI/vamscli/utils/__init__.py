@@ -9,7 +9,6 @@ from .json_output import (
     output_status,
     output_warning,
     output_info,
-    ensure_json_output_purity
 )
 from .exceptions import (
     VamsCLIError,
@@ -68,7 +67,6 @@ __all__ = [
     'output_status',
     'output_warning',
     'output_info',
-    'ensure_json_output_purity',
     'VamsCLIError',
     'ConfigurationError',
     'AuthenticationError',

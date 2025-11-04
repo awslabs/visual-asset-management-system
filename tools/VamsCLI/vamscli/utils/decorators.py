@@ -1,6 +1,7 @@
 """Decorators for VamsCLI commands."""
 
 import functools
+import time
 import click
 from typing import Optional
 
@@ -32,6 +33,7 @@ def requires_setup_and_auth(func):
     1. Setup validation (raises SetupRequiredError if not configured)
     2. API availability check (raises APIUnavailableError if API is down)
     3. Configuration logging in verbose mode
+    4. Command start/stop logging with timing
     
     This replaces the need for individual commands to check setup and handle
     global infrastructure concerns.
@@ -43,7 +45,21 @@ def requires_setup_and_auth(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         # Import logging utilities
-        from .logging import log_config_info, _is_verbose_mode
+        from .logging import (
+            log_config_info, log_command_start, log_command_end, 
+            log_debug, _is_verbose_mode
+        )
+        
+        # Capture start time for duration calculation
+        start_time = time.time()
+        command_name = func.__name__
+        
+        # Log command start with sanitized arguments
+        try:
+            log_command_start(command_name, kwargs)
+        except Exception:
+            # Don't fail if logging fails
+            pass
         
         # Get context from args if available
         ctx = None
@@ -92,7 +108,37 @@ def requires_setup_and_auth(func):
             # This prevents the availability check from blocking legitimate operations
             pass
         
-        return func(*args, **kwargs)
+        # Execute the wrapped function and log completion
+        try:
+            result = func(*args, **kwargs)
+            
+            # Log successful completion with result
+            duration = time.time() - start_time
+            try:
+                log_command_end(command_name, True, duration)
+                # Log result (truncate if too large)
+                result_str = str(result)
+                if len(result_str) > 1000:
+                    log_debug(f"Command '{command_name}' returned result (truncated): {result_str[:1000]}...")
+                else:
+                    log_debug(f"Command '{command_name}' returned result: {result_str}")
+            except Exception:
+                # Don't fail if logging fails
+                pass
+            
+            return result
+            
+        except Exception:
+            # Log failed completion
+            duration = time.time() - start_time
+            try:
+                log_command_end(command_name, False, duration)
+            except Exception:
+                # Don't fail if logging fails
+                pass
+            
+            # Re-raise the exception to be handled by global exception handler
+            raise
     
     return wrapper
 

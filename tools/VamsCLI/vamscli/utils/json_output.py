@@ -10,6 +10,9 @@ import sys
 from typing import Any, Dict, Optional, Callable
 import click
 
+# Import logging for file-only logging (not console)
+from .logging import log_debug, log_info, log_warning, log_error
+
 
 def output_result(result: Any, json_output: bool, success_message: Optional[str] = None,
                  cli_formatter: Optional[Callable[[Any], str]] = None) -> None:
@@ -40,6 +43,19 @@ def output_result(result: Any, json_output: bool, success_message: Optional[str]
             cli_formatter=lambda r: f"Asset ID: {r.get('assetId')}"
         )
     """
+    # Log to file (not console - console output handled below)
+    try:
+        result_str = str(result)
+        if len(result_str) > 1000:
+            log_info(f"output_result: json_output={json_output}, result (truncated): {result_str[:1000]}...", False)
+        else:
+            log_info(f"output_result: json_output={json_output}, result: {result_str}", False)
+        if success_message:
+            log_info(f"output_result: success_message='{success_message}'", False)
+    except Exception:
+        # Don't fail if logging fails
+        pass
+    
     if json_output:
         # Pure JSON output only
         click.echo(json.dumps(result, indent=2))
@@ -94,6 +110,13 @@ def output_error(error: Exception, json_output: bool,
             helpful_message="Use 'vamscli assets list' to see available assets."
         )
     """
+    # Log to file (not console - console output handled below)
+    try:
+        log_error(f"output_error: json_output={json_output}, error_type='{error_type}', error='{error}', helpful_message='{helpful_message}'")
+    except Exception:
+        # Don't fail if logging fails
+        pass
+    
     if json_output:
         # Pure JSON error output
         error_data = {
@@ -127,6 +150,13 @@ def output_status(message: str, json_output: bool) -> None:
         output_status("Retrieving databases...", json_output)
         output_status(f"Creating asset '{asset_id}'...", json_output)
     """
+    # Log to file (not console - console output handled below)
+    try:
+        log_info(f"output_status: json_output={json_output}, message='{message}'", False)
+    except Exception:
+        # Don't fail if logging fails
+        pass
+    
     if not json_output:
         click.echo(message)
 
@@ -146,6 +176,13 @@ def output_warning(message: str, json_output: bool) -> None:
         output_warning("⚠️  This action cannot be undone!", json_output)
         output_warning("Database must not contain active assets.", json_output)
     """
+    # Log to file (not console - console output handled below)
+    try:
+        log_warning(f"output_warning: json_output={json_output}, message='{message}'", False)
+    except Exception:
+        # Don't fail if logging fails
+        pass
+    
     if not json_output:
         click.secho(message, fg='yellow', bold=True)
 
@@ -165,37 +202,13 @@ def output_info(message: str, json_output: bool) -> None:
         output_info("Use --help for more information.", json_output)
         output_info("Pagination available with --starting-token.", json_output)
     """
+    # Log to file (not console - console output handled below)
+    try:
+        log_debug(f"output_info: json_output={json_output}, message='{message}'")
+    except Exception:
+        # Don't fail if logging fails
+        pass
+    
     if not json_output:
         click.secho(message, fg='cyan')
 
-
-def ensure_json_output_purity(func):
-    """
-    Decorator to ensure command produces pure JSON output when --json-output is enabled.
-    
-    This decorator can be used to wrap command functions to add an additional
-    layer of validation that no non-JSON output is produced.
-    
-    Note: This is optional and primarily useful for testing/validation.
-    The output_* functions already handle JSON purity correctly.
-    
-    Example:
-        @command.command()
-        @click.option('--json-output', is_flag=True)
-        @ensure_json_output_purity
-        def my_command(json_output: bool):
-            output_status("Processing...", json_output)
-            result = api_call()
-            output_result(result, json_output)
-    """
-    def wrapper(*args, **kwargs):
-        json_output = kwargs.get('json_output', False)
-        
-        if json_output:
-            # In JSON mode, capture all output and validate it's pure JSON
-            # This is a safety check - the output_* functions should already handle this
-            pass
-        
-        return func(*args, **kwargs)
-    
-    return wrapper
