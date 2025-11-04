@@ -196,7 +196,7 @@ export function buildMetadataGenerationPipelineFunction(
         bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId;
     }
 
-    let bedrockModelPermissions = bedrockModelId.replace("global.", "").replace("us.", "");
+    const bedrockModelPermissions = bedrockModelId.replace("global.", "").replace("us.", "");
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
