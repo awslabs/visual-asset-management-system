@@ -52,7 +52,7 @@ vamscli metadata-schema get -d my-database --profile production
 {
     "maxItems": 100,
     "pageSize": 50,
-    "startingToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+    "startingToken": "..."
 }
 ```
 

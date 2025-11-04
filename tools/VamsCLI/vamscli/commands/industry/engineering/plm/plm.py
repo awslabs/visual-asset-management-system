@@ -130,7 +130,7 @@ def import_plmxml(ctx: click.Context, database_id: str, name: str, description: 
     
     # Step 1: Create the asset
     if not json_output:
-        click.echo(click.style("Step 1/2: Creating asset...", fg='cyan', bold=True))
+        click.secho("Step 1/2: Creating asset...", fg='cyan', bold=True)
     
     # Invoke the assets create command programmatically
     # We need to capture the result, so we'll call it with json_output internally
@@ -190,7 +190,7 @@ def import_plmxml(ctx: click.Context, database_id: str, name: str, description: 
     
     # Step 2: Upload the PLM XML file
     if not json_output:
-        click.echo(click.style(f"\nStep 2/2: Uploading PLM XML file...", fg='cyan', bold=True))
+        click.secho(f"\nStep 2/2: Uploading PLM XML file...", fg='cyan', bold=True)
     
     try:
         # Invoke the file upload command programmatically
@@ -254,9 +254,9 @@ def import_plmxml(ctx: click.Context, database_id: str, name: str, description: 
         click.echo(json.dumps(overall_result, indent=2))
     else:
         click.echo()
-        click.echo(click.style("=" * 60, fg='green'))
-        click.echo(click.style("✓ PLM XML Import Completed Successfully!", fg='green', bold=True))
-        click.echo(click.style("=" * 60, fg='green'))
+        click.secho("=" * 60, fg='green')
+        click.secho("✓ PLM XML Import Completed Successfully!", fg='green', bold=True)
+        click.secho("=" * 60, fg='green')
         click.echo()
         click.echo(f"Asset Details:")
         click.echo(f"  Database ID: {database_id}")

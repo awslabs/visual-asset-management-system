@@ -46,7 +46,7 @@ def output_result(result: Any, json_output: bool, success_message: Optional[str]
     else:
         # CLI-friendly output
         if success_message:
-            click.echo(click.style(success_message, fg='green', bold=True))
+            click.secho(success_message, fg='green', bold=True)
         
         if cli_formatter:
             formatted_output = cli_formatter(result)
@@ -103,10 +103,7 @@ def output_error(error: Exception, json_output: bool,
         click.echo(json.dumps(error_data, indent=2))
     else:
         # CLI-friendly error output to stderr
-        click.echo(
-            click.style(f"✗ {error_type}: {error}", fg='red', bold=True),
-            err=True
-        )
+        click.secho(f"✗ {error_type}: {error}", fg='red', bold=True, err=True)
         if helpful_message:
             click.echo(helpful_message, err=True)
 
@@ -150,7 +147,7 @@ def output_warning(message: str, json_output: bool) -> None:
         output_warning("Database must not contain active assets.", json_output)
     """
     if not json_output:
-        click.echo(click.style(message, fg='yellow', bold=True))
+        click.secho(message, fg='yellow', bold=True)
 
 
 def output_info(message: str, json_output: bool) -> None:
@@ -169,7 +166,7 @@ def output_info(message: str, json_output: bool) -> None:
         output_info("Pagination available with --starting-token.", json_output)
     """
     if not json_output:
-        click.echo(click.style(message, fg='cyan'))
+        click.secho(message, fg='cyan')
 
 
 def ensure_json_output_purity(func):

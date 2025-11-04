@@ -225,6 +225,15 @@ def my_command(json_output: bool):
             helpful_message="Use 'vamscli assets list' to see available assets."
         )
         raise click.ClickException(str(e))
+
+# Note: For styled output, use click.secho instead of click.echo(click.style(...))
+# ✅ CORRECT - Using click.secho
+click.secho("✓ Success!", fg='green', bold=True)
+click.secho("⚠️  Warning!", fg='yellow', bold=True)
+click.secho("✗ Error!", fg='red', bold=True, err=True)
+
+# ❌ INCORRECT - Don't use click.echo with click.style
+click.echo(click.style("✓ Success!", fg='green', bold=True))  # Use click.secho instead
 ```
 
 ### **Testing Standards**

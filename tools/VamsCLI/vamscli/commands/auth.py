@@ -506,7 +506,7 @@ def status(ctx: click.Context, json_output: bool):
         }
         output_error(e, json_output, error_type="Status Check Error")
         if json_output:
-            click.echo(click.style(str(error_result), fg='red'), err=True)
+            click.secho(str(error_result), fg='red', err=True)
 
 
 @auth.command()

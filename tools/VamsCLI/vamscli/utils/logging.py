@@ -364,7 +364,7 @@ def log_warning(message: str, show_console: bool = None):
     
     # Show in console if explicitly requested or if verbose mode
     if show_console is True or (show_console is None and _is_verbose_mode()):
-        click.echo(click.style(f"⚠ Warning: {message}", fg='yellow'), err=True)
+        click.secho(f"⚠ Warning: {message}", fg='yellow', err=True)
 
 
 def log_error(message: str, exception: Exception = None):

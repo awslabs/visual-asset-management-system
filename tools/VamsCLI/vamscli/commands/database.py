@@ -461,9 +461,7 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
     try:
         # Require confirmation for deletion
         if not confirm:
-            click.echo(
-                click.style("⚠️  Database deletion requires explicit confirmation!", fg='yellow', bold=True)
-            )
+            click.secho("⚠️  Database deletion requires explicit confirmation!", fg='yellow', bold=True)
             click.echo("This action will delete the database and cannot be undone.")
             click.echo("The database must not contain any active assets, workflows, or pipelines.")
             click.echo()
@@ -471,9 +469,7 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
             raise click.ClickException("Confirmation required for database deletion")
         
         # Additional confirmation prompt for safety
-        click.echo(
-            click.style(f"⚠️  You are about to delete database '{database_id}'", fg='red', bold=True)
-        )
+        click.secho(f"⚠️  You are about to delete database '{database_id}'", fg='red', bold=True)
         click.echo("This action cannot be undone!")
         
         if not click.confirm("Are you sure you want to proceed?"):
