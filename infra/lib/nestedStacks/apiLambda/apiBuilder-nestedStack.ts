@@ -86,7 +86,7 @@ interface apiGatewayLambdaConfiguration {
 }
 
 export class ApiBuilderNestedStack extends NestedStack {
-    public importGlobalPipelineWorkflowFunctionName: string = "";
+    public importGlobalPipelineWorkflowFunctionName = "";
 
     constructor(
         parent: Construct,
