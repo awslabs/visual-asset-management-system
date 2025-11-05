@@ -39,6 +39,8 @@ setup(
         'aiofiles>=23.0.0',
         'botocore>=1.29.0',
         'geojson>=3.2.0',
+        'rich>=14.2.0',
+        'tqdm>=4.67.1',
     ],
     extras_require={
         'dev': [
