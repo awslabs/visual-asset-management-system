@@ -3,11 +3,14 @@
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional
-import xml.etree.ElementTree as ET
+from xml.etree.ElementTree import Element  # For type hints only
+import defusedxml.ElementTree as ET  # For secure XML parsing
 from tqdm.rich import tqdm
 import click
 import os
-from .....utils.decorators import requires_setup_and_auth
+from .....utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from .....utils.api_client import APIClient
+from .....utils.json_output import output_status, output_result, output_error, output_warning, output_info
 from .....utils.exceptions import (
     AssetNotFoundError,
     AssetAlreadyExistsError,
@@ -435,6 +438,11 @@ def import_plmxml(
           --plmxml-dir /path/to/product.xml \\
           --json-output
     """
+    # Get profile manager and API client (setup/auth already validated by decorator)
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
     # Validate PLM XML file exists and is readable
     plmxml_path = Path(plmxml_dir)
     if not plmxml_path.exists():
@@ -581,7 +589,7 @@ class PLMXMLIngestor:
 
         # return result
 
-    def _extract_file_metadata(self, root: ET.Element, file_path: str) -> Dict[str, str]:
+    def _extract_file_metadata(self, root: Element, file_path: str) -> Dict[str, str]:
         """Extract metadata from PLMXML root element."""
         return {
             "date": root.get("date", ""),
@@ -589,7 +597,7 @@ class PLMXMLIngestor:
             "author": root.get("author", ""),
         }
 
-    def _parse_components(self, root: ET.Element):
+    def _parse_components(self, root: Element):
         """Parse all components (Products and ProductRevisions) from the XML."""
         # Parse Products
         for product in root.findall(".//plm:Product", self.namespace):
@@ -630,7 +638,7 @@ class PLMXMLIngestor:
                 self.components[item_revision] = component_data
 
     def _extract_component_metadata(
-        self, root: ET.Element, product_revision: ET.Element, component_data: Dict[str, Any]
+        self, root: Element, product_revision: Element, component_data: Dict[str, Any]
     ):
         """Extract metadata from associated attachments."""
         product_revision_id = product_revision.get("id")
@@ -714,7 +722,7 @@ class PLMXMLIngestor:
                                             component_data["geometry_file_location"] = location_ref
                                             break
 
-    def _parse_occurrences(self, root: ET.Element):
+    def _parse_occurrences(self, root: Element):
         """Parse occurrence hierarchy and relationships."""
         occurrences = root.findall(".//plm:Occurrence", self.namespace)
 
@@ -781,7 +789,7 @@ class PLMXMLIngestor:
                                     self.relationships.append(relationship)
 
     def _extract_occurrence_geometry(
-        self, root: ET.Element, occurrence: ET.Element, item_revision: str
+        self, root: Element, occurrence: Element, item_revision: str
     ):
         """Extract geometry file location specific to this occurrence."""
         if item_revision not in self.components:
@@ -824,7 +832,7 @@ class PLMXMLIngestor:
                                         ] = location_ref
                                     break
 
-    def _extract_relationship_metadata(self, occurrence: ET.Element, relationship: Dict[str, Any]):
+    def _extract_relationship_metadata(self, occurrence: Element, relationship: Dict[str, Any]):
         """Extract metadata from occurrence for the relationship."""
         # Extract Transform
         transform_elem = occurrence.find(".//plm:Transform", self.namespace)

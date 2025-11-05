@@ -41,6 +41,7 @@ setup(
         'geojson>=3.2.0',
         'rich>=14.2.0',
         'tqdm>=4.67.1',
+        'defusedxml>=0.7.1',
     ],
     extras_require={
         'dev': [
