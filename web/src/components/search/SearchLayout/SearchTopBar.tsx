@@ -62,7 +62,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                 <div style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
                     <div style={{ flex: 1 }}>
                         <Input
-                            placeholder="Search by keywords..."
+                            placeholder="Search by keywords (wildcard)..."
                             type="search"
                             value={query}
                             onChange={(e) => onQueryChange(e.detail.value)}

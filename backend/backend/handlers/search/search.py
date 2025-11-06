@@ -498,6 +498,50 @@ class SimpleSearchQueryBuilder:
         self.database_access_manager = database_access_manager
         self.field_classifier = FieldClassifier()
     
+    def _build_field_query(self, field_name: str, value: str, use_keyword: bool = True) -> Dict[str, Any]:
+        """Build a query for a specific field with proper wildcard handling
+        
+        Args:
+            field_name: The field name to search (e.g., 'str_assetname')
+            value: The search value
+            use_keyword: Whether to use .keyword subfield for exact matching
+            
+        Returns:
+            OpenSearch query dict
+        """
+        # Check if user provided wildcards
+        has_wildcards = '*' in value or '?' in value
+        
+        if has_wildcards:
+            # User wants wildcard search - use query_string with their wildcards
+            escaped_value = self.field_classifier.escape_opensearch_query_string(value, preserve_wildcards=True)
+            return {
+                "query_string": {
+                    "query": f"{field_name}:{escaped_value}",
+                    "default_operator": "OR",
+                    "analyze_wildcard": True,
+                    "lenient": True
+                }
+            }
+        else:
+            # User wants exact match - use term query on .keyword field
+            if use_keyword:
+                return {
+                    "term": {
+                        f"{field_name}.keyword": value
+                    }
+                }
+            else:
+                # For fields that don't have .keyword subfield
+                escaped_value = self.field_classifier.escape_opensearch_query_string(value, preserve_wildcards=False)
+                return {
+                    "query_string": {
+                        "query": f'{field_name}:"{escaped_value}"',
+                        "default_operator": "OR",
+                        "lenient": True
+                    }
+                }
+    
     def build_simple_dual_index_queries(self, request: SimpleSearchRequestModel, claims_and_roles: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Build simple queries for both asset and file indexes"""
         
@@ -520,11 +564,16 @@ class SimpleSearchQueryBuilder:
         """Build simple query for specific index type"""
         try:
             # Build base query structure
+            query_clause = self._build_simple_query_clause(request, accessible_databases, index_type)
+            
+            # Log the generated query for debugging
+            logger.info(f"[SimpleSearch] Generated {index_type} query clause: {json.dumps(query_clause, indent=2)}")
+            
             query = {
                 "from": request.from_ or 0,
                 "size": request.size or 100,
                 "sort": ["_score"],
-                "query": self._build_simple_query_clause(request, accessible_databases, index_type),
+                "query": query_clause,
                 "highlight": self._build_simple_highlight_config(index_type),
                 "_source": True,
                 "track_total_hits": True,
@@ -565,7 +614,7 @@ class SimpleSearchQueryBuilder:
         # Build search queries based on parameters
         search_queries = []
         
-        # General keyword search with hyphen support
+        # General keyword search with hyphen support (ALWAYS uses wildcards for discovery)
         if request.query:
             escaped_query = self.field_classifier.escape_opensearch_query_string(request.query)
             searchable_fields = self._get_simple_searchable_fields(index_type)
@@ -607,56 +656,34 @@ class SimpleSearchQueryBuilder:
                 }
             })
         
-        # Asset-specific searches (only for asset index or when searching both)
+        # Asset-specific searches
+        # These use exact matching unless user provides wildcards
+        # Note: assetName and assetId exist in both asset and file indexes
         if index_type == "asset":
             if request.assetName:
-                escaped_name = self.field_classifier.escape_opensearch_query_string(request.assetName)
-                search_queries.append({
-                    "query_string": {
-                        "query": f"str_assetname:*{escaped_name}*",
-                        "default_operator": "OR",
-                        "analyze_wildcard": True,
-                        "lenient": True
-                    }
-                })
+                search_queries.append(self._build_field_query("str_assetname", request.assetName))
             
             if request.assetId:
-                escaped_id = self.field_classifier.escape_opensearch_query_string(request.assetId)
-                search_queries.append({
-                    "query_string": {
-                        "query": f"str_assetid:*{escaped_id}*",
-                        "default_operator": "OR",
-                        "analyze_wildcard": True,
-                        "lenient": True
-                    }
-                })
+                search_queries.append(self._build_field_query("str_assetid", request.assetId))
             
             if request.assetType:
-                escaped_type = self.field_classifier.escape_opensearch_query_string(request.assetType)
-                search_queries.append({
-                    "query_string": {
-                        "query": f"str_assettype:*{escaped_type}*",
-                        "default_operator": "OR",
-                        "analyze_wildcard": True,
-                        "lenient": True
-                    }
-                })
+                search_queries.append(self._build_field_query("str_assettype", request.assetType))
         
-        # File-specific searches (only for file index or when searching both)
+        # File-specific searches
+        # Note: assetName and assetId also exist in file index (files belong to assets)
         if index_type == "file":
+            # Apply assetName/assetId filters to file index as well
+            if request.assetName:
+                search_queries.append(self._build_field_query("str_assetname", request.assetName))
+            
+            if request.assetId:
+                search_queries.append(self._build_field_query("str_assetid", request.assetId))
+            
             if request.fileKey:
-                escaped_key = self.field_classifier.escape_opensearch_query_string(request.fileKey)
-                search_queries.append({
-                    "query_string": {
-                        "query": f"str_key:*{escaped_key}*",
-                        "default_operator": "OR",
-                        "analyze_wildcard": True,
-                        "lenient": True
-                    }
-                })
+                search_queries.append(self._build_field_query("str_key", request.fileKey))
             
             if request.fileExtension:
-                # Exact match for file extension
+                # Exact match for file extension (no wildcards)
                 search_queries.append({
                     "term": {
                         "str_fileext.keyword": request.fileExtension
@@ -665,7 +692,8 @@ class SimpleSearchQueryBuilder:
         
         # Common searches (apply to both indexes)
         if request.databaseId:
-            # Exact match for database ID
+            # Exact match for database ID - add to filters, not search queries
+            # This ensures it's a hard requirement, not just a scoring factor
             filter_clauses.append({
                 "term": {
                     "str_databaseid.keyword": request.databaseId
@@ -673,18 +701,10 @@ class SimpleSearchQueryBuilder:
             })
         
         if request.tags:
-            # Search for any of the specified tags
+            # Search for any of the specified tags (exact match unless wildcards provided)
             tag_queries = []
             for tag in request.tags:
-                escaped_tag = self.field_classifier.escape_opensearch_query_string(tag)
-                tag_queries.append({
-                    "query_string": {
-                        "query": f"list_tags:*{escaped_tag}*",
-                        "default_operator": "OR",
-                        "analyze_wildcard": True,
-                        "lenient": True
-                    }
-                })
+                tag_queries.append(self._build_field_query("list_tags", tag))
             
             if tag_queries:
                 search_queries.append({
@@ -694,41 +714,90 @@ class SimpleSearchQueryBuilder:
                     }
                 })
         
-        # Metadata searches
+        # Metadata searches (use wildcards for discovery)
         if request.metadataKey:
-            escaped_key = self.field_classifier.escape_opensearch_query_string(request.metadataKey)
-            search_queries.append({
-                "wildcard": {
-                    "_field_names": {
-                        "value": f"MD_*{escaped_key}*",
-                        "case_insensitive": True
-                    }
-                }
-            })
-        
-        if request.metadataValue:
-            escaped_value = self.field_classifier.escape_opensearch_query_string(request.metadataValue)
-            search_queries.append({
-                "query_string": {
-                    "query": f"*{escaped_value}*",
-                    "fields": ["MD_*"],
-                    "default_operator": "OR",
-                    "analyze_wildcard": True,
-                    "lenient": True
-                }
-            })
-        
-        # Combine search queries
-        if search_queries:
-            if len(search_queries) == 1:
-                should_clauses.append(search_queries[0])
-            else:
-                should_clauses.append({
-                    "bool": {
-                        "should": search_queries,
-                        "minimum_should_match": 1
+            # Check if user provided wildcards
+            has_wildcards = '*' in request.metadataKey or '?' in request.metadataKey
+            if has_wildcards:
+                escaped_key = self.field_classifier.escape_opensearch_query_string(request.metadataKey, preserve_wildcards=True)
+                search_queries.append({
+                    "wildcard": {
+                        "_field_names": {
+                            "value": f"MD_{escaped_key}",
+                            "case_insensitive": True
+                        }
                     }
                 })
+            else:
+                # Exact field name match
+                search_queries.append({
+                    "wildcard": {
+                        "_field_names": {
+                            "value": f"MD_*{request.metadataKey}*",
+                            "case_insensitive": True
+                        }
+                    }
+                })
+        
+        if request.metadataValue:
+            # Check if user provided wildcards
+            has_wildcards = '*' in request.metadataValue or '?' in request.metadataValue
+            if has_wildcards:
+                escaped_value = self.field_classifier.escape_opensearch_query_string(request.metadataValue, preserve_wildcards=True)
+                search_queries.append({
+                    "query_string": {
+                        "query": escaped_value,
+                        "fields": ["MD_*"],
+                        "default_operator": "OR",
+                        "analyze_wildcard": True,
+                        "lenient": True
+                    }
+                })
+            else:
+                # Exact value match in metadata fields
+                escaped_value = self.field_classifier.escape_opensearch_query_string(request.metadataValue, preserve_wildcards=False)
+                search_queries.append({
+                    "query_string": {
+                        "query": f'MD_*:"{escaped_value}"',
+                        "default_operator": "OR",
+                        "lenient": True
+                    }
+                })
+        
+        # Combine search queries with proper logic
+        # Specific field queries should be required (must match), not optional
+        if search_queries:
+            # Separate general query from specific field queries
+            general_query = None
+            specific_queries = []
+            
+            for query in search_queries:
+                # Check if this is the general query (has nested bool with should clauses for multiple fields)
+                if isinstance(query, dict) and "bool" in query and "should" in query["bool"]:
+                    # Check if it's searching multiple fields (general query pattern)
+                    should_clauses_in_query = query["bool"]["should"]
+                    if len(should_clauses_in_query) > 0:
+                        first_clause = should_clauses_in_query[0]
+                        if isinstance(first_clause, dict) and "query_string" in first_clause:
+                            query_string_fields = first_clause["query_string"].get("fields", [])
+                            # If searching multiple fields, it's the general query
+                            if len(query_string_fields) > 1 or any("*" in f for f in query_string_fields):
+                                general_query = query
+                                continue
+                
+                # Otherwise, it's a specific field query
+                specific_queries.append(query)
+            
+            # Build the final query structure
+            # IMPORTANT: Specific field queries are REQUIREMENTS (must match)
+            # Only the general query field is optional (should match)
+            if specific_queries:
+                # Add all specific queries to must_clauses (they are requirements)
+                must_clauses.extend(specific_queries)
+            
+            if general_query:
+                # General query is optional - add to should_clauses
+                should_clauses.append(general_query)
         
         # Build final bool query
         bool_query = {}

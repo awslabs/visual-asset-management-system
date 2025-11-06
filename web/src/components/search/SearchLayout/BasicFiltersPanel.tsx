@@ -13,6 +13,7 @@ import {
     SpaceBetween,
     ExpandableSection,
     Box,
+    Input,
 } from "@cloudscape-design/components";
 import { SearchFilters } from "../types";
 import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
@@ -221,6 +222,26 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 multi-selection
             </Box>
             <SpaceBetween direction="vertical" size="m">
+                {/* Asset Name Filter */}
+                <FormField label="Asset Name" description="Search by asset name (exact)">
+                    <Input
+                        value={filters.str_assetname?.value || ""}
+                        onChange={({ detail }) => {
+                            if (detail.value.trim() === "") {
+                                // Clear filter if empty
+                                onFilterChange("str_assetname", null);
+                            } else {
+                                onFilterChange("str_assetname", {
+                                    value: detail.value,
+                                });
+                            }
+                        }}
+                        placeholder="Enter asset name (e.g., MyAsset or My*)"
+                        disabled={loading}
+                        type="text"
+                    />
+                </FormField>
+
                 {/* Database Filter */}
                 <FormField
                     label="Database"

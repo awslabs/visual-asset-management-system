@@ -48,6 +48,9 @@ export interface SearchFilters {
         value: number | number[]; // Size in bytes
         unit?: "bytes" | "KB" | "MB" | "GB"; // For display purposes
     } | null;
+    str_assetname?: {
+        value: string;
+    } | null;
     [key: string]: any;
 }
 
