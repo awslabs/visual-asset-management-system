@@ -16,8 +16,6 @@ export const VIEWER_COMPONENTS = {
     "./viewers/HTMLViewerPlugin/HTMLViewerComponent": "HTMLViewerPlugin/HTMLViewerComponent",
     "./viewers/PotreeViewerPlugin/PotreeViewerComponent":
         "PotreeViewerPlugin/PotreeViewerComponent",
-    "./viewers/ThreeDimensionalPlotterPlugin/ThreeDimensionalPlotterComponent":
-        "ThreeDimensionalPlotterPlugin/ThreeDimensionalPlotterComponent",
     "./viewers/ColumnarViewerPlugin/ColumnarViewerComponent":
         "ColumnarViewerPlugin/ColumnarViewerComponent",
     "./viewers/PDFViewerPlugin/PDFViewerComponent": "PDFViewerPlugin/PDFViewerComponent",
@@ -28,6 +26,8 @@ export const VIEWER_COMPONENTS = {
         "BabylonJSGaussianSplatViewerPlugin/BabylonJSGaussianSplatViewerComponent",
     "./viewers/PlayCanvasGaussianSplatViewerPlugin/PlayCanvasGaussianSplatViewerComponent":
         "PlayCanvasGaussianSplatViewerPlugin/PlayCanvasGaussianSplatViewerComponent",
+    "./viewers/VntanaViewerPlugin/VntanaViewerComponent":
+        "VntanaViewerPlugin/VntanaViewerComponent",
 } as const;
 
 // Dependency manager paths - add new dependency managers here
@@ -39,6 +39,7 @@ export const DEPENDENCY_MANAGERS = {
         "BabylonJSGaussianSplatViewerPlugin/dependencies",
     "./viewers/PlayCanvasGaussianSplatViewerPlugin/dependencies":
         "PlayCanvasGaussianSplatViewerPlugin/dependencies",
+    "./viewers/VntanaViewerPlugin/dependencies": "VntanaViewerPlugin/dependencies",
     // Add new dependency managers here as needed:
     // './viewers/MyViewerPlugin/dependencies': 'MyViewerPlugin/dependencies',
 } as const;

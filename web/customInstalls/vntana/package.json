@@ -1,0 +1,23 @@
+{
+    "name": "vntana",
+    "version": "1.0.0",
+    "description": "Vntana Viewer Bundle Builder",
+    "license": "ISC",
+    "author": "",
+    "type": "commonjs",
+    "scripts": {
+        "build": "webpack --mode production",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "dependencies": {
+        "@vntana/viewer": "^2.2.0"
+    },
+    "devDependencies": {
+        "css-loader": "^6.8.1",
+        "css-minimizer-webpack-plugin": "^5.0.1",
+        "mini-css-extract-plugin": "^2.7.6",
+        "terser-webpack-plugin": "^5.3.9",
+        "webpack": "^5.89.0",
+        "webpack-cli": "^5.1.4"
+    }
+}

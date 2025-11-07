@@ -3,113 +3,103 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//npm install simple-git fs-extra
-//const { simpleGit, SimpleGit, SimpleGitOptions } = require("simple-git");
-//const { execSync } = require("child_process");
+const { execSync } = require("child_process");
 const fs = require("fs-extra");
+const path = require("path");
 
 // Configurations
-//const gitRepoSourceDestDir = "./customInstalls/online3dviewer/source"; //Relative to base web directory where yarn/npm is run
-//const gitRepoUrl = "https://github.com/kovacsv/Online3DViewer.git";
-//const gitRepoCommitHash = "f4260cc7be355b3cfe0fa6cb421d2864bc396133";
-const nodeModulesDestDir = "./node_modules/online-3d-viewer"; //Relative to base web directory where yarn/npm is run
-//const pluginSourceDestDir = "./src/visualizerPlugin/viewers/Online3dViewerPlugin/source"; //Relative to base web directory where yarn/npm is run
-const publicDestinationDir = "./public/online3dviewer"; //Relative to base web directory where yarn/npm is run
+const npmPackageDir = "./customInstalls/online3dviewer";
+const npmRepoSourceDestDir = "./customInstalls/online3dviewer/node_modules";
+const publicDestinationDir = "./public/viewers/online3dviewer";
 
-// Function to cleanup previous git source and build binaries
+// Function to cleanup previous build
 const previousCleanUp = async () => {
     try {
-        //await fs.rmSync(gitRepoSourceDestDir, { recursive: true, force: true });
-        //await fs.rmSync(nodeModulesDestDir + "/build/website", { recursive: true, force: true });
-        //await fs.rmSync(nodeModulesDestDir + "/source/website", { recursive: true, force: true });
-        //await fs.rmSync(pluginSourceDestDir, { recursive: true, force: true });
+        await fs.rmSync(npmRepoSourceDestDir, { recursive: true, force: true });
         await fs.rmSync(publicDestinationDir, { recursive: true, force: true });
-        console.log("Online3DViewer Previous Build Cleanup Complete");
+        console.log("Online3DViewer: Previous build cleanup complete");
     } catch (err) {
-        console.error("Online3DViewer Previous Build Cleanup error:", err);
+        console.error("Online3DViewer: Previous build cleanup error:", err);
     }
 };
 
-// // Function to perform Git pull and checkout to specific commit
-// const gitActions = async () => {
-//     try {
-//         await simpleGit().clone(gitRepoUrl, gitRepoSourceDestDir);
-//         console.log("Online3DViewer Build Git Clone complete");
+// Function to run NPM install
+const npmInstall = async () => {
+    try {
+        console.log("Online3DViewer: Installing dependencies...");
+        await execSync("npm install", { cwd: npmPackageDir, stdio: "inherit" });
+        console.log("Online3DViewer: NPM install complete");
+    } catch (err) {
+        console.error("Online3DViewer: NPM install error:", err);
+        throw err;
+    }
+};
 
-//         const git = simpleGit({ baseDir: gitRepoSourceDestDir });
-//         await git.checkout(gitRepoCommitHash);
-//         console.log("Online3DViewer Build Git Checkout Specific Commit complete");
-//         console.log("Online3DViewer Build Git complete");
-//     } catch (err) {
-//         console.error("Online3DViewer Build Git error:", err);
-//     }
-// };
-
-// // Function to copy minified files to plugin directory for direct integration
-// const copyMinifiedFiles = async () => {
-//     try {
-//         // Create plugin source directory
-//         await fs.mkdir(publicDestinationDir, { recursive: true });
-
-//         // Copy minified website files (these have all dependencies bundled)
-//         await fs.copy(gitRepoSourceDestDir + "/build/website",  publicDestinationDir);
-//         console.log("Online3DViewer Minified website files copied to public plugin directory");
-
-//         // Copy website assets for direct access
-//         const websiteAssetsDir = gitRepoSourceDestDir + "/website/assets";
-//         if (await fs.pathExists(websiteAssetsDir)) {
-//             await fs.mkdir(publicDestinationDir + "/assets", { recursive: true });
-//             await fs.copy(websiteAssetsDir,  publicDestinationDir + "/assets");
-//             console.log("Online3DViewer Website assets copied to public plugin assets directory");
-//         }
-
-//         console.log("Online3DViewer Minified Files copied to plugin directory");
-//     } catch (err) {
-//         console.error("Online3DViewer Minified Files copy error:", err);
-//     }
-// };
-
-// Function to copy files to node_modules for compatibility
+// Function to copy files to public directory for dynamic loading
 const copyFiles = async () => {
     try {
-        // // Create build/website directory and copy files
-        //await fs.mkdir(nodeModulesDestDir + "/website", { recursive: true });
-        // await fs.copy(gitRepoSourceDestDir + "/build/website", nodeModulesDestDir + "/build/website");
-        // console.log("Online3DViewer Build website files copied to node_modules build directory");
+        console.log("Online3DViewer: Copying files to destination...");
 
-        // // Create source/website directory and copy files
-        // await fs.mkdir(nodeModulesDestDir + "/source/website", { recursive: true });
-        // await fs.copy(gitRepoSourceDestDir + "/website", nodeModulesDestDir + "/source/website");
-        // console.log("Online3DViewer Source website files copied to node_modules source directory");
+        // Create public destination directory
+        await fs.mkdir(publicDestinationDir, { recursive: true });
 
-        //Copy website assets to public
-        await fs.copy(nodeModulesDestDir + "/website", publicDestinationDir);
+        // Copy the pre-built minified library file
+        const libSource = path.join(
+            npmRepoSourceDestDir,
+            "online-3d-viewer/build/engine/o3dv.min.js"
+        );
+        const libDest = path.join(publicDestinationDir, "o3dv.min.js");
 
-        console.log("Online3DViewer Build Files copied to destination directories");
+        if (await fs.pathExists(libSource)) {
+            await fs.copy(libSource, libDest);
+            console.log("Online3DViewer: Library file copied to public directory");
+        } else {
+            throw new Error("Library file not found: " + libSource);
+        }
+
+        // Copy website assets (environment maps)
+        const assetsSource = path.join(npmRepoSourceDestDir, "online-3d-viewer/website/assets");
+        const assetsDest = path.join(publicDestinationDir, "assets");
+
+        if (await fs.pathExists(assetsSource)) {
+            await fs.copy(assetsSource, assetsDest);
+            console.log("Online3DViewer: Assets copied to public directory");
+        } else {
+            console.warn("Online3DViewer: Assets directory not found: " + assetsSource);
+        }
+
+        console.log("Online3DViewer: Files copied to destination directory");
+        console.log("Online3DViewer: Bundle location: " + publicDestinationDir);
     } catch (err) {
-        console.error("Online3DViewer Build File copy error:", err);
+        console.error("Online3DViewer: File copy error:", err);
+        throw err;
     }
 };
-
-// // Function to run NPM install and build on Online3DViewer Source
-// const npmBuild = () => {
-//     try {
-//         execSync("npm install", { cwd: gitRepoSourceDestDir }); //Install dependencies
-//         console.log("Online3DViewer Build NPM install complete");
-//         execSync("npm run build_website", { cwd: gitRepoSourceDestDir }); //Run build script
-//         console.log("Online3DViewer Build NPM build_website complete");
-//     } catch (err) {
-//         console.error("Online3DViewer Build NPM install/build error:", err);
-//     }
-// };
 
 // Main function
 const main = async () => {
-    await previousCleanUp();
-    //await gitActions();
-    //npmBuild();
-    //await copyMinifiedFiles();
-    await copyFiles();
+    try {
+        console.log("=".repeat(60));
+        console.log("Online3DViewer Installation");
+        console.log("=".repeat(60));
+
+        await previousCleanUp();
+        await npmInstall();
+        await copyFiles();
+
+        console.log("=".repeat(60));
+        console.log("Online3DViewer: Installation complete!");
+        console.log("Files:");
+        console.log("  - " + path.join(publicDestinationDir, "o3dv.min.js"));
+        console.log("  - " + path.join(publicDestinationDir, "assets/"));
+        console.log("=".repeat(60));
+    } catch (err) {
+        console.error("=".repeat(60));
+        console.error("Online3DViewer: Installation failed!");
+        console.error(err);
+        console.error("=".repeat(60));
+        process.exit(1);
+    }
 };
 
 // Run the main function

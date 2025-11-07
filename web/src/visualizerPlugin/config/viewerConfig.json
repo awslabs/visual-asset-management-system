@@ -30,7 +30,8 @@
             "priority": 1,
             "dependencies": ["online-3d-viewer"],
             "loadStrategy": "lazy",
-            "category": "3d"
+            "category": "3d",
+            "enabled": true
         },
         {
             "id": "potree-viewer",
@@ -48,7 +49,8 @@
             "dependencies": ["potree"],
             "loadStrategy": "lazy",
             "category": "3d",
-            "requiresPreprocessing": true
+            "requiresPreprocessing": true,
+            "enabled": true
         },
         {
             "id": "image-viewer",
@@ -61,7 +63,8 @@
             "priority": 1,
             "dependencies": [],
             "loadStrategy": "eager",
-            "category": "media"
+            "category": "media",
+            "enabled": true
         },
         {
             "id": "html-viewer",
@@ -74,7 +77,8 @@
             "priority": 1,
             "dependencies": [],
             "loadStrategy": "lazy",
-            "category": "document"
+            "category": "document",
+            "enabled": true
         },
         {
             "id": "video-viewer",
@@ -96,7 +100,8 @@
             "priority": 1,
             "dependencies": [],
             "loadStrategy": "lazy",
-            "category": "media"
+            "category": "media",
+            "enabled": true
         },
         {
             "id": "audio-viewer",
@@ -109,20 +114,8 @@
             "priority": 1,
             "dependencies": [],
             "loadStrategy": "lazy",
-            "category": "media"
-        },
-        {
-            "id": "3d-plotter",
-            "name": "3D Data Plotter",
-            "description": "Visualize columnar data in 3D plots",
-            "componentPath": "./viewers/ThreeDimensionalPlotterPlugin/ThreeDimensionalPlotterComponent",
-            "supportedExtensions": [".rds", ".fcs", ".csv"],
-            "supportsMultiFile": false,
-            "canFullscreen": true,
-            "priority": 1,
-            "dependencies": [],
-            "loadStrategy": "lazy",
-            "category": "data"
+            "category": "media",
+            "enabled": true
         },
         {
             "id": "columnar-viewer",
@@ -135,7 +128,8 @@
             "priority": 2,
             "dependencies": [],
             "loadStrategy": "lazy",
-            "category": "data"
+            "category": "data",
+            "enabled": true
         },
         {
             "id": "pdf-viewer",
@@ -148,7 +142,8 @@
             "priority": 1,
             "dependencies": ["react-pdf"],
             "loadStrategy": "lazy",
-            "category": "document"
+            "category": "document",
+            "enabled": true
         },
         {
             "id": "cesium-viewer",
@@ -169,7 +164,8 @@
             "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"],
             "customParameters": {
                 "cesiumIonToken": ""
-            }
+            },
+            "enabled": true
         },
         {
             "id": "text-viewer",
@@ -193,7 +189,8 @@
             "priority": 1,
             "dependencies": ["react-syntax-highlighter"],
             "loadStrategy": "lazy",
-            "category": "document"
+            "category": "document",
+            "enabled": true
         },
         {
             "id": "gaussian-splat-viewer-babylonjs",
@@ -216,7 +213,8 @@
                 "pointSize": 5.0,
                 "maxPoints": 100000,
                 "enableLighting": false
-            }
+            },
+            "enabled": true
         },
         {
             "id": "gaussian-splat-viewer-playcanvas",
@@ -239,7 +237,26 @@
                 "cameraMode": "orbit",
                 "autoFocus": true,
                 "enableSorting": true
-            }
+            },
+            "enabled": true
+        },
+        {
+            "id": "vntana-viewer",
+            "name": "VNTANA 3D Viewer",
+            "description": "View GLB files using VNTANA's high-quality 3D viewer (LICENSED VIEWER)",
+            "componentPath": "./viewers/VntanaViewerPlugin/VntanaViewerComponent",
+            "dependencyManager": "./viewers/VntanaViewerPlugin/dependencies",
+            "dependencyManagerClass": "VntanaDependencyManager",
+            "dependencyManagerMethod": "loadVntana",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".glb"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 2,
+            "dependencies": ["@vntana/viewer"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "enabled": true
         },
         {
             "id": "preview-viewer",
@@ -253,7 +270,8 @@
             "dependencies": [],
             "loadStrategy": "eager",
             "category": "preview",
-            "isPreviewViewer": true
+            "isPreviewViewer": true,
+            "enabled": true
         }
     ]
 }

@@ -2,7 +2,7 @@
  * PlayCanvas Gaussian Splat Dependency Manager
  *
  * Handles dynamic loading and cleanup of PlayCanvas engine for Gaussian Splat viewing.
- * Follows VAMS plugin dependency management patterns.
+ * Follows VAMS plugin dependency management patterns with script tag loading.
  */
 
 export class PlayCanvasGaussianSplatDependencyManager {
@@ -12,12 +12,13 @@ export class PlayCanvasGaussianSplatDependencyManager {
     private static loadPromise: Promise<any> | null = null;
 
     /**
-     * Load PlayCanvas engine dynamically
+     * Load PlayCanvas engine dynamically from public directory
      * @returns Promise that resolves to the PlayCanvas module
      */
     static async loadPlayCanvas(): Promise<any> {
         // Return existing instance if already loaded
         if (this.loaded && this.playcanvas) {
+            console.log(`[${this.PLUGIN_ID}] PlayCanvas already loaded`);
             return this.playcanvas;
         }
 
@@ -40,17 +41,26 @@ export class PlayCanvasGaussianSplatDependencyManager {
     }
 
     /**
-     * Perform the actual loading of PlayCanvas
+     * Perform the actual loading of PlayCanvas via script tag
      */
     private static async performLoad(): Promise<any> {
         try {
             console.log(`[${this.PLUGIN_ID}] Loading PlayCanvas engine...`);
 
-            // Dynamic import of PlayCanvas
-            const pc = await import("playcanvas");
+            // Load the PlayCanvas bundle dynamically from public directory
+            await this.loadScript("/viewers/playcanvas/playcanvas.bundle.js");
+
+            // Wait for pc to be available on window
+            await this.waitForPC();
+
+            // Get pc from window
+            const pc = (window as any).pc;
+            if (!pc) {
+                throw new Error("PlayCanvas library not loaded");
+            }
 
             // Verify PlayCanvas loaded correctly
-            if (!pc || typeof pc.Application !== "function") {
+            if (typeof pc.Application !== "function") {
                 throw new Error("PlayCanvas module did not load correctly");
             }
 
@@ -76,11 +86,70 @@ export class PlayCanvasGaussianSplatDependencyManager {
     }
 
     /**
+     * Load a script dynamically
+     * @param src - Script source URL
+     */
+    private static loadScript(src: string): Promise<void> {
+        return new Promise((resolve, reject) => {
+            // Check if script is already loaded
+            const existingScript = document.querySelector(`script[src="${src}"]`);
+            if (existingScript) {
+                resolve();
+                return;
+            }
+
+            const script = document.createElement("script");
+            script.src = src;
+            script.async = true;
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+            document.head.appendChild(script);
+        });
+    }
+
+    /**
+     * Wait for pc to be available on window
+     */
+    private static waitForPC(): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const maxAttempts = 50;
+            let attempts = 0;
+
+            const checkPC = () => {
+                if (typeof (window as any).pc !== "undefined") {
+                    resolve();
+                } else if (attempts < maxAttempts) {
+                    attempts++;
+                    setTimeout(checkPC, 100);
+                } else {
+                    reject(new Error("Timeout waiting for PlayCanvas to load"));
+                }
+            };
+
+            checkPC();
+        });
+    }
+
+    /**
      * Cleanup PlayCanvas resources and reset state
      */
     static cleanup(): void {
         try {
             console.log(`[${this.PLUGIN_ID}] Cleaning up PlayCanvas resources...`);
+
+            // Remove the script tag
+            const script = document.querySelector(
+                'script[src="/viewers/playcanvas/playcanvas.bundle.js"]'
+            );
+            if (script) {
+                script.remove();
+            }
+
+            // Clean up the global pc object by setting to undefined instead of deleting
+            // (delete is not allowed on window properties in strict mode)
+            if ((window as any).pc) {
+                (window as any).pc = undefined;
+            }
 
             // Reset state
             this.loaded = false;

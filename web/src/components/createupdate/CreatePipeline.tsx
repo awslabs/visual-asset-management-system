@@ -18,7 +18,6 @@ import {
 } from "@cloudscape-design/components";
 import { useState, useEffect } from "react";
 import { API } from "aws-amplify";
-import { StringDictionary } from "babylonjs";
 import OptionDefinition from "./form-definitions/types/OptionDefinition";
 import {
     pipelineTypeOptions,
@@ -27,6 +26,9 @@ import {
 import DatabaseSelector from "../selectors/DatabaseSelector";
 import { dataBind } from "jodit/types/core/helpers";
 import { check } from "prettier";
+
+// Type definition for string dictionary (was imported from babylonjs)
+type StringDictionary = { [key: string]: string };
 
 interface CreatePipelineProps {
     open: boolean;

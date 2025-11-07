@@ -5,6 +5,10 @@
 
 import React, { useEffect, useRef, useCallback } from "react";
 import { useViewerContext } from "../../context/ViewerContext";
+import { Online3dViewerDependencyManager } from "../../dependencies";
+
+// Declare the global OV object
+declare const OV: any;
 
 export const ViewerCanvas: React.FC = () => {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -24,29 +28,32 @@ export const ViewerCanvas: React.FC = () => {
         try {
             console.log("Initializing Online3DViewer EmbeddedViewer...");
 
-            // Import the online-3d-viewer engine
-            const OV = await import("online-3d-viewer");
-            ovLibRef.current = OV;
+            // Load the online-3d-viewer library dynamically
+            await Online3dViewerDependencyManager.loadOnline3dViewer();
 
-            // Make OV globally available for other components
-            window.OV = OV;
+            // Get OV from window
+            const OVLib = (window as any).OV;
+            if (!OVLib) {
+                throw new Error("OV library not loaded");
+            }
+            ovLibRef.current = OVLib;
 
             // Create EmbeddedViewer instance exactly like the working implementation
-            const viewer = new OV.EmbeddedViewer(containerRef.current, {
-                backgroundColor: new OV.RGBAColor(
+            const viewer = new OVLib.EmbeddedViewer(containerRef.current, {
+                backgroundColor: new OVLib.RGBAColor(
                     settings.backgroundColor.r,
                     settings.backgroundColor.g,
                     settings.backgroundColor.b,
                     255
                 ),
-                defaultColor: new OV.RGBColor(
+                defaultColor: new OVLib.RGBColor(
                     settings.defaultColor.r,
                     settings.defaultColor.g,
                     settings.defaultColor.b
                 ),
-                edgeSettings: new OV.EdgeSettings(
+                edgeSettings: new OVLib.EdgeSettings(
                     settings.showEdges,
-                    new OV.RGBColor(
+                    new OVLib.RGBColor(
                         settings.edgeSettings.edgeColor.r,
                         settings.edgeSettings.edgeColor.g,
                         settings.edgeSettings.edgeColor.b
@@ -178,7 +185,7 @@ export const ViewerCanvas: React.FC = () => {
                 GetViewer: () => viewer.GetViewer(),
                 GetModel: () => viewer.GetModel(),
                 // Expose OV library for color and settings creation
-                OV: OV,
+                OV: OVLib,
             };
 
             updateState({

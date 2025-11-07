@@ -7,9 +7,10 @@ import React, { useEffect, useRef, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
 import { BabylonJSGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
-import * as BABYLON from "@babylonjs/core";
-import "@babylonjs/loaders";
-import "@babylonjs/core/Meshes/GaussianSplatting/gaussianSplattingMesh";
+import { BabylonJSGaussianSplatDependencyManager } from "./dependencies";
+
+// Declare BABYLON as it will be loaded dynamically
+declare const BABYLON: any;
 
 const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatViewerProps> = ({
     assetId,
@@ -72,6 +73,11 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
         const initViewer = async () => {
             try {
                 console.log("BabylonJS Gaussian Splat Viewer: Starting initialization");
+                setLoadingMessage("Loading BabylonJS...");
+
+                // Load BabylonJS dependencies
+                const BABYLON = await BabylonJSGaussianSplatDependencyManager.loadBabylonJS();
+
                 setLoadingMessage("Initializing viewer...");
 
                 // Create canvas directly in DOM
@@ -97,8 +103,6 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     containerRef.current.appendChild(canvas);
                     console.log("BabylonJS Gaussian Splat Viewer: Canvas added to DOM");
                 }
-
-                // BabylonJS is now imported at the top
 
                 // Create engine with inspector disabled
                 const engine = new BABYLON.Engine(canvas, true, {
@@ -186,7 +190,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                         );
 
                         BABYLON.SceneLoader.ImportMeshAsync("", "", response[1], scene)
-                            .then((result) => {
+                            .then((result: any) => {
                                 console.log(
                                     "BabylonJS Gaussian Splat Viewer: File loaded successfully, positioning camera"
                                 );

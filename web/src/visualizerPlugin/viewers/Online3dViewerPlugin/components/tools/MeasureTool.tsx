@@ -4,8 +4,21 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import * as THREE from "three";
 import { useViewerContext } from "../../context/ViewerContext";
+
+// Access THREE through the OV library which bundles it
+const getTHREE = () => {
+    const OV = (window as any).OV;
+    if (OV && OV.THREE) {
+        return OV.THREE;
+    }
+    // Fallback - OV might expose THREE directly on window
+    if ((window as any).THREE) {
+        return (window as any).THREE;
+    }
+    console.error("THREE library not available through OV");
+    return null;
+};
 
 interface MeasureToolProps {
     isActive: boolean;
@@ -61,6 +74,9 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
     }, [state.viewer]);
 
     const getFaceWorldNormal = useCallback((intersection: any) => {
+        const THREE = getTHREE();
+        if (!THREE) return null;
+
         const normalMatrix = new THREE.Matrix4();
         intersection.object.updateWorldMatrix(true, false);
         normalMatrix.extractRotation(intersection.object.matrixWorld);
@@ -70,6 +86,9 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
     }, []);
 
     const createMaterial = useCallback(() => {
+        const THREE = getTHREE();
+        if (!THREE) return null;
+
         return new THREE.LineBasicMaterial({
             color: 0xff0000, // Red color
             depthTest: false,
@@ -77,6 +96,9 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
     }, []);
 
     const createLineFromPoints = useCallback((points: any[], material: any) => {
+        const THREE = getTHREE();
+        if (!THREE) return null;
+
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
         return new THREE.Line(geometry, material);
     }, []);
@@ -85,6 +107,12 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
         (intersection: any, radius: number) => {
             try {
                 console.log("Creating marker with radius:", radius);
+
+                const THREE = getTHREE();
+                if (!THREE) {
+                    console.error("THREE library not available");
+                    return null;
+                }
 
                 const markerObject = new THREE.Object3D();
                 const material = createMaterial();
@@ -163,6 +191,15 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
 
     const calculateMarkerValues = useCallback(
         (aMarker: Marker, bMarker: Marker): MeasureValues => {
+            const THREE = getTHREE();
+            if (!THREE) {
+                return {
+                    pointsDistance: null,
+                    parallelFacesDistance: null,
+                    facesAngle: null,
+                };
+            }
+
             const aIntersection = aMarker.intersection;
             const bIntersection = bMarker.intersection;
 
@@ -375,7 +412,7 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
                 console.error("Error handling measure tool click:", error);
             }
         },
-        [isActive, getUnderlyingViewer, markers.length, clearMarkers, addMarker]
+        [isActive, getUnderlyingViewer, getOVLibrary, markers.length, clearMarkers, addMarker]
     );
 
     const handleMouseMove = useCallback(
@@ -464,7 +501,7 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
                 console.warn("Error handling measure tool mouse move:", error);
             }
         },
-        [isActive, getUnderlyingViewer, tempMarker, createMarker, getFaceWorldNormal]
+        [isActive, getUnderlyingViewer, getOVLibrary, tempMarker, createMarker, getFaceWorldNormal]
     );
 
     // Set up event listeners

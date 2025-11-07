@@ -1,0 +1,14 @@
+{
+    "name": "babylonjs-custom-install",
+    "version": "1.0.0",
+    "description": "Custom installation for BabylonJS with dynamic loading",
+    "private": true,
+    "dependencies": {
+        "@babylonjs/core": "^8.33.0",
+        "@babylonjs/loaders": "^8.33.0"
+    },
+    "devDependencies": {
+        "webpack": "^5.89.0",
+        "webpack-cli": "^5.1.4"
+    }
+}

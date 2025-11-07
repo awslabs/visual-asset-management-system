@@ -151,21 +151,14 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Dependencies**: Potree (loaded dynamically)
 -   **Special**: Requires preprocessing pipeline
 
-### 7. ThreeDimensionalPlotterPlugin
-
--   **Extensions**: `.rds`, `.fcs`, `.csv`
--   **Features**: 3D scatter plots using BabylonJS
--   **Multi-file**: No
--   **Dependencies**: BabylonJS, FCS parser
-
-### 8. ColumnarViewerPlugin
+### 7. ColumnarViewerPlugin
 
 -   **Extensions**: `.rds`, `.fcs`, `.csv`
 -   **Features**: Tabular data display using DataGrid
 -   **Multi-file**: No
 -   **Dependencies**: react-data-grid, FCS parser
 
-### 9. PDFViewerPlugin
+### 8. PDFViewerPlugin
 
 -   **Extensions**: `.pdf`
 -   **Features**: PDF document viewing with page navigation, zoom controls, page counter, and responsive design
@@ -173,7 +166,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Dependencies**: `react-pdf` (built on PDF.js)
 -   **Special**: Includes PDF.js worker configuration for optimal performance
 
-### 10. CesiumViewerPlugin
+### 9. CesiumViewerPlugin
 
 -   **Extensions**: `.json`
 -   **Features**: 3D Tileset viewing with CesiumJS using streaming API, optimized for large-scale 3D Tiles
@@ -186,9 +179,67 @@ All plugin behavior is defined in `viewerConfig.json`:
     -   `cesiumIonToken`: Cesium Ion access token for enhanced features (terrain, high-resolution imagery, geocoding)
 -   **CSP Requirements**:
     -   **Required**: `ALLOWUNSAFEEVAL` feature flag must be enabled in CDK config.json configuration file
-    -   **Optional**: If providing a Cesium Ion access token, add `https://api.cesium.com` to the CDK CSP `connectSrc` configuration file to enable Cesium ION functionality
+    -   **Optional**: If providing a Cesium Ion access token, add `https://api.cesium.com` to the CDK CSP `connectSrc` configuration file in `infra\config\csp\cspAdditionalConfig.json` to enable Cesium ION functionality
 -   **Configuration**: To enable CesiumJS viewer, ensure `allowUnsafeEvalFeatures` is turned on in the `config.json` CDK configuration
 -   **Note**: Designed for 3D Tileset (.json) files that reference collections of .glb/.gltf tiles. Uses VAMS streaming API for authenticated access to tileset data. Additional functionality (terrain, enhanced imagery) can be unlocked by providing a Cesium Ion token. This viewer will not be available if `ALLOWUNSAFEEVAL` is not enabled due to CesiumJS's requirement for dynamic code execution in WebGL shaders.
+
+### 10. TextViewerPlugin
+
+-   **Extensions**: `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`
+-   **Features**: View and syntax highlight text-based files with advanced formatting options
+-   **Multi-file**: No
+-   **Dependencies**: `react-syntax-highlighter`
+-   **Priority**: 1
+-   **Category**: document
+
+### 11. GaussianSplatViewerPlugin (BabylonJS)
+
+-   **Extensions**: `.ply`, `.spz`
+-   **Features**: View Gaussian Splat files with 3D visualization using BabylonJS engine
+-   **Multi-file**: No
+-   **Dependencies**: `babylonjs`, `babylonjs-loaders`
+-   **Priority**: 1
+-   **Category**: 3d
+-   **Custom Parameters**:
+    -   `enableXR`: Enable XR/AR support (default: true)
+    -   `pointSize`: Point size for rendering (default: 5.0)
+    -   `maxPoints`: Maximum number of points to render (default: 100000)
+    -   `enableLighting`: Enable lighting effects (default: false)
+
+### 12. GaussianSplatViewerPlugin (PlayCanvas)
+
+-   **Extensions**: `.ply`, `.sog`
+-   **Features**: View Gaussian Splat files with 3D visualization using PlayCanvas engine
+-   **Multi-file**: No
+-   **Dependencies**: `playcanvas`
+-   **Priority**: 2
+-   **Category**: 3d
+-   **Custom Parameters**:
+    -   `enableXR`: Enable XR/AR support (default: true)
+    -   `cameraMode`: Camera control mode (default: "orbit")
+    -   `autoFocus`: Automatically focus on model (default: true)
+    -   `enableSorting`: Enable point sorting for better rendering (default: true)
+
+### 13. VntanaViewerPlugin
+
+-   **Extensions**: `.glb`
+-   **Features**: View GLB files using VNTANA's high-quality 3D viewer
+-   **Multi-file**: No
+-   **Dependencies**: `@vntana/viewer`
+-   **Priority**: 2
+-   **Category**: 3d
+-   **Enabled**: false (disabled by default)
+-   **Note**: ⚠️ **VNTANA is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VNTANA license. To enable this viewer and obtain licensing information, visit [https://www.vntana.com](https://www.vntana.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` in the viewer configuration.
+
+### 14. PreviewViewerPlugin
+
+-   **Extensions**: `*` (all file types)
+-   **Features**: View generated preview images for any file type
+-   **Multi-file**: No
+-   **Dependencies**: None
+-   **Priority**: 10 (lowest priority, fallback viewer)
+-   **Category**: preview
+-   **Special**: This is a special viewer that displays preview images generated by VAMS for files that don't have a dedicated viewer
 
 ## 🚀 Usage
 
@@ -906,8 +957,8 @@ export class PotreeDependencyManager {
     static async loadPotree(): Promise<void> {
         // Load stylesheets using StylesheetManager
         const stylesheets = [
-            "/potree_libs/potree/potree.css",
-            "/potree_libs/jquery-ui/jquery-ui.min.css",
+            "/viewers/potree_libs/potree/potree.css",
+            "/viewers/potree_libs/jquery-ui/jquery-ui.min.css",
             // ... more stylesheets
         ];
 

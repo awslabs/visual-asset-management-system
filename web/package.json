@@ -13,8 +13,6 @@
         "@aws-sdk/client-s3": "^3.400.0",
         "@aws-sdk/lib-storage": "^3.400.0",
         "@aws-sdk/s3-request-presigner": "^3.400.0",
-        "@babylonjs/core": "^8.33.0",
-        "@babylonjs/loaders": "^8.33.0",
         "@badgateway/oauth2-client": "2.4.2",
         "@cloudscape-design/collection-hooks": "^1.0.19",
         "@cloudscape-design/components": "^3.0.196",
@@ -24,7 +22,6 @@
         "@dnd-kit/utilities": "^3.2.2",
         "@mapbox/mapbox-gl-draw": "^1.4.1",
         "@maplibre/maplibre-gl-geocoder": "^1.5.0",
-        "@spz-loader/babylonjs": "^0.3.0",
         "@turf/bbox": "^6.5.0",
         "@turf/turf": "^6.5.0",
         "@types/mapbox__mapbox-gl-draw": "^1.4.0",
@@ -35,10 +32,7 @@
         "aws-amplify": "5.3.27",
         "aws-amplify-react": "^5.1.9",
         "axios": "^1.6.0",
-        "babylonjs": "8.33.0",
-        "babylonjs-loaders": "8.33.0",
         "buffer": "^6.0.3",
-        "cesium": "1.118.0",
         "del-cli": "^5.0.0",
         "dompurify": "^2.3.6",
         "fast-xml-parser": "^4.2.5",
@@ -51,10 +45,8 @@
         "localforage": "^1.10.0",
         "maplibre-gl": "^5.8.0",
         "moment": "^2.29.4",
-        "online-3d-viewer": "^0.16.0",
         "papaparse": "^5.4.1",
         "patch-package": "^6.4.7",
-        "playcanvas": "2.11.8",
         "postcss": "^8.4.31",
         "postinstall-postinstall": "^2.1.0",
         "prop-types": "^15.8.1",
@@ -97,7 +89,7 @@
         "build.lowmem": "GENERATE_SOURCEMAP=false react-scripts --max_old_space_size=4096 build",
         "test": "react-scripts test --coverage",
         "eject": "react-scripts eject",
-        "postinstall": "node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js && patch-package && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js-worker.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.license.md && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.wasm"
+        "postinstall": "node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js && patch-package"
     },
     "eslintConfig": {
         "extends": [

@@ -144,7 +144,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({ contentWidth = 280 }) =>
                 try {
                     if (viewer.SetEnvironmentMapSettings) {
                         // Create environment map settings with correct path
-                        const envMapPath = `/online3dviewer/assets/envmaps/${envMapName}/`;
+                        const envMapPath = `/viewers/online3dviewer/assets/envmaps/${envMapName}/`;
                         const envMapTextures = [
                             envMapPath + "posx.jpg",
                             envMapPath + "negx.jpg",
@@ -289,7 +289,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({ contentWidth = 280 }) =>
 
                                                 if (viewer && OV) {
                                                     try {
-                                                        const envMapPath = `/online3dviewer/assets/envmaps/${settings.environmentMapName}/`;
+                                                        const envMapPath = `/viewers/online3dviewer/assets/envmaps/${settings.environmentMapName}/`;
                                                         const envMapTextures = [
                                                             envMapPath + "posx.jpg",
                                                             envMapPath + "negx.jpg",

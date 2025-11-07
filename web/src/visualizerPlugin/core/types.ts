@@ -25,6 +25,7 @@ export interface ViewerPluginConfig {
     isPreviewViewer?: boolean;
     customParameters?: Record<string, any>;
     featuresEnabledRestriction?: string[];
+    enabled?: boolean;
 }
 
 export interface ViewerPluginProps {

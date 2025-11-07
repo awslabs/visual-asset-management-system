@@ -10,7 +10,7 @@ THIRD PARTY COMPONENTS - CORE VAMS
 
 This software includes third party software subject to the following copyrights:
 
-Javascript Libraries:
+Javascript Libraries (Open Licensing):
 
 | Package                  | Version                                                              | Licenses                |
 | :----------------------- | :------------------------------------------------------------------- | :---------------------- |
@@ -91,10 +91,16 @@ Python Libraries
 | protobuf3-to-dict   | 0.1.5     | Public Domain                        |
 | Casbin              | 2.29.0    | Apache-2.0                           |
 
-Other Libraries
+---
 
-| Name | Version | Licenses |
-| :--- | :------ | :------- |
+THIRD PAID PARTY COMPONENTS - WEB VIEWERS
+
+---
+
+NPM Libraries
+
+| Package | Version | Licenses |
+| VNTANA 3D Model Viewer | [@vntana/viewer@2.2.0](https://www.npmjs.com/package/@vntana/viewer) | PAID - Commercial |
 
 ---
 

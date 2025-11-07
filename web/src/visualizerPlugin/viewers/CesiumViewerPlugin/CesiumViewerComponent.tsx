@@ -4,10 +4,15 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import * as Cesium from "cesium";
-import { Cesium3DTileset, Resource } from "cesium";
 import { Auth, Cache } from "aws-amplify";
 import { ViewerPluginProps } from "../../core/types";
+import { CesiumDependencyManager } from "./dependencies";
+
+// Cesium will be loaded dynamically and accessed from window
+// No imports needed - we'll use window.Cesium directly
+
+// Declare Cesium as available from window for TypeScript
+declare const Cesium: any;
 
 const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -22,12 +27,34 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     customParameters,
 }) => {
     const cesiumContainer = useRef<HTMLDivElement>(null);
-    const viewerRef = useRef<Cesium.Viewer | null>(null);
+    const viewerRef = useRef<any>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [initError, setInitError] = useState<string | null>(null);
-    const [loadedTilesets, setLoadedTilesets] = useState<Cesium.Cesium3DTileset[]>([]);
+    const [loadedTilesets, setLoadedTilesets] = useState<any[]>([]);
     const [config] = useState(Cache.getItem("config"));
+    const [cesiumLoaded, setCesiumLoaded] = useState(false);
+
+    // Load Cesium dynamically on mount
+    useEffect(() => {
+        const loadCesiumLib = async () => {
+            try {
+                await CesiumDependencyManager.loadCesium();
+                setCesiumLoaded(true);
+                console.log("Cesium loaded and ready");
+            } catch (error) {
+                console.error("Failed to load Cesium:", error);
+                setError("Failed to load Cesium viewer library");
+                setLoading(false);
+            }
+        };
+
+        loadCesiumLib();
+
+        return () => {
+            // Cleanup is handled by the viewer cleanup effect
+        };
+    }, []);
 
     // Scene control states
     const [showControls, setShowControls] = useState(true);
@@ -42,8 +69,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         memory: number;
     } | null>(null);
     const [measurementMode, setMeasurementMode] = useState<"none" | "distance" | "area">("none");
-    const [measurementPoints, setMeasurementPoints] = useState<Cesium.Cartesian3[]>([]);
-    const [measurementEntities, setMeasurementEntities] = useState<Cesium.Entity[]>([]);
+    const [measurementPoints, setMeasurementPoints] = useState<any[]>([]);
+    const [measurementEntities, setMeasurementEntities] = useState<any[]>([]);
     const [measurementResults, setMeasurementResults] = useState<
         Array<{ type: "distance" | "area"; value: number; unit: string; id: number }>
     >([]);
@@ -71,7 +98,12 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 throw new Error("Configuration not available");
             }
 
-            const encodedFileKey = encodeURIComponent(fileKey);
+            // Don't encode the entire path - Cesium needs the slashes to resolve relative paths
+            // Only encode individual path segments to handle special characters
+            const pathSegments = fileKey.split("/");
+            const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
+            const encodedFileKey = encodedSegments.join("/");
+
             return `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
         },
         [config, databaseId, assetId]
@@ -100,8 +132,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     }, []);
 
     useEffect(() => {
-        // Initialize Cesium viewer
-        if (cesiumContainer.current && !viewerRef.current) {
+        // Initialize Cesium viewer only after Cesium is loaded
+        if (cesiumContainer.current && !viewerRef.current && cesiumLoaded) {
             const initializeViewer = async () => {
                 try {
                     setInitError(null);
@@ -110,6 +142,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     // Get Cesium Ion token from custom parameters
                     const cesiumIonToken = customParameters?.cesiumIonToken;
                     const hasValidToken = cesiumIonToken && cesiumIonToken.trim() !== "";
+
+                    // Get Cesium from window
+                    const Cesium = (window as any).Cesium;
 
                     // Set Cesium Ion access token if provided
                     if (hasValidToken) {
@@ -149,10 +184,12 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
 
                     // Add error event listeners
-                    viewerRef.current.scene.renderError.addEventListener((scene, error) => {
-                        console.error("Cesium render error:", error);
-                        setInitError(`Render error: ${error.message || error}`);
-                    });
+                    viewerRef.current.scene.renderError.addEventListener(
+                        (scene: any, error: any) => {
+                            console.error("Cesium render error:", error);
+                            setInitError(`Render error: ${error.message || error}`);
+                        }
+                    );
 
                     // Only load terrain if Ion token is provided
                     if (hasValidToken) {
@@ -261,10 +298,10 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
             }
         };
-    }, [viewerMode, customParameters]);
+    }, [viewerMode, customParameters, cesiumLoaded]);
 
     // Helper function to configure camera for tileset viewing
-    const configureCameraForTileset = useCallback((tileset: Cesium.Cesium3DTileset) => {
+    const configureCameraForTileset = useCallback((tileset: any) => {
         if (!viewerRef.current) return;
 
         const viewer = viewerRef.current;
@@ -294,7 +331,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     }, []);
 
     // Helper function to create appropriate camera offset for tileset
-    const createCameraOffset = useCallback((tileset: Cesium.Cesium3DTileset) => {
+    const createCameraOffset = useCallback((tileset: any) => {
         const boundingSphere = tileset.boundingSphere;
         const radius = boundingSphere.radius;
 
@@ -532,7 +569,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             const canvas = viewerRef.current.scene.canvas;
 
             // Create download link with error handling
-            canvas.toBlob((blob) => {
+            canvas.toBlob((blob: any) => {
                 try {
                     if (blob) {
                         const url = URL.createObjectURL(blob);
@@ -571,7 +608,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     }, []);
 
     const addMeasurementPoint = useCallback(
-        (position: Cesium.Cartesian3) => {
+        (position: any) => {
             if (!viewerRef.current || measurementMode === "none") return;
 
             const newPoints = [...measurementPoints, position];
@@ -767,14 +804,17 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 const streamingUrl = constructStreamingUrl(key);
                 console.log("Streaming URL:", streamingUrl);
 
+                // Get Cesium from window
+                const Cesium = (window as any).Cesium;
+
                 // Create Cesium Resource with authentication headers
-                const resource = new Resource({
+                const resource = new Cesium.Resource({
                     url: streamingUrl,
                     headers: authHeaders,
                 });
 
                 // Create 3D Tileset using the authenticated resource
-                const tileset = await Cesium3DTileset.fromUrl(resource);
+                const tileset = await Cesium.Cesium3DTileset.fromUrl(resource);
 
                 // Add tileset to scene
                 viewerRef.current.scene.primitives.add(tileset);
@@ -840,12 +880,15 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         async (keys: string[]) => {
             if (!viewerRef.current || !config) return;
 
-            const tilesets: Cesium.Cesium3DTileset[] = [];
+            const tilesets: any[] = [];
 
             for (let i = 0; i < keys.length; i++) {
                 const key = keys[i];
                 try {
                     console.log(`Loading tileset ${i + 1}/${keys.length}:`, key);
+
+                    // Get Cesium from window
+                    const Cesium = (window as any).Cesium;
 
                     // Get authentication headers
                     const authHeaders = await getAuthHeaders();
@@ -855,13 +898,13 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     console.log(`Streaming URL for ${key}:`, streamingUrl);
 
                     // Create Cesium Resource with authentication headers
-                    const resource = new Resource({
+                    const resource = new Cesium.Resource({
                         url: streamingUrl,
                         headers: authHeaders,
                     });
 
                     // Create 3D Tileset using the authenticated resource
-                    const tileset = await Cesium3DTileset.fromUrl(resource);
+                    const tileset = await Cesium.Cesium3DTileset.fromUrl(resource);
 
                     // Add tileset to scene
                     viewerRef.current!.scene.primitives.add(tileset);
@@ -924,7 +967,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     );
 
     useEffect(() => {
-        if (!viewerRef.current || !config) return;
+        if (!viewerRef.current || !config) {
+            return;
+        }
 
         const loadTilesets = async () => {
             try {
@@ -951,16 +996,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         };
 
         loadTilesets();
-    }, [
-        assetId,
-        assetKey,
-        multiFileKeys,
-        databaseId,
-        versionId,
-        config,
-        loadMultipleTilesets,
-        loadSingleTileset,
-    ]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [assetId, assetKey, multiFileKeys, databaseId, versionId, config, viewerRef.current]);
 
     if (error) {
         return (
@@ -1094,7 +1131,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 }}
             />
 
-            {loadedTilesets.length > 0 && (
+            {viewerRef.current && loadedTilesets.length > 0 && (
                 <div
                     style={{
                         position: "absolute",
@@ -1115,7 +1152,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             )}
 
             {/* Scene Controls Panel */}
-            {loadedTilesets.length > 0 && showControls && (
+            {viewerRef.current && showControls && (
                 <div
                     style={{
                         position: "fixed",

@@ -5,7 +5,7 @@
 
 /**
  * Dependency manager for BabylonJS Gaussian Splat Viewer
- * Handles loading and cleanup of BabylonJS dependencies
+ * Handles loading and cleanup of BabylonJS dependencies via dynamic script loading
  */
 export class BabylonJSGaussianSplatDependencyManager {
     private static readonly PLUGIN_ID = "babylonjs-gaussian-splat-viewer";
@@ -14,7 +14,7 @@ export class BabylonJSGaussianSplatDependencyManager {
     private static activeEngines: Set<any> = new Set();
 
     /**
-     * Load BabylonJS dependencies
+     * Load BabylonJS dependencies dynamically from public directory
      * @returns Promise that resolves to BabylonJS module
      */
     static async loadBabylonJS(): Promise<any> {
@@ -26,18 +26,17 @@ export class BabylonJSGaussianSplatDependencyManager {
         try {
             console.log("Loading BabylonJS for BabylonJS Gaussian Splat viewer...");
 
-            // Dynamic import of BabylonJS with proper error handling
-            const BABYLON = await import("babylonjs").catch(() => {
-                throw new Error("BabylonJS package not found. Please install babylonjs package.");
-            });
+            // Load the BabylonJS bundle dynamically from public directory
+            await this.loadScript("/viewers/babylonjs/babylonjs.bundle.js");
 
-            // Load additional modules
-            await import("babylonjs-loaders").catch(() => {
-                console.warn("babylonjs-loaders not found, some features may be limited");
-            });
+            // Wait for BABYLON to be available on window
+            await this.waitForBABYLON();
 
-            // Make BabylonJS available globally for the splat loader
-            (window as any).BABYLON = BABYLON;
+            // Get BABYLON from window
+            const BABYLON = (window as any).BABYLON;
+            if (!BABYLON) {
+                throw new Error("BABYLON library not loaded");
+            }
 
             this.babylonEngine = BABYLON;
             this.loaded = true;
@@ -54,6 +53,51 @@ export class BabylonJSGaussianSplatDependencyManager {
                 }`
             );
         }
+    }
+
+    /**
+     * Load a script dynamically
+     * @param src - Script source URL
+     */
+    private static loadScript(src: string): Promise<void> {
+        return new Promise((resolve, reject) => {
+            // Check if script is already loaded
+            const existingScript = document.querySelector(`script[src="${src}"]`);
+            if (existingScript) {
+                resolve();
+                return;
+            }
+
+            const script = document.createElement("script");
+            script.src = src;
+            script.async = true;
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+            document.head.appendChild(script);
+        });
+    }
+
+    /**
+     * Wait for BABYLON to be available on window
+     */
+    private static waitForBABYLON(): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const maxAttempts = 50;
+            let attempts = 0;
+
+            const checkBABYLON = () => {
+                if (typeof (window as any).BABYLON !== "undefined") {
+                    resolve();
+                } else if (attempts < maxAttempts) {
+                    attempts++;
+                    setTimeout(checkBABYLON, 100);
+                } else {
+                    reject(new Error("Timeout waiting for BABYLON to load"));
+                }
+            };
+
+            checkBABYLON();
+        });
     }
 
     /**
@@ -93,9 +137,23 @@ export class BabylonJSGaussianSplatDependencyManager {
 
         this.activeEngines.clear();
 
-        // Reset state but keep BabylonJS loaded for other potential uses
-        // this.loaded = false;
-        // this.babylonEngine = null;
+        // Remove the script tag
+        const script = document.querySelector(
+            'script[src="/viewers/babylonjs/babylonjs.bundle.js"]'
+        );
+        if (script) {
+            script.remove();
+        }
+
+        // Clean up the global BABYLON object by setting to undefined instead of deleting
+        // (delete is not allowed on window properties in strict mode)
+        if ((window as any).BABYLON) {
+            (window as any).BABYLON = undefined;
+        }
+
+        // Reset state
+        this.loaded = false;
+        this.babylonEngine = null;
 
         console.log("BabylonJS Gaussian Splat viewer dependencies cleaned up");
     }

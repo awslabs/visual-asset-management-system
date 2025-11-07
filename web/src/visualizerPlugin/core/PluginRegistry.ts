@@ -135,6 +135,12 @@ export class PluginRegistry {
 
     async registerPluginMetadata(config: ViewerPluginConfig): Promise<void> {
         try {
+            // Check if viewer is explicitly disabled
+            if (config.enabled === false) {
+                console.log(`Skipping disabled plugin: ${config.name} (${config.id})`);
+                return;
+            }
+
             // Check feature restrictions before registering metadata
             if (!this.checkFeatureRestrictions(config)) {
                 console.log(

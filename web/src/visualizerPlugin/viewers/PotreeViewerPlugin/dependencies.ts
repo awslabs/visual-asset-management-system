@@ -29,26 +29,26 @@ export class PotreeDependencyManager {
     private static async loadPotreeFromAssets(): Promise<void> {
         // Load only the essential Potree files dynamically
         const scripts = [
-            "/potree_libs/jquery/jquery-3.1.1.min.js",
-            "/potree_libs/spectrum/spectrum.js",
-            "/potree_libs/jquery-ui/jquery-ui.min.js",
-            "/potree_libs/other/BinaryHeap.js",
-            "/potree_libs/tween/tween.min.js",
-            "/potree_libs/d3/d3.js",
-            "/potree_libs/proj4/proj4.js",
-            "/potree_libs/openlayers3/ol.js",
-            "/potree_libs/i18next/i18next.js",
-            "/potree_libs/jstree/jstree.js",
-            "/potree_libs/potree/potree.js",
-            "/potree_libs/plasio/js/laslaz.js",
+            "/viewers/potree_libs/jquery/jquery-3.1.1.min.js",
+            "/viewers/potree_libs/spectrum/spectrum.js",
+            "/viewers/potree_libs/jquery-ui/jquery-ui.min.js",
+            "/viewers/potree_libs/other/BinaryHeap.js",
+            "/viewers/potree_libs/tween/tween.min.js",
+            "/viewers/potree_libs/d3/d3.js",
+            "/viewers/potree_libs/proj4/proj4.js",
+            "/viewers/potree_libs/openlayers3/ol.js",
+            "/viewers/potree_libs/i18next/i18next.js",
+            "/viewers/potree_libs/jstree/jstree.js",
+            "/viewers/potree_libs/potree/potree.js",
+            "/viewers/potree_libs/plasio/js/laslaz.js",
         ];
 
         const stylesheets = [
-            "/potree_libs/potree/potree.css",
-            "/potree_libs/jquery-ui/jquery-ui.min.css",
-            "/potree_libs/openlayers3/ol.css",
-            "/potree_libs/spectrum/spectrum.css",
-            "/potree_libs/jstree/themes/mixed/style.css",
+            "/viewers/potree_libs/potree/potree.css",
+            "/viewers/potree_libs/jquery-ui/jquery-ui.min.css",
+            "/viewers/potree_libs/openlayers3/ol.css",
+            "/viewers/potree_libs/spectrum/spectrum.css",
+            "/viewers/potree_libs/jstree/themes/mixed/style.css",
         ];
 
         // Load stylesheets first using StylesheetManager

@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file. See [standa
 Major Changes:
 • New VAMS CLI Tool - Complete command-line interface with robust file handling for large-scale automation and integration workflows
 • Overhauled Search & Asset Management - Redesigned asset and file search system with enhanced UI, advanced filtering, and improved location services integration
-• Advanced File Visualization System - New plugin-based viewer architecture with new CesiumJS, BabylonJS, PlayCanvas, PDF, Video, and Text viewers plus modal popup access
+• Advanced File Visualization System - New plugin-based viewer architecture with new CesiumJS, BabylonJS, PlayCanvas, VNTANA, PDF, Video, and Text viewers plus modal popup access
 • Enhanced Pipeline System - Auto-deployment registration capabilities, new CAD/Mesh extraction pipeline, Gaussian Splat toolkit, and streamlined backend dependencies
 • Improved Asset Links & Metadata - Extended support for 4x4 Matrix, WXYZ, JSON, GEOJSON, GEOPOINT types with multiple parent/child relationships
 • Performance & Security Improvements - Enhanced API Gateway authorizers with IP restrictions, asynchronous large file upload processing, and restored VPC lambda support
@@ -41,6 +41,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   Added PlayCanvas-based Gaussian Splat viewer for `.ply` and `.sog` splat files
     -   3D Online viewer now has additional UI added to support basic extra functionality
     -   3D Online Viewer once again will also support `.ply` file extensions for viewing (previously switched to PotreeViewer only)
+    -   Added the VNTANA 3D Model licened viewer to the viewer plugin system for `glb` files. Go to [VNTANA.com](https://www.vntana.com/) for license purchasing and then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
 -   Overhauled the file and asset OpenSearch system, APIs, indexing, and user interfaces
     -   Assets and files are now split into two separate OpenSearch indexes; the old index will remain and will not be deleted for auditing and/or migration purposes; this causes breaking changes that require a migration script to re-index all assets/files for search
     -   Asset link relationship data will now additionally be indexed (excluding asset link metadata for now)

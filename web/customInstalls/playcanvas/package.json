@@ -1,0 +1,13 @@
+{
+    "name": "playcanvas-custom-install",
+    "version": "1.0.0",
+    "description": "Custom installation for PlayCanvas with dynamic loading",
+    "private": true,
+    "dependencies": {
+        "playcanvas": "2.11.8"
+    },
+    "devDependencies": {
+        "webpack": "^5.89.0",
+        "webpack-cli": "^5.1.4"
+    }
+}

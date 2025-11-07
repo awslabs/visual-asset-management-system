@@ -43,11 +43,15 @@ export const Toolbar: React.FC = () => {
         }
     };
 
-    const handleSetUpVector = async (direction: "Y" | "Z") => {
+    const handleSetUpVector = (direction: "Y" | "Z") => {
         const viewer = getUnderlyingViewer();
         if (viewer) {
             try {
-                const OV = await import("online-3d-viewer");
+                const OV = (window as any).OV;
+                if (!OV) {
+                    console.error("OV library not loaded");
+                    return;
+                }
                 const directionEnum = direction === "Y" ? OV.Direction.Y : OV.Direction.Z;
                 viewer.SetUpVector(directionEnum, true);
             } catch (error) {
@@ -67,11 +71,15 @@ export const Toolbar: React.FC = () => {
         }
     };
 
-    const handleNavigationModeChange = async (mode: "FixedUpVector" | "FreeOrbit") => {
+    const handleNavigationModeChange = (mode: "FixedUpVector" | "FreeOrbit") => {
         const viewer = getUnderlyingViewer();
         if (viewer) {
             try {
-                const OV = await import("online-3d-viewer");
+                const OV = (window as any).OV;
+                if (!OV) {
+                    console.error("OV library not loaded");
+                    return;
+                }
                 const navMode =
                     mode === "FixedUpVector"
                         ? OV.NavigationMode.FixedUpVector
@@ -84,11 +92,15 @@ export const Toolbar: React.FC = () => {
         updateCameraSettings({ navigationMode: mode });
     };
 
-    const handleProjectionModeChange = async (mode: "Perspective" | "Orthographic") => {
+    const handleProjectionModeChange = (mode: "Perspective" | "Orthographic") => {
         const viewer = getUnderlyingViewer();
         if (viewer) {
             try {
-                const OV = await import("online-3d-viewer");
+                const OV = (window as any).OV;
+                if (!OV) {
+                    console.error("OV library not loaded");
+                    return;
+                }
                 const projMode =
                     mode === "Perspective"
                         ? OV.ProjectionMode.Perspective
