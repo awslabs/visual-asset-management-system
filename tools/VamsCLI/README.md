@@ -101,6 +101,13 @@ vamscli assets download /local/path -d my-database -a my-asset
 vamscli assets download /local/path -d my-database -a my-asset --file-key "/model.gltf"
 vamscli assets download -d my-database -a my-asset --shareable-links-only
 
+# Export comprehensive asset data (new in v2.2+, auto-pagination enabled by default)
+vamscli assets export -d my-database -a my-asset --json-output > export.json
+vamscli assets export -d my-database -a my-asset --file-extensions .gltf --generate-presigned-urls
+vamscli assets export -d my-database -a my-asset --no-fetch-relationships  # Single asset only
+vamscli assets export -d my-database -a my-asset --fetch-entire-subtrees  # Full tree
+vamscli assets export -d my-database -a my-asset --no-auto-paginate --max-assets 100  # Manual pagination
+
 # Create asset versions for tracking changes
 vamscli asset-version create -d my-database -a my-asset --comment "Initial version"
 
@@ -162,7 +169,7 @@ VamsCLI provides fourteen main command groups:
 -   **`vamscli auth`** - Authentication and session management
 -   **`vamscli features`** - Feature switches management and checking
 -   **`vamscli search`** - Search assets and files using OpenSearch (requires OpenSearch enabled)
--   **`vamscli assets`** - Asset creation, updates, and management
+-   **`vamscli assets`** - Asset creation, updates, management, and comprehensive data export
 -   **`vamscli asset-version`** - Asset version management and tracking
 -   **`vamscli asset-links`** - Asset relationship management and linking
 -   **`vamscli asset-links-metadata`** - Metadata management for asset links

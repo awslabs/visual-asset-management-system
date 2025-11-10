@@ -2345,13 +2345,16 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
             operation_message = f"Set primary type '{final_primary_type}' for file: {file_path}"
         
         # Copy the object with updated metadata (this creates a new version with the updated metadata)
-        s3_client.copy_object(
+        # Use s3_resource.meta.client.copy() which supports multi-part uploads for files >5GB
+        s3_resource.meta.client.copy(
             CopySource={'Bucket': bucket, 'Key': full_key},
             Bucket=bucket,
             Key=full_key,
-            MetadataDirective='REPLACE',
-            Metadata=new_metadata,
-            ContentType=current_object.get('ContentType', 'binary/octet-stream')
+            ExtraArgs={
+                'Metadata': new_metadata,
+                'MetadataDirective': 'REPLACE',
+                'ContentType': current_object.get('ContentType', 'binary/octet-stream')
+            }
         )
         
         # Send email notification for asset file change

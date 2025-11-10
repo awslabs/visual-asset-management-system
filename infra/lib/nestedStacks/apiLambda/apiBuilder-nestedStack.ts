@@ -38,6 +38,7 @@ import {
     buildUploadFileFunction,
     buildAssetVersionsFunction,
     buildSqsUploadFileLargeFunction,
+    buildAssetExportService,
 } from "../../lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
@@ -862,6 +863,23 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, assetVersionsFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}",
             method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        // Asset Export Service Function
+        const assetExportServiceFunction = buildAssetExportService(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            assetLinksService,
+            config,
+            vpc,
+            subnets
+        );
+        // Attach to export endpoint
+        attachFunctionToApi(this, assetExportServiceFunction, {
+            routePath: "/database/{databaseId}/assets/{assetId}/export",
+            method: apigateway.HttpMethod.POST,
             api: api,
         });
 

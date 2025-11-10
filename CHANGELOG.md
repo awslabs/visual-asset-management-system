@@ -28,6 +28,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 ### Features
 
 -   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
+-   New asset export API `/database/{databaseId}/assets/{assetId}/export POST` to make it easier for downstream tool integration to have a single call to fetch all information about an asset, all its related data, and asset link sub-tree information (including auto-fetching pre-signed URLs). Integrated into CLI to support easy fetching and file download logic.
 -   **Web** The website viewer system has been rewritten to support a plugin-based dynamically loaded viewing system which allows for much easier capability to add new viewers and adds more functionality. Documentation can be found at: `web\src\visualizerPlugin\README.md`
     -   Support for multiple viewers per file types which is now controlled with a drop-down as part of the viewer
     -   Support to define which viewers are for multiple files or single files
@@ -41,7 +42,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   Added PlayCanvas-based Gaussian Splat viewer for `.ply` and `.sog` splat files
     -   3D Online viewer now has additional UI added to support basic extra functionality
     -   3D Online Viewer once again will also support `.ply` file extensions for viewing (previously switched to PotreeViewer only)
-    -   Added the VNTANA 3D Model licened viewer to the viewer plugin system for `glb` files. Go to [VNTANA.com](https://www.vntana.com/) for license purchasing and then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
+    -   Added the VNTANA 3D Model licened viewer to the viewer plugin system for `glb` files. Head to [VNTANA.com](https://www.vntana.com/) for license purchasing and then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
 -   Overhauled the file and asset OpenSearch system, APIs, indexing, and user interfaces
     -   Assets and files are now split into two separate OpenSearch indexes; the old index will remain and will not be deleted for auditing and/or migration purposes; this causes breaking changes that require a migration script to re-index all assets/files for search
     -   Asset link relationship data will now additionally be indexed (excluding asset link metadata for now)

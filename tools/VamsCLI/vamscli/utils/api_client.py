@@ -11,7 +11,7 @@ from ..constants import (
     API_CREATE_FOLDER, API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_ASSET_PREVIEW, 
     API_DELETE_AUXILIARY_PREVIEW, API_DELETE_FILE, API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE,
-    API_ARCHIVE_ASSET, API_DELETE_ASSET, API_DOWNLOAD_ASSET, API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS,
+    API_ARCHIVE_ASSET, API_DELETE_ASSET, API_DOWNLOAD_ASSET, API_ASSET_EXPORT, API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS,
     API_TAGS, API_TAG_DELETE, API_TAG_TYPES, API_TAG_TYPE_DELETE,
     API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION, API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION,
     API_ASSET_LINKS, API_ASSET_LINKS_SINGLE, API_ASSET_LINKS_UPDATE, API_ASSET_LINKS_DELETE, API_ASSET_LINKS_FOR_ASSET,
@@ -2730,6 +2730,67 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to download asset preview: {e}")
+
+    # Asset Export API Methods
+
+    def export_asset(self, database_id: str, asset_id: str, export_params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Export comprehensive asset data with filtering options.
+        
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID (root asset for tree export)
+            export_params: Export parameters matching AssetExportRequestModel:
+                - generatePresignedUrls: Generate presigned URLs for files
+                - includeFolderFiles: Include folder files
+                - includeOnlyPrimaryTypeFiles: Only files with primaryType
+                - includeFileMetadata: Include file metadata
+                - includeAssetLinkMetadata: Include asset link metadata
+                - includeAssetMetadata: Include asset metadata
+                - fetchAssetRelationships: Fetch asset relationships
+                - fetchEntireChildrenSubtrees: Fetch entire children subtrees
+                - includeArchivedFiles: Include archived files
+                - fileExtensions: Filter by file extensions
+                - maxAssets: Max assets per page (1-1000)
+                - nextToken: Pagination token
+        
+        Returns:
+            API response with assets, relationships, and pagination info
+        
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            InvalidAssetDataError: When export parameters are invalid
+            APIError: When API call fails
+        """
+        try:
+            endpoint = API_ASSET_EXPORT.format(databaseId=database_id, assetId=asset_id)
+            # Backend expects POST with JSON body
+            response = self.post(endpoint, data=export_params, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise InvalidAssetDataError(f"Invalid export parameters: {error_message}")
+                
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Asset export failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to export asset: {e}")
 
     # Search API Methods
 

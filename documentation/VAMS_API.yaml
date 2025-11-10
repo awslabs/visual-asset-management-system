@@ -1383,6 +1383,212 @@ paths:
               schema:
                   type: "string"
                   pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /database/{databaseId}/assets/{assetId}/export:
+        post:
+            summary: "Export comprehensive asset data including child tree, metadata, files, and relationships"
+            description: "Exports a complete asset hierarchy starting from the specified root asset, including all child assets, their files, metadata, versions, and relationships. Supports pagination for large asset trees and optional response compression (100KB threshold). The export includes configurable filters for files, metadata, and relationship fetching. Uses POST method to support request body with filter options and optional presigned URL generation."
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                generatePresignedUrls:
+                                    type: boolean
+                                    default: false
+                                    description: "Generate presigned S3 URLs for file downloads (skipped for archived files)"
+                                includeFolderFiles:
+                                    type: boolean
+                                    default: false
+                                    description: "Include folder markers in file listings"
+                                includeOnlyPrimaryTypeFiles:
+                                    type: boolean
+                                    default: false
+                                    description: "Include only files with primaryType metadata set"
+                                includeFileMetadata:
+                                    type: boolean
+                                    default: true
+                                    description: "Include file-specific metadata"
+                                includeAssetLinkMetadata:
+                                    type: boolean
+                                    default: true
+                                    description: "Include asset link relationship metadata"
+                                includeAssetMetadata:
+                                    type: boolean
+                                    default: true
+                                    description: "Include asset-level metadata"
+                                fetchAssetRelationships:
+                                    type: boolean
+                                    default: true
+                                    description: "Fetch asset relationships and linked asset details. When false, only returns the single root asset without any relationship data or child assets."
+                                fetchEntireChildrenSubtrees:
+                                    type: boolean
+                                    default: false
+                                    description: "Fetch entire children relationship sub-trees. When false, only fetches root asset plus one level of children. When true, fetches the complete tree hierarchy."
+                                includeParentRelationships:
+                                    type: boolean
+                                    default: false
+                                    description: "Include parent relationships in the relationship data. When false (default), filters out relationships where the root asset is the child (i.e., parent relationships to the root asset)."
+                                includeArchivedFiles:
+                                    type: boolean
+                                    default: false
+                                    description: "Include archived files in export. Note: Presigned URLs will not be generated for archived files regardless of generatePresignedUrls setting."
+                                fileExtensions:
+                                    type: array
+                                    items:
+                                        type: string
+                                    description: "Filter files to only specified extensions (e.g., ['.pdf', '.jpg'])"
+                                maxAssets:
+                                    type: integer
+                                    default: 100
+                                    minimum: 1
+                                    maximum: 1000
+                                    description: "Maximum number of assets to return per page"
+                                nextToken:
+                                    type: string
+                                    description: "Pagination token from previous response for retrieving next page"
+            responses:
+                "200":
+                    description: Asset export data retrieved successfully. Response may be gzip compressed if size exceeds 100KB.
+                    headers:
+                        Content-Encoding:
+                            schema:
+                                type: string
+                                enum: [gzip]
+                            description: "Present when response is compressed"
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required:
+                                    - assets
+                                    - totalAssetsInTree
+                                    - assetsInThisPage
+                                properties:
+                                    assets:
+                                        type: array
+                                        description: "Array of assets with complete data"
+                                        items:
+                                            type: object
+                                            properties:
+                                                is_root_lookup_asset:
+                                                    type: boolean
+                                                id:
+                                                    type: string
+                                                databaseid:
+                                                    type: string
+                                                assetid:
+                                                    type: string
+                                                bucketid:
+                                                    type: string
+                                                assetname:
+                                                    type: string
+                                                bucketname:
+                                                    type: string
+                                                bucketprefix:
+                                                    type: string
+                                                assettype:
+                                                    type: string
+                                                description:
+                                                    type: string
+                                                isdistributable:
+                                                    type: boolean
+                                                tags:
+                                                    type: array
+                                                    items:
+                                                        type: string
+                                                asset_version_id:
+                                                    type: string
+                                                asset_version_createdate:
+                                                    type: string
+                                                asset_version_comment:
+                                                    type: string
+                                                archived:
+                                                    type: boolean
+                                                metadata:
+                                                    type: object
+                                                    additionalProperties:
+                                                        type: object
+                                                        properties:
+                                                            valueType:
+                                                                type: string
+                                                            value:
+                                                                type: string
+                                                files:
+                                                    type: array
+                                                    items:
+                                                        type: object
+                                    relationships:
+                                        type: array
+                                        description: "Array of parent-child relationships (only in first page)"
+                                        items:
+                                            type: object
+                                            properties:
+                                                parentAssetId:
+                                                    type: string
+                                                parentAssetDatabaseId:
+                                                    type: string
+                                                childAssetId:
+                                                    type: string
+                                                childAssetDatabaseId:
+                                                    type: string
+                                                assetLinkType:
+                                                    type: string
+                                                assetLinkId:
+                                                    type: string
+                                                assetLinkAliasId:
+                                                    type: string
+                                                metadata:
+                                                    type: object
+                                    nextToken:
+                                        type: string
+                                        description: "Pagination token for retrieving next page of assets"
+                                    totalAssetsInTree:
+                                        type: integer
+                                        description: "Total number of assets in the complete tree"
+                                    assetsInThisPage:
+                                        type: integer
+                                        description: "Number of assets returned in this page"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to access asset or child assets.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing export request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: "path"
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "assetId"
+                  in: "path"
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/asset_id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}:
         get:
             summary: "Stream asset files with HTTP range support."

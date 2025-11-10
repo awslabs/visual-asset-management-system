@@ -610,3 +610,77 @@ export function buildIngestAssetFunction(
 
     return fun;
 }
+
+export function buildAssetExportService(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    assetLinksFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "assetExportService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+
+        environment: {
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.assetLinksStorageTableV2.tableName,
+            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            ASSET_LINKS_FUNCTION_NAME: assetLinksFunction.functionName,
+            PRESIGNED_URL_TIMEOUT_SECONDS:
+                config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+        },
+    });
+
+    // Grant read permissions to all required tables
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.metadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+
+    // Grant invoke permission for asset links lambda
+    assetLinksFunction.grantInvoke(fun);
+
+    // Grant read permissions to all asset buckets for file listing and presigned URLs
+    grantReadPermissionsToAllAssetBuckets(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return fun;
+}

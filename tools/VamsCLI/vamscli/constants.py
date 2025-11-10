@@ -33,6 +33,7 @@ API_SET_PRIMARY_FILE = "/database/{databaseId}/assets/{assetId}/setPrimaryFile"
 API_ARCHIVE_ASSET = "/database/{databaseId}/assets/{assetId}/archiveAsset"
 API_DELETE_ASSET = "/database/{databaseId}/assets/{assetId}/deleteAsset"
 API_DOWNLOAD_ASSET = "/database/{databaseId}/assets/{assetId}/download"
+API_ASSET_EXPORT = "/database/{databaseId}/assets/{assetId}/export"
 
 # Asset Version API Endpoints
 API_CREATE_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/createVersion"

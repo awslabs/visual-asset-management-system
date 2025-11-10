@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, List
 import click
 
 from ..constants import (
-    API_DATABASE_ASSETS, API_ASSETS, DEFAULT_PARALLEL_DOWNLOADS, 
+    API_DATABASE_ASSETS, API_ASSETS, API_ASSET_EXPORT, DEFAULT_PARALLEL_DOWNLOADS, 
     DEFAULT_DOWNLOAD_RETRY_ATTEMPTS, DEFAULT_DOWNLOAD_TIMEOUT
 )
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
@@ -1328,3 +1328,10 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
         # Handle asset/database business logic errors
         output_error(e, json_output, error_type="Resource Not Found")
         raise click.ClickException(str(e))
+
+
+# Import and register export command from assetsExport module
+from .assetsExport import export_command
+
+# Add export command to assets group
+assets.add_command(export_command, name='export')

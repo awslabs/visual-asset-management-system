@@ -30,19 +30,17 @@ class TestIndustryPLMImportCommand:
         assert result.exit_code == 0
         assert 'Import a PLM XML file as a new VAMS asset' in result.output
         assert '--database-id' in result.output
-        assert '--name' in result.output
-        assert '--description' in result.output
-        assert '--distributable' in result.output
-        assert '--plmxml-file' in result.output
-        assert '--tags' in result.output
+        assert '--plmxml-dir' in result.output
         assert '--asset-location' in result.output
         assert '--json-output' in result.output
     
     @patch('vamscli.main.ProfileManager')
     def test_import_success(self, mock_main_profile_manager, cli_runner, tmp_path):
         """Test successful PLM XML import (integration test with command chaining)."""
-        # Create a temporary PLM XML file
-        plm_file = tmp_path / "test.xml"
+        # Create a temporary PLM XML directory with a test file
+        plm_dir = tmp_path / "plm_data"
+        plm_dir.mkdir()
+        plm_file = plm_dir / "test.xml"
         plm_file.write_text('<?xml version="1.0"?><plm>test</plm>')
         
         # Mock profile manager
@@ -57,19 +55,16 @@ class TestIndustryPLMImportCommand:
         result = cli_runner.invoke(cli, [
             'industry', 'engineering', 'plm', 'plmxml', 'import',
             '-d', 'test-database',
-            '--name', 'Test Product',
-            '--description', 'Test PLM product',
-            '--distributable',
-            '--plmxml-file', str(plm_file)
+            '--plmxml-dir', str(plm_dir)
         ])
         
         # The command will fail because we're not mocking the underlying API calls,
         # but we can verify the command structure is correct
-        assert 'Step 1/2: Creating asset...' in result.output or result.exit_code != 0
+        assert 'Processing plmxml file' in result.output or result.exit_code != 0
     
     @patch('vamscli.main.ProfileManager')
     def test_import_file_not_found(self, mock_main_profile_manager, cli_runner):
-        """Test PLM XML import with non-existent file."""
+        """Test PLM XML import with non-existent directory."""
         # Mock profile manager
         mock_profile_manager = Mock()
         mock_profile_manager.has_config.return_value = True
@@ -80,15 +75,12 @@ class TestIndustryPLMImportCommand:
         result = cli_runner.invoke(cli, [
             'industry', 'engineering', 'plm', 'plmxml', 'import',
             '-d', 'test-database',
-            '--name', 'Product',
-            '--description', 'Product data',
-            '--distributable',
-            '--plmxml-file', '/nonexistent/file.xml'
+            '--plmxml-dir', '/nonexistent/directory'
         ])
         
         assert result.exit_code != 0
-        # Click validates file existence before our code runs
-        assert 'does not exist' in result.output or 'PLM XML file not found' in result.output
+        # Click validates directory existence before our code runs
+        assert 'does not exist' in result.output or 'Error' in result.output
     
     def test_import_missing_required_params(self, cli_runner):
         """Test PLM XML import with missing required parameters."""

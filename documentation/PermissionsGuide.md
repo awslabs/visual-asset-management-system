@@ -268,6 +268,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/export` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/download` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/workflows/{workflowId}` - POST
