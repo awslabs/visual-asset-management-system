@@ -10,7 +10,7 @@ interface VAMSConfig {
 }
 const config: VAMSConfig = {
     APP_TITLE: "Amazon VAMS",
-    DEV_API_ENDPOINT: "https://wvyn1j31o7.execute-api.us-east-1.amazonaws.com", //'http://localhost:8002/', // Can point to either remote or local API
+    DEV_API_ENDPOINT: "", //'http://localhost:8002/', // Can point to either remote or local API
     // CUSTOMER_LOGO // defines a alternate logo
 };
 
