@@ -327,6 +327,24 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
             setCurrentView("table");
         }
 
+        // Remove mode-specific filters that don't apply to the new mode
+        const updatedFilters = { ...searchState.filters };
+        
+        if (type === "asset") {
+            // Switching to asset mode - remove file-specific filters
+            delete updatedFilters.str_fileext;
+            delete updatedFilters.num_filesize_filter;
+            delete updatedFilters.date_lastmodified_filter;
+        } else {
+            // Switching to file mode - remove asset-specific filters
+            delete updatedFilters.str_assettype;
+            delete updatedFilters.bool_has_asset_children;
+            delete updatedFilters.bool_has_asset_parents;
+            delete updatedFilters.bool_has_assets_related;
+        }
+        
+        searchState.setFilters(updatedFilters);
+
         // No need to update columns here - they're already stored separately per record type
         // The PreferencesPanel will automatically use the correct column list
     };
