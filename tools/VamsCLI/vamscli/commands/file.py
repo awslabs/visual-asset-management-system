@@ -222,6 +222,10 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             directory = json_data['directory']
             log_debug(f"Using directory from JSON input: {directory}")
         
+        # Auto-enable hide_progress when json_output is enabled
+        if json_output:
+            hide_progress = True
+        
         # Validate arguments
         log_debug(f"Validating upload arguments: database_id={database_id}, asset_id={asset_id}, asset_preview={asset_preview}")
         file_source = validate_upload_args(
@@ -333,6 +337,37 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         result = asyncio.run(run_upload())
         
         log_debug(f"Upload completed: {result['successful_files']}/{result['total_files']} files successful, duration={result.get('upload_duration', 0):.2f}s")
+        
+        # Create a clean, JSON-serializable result when json_output is enabled
+        if json_output:
+            # Extract only serializable data
+            clean_result = {
+                'overall_success': result.get('overall_success', False),
+                'total_files': result.get('total_files', 0),
+                'successful_files': result.get('successful_files', 0),
+                'failed_files': result.get('failed_files', 0),
+                'total_size': result.get('total_size', 0),
+                'total_size_formatted': result.get('total_size_formatted', '0 B'),
+                'upload_duration': result.get('upload_duration', 0),
+                'average_speed': result.get('average_speed', 0),
+                'average_speed_formatted': result.get('average_speed_formatted', '0 B/s')
+            }
+            
+            # Add sequence results without progress objects
+            if 'sequence_results' in result:
+                clean_sequence_results = []
+                for seq_result in result['sequence_results']:
+                    clean_seq = {
+                        'sequence_number': seq_result.get('sequence_number'),
+                        'successful_files': seq_result.get('successful_files', 0),
+                        'failed_files': seq_result.get('failed_files', [])
+                    }
+                    if 'completion_result' in seq_result:
+                        clean_seq['completion_result'] = seq_result['completion_result']
+                    clean_sequence_results.append(clean_seq)
+                clean_result['sequence_results'] = clean_sequence_results
+            
+            result = clean_result
         
         # Clear progress display (only in CLI mode)
         if not json_output and not hide_progress:

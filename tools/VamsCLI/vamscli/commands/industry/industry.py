@@ -2,8 +2,10 @@
 
 import click
 
-
 @click.group()
 def industry():
     """Industry-specific commands."""
     pass
+
+
+

@@ -155,15 +155,20 @@ vamscli assets archive my-asset -d my-database --reason "No longer needed"
 # Permanently delete an asset (requires confirmation)
 vamscli assets delete my-asset -d my-database --confirm --reason "Project cancelled"
 
+# Combine multiple GLBs from asset hierarchy into single GLB (industry spatial)
+vamscli industry spatial glbassetcombine -d my-database -a root-asset-id
+vamscli industry spatial glbassetcombine -d my-database -a root-asset-id --asset-create-name "Combined Model"
+
 # Get help for any command
 vamscli --help
 vamscli tag --help
 vamscli tag-type --help
+vamscli industry spatial --help
 ```
 
 ## Available Commands
 
-VamsCLI provides fourteen main command groups:
+VamsCLI provides fifteen main command groups:
 
 -   **`vamscli setup`** - Configure CLI with API Gateway URL
 -   **`vamscli auth`** - Authentication and session management
@@ -179,6 +184,7 @@ VamsCLI provides fourteen main command groups:
 -   **`vamscli database`** - Database creation and management
 -   **`vamscli tag`** - Tag creation and management for asset organization
 -   **`vamscli tag-type`** - Tag type creation and management
+-   **`vamscli industry`** - Industry-specific commands (spatial data processing)
 -   **`vamscli profile`** - Profile management for multiple environments
 
 For complete command documentation, see the [Commands Documentation](docs/commands/) directory.
@@ -225,6 +231,7 @@ VamsCLI provides comprehensive documentation organized by functional area:
 -   **[Metadata Management](docs/commands/metadata-management.md)** - Metadata operations for assets and files
 -   **[Database Administration](docs/commands/database-admin.md)** - Database and bucket management
 -   **[Tag Management](docs/commands/tag-management.md)** - Tag and tag type operations
+-   **[Industry Spatial](docs/commands/industry-spatial.md)** - Spatial data processing (GLB combining)
 -   **[Global Options](docs/commands/global-options.md)** - JSON patterns, automation, and best practices
 
 ### Troubleshooting Documentation

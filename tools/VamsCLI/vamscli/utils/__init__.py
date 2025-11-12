@@ -57,6 +57,15 @@ from .exceptions import (
     SearchQueryError,
     SearchMappingError
 )
+from .glb_combiner import (
+    combine_glb_files,
+    combine_multiple_glbs,
+    build_transform_matrix_from_metadata,
+    add_root_transform_node,
+    create_empty_glb,
+    format_file_size,
+    GLBCombineError
+)
 
 __all__ = [
     'APIClient',
@@ -111,5 +120,12 @@ __all__ = [
     'SearchUnavailableError',
     'InvalidSearchParametersError',
     'SearchQueryError',
-    'SearchMappingError'
+    'SearchMappingError',
+    'combine_glb_files',
+    'combine_multiple_glbs',
+    'build_transform_matrix_from_metadata',
+    'add_root_transform_node',
+    'create_empty_glb',
+    'format_file_size',
+    'GLBCombineError'
 ]

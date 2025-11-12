@@ -307,11 +307,34 @@ class ReindexUtility:
                         response = client.scroll(scroll_id=scroll_id, scroll=scroll_time)
                         scroll_id = response.get('_scroll_id')
                         hits = response.get('hits', {}).get('hits', [])
+                        
+                        # If no hits returned, we're done
+                        if not hits:
+                            logger.info(f"No more documents to process in {index_name}")
+                            break
+                            
                     except Exception as scroll_error:
                         # Scroll may not be fully supported in OpenSearch Serverless
-                        # If we get an error, assume we've processed all documents
-                        logger.info(f"Scroll continuation not supported or completed: {scroll_error}")
-                        break
+                        # Check if we've processed all documents by attempting a new search
+                        logger.info(f"Scroll continuation error: {scroll_error}")
+                        
+                        # Try one more search to see if there are remaining documents
+                        try:
+                            verify_response = client.search(
+                                index=index_name,
+                                size=1,
+                                body={"query": {"match_all": {}}, "_source": False}
+                            )
+                            remaining = verify_response.get('hits', {}).get('total', {}).get('value', 0)
+                            if remaining == 0:
+                                logger.info(f"Verified all documents deleted from {index_name}")
+                                break
+                            else:
+                                logger.warning(f"Scroll failed but {remaining} documents may remain in {index_name}")
+                                break
+                        except Exception as verify_error:
+                            logger.warning(f"Could not verify remaining documents: {verify_error}")
+                            break
                 else:
                     break
             

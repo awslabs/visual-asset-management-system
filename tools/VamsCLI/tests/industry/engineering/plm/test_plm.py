@@ -28,10 +28,10 @@ class TestIndustryPLMImportCommand:
             'industry', 'engineering', 'plm', 'plmxml', 'import', '--help'
         ])
         assert result.exit_code == 0
-        assert 'Import a PLM XML file as a new VAMS asset' in result.output
+        assert 'Import PLM XML files into VAMS with parallel processing' in result.output
         assert '--database-id' in result.output
         assert '--plmxml-dir' in result.output
-        assert '--asset-location' in result.output
+        assert '--max-workers' in result.output
         assert '--json-output' in result.output
     
     @patch('vamscli.main.ProfileManager')
@@ -60,7 +60,7 @@ class TestIndustryPLMImportCommand:
         
         # The command will fail because we're not mocking the underlying API calls,
         # but we can verify the command structure is correct
-        assert 'Processing plmxml file' in result.output or result.exit_code != 0
+        assert 'Parsing' in result.output or 'Phase 0' in result.output or result.exit_code != 0
     
     @patch('vamscli.main.ProfileManager')
     def test_import_file_not_found(self, mock_main_profile_manager, cli_runner):

@@ -28,6 +28,8 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 ### Features
 
 -   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
+    -   CLI has logic for asset uploading and downloading and optimized for many and large files
+    -   CLI contains some experimental industry commands to help with automation of processing PLMXML files and doing asset-tree GLB combining
 -   New asset export API `/database/{databaseId}/assets/{assetId}/export POST` to make it easier for downstream tool integration to have a single call to fetch all information about an asset, all its related data, and asset link sub-tree information (including auto-fetching pre-signed URLs). Integrated into CLI to support easy fetching and file download logic.
 -   **Web** The website viewer system has been rewritten to support a plugin-based dynamically loaded viewing system which allows for much easier capability to add new viewers and adds more functionality. Documentation can be found at: `web\src\visualizerPlugin\README.md`
     -   Support for multiple viewers per file types which is now controlled with a drop-down as part of the viewer
