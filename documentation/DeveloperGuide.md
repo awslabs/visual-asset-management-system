@@ -56,7 +56,6 @@ Federated authentication with SAML is available with additional configuration. S
 ### Requirements
 
 -   Python 3.12
--   Poetry (for managing python dependencies in the VAMS backend)
 -   Docker
 -   Node >=20.18.1
 -   Yarn >=1.22.19
@@ -65,6 +64,7 @@ Federated authentication with SAML is available with additional configuration. S
 -   AWS cli
 -   AWS CDK cli
 -   Programatic access to AWS account at minimum access levels outlined above.
+-   Poetry (optional: for managing python dependencies in the VAMS backend)
 
 ### Deploy VAMS for the First Time
 
