@@ -21,6 +21,7 @@ export interface PcPotreeViewerBuilderNestedStackProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
+    importGlobalPipelineWorkflowFunctionName: string;
 }
 
 /**
@@ -35,16 +36,23 @@ export class PcPotreeViewerBuilderNestedStack extends NestedStack {
 
         props = { ...defaultProps, ...props };
 
-        const pcPotreeViewerPipeline = new PcPotreeViewerConstruct(this, "PcPotreeViewerPipeline", {
-            ...props,
-            config: props.config,
-            storageResources: props.storageResources,
-            vpc: props.vpc,
-            pipelineSubnets: props.pipelineSubnets,
-            pipelineSecurityGroups: props.pipelineSecurityGroups,
-            lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-        });
+        const pcPotreeViewerConstructPipeline = new PcPotreeViewerConstruct(
+            this,
+            "PcPotreeViewerPipeline",
+            {
+                ...props,
+                config: props.config,
+                storageResources: props.storageResources,
+                vpc: props.vpc,
+                pipelineSubnets: props.pipelineSubnets,
+                pipelineSecurityGroups: props.pipelineSecurityGroups,
+                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                importGlobalPipelineWorkflowFunctionName:
+                    props.importGlobalPipelineWorkflowFunctionName,
+            }
+        );
 
-        this.pipelineVamsLambdaFunctionName = pcPotreeViewerPipeline.pipelineVamsLambdaFunctionName;
+        this.pipelineVamsLambdaFunctionName =
+            pcPotreeViewerConstructPipeline.pipelineVamsLambdaFunctionName;
     }
 }

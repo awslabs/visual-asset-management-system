@@ -32,6 +32,21 @@ def create_tag(body):
     tag_table = dynamodb.Table(tag_db_table_name)
     tag_type_table = dynamodb.Table(tag_type_db_table_name)
 
+    # Check if tag already exists
+    try:
+        existing_tag = tag_table.get_item(
+            Key={'tagName': body["tagName"]}
+        )
+        if 'Item' in existing_tag:
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Tag already exists. Tags are unique across tag types."})
+            return response
+    except botocore.exceptions.ClientError as e:
+        # If the error is not about the item not existing, re-raise it
+        if e.response['Error']['Code'] != 'ResourceNotFoundException':
+            raise e
+
+    # Check if tag type exists
     response_tag_type = tag_type_table.get_item(
         Key={
             'tagTypeName': body["tagTypeName"]

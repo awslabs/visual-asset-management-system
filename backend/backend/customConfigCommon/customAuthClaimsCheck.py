@@ -3,7 +3,7 @@ import boto3
 import os
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="CustomConfigAuthClaimsCheck")
+logger = safeLogger()
 
 #Possible environment variables used and passed in for various purposes
 try:
@@ -20,13 +20,20 @@ usersMFACache = {}
 
 def customMFATokenScopeCheckOverride(user, lambdaRequest):
 
-    authorizerJwt = lambdaRequest['requestContext']['authorizer']['jwt']
     mfaLoginEnabled = False
     try:
         if cognito_auth_enabled == "TRUE":
+            #Handle both claims from APIGateway standard authorizer format, lambda authorizers, or lambda cross-calls
+            if 'jwt' in lambdaRequest['requestContext']['authorizer']:
+                authorizerJwt = lambdaRequest['requestContext']['authorizer']['jwt']['claims']
+            elif 'lambda' in lambdaRequest['requestContext']['authorizer']:
+                authorizerJwt = lambdaRequest['requestContext']['authorizer']['lambda']
+            else:
+                authorizerJwt = None
+
             #Cognito MFA check
             #Check if user in a cache lists
-            if user in usersMFACache and usersMFACache[user]['auth_time'] == authorizerJwt['claims']['auth_time']:
+            if user in usersMFACache and usersMFACache[user]['auth_time'] == authorizerJwt['auth_time']:
                 mfaLoginEnabled = usersMFACache[user]['MFAEnabled']
             else:
                 #Make call to cognito for user in JWT token to see if MFA preference is enabled. If it is, the user has authenticated with MFA
@@ -34,14 +41,14 @@ def customMFATokenScopeCheckOverride(user, lambdaRequest):
                 response = cognitoClient.get_user(
                     AccessToken=authorizer_jwt_token
                 )
-                if 'UserMFASettingList' in response and len(response['UserMFASettingList']) > 0:
+                if response and 'UserMFASettingList' in response and len(response['UserMFASettingList']) > 0:
                     mfaLoginEnabled = True
                     logger.info("User logged in with MFA")
-                    usersMFACache[user] = {'MFAEnabled': True, 'auth_time': authorizerJwt['claims']['auth_time']}
+                    usersMFACache[user] = {'MFAEnabled': True, 'auth_time': authorizerJwt['auth_time']}
                 else:
                     mfaLoginEnabled = False
                     logger.info("User logged in without MFA")
-                    usersMFACache[user] = {'MFAEnabled': False, 'auth_time': authorizerJwt['claims']['auth_time']}
+                    usersMFACache[user] = {'MFAEnabled': False, 'auth_time': authorizerJwt['auth_time']}
         else:
 
     ############################################################################################################################

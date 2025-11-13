@@ -187,6 +187,10 @@ export class CoreVAMSStack extends cdk.Stack {
                 authResources: authBuilderNestedStack.authResources,
                 storageResources: storageResourcesNestedStack.storageResources,
                 config: props.config,
+                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                lambdaAuthorizerLayer: lambdaLayers.lambdaAuthorizerLayer,
+                vpc: this.vpc,
+                subnets: this.subnetsIsolated,
             });
             apiNestedStack.addDependency(storageResourcesNestedStack);
 
@@ -213,7 +217,6 @@ export class CoreVAMSStack extends cdk.Stack {
                 storageResourcesNestedStack.storageResources,
                 authBuilderNestedStack.authResources,
                 lambdaLayers.lambdaCommonBaseLayer,
-                lambdaLayers.lambdaCommonServiceSDKLayer,
                 this.vpc,
                 this.subnetsIsolated
             );
@@ -253,6 +256,8 @@ export class CoreVAMSStack extends cdk.Stack {
                     vpceSecurityGroup: this.vpceSecurityGroup,
                     isolatedSubnets: this.subnetsIsolated,
                     privateSubnets: this.subnetsPrivate,
+                    importGlobalPipelineWorkflowFunctionName:
+                        apiBuilderNestedStack.importGlobalPipelineWorkflowFunctionName,
                 }
             );
             pipelineBuilderNestedStack.addDependency(storageResourcesNestedStack);
@@ -284,6 +289,16 @@ export class CoreVAMSStack extends cdk.Stack {
                 value: `${apiNestedStack.apiEndpoint}`,
                 description: "API Gateway endpoint",
             });
+
+            const importGlobalPipelineWorkflowFunctionNameOutput = new cdk.CfnOutput(
+                this,
+                "ImportGlobalPipelineWorkflowFunctionNameOutput",
+                {
+                    value: apiBuilderNestedStack.importGlobalPipelineWorkflowFunctionName,
+                    description:
+                        "Lambda function name for importing global pipelines and workflows from IaC deployments",
+                }
+            );
 
             let useCasefunctionNumber = 1;
             for (const pipelineVamsExecuteLambdaFunction of pipelineBuilderNestedStack.pipelineVamsLambdaFunctionNames) {
@@ -325,21 +340,14 @@ export class CoreVAMSStack extends cdk.Stack {
         }
 
         //Deploy Location Services (Nested Stack) and setup feature enabled
-        if (
-            props.config.app.useLocationService.enabled &&
-            props.config.app.authProvider.useCognito.enabled
-        ) {
+        if (props.config.app.useLocationService.enabled) {
             const locationServiceNestedStack = new LocationServiceNestedStack(
                 this,
                 "LocationService",
-                {}
+                {
+                    config: props.config,
+                }
             );
-
-            locationServiceNestedStack.addMapPermissionsToRole(
-                authBuilderNestedStack.authResources.roles.authenticatedRole
-            );
-
-            locationServiceNestedStack.node.addDependency(authBuilderNestedStack);
 
             this.enabledFeatures.push(VAMS_APP_FEATURES.LOCATIONSERVICES);
         }

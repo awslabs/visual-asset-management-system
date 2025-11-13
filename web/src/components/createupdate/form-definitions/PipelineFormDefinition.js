@@ -8,29 +8,7 @@ import ControlDefinition from "./types/ControlDefinition";
 import { Input, Select, Textarea } from "@cloudscape-design/components";
 import ElementDefinition from "./types/ElementDefinition";
 import DatabaseSelector from "../../selectors/DatabaseSelector";
-import {
-    columnarFileFormats,
-    pcFileFormats,
-    imageFileFormats,
-    modelFileFormats,
-    cadFileFormats,
-    archiveFileFormats,
-} from "../../../common/constants/fileFormats";
-import OptionDefinition from "./types/OptionDefinition";
 import { ENTITY_TYPES_NAMES } from "../entity-types/EntitieTypes";
-
-export const fileTypeOptions = modelFileFormats
-    .concat(columnarFileFormats)
-    .concat(cadFileFormats)
-    .concat(archiveFileFormats)
-    .concat(pcFileFormats)
-    .concat(imageFileFormats)
-    .map((fileType) => {
-        return new OptionDefinition({
-            value: fileType,
-            label: fileType,
-        });
-    });
 
 export const pipelineTypeOptions = [
     {
@@ -189,27 +167,29 @@ export const PipelineFormDefinition = new FormDefinition({
             required: true,
         }),
         new ControlDefinition({
-            label: "Input Filetype",
+            label: "Asset Type",
             id: "assetType",
-            constraintText: "Required.",
-            options: fileTypeOptions,
+            constraintText:
+                "Required. Specify the asset type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used. Does not restrict pipeline use as part of VAMS execution.",
             elementDefinition: new ElementDefinition({
-                formElement: Select,
+                formElement: Input,
                 elementProps: {
-                    "data-testid": "inputFileType-select",
+                    placeholder: ".all",
+                    "data-testid": "inputFileType-input",
                 },
             }),
             required: true,
         }),
         new ControlDefinition({
-            label: "Output Filetype",
+            label: "Output Type",
             id: "outputType",
-            constraintText: "Required.",
-            options: fileTypeOptions,
+            constraintText:
+                "Required. Specify the output type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used.",
             elementDefinition: new ElementDefinition({
-                formElement: Select,
+                formElement: Input,
                 elementProps: {
-                    "data-testid": "outputFileType-select",
+                    placeholder: ".all",
+                    "data-testid": "outputFileType-input",
                 },
             }),
             required: true,

@@ -655,69 +655,88 @@ export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }, api
 };
 
 /**
- * Returns array of all assets the current user can access for a given database, or false if error.
+ * Returns array of all assets the current user can access for a given database, or empty array if error.
  * @param {Object} params - Parameters object
  * @param {string} params.databaseId - Database ID
  * @param {boolean} params.showArchived - Whether to include archived assets (optional)
- * @param {number} params.maxItems - Maximum items per page (optional)
- * @param {number} params.pageSize - Page size for pagination (optional)
+ * @param {number} params.maxItems - Maximum items to retrieve per request (optional, default 1000, max 1000)
+ * @param {number} params.pageSize - Page size for pagination (optional, default 1000)
  * @param {string} params.startingToken - Pagination token (optional)
- * @returns {Promise<boolean|{message}|any>}
+ * @returns {Promise<Array>} Array of assets or empty array on error
  */
 export const fetchDatabaseAssets = async (
     { databaseId, showArchived = false, maxItems = 1000, pageSize = 1000, startingToken = null },
     api = API
 ) => {
     try {
-        let response;
-        if (databaseId) {
-            const queryParams = {
-                showArchived: showArchived.toString(),
-                maxItems: maxItems.toString(),
-                pageSize: pageSize.toString(),
-            };
+        if (!databaseId) {
+            return [];
+        }
 
-            if (startingToken) {
-                queryParams.startingToken = startingToken;
-            }
+        const queryParams = {
+            showArchived: showArchived.toString(),
+            maxItems: maxItems.toString(),
+            pageSize: pageSize.toString(),
+        };
 
-            response = await api.get("api", `database/${databaseId}/assets`, {
-                queryStringParameters: queryParams,
-            });
+        if (startingToken) {
+            queryParams.startingToken = startingToken;
+        }
 
-            let items = [];
-            if (response.message) {
-                if (response.message.Items) {
-                    items = items.concat(response.message.Items);
-                    while (response.message.NextToken) {
-                        queryParams.startingToken = response.message.NextToken;
-                        response = await api.get("api", `database/${databaseId}/assets`, {
-                            queryStringParameters: queryParams,
-                        });
+        let response = await api.get("api", `database/${databaseId}/assets`, {
+            queryStringParameters: queryParams,
+        });
+
+        let items = [];
+
+        // Handle legacy response format with message wrapper
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    queryParams.startingToken = response.message.NextToken;
+                    response = await api.get("api", `database/${databaseId}/assets`, {
+                        queryStringParameters: queryParams,
+                    });
+                    if (response.message && response.message.Items) {
                         items = items.concat(response.message.Items);
                     }
-                    return items;
-                } else {
-                    return response.message;
+                }
+                return items;
+            }
+            // If message exists but no Items, return empty array
+            return [];
+        }
+        // Handle new API format with direct Items property
+        else if (response.Items) {
+            items = items.concat(response.Items);
+            while (response.NextToken) {
+                queryParams.startingToken = response.NextToken;
+                response = await api.get("api", `database/${databaseId}/assets`, {
+                    queryStringParameters: queryParams,
+                });
+                if (response.Items) {
+                    items = items.concat(response.Items);
                 }
             }
-        } else {
-            return false;
+            return items;
         }
+
+        return [];
     } catch (error) {
-        console.log(error);
-        return error?.message;
+        console.log("Error fetching database assets:", error);
+        return [];
     }
 };
 
 /**
- * Returns array of all assets the current user can access for all databases, or false if error.
+ * Returns array of all assets the current user can access for all databases, or empty array if error.
  * @param {Object} params - Parameters object (optional)
  * @param {boolean} params.showArchived - Whether to include archived assets (optional)
- * @param {number} params.maxItems - Maximum items per page (optional)
- * @param {number} params.pageSize - Page size for pagination (optional)
+ * @param {number} params.maxItems - Maximum items to retrieve per request (optional, default 1000, max 1000)
+ * @param {number} params.pageSize - Page size for pagination (optional, default 1000)
  * @param {string} params.startingToken - Pagination token (optional)
- * @returns {Promise<boolean|{message}|any>}
+ * @returns {Promise<Array>} Array of assets or empty array on error
  */
 export const fetchAllAssets = async (
     { showArchived = false, maxItems = 1000, pageSize = 1000, startingToken = null } = {},
@@ -739,6 +758,8 @@ export const fetchAllAssets = async (
         });
 
         let items = [];
+
+        // Handle legacy response format with message wrapper
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -747,18 +768,34 @@ export const fetchAllAssets = async (
                     response = await api.get("api", `assets`, {
                         queryStringParameters: queryParams,
                     });
-                    items = items.concat(response.message.Items);
+                    if (response.message && response.message.Items) {
+                        items = items.concat(response.message.Items);
+                    }
                 }
                 return items;
-            } else {
-                return response.message;
             }
-        } else {
-            return false;
+            // If message exists but no Items, return empty array
+            return [];
         }
+        // Handle new API format with direct Items property
+        else if (response.Items) {
+            items = items.concat(response.Items);
+            while (response.NextToken) {
+                queryParams.startingToken = response.NextToken;
+                response = await api.get("api", `assets`, {
+                    queryStringParameters: queryParams,
+                });
+                if (response.Items) {
+                    items = items.concat(response.Items);
+                }
+            }
+            return items;
+        }
+
+        return [];
     } catch (error) {
-        console.log(error);
-        return error?.message;
+        console.log("Error fetching all assets:", error);
+        return [];
     }
 };
 

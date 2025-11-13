@@ -114,9 +114,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
         const cloudFrontDistribution = new cloudfront.Distribution(this, "WebAppDistribution", {
             defaultBehavior: {
                 compress: true,
-                responseHeadersPolicy: {
-                    responseHeadersPolicyId: responseHeadersPolicy.responseHeadersPolicyId,
-                },
+                responseHeadersPolicy: responseHeadersPolicy,
                 origin: new cdk.aws_cloudfront_origins.OriginGroup({
                     primaryOrigin:
                         cdk.aws_cloudfront_origins.S3BucketOrigin.withOriginAccessControl(

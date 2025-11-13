@@ -61,6 +61,25 @@ jobs:
                   virtualenvs-path: backend/.venv
                   installer-parallel: true
 
+            - name: Install VamsCLI dependencies
+              working-directory: vams/tools/VamsCLI
+              run: |
+                  pip install -e ".[dev]"
+
+            - name: Run VamsCLI pytest tests
+              working-directory: vams/tools/VamsCLI
+              run: |
+                  pytest --cov=vamscli --cov-report=xml --cov-report=term -v --tb=short > pytest_output.txt 2>&1
+
+            - name: Upload VamsCLI test results
+              uses: actions/upload-artifact@v4
+              with:
+                  name: vamscli-test-results
+                  path: |
+                      vams/tools/VamsCLI/pytest_output.txt
+                      vams/tools/VamsCLI/coverage.xml
+              if: always()
+
             - name: Run yarn install web directory
               uses: Borales/actions-yarn@v4.2.0
               with:

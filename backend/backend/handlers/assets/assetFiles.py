@@ -51,6 +51,7 @@ try:
     asset_database_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"] 
     asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
+    asset_metadata_table_name = os.environ.get("METADATA_STORAGE_TABLE_NAME")
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
@@ -60,6 +61,7 @@ except Exception as e:
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_database_table_name)
 asset_version_files_table = dynamodb.Table(asset_version_files_table_name)
+asset_metadata_table = dynamodb.Table(asset_metadata_table_name)
 
 # Define allowed extensions
 allowed_previewFile_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
@@ -301,7 +303,7 @@ def check_destination_file_exists(bucket: str, key: str, path_display: str) -> b
         raise VAMSGeneralErrorResponse(f"Error accessing destination path. Please verify the folder exists.")
 
 def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, source_asset_id: str = None, source_database_id: str = None, dest_asset_id: str = None, dest_database_id: str = None) -> bool:
-    """Copy an S3 object from one location to another
+    """Copy an S3 object from one location to another, handling large files with multipart copy
     
     Args:
         source_bucket: Source bucket
@@ -331,16 +333,18 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             if dest_database_id:
                 metadata['databaseid'] = dest_database_id
             
-            # Copy with updated metadata
+            # Copy with updated metadata - uses managed transfer which handles multipart for large files
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
                 Key=dest_key,
-                MetadataDirective='REPLACE',
-                Metadata=metadata
+                ExtraArgs={
+                    'Metadata': metadata,
+                    'MetadataDirective': 'REPLACE'
+                }
             )
         else:
-            # Standard copy with preserved metadata
+            # Standard copy with preserved metadata - uses managed transfer which handles multipart for large files
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
@@ -1374,6 +1378,52 @@ def get_asset_file_versions(assetId: str, assetVersionId: str, relativeFileKey: 
 # API Handler Functions
 #######################
 
+def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str) -> bool:
+    """Delete metadata record for a file
+    
+    Args:
+        databaseId: The database ID (partition key)
+        assetId: The asset ID
+        relative_file_path: The relative file path (without leading slash)
+        
+    Returns:
+        True if successful or no record found, False on error
+    """
+    try:
+        # Skip if this is a folder (ends with /)
+        if relative_file_path.endswith('/'):
+            logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
+            return True
+        
+        # Construct the metadata sort key: /<assetId>/<relative_file_path>
+        metadata_sort_key = f"/{assetId}/{relative_file_path}"
+        
+        # Query for the metadata record
+        response = asset_metadata_table.get_item(
+            Key={
+                'databaseId': databaseId,
+                'assetId': metadata_sort_key
+            }
+        )
+        
+        # If record exists, delete it
+        if 'Item' in response:
+            asset_metadata_table.delete_item(
+                Key={
+                    'databaseId': databaseId,
+                    'assetId': metadata_sort_key
+                }
+            )
+            logger.info(f"Deleted metadata for {metadata_sort_key}")
+            return True
+        else:
+            logger.info(f"No metadata found for {metadata_sort_key}")
+            return True
+            
+    except Exception as e:
+        logger.exception(f"Error deleting metadata for file: {e}")
+        return False
+
 def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, confirm_permanent_delete: bool, claims_and_roles: Dict) -> FileOperationResponseModel:
     """Permanently delete a file or files under a prefix
     
@@ -1456,11 +1506,15 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         # Delete aux files under prefix if they exist
         delete_assetAuxiliary_files(full_key)
         
-        # Convert full keys to relative paths
+        # Convert full keys to relative paths and delete metadata
         for key in deleted_keys:
             if key.startswith(base_key):
                 relative_path = key[len(base_key):]
                 affected_files.append(relative_path)
+                
+                # Delete metadata for non-folder files
+                if not key.endswith('/'):
+                    delete_file_metadata(databaseId, assetId, relative_path)
     else:
         # Check if this is a preview file - don't allow direct operations on preview files
         if is_preview_file(file_path):
@@ -1489,6 +1543,11 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             raise VAMSGeneralErrorResponse(f"Failed to delete file.")
         
         affected_files.append(file_path)
+        
+        # Delete metadata for the main file (not a folder since we checked earlier)
+        # Extract relative path from file_path (remove leading slash if present)
+        relative_path = file_path.lstrip('/')
+        delete_file_metadata(databaseId, assetId, relative_path)
 
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -1684,16 +1743,20 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
             raise VAMSGeneralErrorResponse(f"Could not find a previous version for file.")
         
         # Copy the latest version to create a new current version (effectively unarchiving)
-        copy_response = s3_client.copy_object(
+        # Use copy() which automatically handles multipart for large files
+        s3_resource.Object(bucket, full_key).copy(
             CopySource={
                 'Bucket': bucket,
                 'Key': full_key,
                 'VersionId': latest_version['VersionId']
             },
-            Bucket=bucket,
-            Key=full_key,
-            MetadataDirective='COPY'  # Preserve metadata from source version
+            ExtraArgs={
+                'MetadataDirective': 'COPY'
+            }
         )
+        
+        # Get the new version ID
+        copy_response = s3_client.head_object(Bucket=bucket, Key=full_key)
         
         new_version_id = copy_response.get('VersionId', 'null')
         affected_files = [file_path]
@@ -1742,15 +1805,16 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                     
                     if preview_latest_version:
                         # Copy the latest version to create a new current version (effectively unarchiving)
-                        s3_client.copy_object(
+                        # Use copy() which automatically handles multipart for large files
+                        s3_resource.Object(bucket, preview_file).copy(
                             CopySource={
                                 'Bucket': bucket,
                                 'Key': preview_file,
                                 'VersionId': preview_latest_version['VersionId']
                             },
-                            Bucket=bucket,
-                            Key=preview_file,
-                            MetadataDirective='COPY'  # Preserve metadata from source version
+                            ExtraArgs={
+                                'MetadataDirective': 'COPY'
+                            }
                         )
                         logger.info(f"Successfully unarchived preview file {preview_file} from version {preview_latest_version['VersionId']}")
                             
@@ -2065,17 +2129,20 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     
     # Copy the specified version to create a new current version
     try:
-        copy_response = s3_client.copy_object(
+        # Use copy() which automatically handles multipart for large files
+        s3_resource.Object(bucket, full_key).copy(
             CopySource={
                 'Bucket': bucket,
                 'Key': full_key,
                 'VersionId': version_id
             },
-            Bucket=bucket,
-            Key=full_key,
-            MetadataDirective='COPY'  # Preserve metadata from source version
+            ExtraArgs={
+                'MetadataDirective': 'COPY'
+            }
         )
         
+        # Get the new version ID
+        copy_response = s3_client.head_object(Bucket=bucket, Key=full_key)
         new_version_id = copy_response.get('VersionId', 'null')
         
     except Exception as e:
@@ -2278,13 +2345,16 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
             operation_message = f"Set primary type '{final_primary_type}' for file: {file_path}"
         
         # Copy the object with updated metadata (this creates a new version with the updated metadata)
-        s3_client.copy_object(
+        # Use s3_resource.meta.client.copy() which supports multi-part uploads for files >5GB
+        s3_resource.meta.client.copy(
             CopySource={'Bucket': bucket, 'Key': full_key},
             Bucket=bucket,
             Key=full_key,
-            MetadataDirective='REPLACE',
-            Metadata=new_metadata,
-            ContentType=current_object.get('ContentType', 'binary/octet-stream')
+            ExtraArgs={
+                'Metadata': new_metadata,
+                'MetadataDirective': 'REPLACE',
+                'ContentType': current_object.get('ContentType', 'binary/octet-stream')
+            }
         )
         
         # Send email notification for asset file change

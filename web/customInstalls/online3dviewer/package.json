@@ -1,0 +1,9 @@
+{
+    "name": "online3dviewer-custom-install",
+    "version": "1.0.0",
+    "description": "Custom installation for Online3DViewer with dynamic loading",
+    "private": true,
+    "dependencies": {
+        "online-3d-viewer": "^0.16.0"
+    }
+}

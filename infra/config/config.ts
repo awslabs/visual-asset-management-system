@@ -15,7 +15,7 @@ import { region_info } from "aws-cdk-lib";
 dotenv.config();
 
 //Top level configurations
-export const VAMS_VERSION = "2.2";
+export const VAMS_VERSION = "2.3.0";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
@@ -30,6 +30,9 @@ export const STACK_CORE_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-CORE) (version:" +
     VAMS_VERSION +
     ") Primary Components for the Visual Asset Management Systems";
+
+// Custom Authorizer Configuration
+export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
 
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
@@ -107,12 +110,25 @@ export function getConfig(app: cdk.App): Config {
             false)
     );
 
-    //OpenSearch Variables
-    config.openSearchIndexName = "assets1236";
-    config.openSearchIndexNameSSMParam =
-        "/" + [config.name + "-" + config.app.baseStackName, "aos", "indexName"].join("/");
+    config.app.openSearch.reindexOnCdkDeploy = <boolean>(
+        (app.node.tryGetContext("reindexOnCdkDeploy") ||
+            config.app.openSearch.reindexOnCdkDeploy ||
+            false)
+    );
+
+    //OpenSearch Variables - Dual Index Configuration
+    config.openSearchAssetIndexName = "vams-assets-v1";
+    config.openSearchFileIndexName = "vams-files-v1";
+    config.openSearchAssetIndexNameSSMParam =
+        "/" + [config.name + "-" + config.app.baseStackName, "aos", "assetIndexName"].join("/");
+    config.openSearchFileIndexNameSSMParam =
+        "/" + [config.name + "-" + config.app.baseStackName, "aos", "fileIndexName"].join("/");
     config.openSearchDomainEndpointSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "aos", "endPoint"].join("/");
+
+    //Location Service Variables
+    config.locationServiceApiKeyArnSSMParam =
+        "/" + [config.name + "-" + config.app.baseStackName, "location", "apiKeyArn"].join("/");
 
     //Fill in some basic values to false if blank
     //Note: usually added for backwards compatabibility of an old config file that hasn't had the newest elements added
@@ -122,6 +138,14 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.openSearch.useProvisioned.enabled == undefined) {
         config.app.openSearch.useProvisioned.enabled = false;
+    }
+
+    if (config.app.openSearch.reindexOnCdkDeploy == undefined) {
+        config.app.openSearch.reindexOnCdkDeploy = false;
+    }
+
+    if (config.app.pipelines.useSplatToolbox.enabled == undefined) {
+        config.app.pipelines.useSplatToolbox.enabled = false;
     }
 
     if (config.app.pipelines.usePreviewPcPotreeViewer.enabled == undefined) {
@@ -148,6 +172,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useConversion3dBasic.enabled = true;
     }
 
+    if (config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled == undefined) {
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = false;
+    }
+
     if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
         config.app.authProvider.useExternalOAuthIdp.enabled = false;
     }
@@ -166,6 +194,18 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.webUi.allowUnsafeEvalFeatures == undefined) {
         config.app.webUi.allowUnsafeEvalFeatures = false;
+    }
+
+    // Initialize authorizerOptions if undefined
+    if (config.app.authProvider.authorizerOptions == undefined) {
+        config.app.authProvider.authorizerOptions = {
+            allowedIpRanges: [],
+        };
+    }
+
+    // Initialize allowedIpRanges if undefined
+    if (config.app.authProvider.authorizerOptions.allowedIpRanges == undefined) {
+        config.app.authProvider.authorizerOptions.allowedIpRanges = [];
     }
 
     if (config.app.api == undefined) {
@@ -211,12 +251,6 @@ export function getConfig(app: cdk.App): Config {
             );
         }
 
-        if (config.app.openSearch.useServerless.enabled) {
-            throw new Error(
-                "Configuration Error: GovCloud must have openSearch.useServerless.enabled set to false"
-            );
-        }
-
         if (config.app.useLocationService.enabled) {
             throw new Error(
                 "Configuration Error: GovCloud must have app.useLocationService.enabled set to false"
@@ -238,12 +272,6 @@ export function getConfig(app: cdk.App): Config {
                 );
             }
 
-            if (!config.app.useGlobalVpc.useForAllLambdas) {
-                throw new Error(
-                    "Configuration Error: GovCloud IL6 must have app.useGlobalVpc.useForAllLambdas set to true"
-                );
-            }
-
             if (!config.app.useKmsCmkEncryption.enabled) {
                 throw new Error(
                     "Configuration Error: GovCloud IL6 must have config.app.useKmsCmkEncryption.enabled set to true"
@@ -256,6 +284,7 @@ export function getConfig(app: cdk.App): Config {
     if (
         config.app.useAlb.enabled ||
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
+        config.app.pipelines.useSplatToolbox.enabled ||
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
         config.app.pipelines.useRapidPipeline.enabled ||
         config.app.pipelines.useModelOps.enabled ||
@@ -435,6 +464,17 @@ export function getConfig(app: cdk.App): Config {
         throw new Error("Configuration Error: Must specify either none or one openSearch method!");
     }
 
+    //Error check for reindexOnDeploy - requires OpenSearch to be enabled
+    if (
+        config.app.openSearch.reindexOnCdkDeploy &&
+        !config.app.openSearch.useServerless.enabled &&
+        !config.app.openSearch.useProvisioned.enabled
+    ) {
+        throw new Error(
+            "Configuration Error: reindexOnDeploy requires either OpenSearch Serverless or Provisioned to be enabled!"
+        );
+    }
+
     //Check when implementing auth providers
     if (
         config.app.authProvider.useCognito.enabled &&
@@ -487,13 +527,6 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    //If using Location services, for now must use cognito due to IDP authenticated role need
-    if (config.app.useLocationService.enabled && !config.app.authProvider.useCognito.enabled) {
-        throw new Error(
-            "Configuration Error: Cannot use location services without using the Cognito authentication method."
-        );
-    }
-
     //API Configuration Error Checks
     if (config.app.api.globalRateLimit <= 0) {
         throw new Error(
@@ -511,6 +544,31 @@ export function getConfig(app: cdk.App): Config {
         throw new Error(
             "Configuration Error: API globalBurstLimit must be greater than or equal to globalRateLimit."
         );
+    }
+
+    // Validate IP ranges configuration
+    if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
+        for (let i = 0; i < config.app.authProvider.authorizerOptions.allowedIpRanges.length; i++) {
+            const range = config.app.authProvider.authorizerOptions.allowedIpRanges[i];
+            if (!Array.isArray(range) || range.length !== 2) {
+                throw new Error(
+                    `Configuration Error: IP range at index ${i} must be an array of exactly 2 IP addresses [min, max]. Got: ${JSON.stringify(
+                        range
+                    )}`
+                );
+            }
+
+            // Basic IP format validation
+            const ipRegex =
+                /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+            if (!ipRegex.test(range[0]) || !ipRegex.test(range[1])) {
+                throw new Error(
+                    `Configuration Error: Invalid IP address format in range at index ${i}. Expected format: ["192.168.1.1", "192.168.1.255"]. Got: ${JSON.stringify(
+                        range
+                    )}`
+                );
+            }
+        }
     }
 
     return config;
@@ -574,6 +632,7 @@ export interface ConfigPublic {
                 masterNodeInstanceType: string;
                 ebsInstanceNodeSizeGb: number;
             };
+            reindexOnCdkDeploy: boolean;
         };
         useLocationService: {
             enabled: boolean;
@@ -589,24 +648,43 @@ export interface ConfigPublic {
         pipelines: {
             useConversion3dBasic: {
                 enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+            };
+            useConversionCadMeshMetadataExtraction: {
+                enabled: boolean;
+                autoRegisterWithVAMS: boolean;
             };
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+                sqsAutoRunOnAssetModified: boolean;
+            };
+            useSplatToolbox: {
+                enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+                sqsAutoRunOnAssetModified: boolean;
             };
             useGenAiMetadata3dLabeling: {
                 enabled: boolean;
+                bedrockModelId: string;
+                autoRegisterWithVAMS: boolean;
             };
             useRapidPipeline: {
                 enabled: boolean;
                 ecrContainerImageURI: string;
+                autoRegisterWithVAMS: boolean;
             };
             useModelOps: {
                 enabled: boolean;
                 ecrContainerImageURI: string;
+                autoRegisterWithVAMS: boolean;
             };
         };
         authProvider: {
             presignedUrlTimeoutSeconds: number;
+            authorizerOptions: {
+                allowedIpRanges: string[][];
+            };
             useCognito: {
                 enabled: boolean;
                 useSaml: boolean;
@@ -643,7 +721,10 @@ export interface Config extends ConfigPublic {
     enableCdkNag: boolean;
     dockerDefaultPlatform: string;
     s3AdditionalBucketPolicyJSON: any | undefined;
-    openSearchIndexName: string;
-    openSearchIndexNameSSMParam: string;
+    openSearchAssetIndexName: string; // Asset index name
+    openSearchFileIndexName: string; // File index name
+    openSearchAssetIndexNameSSMParam: string;
+    openSearchFileIndexNameSSMParam: string;
     openSearchDomainEndpointSSMParam: string;
+    locationServiceApiKeyArnSSMParam: string; // Location Service API key SSM parameter
 }

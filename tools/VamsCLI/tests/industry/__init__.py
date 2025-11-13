@@ -1,0 +1,1 @@
+"""Industry command tests."""

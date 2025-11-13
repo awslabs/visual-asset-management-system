@@ -4,7 +4,6 @@
  */
 
 import { storageResources } from "../storage/storageBuilder-nestedStack";
-import { buildIndexingFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
@@ -16,6 +15,9 @@ import { OpensearchProvisionedConstruct } from "./constructs/opensearch-provisio
 import {
     buildSearchFunction,
     buildSqsBucketSyncFunction,
+    buildFileIndexingFunction,
+    buildAssetIndexingFunction,
+    buildReindexerFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import { attachFunctionToApi } from "../apiLambda/apiBuilder-nestedStack";
 import { Stack, NestedStack } from "aws-cdk-lib";
@@ -29,6 +31,7 @@ import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
 import { Service } from "../../helper/service-helper";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { PropagatedTagSource } from "aws-cdk-lib/aws-ecs";
+import * as cr from "aws-cdk-lib/custom-resources";
 
 export class SearchBuilderNestedStack extends NestedStack {
     constructor(
@@ -76,7 +79,16 @@ export function searchBuilder(
         api: api,
     });
 
-    let indexingS3ObjectMetadataFunction: lambda.Function | undefined = undefined;
+    // Add simple search endpoint
+    attachFunctionToApi(scope, searchFun, {
+        routePath: "/search/simple",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    let fileIndexingFunction: lambda.Function | undefined = undefined;
+    let assetIndexingFunction: lambda.Function | undefined = undefined;
+    let reindexerFunction: lambda.Function | undefined = undefined;
 
     if (config.app.openSearch.useServerless.enabled) {
         //Serverless Deployment
@@ -88,45 +100,66 @@ export function searchBuilder(
             subnets: subnets,
         });
 
-        indexingS3ObjectMetadataFunction = buildIndexingFunction(
+        const osEndpointOutput = new cdk.CfnOutput(
+            scope,
+            "OpenSearchServerlessDomainEndpointOutput",
+            {
+                value: aoss.aossEndpointUrl,
+                description: "The HTTP endpoint for the serverless open search domain",
+            }
+        );
+
+        // Build file indexer function
+        fileIndexingFunction = buildFileIndexingFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
-            "m",
             config,
             vpc,
             subnets
         );
 
-        const assetIndexingFunction = buildIndexingFunction(
+        // Build asset indexer function
+        assetIndexingFunction = buildAssetIndexingFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
-            "a",
             config,
             vpc,
             subnets
         );
 
-        // Due to cdk upgrade, not all regions support tags for EventSourceMapping
-        // this line should remove the tags for regions that dont support it (govcloud currently not supported)
+        // Build reindexer function (always created regardless of reindexOnDeploy config)
+        reindexerFunction = buildReindexerFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+
+        // Setup DynamoDB streams for dual indexing
         if (config.app.govCloud.enabled) {
-            const esmIndexing = new lambda.EventSourceMapping(
+            // File indexer - metadata table stream (for file-level metadata)
+            const esmFileMetadata = new lambda.EventSourceMapping(
                 scope,
-                "idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable",
+                "FileIndexerMetadataTableStream",
                 {
-                    target: indexingS3ObjectMetadataFunction,
+                    target: fileIndexingFunction,
                     eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                     batchSize: 100,
                 }
             );
-            const cfnEsmIndexing = esmIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmIndexing.addPropertyDeletionOverride("Tags");
+            const cfnEsmFileMetadata = esmFileMetadata.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmFileMetadata.addPropertyDeletionOverride("Tags");
 
-            const esmAssetIndexing = new lambda.EventSourceMapping(
+            // Asset indexer - asset table stream
+            const esmAssetTable = new lambda.EventSourceMapping(
                 scope,
-                "idxaDynamoDBEventSourceStorageResourcesBuilderAssetStorageTable",
+                "AssetIndexerAssetTableStream",
                 {
                     target: assetIndexingFunction,
                     eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
@@ -134,30 +167,85 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmAssetIndexing = esmAssetIndexing.node
+            const cfnEsmAssetTable = esmAssetTable.node
                 .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetIndexing.addPropertyDeletionOverride("Tags");
+            cfnEsmAssetTable.addPropertyDeletionOverride("Tags");
+
+            // Asset indexer - metadata table stream (for asset-level metadata)
+            const esmAssetMetadata = new lambda.EventSourceMapping(
+                scope,
+                "AssetIndexerMetadataTableStream",
+                {
+                    target: assetIndexingFunction,
+                    eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    batchSize: 100,
+                }
+            );
+            const cfnEsmAssetMetadata = esmAssetMetadata.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetMetadata.addPropertyDeletionOverride("Tags");
+
+            // Asset indexer - asset links table stream
+            const esmAssetLinks = new lambda.EventSourceMapping(
+                scope,
+                "AssetIndexerAssetLinksTableStream",
+                {
+                    target: assetIndexingFunction,
+                    eventSourceArn: storageResources.dynamo.assetLinksStorageTableV2.tableStreamArn,
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    batchSize: 100,
+                }
+            );
+            const cfnEsmAssetLinks = esmAssetLinks.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetLinks.addPropertyDeletionOverride("Tags");
         } else {
-            indexingS3ObjectMetadataFunction.addEventSource(
+            // File indexer - metadata table stream (for file-level metadata)
+            fileIndexingFunction.addEventSource(
                 new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 })
             );
+
+            // Asset indexer - asset table stream
             assetIndexingFunction.addEventSource(
                 new eventsources.DynamoEventSource(storageResources.dynamo.assetStorageTable, {
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 })
             );
+
+            // Asset indexer - metadata table stream (for asset-level metadata)
+            assetIndexingFunction.addEventSource(
+                new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                })
+            );
+
+            // Asset indexer - asset links table stream
+            assetIndexingFunction.addEventSource(
+                new eventsources.DynamoEventSource(
+                    storageResources.dynamo.assetLinksStorageTableV2,
+                    {
+                        startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    }
+                )
+            );
         }
 
-        aoss.grantCollectionAccess(indexingS3ObjectMetadataFunction);
+        // Grant OpenSearch access to both indexers
+        aoss.grantCollectionAccess(fileIndexingFunction);
         aoss.grantCollectionAccess(assetIndexingFunction);
-        aoss.grantVPCeAccess(indexingS3ObjectMetadataFunction);
+        aoss.grantVPCeAccess(fileIndexingFunction);
         aoss.grantVPCeAccess(assetIndexingFunction);
 
         //grant search function access to collection and VPCe
         aoss.grantCollectionAccess(searchFun);
         aoss.grantVPCeAccess(searchFun);
+
+        // Grant OpenSearch access to reindexer
+        aoss.grantCollectionAccess(reindexerFunction);
+        aoss.grantVPCeAccess(reindexerFunction);
     } else if (config.app.openSearch.useProvisioned.enabled) {
         //Provisioned Deployment
         const aos = new OpensearchProvisionedConstruct(scope, "AOS", {
@@ -180,48 +268,70 @@ export function searchBuilder(
                 : undefined,
         });
 
-        indexingS3ObjectMetadataFunction = buildIndexingFunction(
+        const osEndpointOutput = new cdk.CfnOutput(
+            scope,
+            "OpenSearchProvisionedDomainEndpointOutput",
+            {
+                value: aos.domainEndpoint,
+                description: "The HTTP endpoint for the provisioned open search domain",
+            }
+        );
+
+        // Build file indexer function
+        fileIndexingFunction = buildFileIndexingFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
-            "m",
             config,
             vpc,
             subnets
         );
 
-        const assetIndexingFunction = buildIndexingFunction(
+        // Build asset indexer function
+        assetIndexingFunction = buildAssetIndexingFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
-            "a",
             config,
             vpc,
             subnets
         );
 
+        // Build reindexer function (always created regardless of reindexOnDeploy config)
+        reindexerFunction = buildReindexerFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+
+        // Grant OpenSearch access to both indexers
+        aos.grantOSDomainAccess(fileIndexingFunction);
         aos.grantOSDomainAccess(assetIndexingFunction);
-        aos.grantOSDomainAccess(indexingS3ObjectMetadataFunction);
 
-        // Due to cdk upgrade, not all regions support tags for EventSourceMapping
-        // this line should remove the tags for regions that dont support it (govcloud currently not supported)
+        // Setup DynamoDB streams for dual indexing
         if (config.app.govCloud.enabled) {
-            const esmIndexing = new lambda.EventSourceMapping(
+            // File indexer - metadata table stream (for file-level metadata)
+            const esmFileMetadata = new lambda.EventSourceMapping(
                 scope,
-                "idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable",
+                "FileIndexerMetadataTableStream",
                 {
-                    target: indexingS3ObjectMetadataFunction,
+                    target: fileIndexingFunction,
                     eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                     batchSize: 100,
                 }
             );
-            const cfnEsmIndexing = esmIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmIndexing.addPropertyDeletionOverride("Tags");
+            const cfnEsmFileMetadata = esmFileMetadata.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmFileMetadata.addPropertyDeletionOverride("Tags");
 
-            const esmAssetIndexing = new lambda.EventSourceMapping(
+            // Asset indexer - asset table stream
+            const esmAssetTable = new lambda.EventSourceMapping(
                 scope,
-                "idxaDynamoDBEventSourceStorageResourcesBuilderAssetStorageTable",
+                "AssetIndexerAssetTableStream",
                 {
                     target: assetIndexingFunction,
                     eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
@@ -229,24 +339,77 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmAssetIndexing = esmAssetIndexing.node
+            const cfnEsmAssetTable = esmAssetTable.node
                 .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetIndexing.addPropertyDeletionOverride("Tags");
+            cfnEsmAssetTable.addPropertyDeletionOverride("Tags");
+
+            // Asset indexer - metadata table stream (for asset-level metadata)
+            const esmAssetMetadata = new lambda.EventSourceMapping(
+                scope,
+                "AssetIndexerMetadataTableStream",
+                {
+                    target: assetIndexingFunction,
+                    eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    batchSize: 100,
+                }
+            );
+            const cfnEsmAssetMetadata = esmAssetMetadata.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetMetadata.addPropertyDeletionOverride("Tags");
+
+            // Asset indexer - asset links table stream
+            const esmAssetLinks = new lambda.EventSourceMapping(
+                scope,
+                "AssetIndexerAssetLinksTableStream",
+                {
+                    target: assetIndexingFunction,
+                    eventSourceArn: storageResources.dynamo.assetLinksStorageTableV2.tableStreamArn,
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    batchSize: 100,
+                }
+            );
+            const cfnEsmAssetLinks = esmAssetLinks.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetLinks.addPropertyDeletionOverride("Tags");
         } else {
-            indexingS3ObjectMetadataFunction.addEventSource(
+            // File indexer - metadata table stream (for file-level metadata)
+            fileIndexingFunction.addEventSource(
                 new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 })
             );
+
+            // Asset indexer - asset table stream
             assetIndexingFunction.addEventSource(
                 new eventsources.DynamoEventSource(storageResources.dynamo.assetStorageTable, {
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 })
             );
+
+            // Asset indexer - metadata table stream (for asset-level metadata)
+            assetIndexingFunction.addEventSource(
+                new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                })
+            );
+
+            // Asset indexer - asset links table stream
+            assetIndexingFunction.addEventSource(
+                new eventsources.DynamoEventSource(
+                    storageResources.dynamo.assetLinksStorageTableV2,
+                    {
+                        startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    }
+                )
+            );
         }
 
         //grant search function access to AOS
         aos.grantOSDomainAccess(searchFun);
+
+        // Grant OpenSearch access to reindexer
+        aos.grantOSDomainAccess(reindexerFunction);
     }
 
     /////////////////////////////////////////////////////////////////////////////
@@ -259,8 +422,8 @@ export function searchBuilder(
     const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     for (const record of assetBucketRecords) {
         //Create created queue
-        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated-" + record.bucket, {
-            queueName: `${config.app.baseStackName}-bucketSyncCreated--${index}`,
+        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated--" + record.bucket, {
+            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncCreated-${index}`,
             visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
             encryption: storageResources.encryption.kmsKey
                 ? sqs.QueueEncryption.KMS
@@ -270,12 +433,12 @@ export function searchBuilder(
         });
         onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
 
-        //Create new lambda for bucketSync (pass indexingS3ObjectMetadataFunction function name in if defined)
+        //Create new lambda for bucketSync (pass fileIndexingFunction for dual-index system)
         const sqsBucketSyncFunctionCreated = buildSqsBucketSyncFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
-            indexingS3ObjectMetadataFunction,
+            fileIndexingFunction,
             record.bucket.bucketName,
             record.prefix,
             record.defaultSyncDatabaseId,
@@ -300,7 +463,7 @@ export function searchBuilder(
         // The functions poll the respective queues, which is populated by messages sent to the topic.
         const esmCreated = new lambda.EventSourceMapping(
             scope,
-            `SQSEventSourceBucketSyncCreated--${index}`,
+            `SQSEventSourceBucketSyncCreated-${index}`,
             {
                 eventSourceArn: onS3ObjectCreatedQueue.queueArn,
                 target: sqsBucketSyncFunctionCreated,
@@ -319,8 +482,8 @@ export function searchBuilder(
         index = index + 1;
 
         //Create deleted queue
-        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted-" + record.bucket, {
-            queueName: `${config.app.baseStackName}-bucketSyncDeleted--${index}`,
+        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted--" + record.bucket, {
+            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncDeleted-${index}`,
             visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
             encryption: storageResources.encryption.kmsKey
                 ? sqs.QueueEncryption.KMS
@@ -330,12 +493,12 @@ export function searchBuilder(
         });
         onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
 
-        //Create new lambda for bucketSync (pass indexingS3ObjectMetadataFunction function name in if defined)
+        //Create new lambda for bucketSync (pass fileIndexingFunction for dual-index system)
         const sqsBucketSyncFunctionRemoved = buildSqsBucketSyncFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
-            indexingS3ObjectMetadataFunction,
+            fileIndexingFunction,
             record.bucket.bucketName,
             record.prefix,
             record.defaultSyncDatabaseId,
@@ -357,7 +520,7 @@ export function searchBuilder(
 
         const esmDeleted = new lambda.EventSourceMapping(
             scope,
-            `SQSEventSourceBucketSyncDeleted--${index}`,
+            `SQSEventSourceBucketSyncDeleted-${index}`,
             {
                 eventSourceArn: onS3ObjectDeletedQueue.queueArn,
                 target: sqsBucketSyncFunctionRemoved,
@@ -372,6 +535,45 @@ export function searchBuilder(
             const cfnEsm = esmDeleted.node.defaultChild as lambda.CfnEventSourceMapping;
             cfnEsm.addPropertyDeletionOverride("Tags");
         }
+    }
+
+    /////////////////////////////////////////////////////////////////////////////
+    // Setup Custom Resource for Reindexing (after bucket sync to ensure streams are ready)
+    /////////////////////////////////////////////////////////////////////////////
+
+    // Create custom resource to trigger reindex on deployment if enabled
+    if (reindexerFunction && config.app.openSearch.reindexOnCdkDeploy) {
+        const reindexProvider = new cr.Provider(scope, "OsReindexProvider", {
+            onEventHandler: reindexerFunction,
+        });
+
+        new cdk.CustomResource(scope, "ReindexTrigger", {
+            serviceToken: reindexProvider.serviceToken,
+            properties: {
+                Operation: "both",
+                ClearIndexes: "true",
+                Timestamp: Date.now().toString(),
+            },
+        });
+    }
+
+    //Setup final index output
+    const openSearchIndexAssetSOutput = new cdk.CfnOutput(scope, "OpenSearchIndexAssetsOutput", {
+        value: config.openSearchAssetIndexName,
+        description: "The OpenSearch index name for assets",
+    });
+
+    const openSearchIndexFilesOutput = new cdk.CfnOutput(scope, "OpenSearchIndexFilesOutput", {
+        value: config.openSearchFileIndexName,
+        description: "The OpenSearch index name for files",
+    });
+
+    // Output reindexer function name if it was created
+    if (reindexerFunction) {
+        const reindexerFunctionOutput = new cdk.CfnOutput(scope, "ReindexerFunctionNameOutput", {
+            value: reindexerFunction.functionName,
+            description: "The Lambda function name for the OpenSearch reindexer",
+        });
     }
 
     //Nag supressions

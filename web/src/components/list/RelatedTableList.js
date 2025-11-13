@@ -19,7 +19,16 @@ import ListDefinition from "./list-definitions/types/ListDefinition";
 
 export default function RelatedTableList(props) {
     //props
-    const { allItems, loading, listDefinition, databaseId, HeaderControls = () => <></> } = props;
+    const {
+        allItems,
+        loading,
+        listDefinition,
+        databaseId,
+        HeaderControls = () => <></>,
+        defaultSortingColumn,
+        defaultSortingDescending,
+        setReload,
+    } = props;
     const { columnDefinitions, visibleColumns, filterColumns, pluralName, pluralNameTitleCase } =
         listDefinition;
 
@@ -125,7 +134,15 @@ export default function RelatedTableList(props) {
             },
         },
         pagination: { pageSize: 15 },
-        sorting: {},
+        sorting: defaultSortingColumn
+            ? {
+                  defaultState: {
+                      sortingColumn: { sortingField: defaultSortingColumn },
+                      isDescending:
+                          defaultSortingDescending !== undefined ? defaultSortingDescending : false,
+                  },
+              }
+            : {},
         selection: {},
     });
 
@@ -193,12 +210,27 @@ export default function RelatedTableList(props) {
                 <Grid
                     gridDefinition={[{ colspan: { default: "7" } }, { colspan: { default: "5" } }]}
                 >
-                    <div id="textFilterCapture">
+                    <div
+                        id="textFilterCapture"
+                        style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            maxWidth: "100%",
+                        }}
+                    >
                         <TextFilter
                             id={"test"}
                             {...filterProps}
                             countText={getMatchesCountText(filteredItemsCount)}
                             filteringAriaLabel={`Filter ${pluralName}`}
+                        />
+                        <Button
+                            iconName="refresh"
+                            variant="icon"
+                            onClick={() => setReload(true)}
+                            loading={loading}
+                            ariaLabel="Refresh data"
                         />
                     </div>
                     <div style={{ float: "right" }}>
@@ -265,4 +297,6 @@ RelatedTableList.propTypes = {
     databaseId: PropTypes.string,
     parentId: PropTypes.string,
     childId: PropTypes.string,
+    defaultSortingColumn: PropTypes.string,
+    defaultSortingDescending: PropTypes.bool,
 };

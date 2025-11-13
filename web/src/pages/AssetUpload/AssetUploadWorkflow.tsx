@@ -52,7 +52,7 @@ export default function AssetUploadWorkflow({
             setUploadResponse(response);
             onComplete(response);
         } else {
-            // Still store the response but don't show the completion message yet
+            // Still store the response but don't show the completion message yett
             setUploadResponse(response);
             onComplete(response);
         }
@@ -90,6 +90,15 @@ export default function AssetUploadWorkflow({
                 {uploadComplete && (
                     <Box>
                         <SpaceBetween direction="vertical" size="m">
+                            {/* Display large file processing alert if applicable */}
+                            {uploadResponse?.largeFileAsynchronousHandling && (
+                                <Alert type="info" header="Large File Processing">
+                                    This upload contains large files that are undergoing separate
+                                    processing. The files may take additional time to appear in the
+                                    asset files list. Please check back in a few minutes.
+                                </Alert>
+                            )}
+
                             {isExistingAsset ? (
                                 // Message for existing assets
                                 uploadResponse?.message?.includes("Preview file upload failed") ? (

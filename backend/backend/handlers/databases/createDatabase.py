@@ -38,6 +38,18 @@ def create_database(request_model: CreateDatabaseRequestModel):
         table = dynamodb.Table(db_database)
         dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
         
+        # Check if database ID already exists
+        try:
+            existing_db = table.get_item(
+                Key={'databaseId': request_model.databaseId}
+            )
+            if 'Item' in existing_db:
+                raise VAMSGeneralErrorResponse("Database ID already exists")
+        except ClientError as e:
+            # If the error is not about the item not existing, re-raise it
+            if e.response['Error']['Code'] != 'ResourceNotFoundException':
+                raise e
+        
         # Check if the bucket exists in S3_ASSET_BUCKETS_STORAGE_TABLE
         # Using query instead of get_item because the table has a sort key
         buckets_table = dynamodb.Table(s3_asset_buckets_table)
@@ -47,7 +59,7 @@ def create_database(request_model: CreateDatabaseRequestModel):
         )
         
         if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
-            raise VAMSGeneralErrorResponse(f"Bucket ID not found")
+            raise VAMSGeneralErrorResponse("Bucket ID not found")
         
 
         # First update the description and defaultBucketId

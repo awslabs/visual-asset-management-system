@@ -5,11 +5,14 @@ import json
 import os
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
+from botocore.exceptions import ClientError
 from common.constants import STANDARD_JSON_RESPONSE
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="ConfigService")
 dynamo_client = boto3.client('dynamodb')
+ssm_client = boto3.client('ssm')
+geo_client = boto3.client('location')
 deserializer = TypeDeserializer()
 
 
@@ -73,6 +76,65 @@ def lambda_handler(event, context):
         response = {
             "featuresEnabled": appFeatureEnabledConcatenated_string
         }
+
+        # Attempt to retrieve Location Service API Key from SSM Parameter Store
+        location_service_api_key_arn_ssm_param = os.getenv("LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM", None)
+        location_service_url_format = os.getenv("LOCATION_SERVICE_URL_FORMAT", None)
+        
+        #Set response initially to empty
+        response['locationServiceApiUrl'] = ""
+
+        if location_service_api_key_arn_ssm_param and location_service_url_format and location_service_url_format != "":
+            try:
+                logger.info(f"Attempting to retrieve Location Service API Key from SSM: {location_service_api_key_arn_ssm_param}")
+                ssm_response = ssm_client.get_parameter(
+                    Name=location_service_api_key_arn_ssm_param,
+                    WithDecryption=True
+                )
+                
+                api_key_arn = ssm_response.get('Parameter', {}).get('Value', None)
+                
+                if api_key_arn:
+                    logger.info(f"Successfully retrieved Location Service API Key ARN from SSM: {api_key_arn}")
+                    
+                    # Extract the key name from the ARN
+                    # ARN format: arn:aws:geo:region:account:api-key/key-name
+                    key_name = api_key_arn.split('/')[-1]
+                    logger.info(f"Extracted key name from ARN: {key_name}")
+                    
+                    # Get the actual API key value from AWS Location Services
+                    try:
+                        logger.info(f"Attempting to retrieve API key value from Location Services for key: {key_name}")
+                        geo_response = geo_client.describe_key(
+                            KeyName=key_name
+                        )
+                        
+                        api_key_value = geo_response.get('Key', None)
+                        
+                        if api_key_value:
+                            logger.info("Successfully retrieved Location Service API Key value")
+                            response['locationServiceApiUrl'] = location_service_url_format.replace("<apiKey>", api_key_value)
+                        else:
+                            logger.warning("Location Service API Key retrieved but has no value")
+                            
+                    except ClientError as geo_error:
+                        logger.error(f"Error retrieving API key value from Location Services: {geo_error}")
+                    except Exception as geo_ex:
+                        logger.error(f"Unexpected error retrieving API key value from Location Services: {geo_ex}")
+                else:
+                    logger.warning("Location Service API Key ARN SSM parameter exists but has no value")
+                    
+            except ClientError as e:
+                error_code = e.response.get('Error', {}).get('Code', '')
+                if error_code == 'ParameterNotFound':
+                    logger.info("Location Service API Key SSM parameter not found - Location Services may not be enabled")
+                else:
+                    logger.warning(f"Error retrieving Location Service API Key from SSM: {e}")
+            except Exception as e:
+                logger.warning(f"Unexpected error retrieving Location Service API Key from SSM: {e}")
+        else:
+            logger.info("Location Service API Key SSM parameter name or location service URL not configured")
+
         logger.info("Success")
         return {
             "statusCode": "200",

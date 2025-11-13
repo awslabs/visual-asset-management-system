@@ -36,7 +36,6 @@ import {
 export interface authResources {
     roles: {
         unAuthenticatedRole: iam.Role;
-        authenticatedRole: iam.Role;
     };
     cognito: {
         userPool: cognito.UserPool;
@@ -86,7 +85,6 @@ export class AuthBuilderNestedStack extends NestedStack {
 
             this.authResources = {
                 roles: {
-                    authenticatedRole: cognitoWebNativeConstruct.authenticatedRole,
                     unAuthenticatedRole: cognitoWebNativeConstruct.unauthenticatedRole,
                 },
                 cognito: {
@@ -139,15 +137,81 @@ export class AuthBuilderNestedStack extends NestedStack {
             ],
         });
 
-        if (props.storageResources.encryption.kmsKey) {
-            authDefaultCustomResourceRole.attachInlinePolicy(
-                new iam.Policy(this, "CRAuthKmsPolicy", {
-                    statements: [
-                        kmsKeyPolicyStatementGenerator(props.storageResources.encryption.kmsKey),
-                    ],
-                })
-            );
+        // Add KMS permissions when KMS encryption is enabled, regardless of timing issues
+        if (props.config.app.useKmsCmkEncryption.enabled) {
+            if (props.storageResources.encryption.kmsKey) {
+                // KMS key is available, add specific permissions
+                authDefaultCustomResourceRole.attachInlinePolicy(
+                    new iam.Policy(this, "CRAuthKmsPolicy", {
+                        statements: [
+                            kmsKeyPolicyStatementGenerator(
+                                props.storageResources.encryption.kmsKey
+                            ),
+                        ],
+                    })
+                );
+            } else {
+                // KMS key not yet available, add general KMS permissions for custom resources
+                authDefaultCustomResourceRole.attachInlinePolicy(
+                    new iam.Policy(this, "CRAuthKmsPolicy", {
+                        statements: [
+                            new iam.PolicyStatement({
+                                actions: [
+                                    "kms:Decrypt",
+                                    "kms:DescribeKey",
+                                    "kms:Encrypt",
+                                    "kms:GenerateDataKey*",
+                                    "kms:ReEncrypt*",
+                                    "kms:ListKeys",
+                                    "kms:CreateGrant",
+                                    "kms:ListAliases",
+                                ],
+                                effect: iam.Effect.ALLOW,
+                                resources: ["*"], // Will be constrained by KMS key policy
+                                conditions: {
+                                    StringEquals: {
+                                        "kms:ViaService": [
+                                            Service("DYNAMODB").Endpoint,
+                                            Service("S3").Endpoint,
+                                        ],
+                                    },
+                                },
+                            }),
+                        ],
+                    })
+                );
+            }
         }
+
+        //Deploy DynamoDB system user login profile
+        const awsSdkCallUserSystemUser: AwsSdkCall = {
+            service: "DynamoDB",
+            action: "putItem",
+            parameters: {
+                TableName: props.storageResources.dynamo.userStorageTable.tableName,
+                Item: {
+                    userId: {
+                        S: "SYSTEM_USER",
+                    },
+                    email: {
+                        S: "VAMS_SYSTEM@DO.NOT.REPLY.com",
+                    },
+                    createdOn: {
+                        S: new Date().toISOString(),
+                    },
+                },
+                //ConditionExpression: "attribute_not_exists(userId)",
+            },
+            physicalResourceId: PhysicalResourceId.of(
+                props.storageResources.dynamo.userStorageTable.tableName + `_system_initialization`
+            ),
+        };
+
+        new AwsCustomResource(this, `userStorageTable_system_CustomResource`, {
+            onCreate: awsSdkCallUserSystemUser,
+            onUpdate: awsSdkCallUserSystemUser,
+            role: authDefaultCustomResourceRole,
+        });
 
         //Deploy DynamoDB admin user login profile
         const awsSdkCallUserAdmin: AwsSdkCall = {

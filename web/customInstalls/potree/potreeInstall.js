@@ -14,7 +14,7 @@ const gitRepoUrl = "https://github.com/potree/potree.git";
 const gitRepoCommitHash = "f6ac2d3b";
 const patchFilePath = "./../Potree-Fork_f6ac2d3b.patch"; //Patch file relative to git source directory
 
-const destinationDir = "./public/potree_libs"; //Relative to base web directory where yarn/npm is run
+const destinationDir = "./public/viewers/potree_libs"; //Relative to base web directory where yarn/npm is run
 
 // Function to cleanup previous git source and build binaries
 const previousCleanUp = async () => {

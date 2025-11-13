@@ -5,6 +5,7 @@
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as path from "path";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -208,6 +209,7 @@ export function buildAssetFiles(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
@@ -220,6 +222,7 @@ export function buildAssetFiles(
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
@@ -239,6 +242,7 @@ export function buildUploadFileFunction(
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
     sendEmailFunction: lambda.Function,
+    largeFileProcessingQueue: sqs.IQueue,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -271,6 +275,7 @@ export function buildUploadFileFunction(
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            LARGE_FILE_PROCESSING_QUEUE_URL: largeFileProcessingQueue.queueUrl,
         },
     });
 
@@ -448,6 +453,103 @@ export function buildAssetVersionsFunction(
     return fun;
 }
 
+export function buildStreamAssetFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "streamAsset";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+        },
+    });
+
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+
+    grantReadPermissionsToAllAssetBuckets(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+    return fun;
+}
+
+export function buildSqsUploadFileLargeFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    sendEmailFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "sqsUploadFileLarge";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+        },
+    });
+
+    // Grant same permissions as uploadFile Lambda
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    sendEmailFunction.grantInvoke(fun);
+
+    grantReadWritePermissionsToAllAssetBuckets(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+    return fun;
+}
+
 export function buildIngestAssetFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -504,6 +606,80 @@ export function buildIngestAssetFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return fun;
+}
+
+export function buildAssetExportService(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    assetLinksFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "assetExportService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+
+        environment: {
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.assetLinksStorageTableV2.tableName,
+            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            ASSET_LINKS_FUNCTION_NAME: assetLinksFunction.functionName,
+            PRESIGNED_URL_TIMEOUT_SECONDS:
+                config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+        },
+    });
+
+    // Grant read permissions to all required tables
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.metadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+
+    // Grant invoke permission for asset links lambda
+    assetLinksFunction.grantInvoke(fun);
+
+    // Grant read permissions to all asset buckets for file listing and presigned URLs
+    grantReadPermissionsToAllAssetBuckets(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

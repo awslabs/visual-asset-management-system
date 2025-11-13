@@ -10,7 +10,6 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { LAMBDA_NODE_RUNTIME } from "../../../../config/config";
 import { Construct } from "constructs";
-import { IHttpRouteAuthorizer } from "aws-cdk-lib/aws-apigatewayv2";
 import { Service } from "../../../helper/service-helper";
 import { authResources } from "../../auth/authBuilder-nestedStack";
 import * as Config from "../../../../config/config";
@@ -147,6 +146,11 @@ export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
      * Content Security Policy to apply at the react level [none headers passed from static webpage service] (generally not used as alreayd provided in Cloudfront and ALB deployment)
      */
     contentSecurityPolicy?: string;
+
+    /**
+     * Custom authorizer function for ignored paths
+     */
+    customAuthorizerFunction: lambda.Function;
 }
 
 /**
@@ -215,30 +219,29 @@ export class AmplifyConfigLambdaConstruct extends Construct {
             lambdaFn
         );
 
-        // add route to the api gateway
+        // Determine cache TTL based on IP restrictions
+        const hasIpRestrictions =
+            props.config.app.authProvider.authorizerOptions?.allowedIpRanges?.length > 0;
+        const cacheTtlSeconds = hasIpRestrictions ? 900 : 900;
+
+        // Create custom authorizer for ignored path with routeKey identity source
+        const routeKeyAuthorizer = new apigwAuthorizers.HttpLambdaAuthorizer(
+            "AmplifyConfigAuthorizer",
+            props.customAuthorizerFunction,
+            {
+                authorizerName: "AmplifyConfigCustomAuthorizer",
+                resultsCacheTtl: cdk.Duration.seconds(cacheTtlSeconds),
+                identitySource: ["$context.identity.sourceIp"],
+                responseTypes: [apigwAuthorizers.HttpLambdaResponseType.SIMPLE],
+            }
+        );
+
+        // add route to the api gateway with custom authorizer
         props.api.addRoutes({
             path: "/api/amplify-config",
             methods: [apigatewayv2.HttpMethod.GET],
             integration: lambdaFnIntegration,
-            authorizer: this.createNoOpAuthorizer(),
-        });
-    }
-
-    private createNoOpAuthorizer(): IHttpRouteAuthorizer {
-        const authorizerFn = new cdk.aws_lambda.Function(this, "AuthorizerLambda", {
-            runtime: LAMBDA_NODE_RUNTIME,
-            handler: "index.handler",
-            code: lambda.Code.fromInline(this.getAuthorizerLambdaCode()),
-            timeout: cdk.Duration.seconds(15),
-        });
-
-        authorizerFn.grantInvoke(Service("APIGATEWAY").Principal);
-
-        return new apigwAuthorizers.HttpLambdaAuthorizer("authorizer", authorizerFn, {
-            authorizerName: "CognitoConfigAuthorizer",
-            resultsCacheTtl: cdk.Duration.seconds(3600),
-            identitySource: ["$context.routeKey"],
-            responseTypes: [apigwAuthorizers.HttpLambdaResponseType.SIMPLE],
+            authorizer: routeKeyAuthorizer,
         });
     }
 
@@ -255,16 +258,6 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     body: JSON.stringify(${resp}),
                 };
             };
-        `;
-    }
-
-    private getAuthorizerLambdaCode(): string {
-        return `
-            exports.handler = async function(event, context) {
-                return {
-                    isAuthorized: true
-                }
-            }
         `;
     }
 }

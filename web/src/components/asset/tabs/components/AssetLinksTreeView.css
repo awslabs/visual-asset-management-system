@@ -144,6 +144,12 @@
     display: inline-block;
 }
 
+.asset-links-alias-id {
+    color: var(--color-text-body-secondary);
+    font-style: italic;
+    font-size: 0.9em;
+}
+
 .asset-links-tree-item-children {
     margin-left: 0;
 }

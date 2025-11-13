@@ -2,6 +2,7 @@
     height: 100%;
     display: flex;
     flex-direction: column;
+    overflow-y: auto;
 }
 
 .file-info-header {
@@ -119,4 +120,115 @@
     display: inline-block;
     margin-top: 4px;
     font-size: 12px;
+}
+
+/* Metadata section styling - with single spacer bar above */
+.file-metadata-section {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid #eaeded;
+    transition: opacity 0.3s ease-in-out, transform 0.2s ease-in-out;
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.file-metadata-section.loading {
+    opacity: 0.7;
+    transform: translateY(4px);
+}
+
+.file-metadata-section.error {
+    opacity: 0.9;
+}
+
+/* FileMetadata component styling within FileDetailsPanel */
+.file-details-metadata {
+    /* Ensure consistent spacing and typography with rest of panel */
+    font-size: inherit;
+    line-height: inherit;
+    width: 100%;
+    transition: opacity 0.2s ease-in-out;
+}
+
+.file-details-metadata:focus-within {
+    outline: 2px solid rgba(0, 126, 185, 0.25);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Override any container padding from FileMetadata to match panel styling */
+.file-details-metadata .awsui-container {
+    padding: 0;
+    margin: 0;
+}
+
+.file-details-metadata .awsui-container-header {
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eaeded;
+}
+
+.file-details-metadata .awsui-container-content {
+    padding: 0;
+}
+
+/* Ensure metadata content maintains consistent spacing */
+.file-details-metadata .awsui-form-field {
+    margin-bottom: 12px;
+    transition: background-color 0.2s ease-in-out;
+}
+
+.file-details-metadata .awsui-form-field:hover {
+    background-color: rgba(0, 0, 0, 0.02);
+    border-radius: 4px;
+    padding: 4px;
+    margin: 4px -4px 8px -4px;
+}
+
+.file-details-metadata .awsui-form-field-label {
+    font-weight: bold;
+    width: 130px;
+    display: inline-block;
+    vertical-align: top;
+    transition: color 0.2s ease-in-out;
+}
+
+.file-details-metadata .awsui-form-field-control {
+    display: inline-block;
+    width: calc(100% - 140px);
+    vertical-align: top;
+}
+
+/* Improve focus indicators for form controls */
+.file-details-metadata .awsui-input:focus,
+.file-details-metadata .awsui-select:focus,
+.file-details-metadata .awsui-textarea:focus {
+    box-shadow: 0 0 0 2px rgba(0, 126, 185, 0.25);
+    border-color: #007eb9;
+}
+
+/* Responsive behavior for smaller screens */
+@media (max-width: 768px) {
+    .file-metadata-section {
+        margin-top: 16px;
+        padding-top: 12px;
+    }
+
+    .file-details-metadata .awsui-form-field-label {
+        width: 100%;
+        display: block;
+        margin-bottom: 4px;
+    }
+
+    .file-details-metadata .awsui-form-field-control {
+        width: 100%;
+        display: block;
+    }
+}
+
+/* Ensure scrollable behavior when content exceeds height */
+.file-info-content {
+    padding: 20px 0;
+    flex: 1;
+    overflow-y: auto;
 }

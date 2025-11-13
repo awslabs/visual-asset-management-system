@@ -46,7 +46,7 @@ casbin_user_policy_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.Loc
 #
 casbin_user_enforcer_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.LockedDict()
 
-logger = safeLogger(service="AuthzInit")
+logger = safeLogger()
 
 deserializer = TypeDeserializer()
 _dynamodb_client = boto3.client("dynamodb")
@@ -86,7 +86,17 @@ class CasbinEnforcer:
     def enforceAPI(self, lambdaEvent, apiMethodOverrideValue = ''):
         claims_and_roles = request_to_claims(lambdaEvent)
 
-        if 'requestContext' in lambdaEvent and 'http' in lambdaEvent['requestContext']:
+        if 'lambdaCrossCall' in lambdaEvent:
+            # This is a cross-call from another approved lambda.
+            # Credentials logic in claims_and_roles should already account for this
+            #
+
+            #Auto approve if executing username in token
+            if(len(claims_and_roles["tokens"]) > 0):
+                return True
+            else:
+                return False
+        elif 'requestContext' in lambdaEvent and 'http' in lambdaEvent['requestContext']:
             # This should be a regular API Gateway call
             #
 
@@ -100,17 +110,6 @@ class CasbinEnforcer:
             }
 
             return self.service_object.enforce(request_object, http_method)
-
-        # elif 'lambdaCrossCall' in lambdaEvent:
-        #     # This is a cross-call from another approved lambda.
-        #     # Credentials logic in claims_and_roles should already account for this
-        #     #
-
-        #     #Auto approve if executing username in token
-        #     if(len(claims_and_roles["tokens"]) > 0):
-        #         return True
-        #     else:
-        #         return False
         else:
             #This is not a normal structered call so automatiacally fail
             return False

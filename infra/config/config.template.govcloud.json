@@ -44,7 +44,8 @@
                 "dataNodeInstanceType": "r6g.large.search",
                 "masterNodeInstanceType": "r6g.large.search",
                 "ebsInstanceNodeSizeGb": 120
-            }
+            },
+            "reindexOnCdkDeploy": false
         },
         "useLocationService": {
             "enabled": false
@@ -59,25 +60,43 @@
         },
         "pipelines": {
             "useConversion3dBasic": {
-                "enabled": true
+                "enabled": true,
+                "autoRegisterWithVAMS": true
+            },
+            "useConversionCadMeshMetadataExtraction": {
+                "enabled": false,
+                "autoRegisterWithVAMS": true
             },
             "usePreviewPcPotreeViewer": {
-                "enabled": false
+                "enabled": false,
+                "autoRegisterWithVAMS": false,
+                "sqsAutoRunOnAssetModified": true
             },
             "useGenAiMetadata3dLabeling": {
-                "enabled": false
+                "enabled": false,
+                "bedrockModelId": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+                "autoRegisterWithVAMS": true
+            },
+            "useSplatToolbox": {
+                "enabled": false,
+                "autoRegisterWithVAMS": true
             },
             "useRapidPipeline": {
                 "enabled": false,
-                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>"
+                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                "autoRegisterWithVAMS": true
             },
             "useModelOps": {
                 "enabled": false,
-                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>"
+                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                "autoRegisterWithVAMS": true
             }
         },
         "authProvider": {
             "presignedUrlTimeoutSeconds": 86400,
+            "authorizerOptions": {
+                "allowedIpRanges": []
+            },
             "useCognito": {
                 "enabled": true,
                 "useSaml": false,

@@ -132,6 +132,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             //     props.config.app.useKmsCmkEncryption.enabled && !props.config.app.useAlb.enabled
             //         ? true
             //         : false,
+            objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
             autoDeleteObjects: true,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             serverAccessLogsBucket: webAppAccessLogsBucket,

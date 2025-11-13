@@ -54,7 +54,9 @@ export class OpensearchServerlessConstruct extends Construct {
         this.config = props.config;
 
         this.useVPCEndpoint =
-            props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas;
+            props.config.app.useGlobalVpc.enabled &&
+            props.config.app.useGlobalVpc.useForAllLambdas &&
+            props.config.app.useGlobalVpc.addVpcEndpoints;
 
         //Create Open Search VPC endpoint if we are using a VPC for all our lambda functions
         //Note: Ignoring addVpcEndpoint configuration on purpose as this is required to create to attach to a collection network security policy. must create at this juncture
@@ -104,7 +106,7 @@ export class OpensearchServerlessConstruct extends Construct {
             this,
             "OpensearchServerlessDeploySchema",
             {
-                entry: path.join(__dirname, "./schemaDeploy/serverless/deployschemaserverless.ts"),
+                entry: path.join(__dirname, "./schemaDeploy/deployschema.ts"),
                 handler: "handler",
                 bundling: {
                     externalModules: ["aws-sdk"],
@@ -217,10 +219,13 @@ export class OpensearchServerlessConstruct extends Construct {
             serviceToken: schemaDeployProvider.serviceToken,
             properties: {
                 endpointSSMParam: props.config.openSearchDomainEndpointSSMParam,
-                indexNameSSMParam: props.config.openSearchIndexNameSSMParam,
+                assetIndexNameSSMParam: props.config.openSearchAssetIndexNameSSMParam,
+                fileIndexNameSSMParam: props.config.openSearchFileIndexNameSSMParam,
                 collectionEndpoint: collection.attrCollectionEndpoint,
-                indexName: props.config.openSearchIndexName,
-                version: "1",
+                assetIndexName: props.config.openSearchAssetIndexName,
+                fileIndexName: props.config.openSearchFileIndexName,
+                version: "2",
+                Timestamp: Date.now().toString(), //Used to check index deployment every CDK deployment
             },
         });
 
@@ -257,7 +262,7 @@ export class OpensearchServerlessConstruct extends Construct {
                     {
                         ResourceType: "index",
                         // Resource: ["index/*/*"],
-                        Resource: [`index/${this.collectionUid}/assets1236`],
+                        Resource: [`index/${this.collectionUid}/*`],
                         Permission: [
                             // "aoss:*",
                             "aoss:ReadDocument",
@@ -325,7 +330,7 @@ export class OpensearchServerlessConstruct extends Construct {
                 Rules: [
                     {
                         ResourceType: "index",
-                        Resource: [`index/${this.collectionUid}/assets1236`],
+                        Resource: [`index/${this.collectionUid}/*`],
                         Permission: ["aoss:*"],
                     },
                     {

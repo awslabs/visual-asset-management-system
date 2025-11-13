@@ -59,9 +59,9 @@ const iam = new IAMClient({});
 Deploys an Amazon Opensearch Domain
 */
 export class OpensearchProvisionedConstruct extends Construct {
-    aosName: string;
-    domain: cdk.aws_opensearchservice.Domain;
-    domainEndpoint: string;
+    public aosName: string;
+    public domain: cdk.aws_opensearchservice.Domain;
+    public domainEndpoint: string;
     config: Config.Config;
 
     constructor(scope: Construct, name: string, props: OpensearchProvisionedConstructProps) {
@@ -187,10 +187,7 @@ export class OpensearchProvisionedConstruct extends Construct {
             this,
             "OpensearchProvisionedDeploySchema",
             {
-                entry: path.join(
-                    __dirname,
-                    "./schemaDeploy/provisioned/deployschemaprovisioned.ts"
-                ),
+                entry: path.join(__dirname, "./schemaDeploy/deployschema.ts"),
                 handler: "handler",
                 bundling: {
                     externalModules: ["aws-sdk"],
@@ -240,10 +237,13 @@ export class OpensearchProvisionedConstruct extends Construct {
             serviceToken: schemaDeployProvider.serviceToken,
             properties: {
                 endpointSSMParam: props.config.openSearchDomainEndpointSSMParam,
-                indexNameSSMParam: props.config.openSearchIndexNameSSMParam,
+                assetIndexNameSSMParam: props.config.openSearchAssetIndexNameSSMParam,
+                fileIndexNameSSMParam: props.config.openSearchFileIndexNameSSMParam,
                 domainEndpoint: "https://" + osDomain.domainEndpoint,
-                indexName: props.config.openSearchIndexName,
-                version: "1",
+                assetIndexName: props.config.openSearchAssetIndexName,
+                fileIndexName: props.config.openSearchFileIndexName,
+                version: "2",
+                Timestamp: Date.now().toString(), //Used to check index deployment every CDK deployment
             },
         });
 

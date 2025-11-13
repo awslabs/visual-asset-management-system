@@ -1,0 +1,37 @@
+{
+    "comments": "Configuration for VAMS v2.2 to v2.3 migration - Lambda-based reindexing",
+
+    "_comment_lambda": "Lambda function configuration (required)",
+    "function_name": "YOUR_REINDEXER_LAMBDA_FUNCTION_NAME",
+
+    "_comment_operation": "Reindexing operation settings",
+    "operation": "both",
+    "clear_indexes": true,
+    "dry_run": false,
+    "limit": null,
+
+    "_comment_aws": "AWS configuration (optional)",
+    "aws_profile": null,
+    "aws_region": null,
+
+    "_comment_logging": "Logging settings",
+    "log_level": "INFO",
+
+    "_comment_instructions": "How to use this configuration file",
+    "_instructions": [
+        "1. Get the Lambda function name from CDK outputs:",
+        "   aws cloudformation describe-stacks --stack-name your-stack \\",
+        "     --query 'Stacks[0].Outputs[?OutputKey==`ReindexerFunctionNameOutput`].OutputValue' \\",
+        "     --output text",
+        "",
+        "2. Update 'function_name' with the actual Lambda function name",
+        "",
+        "3. Run migration:",
+        "   python v2.2_to_v2.3_migration.py --function-name <function-name>",
+        "",
+        "4. Or use command-line arguments to override config:",
+        "   python v2.2_to_v2.3_migration.py --function-name <name> --clear-indexes --dry-run",
+        "",
+        "Note: Only 'function_name' is required. All other settings are optional."
+    ]
+}
