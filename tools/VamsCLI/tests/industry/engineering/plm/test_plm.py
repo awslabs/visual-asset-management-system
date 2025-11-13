@@ -32,6 +32,7 @@ class TestIndustryPLMImportCommand:
         assert '--database-id' in result.output
         assert '--plmxml-dir' in result.output
         assert '--max-workers' in result.output
+        assert '--upload-xml' in result.output
         assert '--json-output' in result.output
     
     @patch('vamscli.main.ProfileManager')
@@ -90,6 +91,61 @@ class TestIndustryPLMImportCommand:
         
         assert result.exit_code == 2
         assert 'Missing option' in result.output or 'required' in result.output.lower()
+    
+    @patch('vamscli.main.ProfileManager')
+    def test_import_with_upload_xml_flag(self, mock_main_profile_manager, cli_runner, tmp_path):
+        """Test PLM XML import with --upload-xml flag."""
+        # Create a temporary PLM XML directory with a test file
+        plm_dir = tmp_path / "plm_data"
+        plm_dir.mkdir()
+        plm_file = plm_dir / "test.xml"
+        plm_file.write_text('<?xml version="1.0"?><plm>test</plm>')
+        
+        # Mock profile manager
+        mock_profile_manager = Mock()
+        mock_profile_manager.has_config.return_value = True
+        mock_profile_manager.load_config.return_value = {'api_gateway_url': 'https://api.example.com'}
+        mock_profile_manager.profile_name = 'default'
+        mock_main_profile_manager.return_value = mock_profile_manager
+        
+        # Test that --upload-xml flag is accepted
+        result = cli_runner.invoke(cli, [
+            'industry', 'engineering', 'plm', 'plmxml', 'import',
+            '-d', 'test-database',
+            '--plmxml-dir', str(plm_dir),
+            '--upload-xml'
+        ])
+        
+        # The command will fail because we're not mocking the underlying API calls,
+        # but we can verify the flag is accepted (no parameter error)
+        assert result.exit_code != 2  # Not a parameter error
+    
+    @patch('vamscli.main.ProfileManager')
+    def test_import_without_upload_xml_flag(self, mock_main_profile_manager, cli_runner, tmp_path):
+        """Test PLM XML import without --upload-xml flag (default behavior)."""
+        # Create a temporary PLM XML directory with a test file
+        plm_dir = tmp_path / "plm_data"
+        plm_dir.mkdir()
+        plm_file = plm_dir / "test.xml"
+        plm_file.write_text('<?xml version="1.0"?><plm>test</plm>')
+        
+        # Mock profile manager
+        mock_profile_manager = Mock()
+        mock_profile_manager.has_config.return_value = True
+        mock_profile_manager.load_config.return_value = {'api_gateway_url': 'https://api.example.com'}
+        mock_profile_manager.profile_name = 'default'
+        mock_main_profile_manager.return_value = mock_profile_manager
+        
+        # Test default behavior (no --upload-xml flag)
+        result = cli_runner.invoke(cli, [
+            'industry', 'engineering', 'plm', 'plmxml', 'import',
+            '-d', 'test-database',
+            '--plmxml-dir', str(plm_dir)
+        ])
+        
+        # The command will fail because we're not mocking the underlying API calls,
+        # but we can verify the command structure is correct
+        assert result.exit_code != 2  # Not a parameter error
 
 
 class TestIndustryCommandHierarchy:

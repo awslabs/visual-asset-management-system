@@ -70,10 +70,9 @@ jobs:
               working-directory: vams/tools/VamsCLI
               run: |
                   pytest --cov=vamscli --cov-report=xml --cov-report=term -v --tb=short > pytest_output.txt 2>&1
-                  Get-Content pytest_output.txt
 
             - name: Upload VamsCLI test results
-              uses: actions/upload-artifact@v3
+              uses: actions/upload-artifact@v4
               with:
                   name: vamscli-test-results
                   path: |
