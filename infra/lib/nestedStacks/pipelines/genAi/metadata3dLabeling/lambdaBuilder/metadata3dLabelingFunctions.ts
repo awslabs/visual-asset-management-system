@@ -187,6 +187,17 @@ export function buildMetadataGenerationPipelineFunction(
         subnets: subnets,
     });
 
+    let bedrockModelId = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    if (
+        config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId &&
+        config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId != "" &&
+        config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId != "UNDEFINED"
+    ) {
+        bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId;
+    }
+
+    const bedrockModelPermissions = bedrockModelId.replace("global.", "").replace("us.", "");
+
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
             path.join(
@@ -211,9 +222,13 @@ export function buildMetadataGenerationPipelineFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? pipelineSecurityGroups
                 : undefined,
+
+        environment: {
+            BEDROCK_MODEL_ID: bedrockModelId,
+        },
     });
 
-    grantReadPermissionsToAllAssetBuckets(fun);
+    grantReadWritePermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantReadWrite(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -226,7 +241,16 @@ export function buildMetadataGenerationPipelineFunction(
         resources: [
             `arn:${ServiceHelper.Partition()}:bedrock:` +
                 config.env.region +
-                "::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
+                "::foundation-model/" +
+                bedrockModelPermissions,
+            `arn:${ServiceHelper.Partition()}:bedrock:` +
+                "::foundation-model/" +
+                bedrockModelPermissions,
+            `arn:${ServiceHelper.Partition()}:bedrock:` +
+                config.env.region +
+                ":" +
+                config.env.account +
+                ":inference-profile/*",
         ],
     });
     fun.addToRolePolicy(bedrockPolicy);

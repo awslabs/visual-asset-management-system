@@ -186,6 +186,18 @@ export function fileManagerReducer(
                 error: action.payload,
             };
 
+        case "SET_ERROR":
+            return {
+                ...state,
+                error: action.payload,
+            };
+
+        case "CLEAR_ERROR":
+            return {
+                ...state,
+                error: null,
+            };
+
         case "SET_LOADING":
             return {
                 ...state,

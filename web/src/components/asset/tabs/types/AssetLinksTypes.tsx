@@ -8,6 +8,7 @@ export interface AssetNode {
     assetName: string;
     databaseId: string;
     assetLinkId: string;
+    assetLinkAliasId?: string;
     metadata?: AssetLinkMetadata[];
 }
 
@@ -31,7 +32,18 @@ export interface AssetLinkMetadata {
     assetLinkId: string;
     metadataKey: string;
     metadataValue: string;
-    metadataValueType: "XYZ" | "String";
+    metadataValueType:
+        | "xyz"
+        | "wxyz"
+        | "string"
+        | "number"
+        | "matrix4x4"
+        | "geopoint"
+        | "geojson"
+        | "lla"
+        | "json"
+        | "date"
+        | "boolean";
 }
 
 export interface XYZValue {
@@ -117,6 +129,7 @@ export interface AssetLinksTabProps {
     showErrors?: boolean;
     onAssetLinksChange?: (assetLinks: NewAssetLinksData) => void;
     initialData?: NewAssetLinksData;
+    // databaseId is also used in upload mode to filter asset search
 }
 
 // Legacy props interface for backward compatibility

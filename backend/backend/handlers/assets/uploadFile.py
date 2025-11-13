@@ -51,6 +51,7 @@ s3_resource = boto3.resource('s3', region_name=region, config=s3_config)
 lambda_client = boto3.client('lambda', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 dynamodb_client = boto3.client('dynamodb', config=s3_config)
+sqs = boto3.client('sqs', config=s3_config)
 logger = safeLogger(service_name="UploadFile")
 
 # Constants
@@ -60,6 +61,7 @@ PREVIEW_PREFIX = 'previews/'
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
 MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 10
+LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
 allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
 
 # Load environment variables
@@ -69,6 +71,7 @@ try:
     asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
+    large_file_processing_queue_url = os.environ.get("LARGE_FILE_PROCESSING_QUEUE_URL")
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -395,14 +398,41 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key):
-    """Copy an object from one S3 location to another"""
+def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id):
+    """Copy an object from one S3 location to another with replaced metadata
+    
+    Args:
+        source_bucket: Source S3 bucket name
+        source_key: Source S3 object key
+        dest_bucket: Destination S3 bucket name
+        dest_key: Destination S3 object key
+        database_id: Database ID to set in metadata
+        asset_id: Asset ID to set in metadata
+        
+    Returns:
+        True if successful, False otherwise
+    """
     try:
-        # Use s3_resource for managed transfer to handle large files
+        # Use s3_resource.copy with ExtraArgs for metadata replacement
+        # This handles large files with managed transfer
+        copy_source = {
+            'Bucket': source_bucket,
+            'Key': source_key
+        }
+        
+        extra_args = {
+            'MetadataDirective': 'REPLACE',
+            'Metadata': {
+                "databaseid": database_id,
+                "assetid": asset_id
+            }
+        }
+        
         s3_resource.meta.client.copy(
-            CopySource={'Bucket': source_bucket, 'Key': source_key},
+            CopySource=copy_source,
             Bucket=dest_bucket,
-            Key=dest_key
+            Key=dest_key,
+            ExtraArgs=extra_args
         )
         return True
     except Exception as e:
@@ -686,6 +716,176 @@ def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_i
         logger.exception(f"Error creating zero-byte file {key}: {e}")
         return False
 
+def get_completed_file_size(bucket_name: str, key: str) -> int:
+    """Get the size of a completed file in S3
+    
+    Args:
+        bucket_name: The S3 bucket name
+        key: The S3 object key
+        
+    Returns:
+        The file size in bytes, or 0 if file doesn't exist or error occurs
+    """
+    try:
+        if not bucket_name or not key:
+            logger.warning(f"Invalid parameters for get_completed_file_size: bucket_name='{bucket_name}', key='{key}'")
+            return 0
+            
+        head_response = s3.head_object(Bucket=bucket_name, Key=key)
+        file_size = head_response.get('ContentLength')
+        
+        if file_size is None:
+            logger.warning(f"ContentLength is None for file {key}, defaulting to 0")
+            return 0
+            
+        return file_size
+        
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        if error_code == 'NoSuchKey':
+            logger.warning(f"File {key} not found in bucket {bucket_name}")
+        elif error_code == 'NoSuchBucket':
+            logger.warning(f"Bucket {bucket_name} not found")
+        else:
+            logger.warning(f"AWS ClientError getting file size for {key}: {error_code} - {e.response.get('Error', {}).get('Message', str(e))}")
+        return 0
+    except Exception as e:
+        logger.warning(f"Unexpected error getting file size for {key}: {e}")
+        return 0
+
+def should_process_asynchronously(file_size: int) -> bool:
+    """Determine if file should be processed asynchronously based on size
+    
+    Args:
+        file_size: The file size in bytes
+        
+    Returns:
+        True if file should be processed asynchronously, False otherwise
+    """
+    try:
+        # Validate file_size parameter
+        if file_size is None:
+            logger.warning("File size is None, defaulting to synchronous processing")
+            return False
+            
+        if not isinstance(file_size, (int, float)):
+            logger.warning(f"File size is not a number ({type(file_size)}), defaulting to synchronous processing")
+            return False
+            
+        if file_size < 0:
+            logger.warning(f"File size is negative ({file_size}), defaulting to synchronous processing")
+            return False
+            
+        # Check against threshold
+        return file_size > LARGE_FILE_THRESHOLD_BYTES
+        
+    except Exception as e:
+        logger.warning(f"Error in should_process_asynchronously: {e}")
+        # Default to synchronous processing on any error
+        return False
+
+def queue_large_file_for_processing(file_info: dict, sqs_queue_url: str) -> bool:
+    """Queue a large file for asynchronous processing
+    
+    Args:
+        file_info: Dictionary containing file processing information
+        sqs_queue_url: The SQS queue URL for large file processing
+        
+    Returns:
+        True if successfully queued, False otherwise
+    """
+    try:
+        if not sqs_queue_url:
+            logger.warning("Large file processing queue URL not configured")
+            return False
+            
+        # Validate required file info fields
+        required_fields = ['relativeKey', 'uploadIdS3', 'tempS3Key', 'finalS3Key', 'bucketName', 'databaseId', 'assetId', 'uploadId', 'uploadType']
+        for field in required_fields:
+            if field not in file_info:
+                logger.error(f"Missing required field '{field}' in file_info for SQS message")
+                return False
+        
+        # Create SQS message payload
+        message_body = {
+            "fileInfo": file_info
+        }
+        
+        # Send message to SQS queue with retry handling
+        try:
+            response = sqs.send_message(
+                QueueUrl=sqs_queue_url,
+                MessageBody=json.dumps(message_body)
+            )
+            
+            message_id = response.get('MessageId')
+            if not message_id:
+                logger.error(f"SQS send_message returned no MessageId for file {file_info.get('relativeKey')}")
+                return False
+                
+            logger.info(f"Successfully queued large file for processing: {file_info.get('relativeKey')} (MessageId: {message_id})")
+            return True
+            
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            error_message = e.response.get('Error', {}).get('Message', str(e))
+            logger.error(f"AWS ClientError queuing file {file_info.get('relativeKey')} to SQS: {error_code} - {error_message}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error queuing file {file_info.get('relativeKey')} to SQS: {e}")
+            return False
+        
+    except Exception as e:
+        logger.exception(f"Error in queue_large_file_for_processing for file {file_info.get('relativeKey', 'unknown')}: {e}")
+        return False
+
+def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list) -> tuple:
+    """Calculate total file size by listing parts of an incomplete multipart upload
+    
+    Args:
+        bucket_name: The S3 bucket name
+        key: The S3 object key
+        upload_id: The multipart upload ID
+        expected_parts: List of expected part objects with PartNumber and ETag
+        
+    Returns:
+        Tuple of (total_size, success, error_message)
+    """
+    try:
+        list_parts_response = s3.list_parts(
+            Bucket=bucket_name,
+            Key=key,
+            UploadId=upload_id
+        )
+        
+        # Calculate total size from all uploaded parts
+        total_file_size = 0
+        uploaded_parts = list_parts_response.get('Parts', [])
+        
+        # Verify all requested parts are uploaded and calculate size
+        uploaded_part_numbers = {part['PartNumber'] for part in uploaded_parts}
+        requested_part_numbers = {p.PartNumber for p in expected_parts}
+        
+        if uploaded_part_numbers != requested_part_numbers:
+            missing_parts = requested_part_numbers - uploaded_part_numbers
+            extra_parts = uploaded_part_numbers - requested_part_numbers
+            error_msg = f"Part mismatch."
+            if missing_parts:
+                error_msg += f" Missing parts: {sorted(missing_parts)}."
+            if extra_parts:
+                error_msg += f" Extra parts: {sorted(extra_parts)}."
+            return 0, False, error_msg
+        
+        # Calculate total size
+        for part in uploaded_parts:
+            total_file_size += part['Size']
+        
+        return total_file_size, True, None
+        
+    except Exception as e:
+        logger.exception(f"Error calculating file size from parts: {e}")
+        return 0, False, f"Error verifying upload parts: {str(e)}"
+
 #######################
 # API Implementations
 #######################
@@ -925,8 +1125,20 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     Key=file.tempKey
                 )
                 
+                # Get file size with error handling
+                file_size = 0
+                try:
+                    file_size = head_response.get('ContentLength', 0)
+                    if file_size is None:
+                        logger.warning(f"ContentLength is None for external file {file.relativeKey}, defaulting to 0")
+                        file_size = 0
+                except Exception as size_error:
+                    logger.warning(f"Error getting file size for external file {file.relativeKey}: {size_error}")
+                    # Default to 0 for unknown file sizes (will process synchronously)
+                    file_size = 0
+                
                 # Check file size for preview files - both assetPreview type and .previewFile. files
-                if (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) and head_response.get('ContentLength', 0) > MAX_PREVIEW_FILE_SIZE:
+                if (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) and file_size > MAX_PREVIEW_FILE_SIZE:
                     file_results.append(FileCompletionResult(
                         relativeKey=file.relativeKey,
                         uploadIdS3="external",
@@ -935,6 +1147,55 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     ))
                     has_failures = True
                     continue
+                
+                # Check if file should be processed asynchronously based on size
+                process_async = False
+                try:
+                    process_async = should_process_asynchronously(file_size)
+                except Exception as e:
+                    logger.warning(f"Error determining if external file {file.relativeKey} should be processed asynchronously: {e}")
+                    # Default to synchronous processing for unknown file sizes
+                    process_async = False
+                
+                if process_async:
+                    logger.info(f"External file {file.relativeKey} ({file_size} bytes) will be processed asynchronously")
+                    
+                    # Create file info for SQS message
+                    file_info = {
+                        "relativeKey": file.relativeKey,
+                        "uploadIdS3": "external",
+                        "parts": [],  # External uploads don't have parts
+                        "tempS3Key": file.tempKey,
+                        "finalS3Key": final_s3_key,
+                        "bucketName": bucket_name,
+                        "databaseId": databaseId,
+                        "assetId": assetId,
+                        "uploadId": uploadId,
+                        "uploadType": uploadType
+                    }
+                    
+                    # Try to queue the file for asynchronous processing with comprehensive error handling
+                    try:
+                        if queue_large_file_for_processing(file_info, large_file_processing_queue_url):
+                            # Successfully queued - mark as successful with async flag
+                            file_results.append(FileCompletionResult(
+                                relativeKey=file.relativeKey,
+                                uploadIdS3="external",
+                                success=True,
+                                largeFileAsynchronousHandling=True
+                            ))
+                            logger.info(f"Large external file {file.relativeKey} queued for asynchronous processing")
+                            continue
+                        else:
+                            # Failed to queue - fall back to synchronous processing
+                            logger.warning(f"Failed to queue large external file {file.relativeKey}, falling back to synchronous processing")
+                            process_async = False
+                    except Exception as e:
+                        # SQS queuing error - fall back to synchronous processing
+                        logger.warning(f"Error queuing large external file {file.relativeKey} for asynchronous processing: {e}")
+                        logger.info(f"Falling back to synchronous processing for external file {file.relativeKey}")
+                        process_async = False
+                
             except Exception as e:
                 file_results.append(FileCompletionResult(
                     relativeKey=file.relativeKey,
@@ -1010,7 +1271,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             file_results.append(FileCompletionResult(
                 relativeKey=file.relativeKey,
                 uploadIdS3="external",
-                success=True
+                success=True,
+                largeFileAsynchronousHandling=False
             ))
             
         except Exception as e:
@@ -1026,12 +1288,15 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     # If no files were successfully uploaded, return error
     if not successful_files:
         delete_upload_details(uploadId, assetId)
+        # Check if any file has largeFileAsynchronousHandling=true
+        has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
         return CompleteUploadResponseModel(
             message="No files were successfully uploaded",
             uploadId=uploadId,
             assetId=assetId,
             fileResults=file_results,
-            overallSuccess=False
+            overallSuccess=False,
+            largeFileAsynchronousHandling=has_async_files
         )
     
     # Only for assetFile uploads, validate that .previewFile. files have corresponding base files
@@ -1072,12 +1337,15 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 # If no files remain successful, return error
                 if not successful_files:
                     delete_upload_details(uploadId, assetId)
+                    # Check if any file has largeFileAsynchronousHandling=true
+                    has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
                     return CompleteUploadResponseModel(
                         message="No files were successfully uploaded",
                         uploadId=uploadId,
                         assetId=assetId,
                         fileResults=file_results,
-                        overallSuccess=False
+                        overallSuccess=False,
+                        largeFileAsynchronousHandling=has_async_files
                     )
     
             # Copy successful files from temporary to final location
@@ -1100,7 +1368,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             bucket_name, 
             file_detail['temp_s3_key'], 
             bucket_name, 
-            file_detail['final_s3_key']
+            file_detail['final_s3_key'],
+            databaseId,
+            assetId
         )
         
         if not copy_success:
@@ -1169,6 +1439,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     # Check if all files failed
     all_files_failed = all(not result.success for result in file_results)
     
+    # Check if any file has largeFileAsynchronousHandling=true
+    has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
+    
     # Create response model
     response = CompleteUploadResponseModel(
         message="External upload completed" + (" with some failures" if has_failures else " successfully"),
@@ -1176,7 +1449,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         assetId=assetId,
         assetType=asset.get('assetType'),
         fileResults=file_results,
-        overallSuccess=not has_failures
+        overallSuccess=not has_failures,
+        largeFileAsynchronousHandling=has_async_files
     )
     
     # Return 409 status if all files failed, otherwise return 200
@@ -1265,7 +1539,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     file_results.append(FileCompletionResult(
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
-                        success=True
+                        success=True,
+                        largeFileAsynchronousHandling=False
                     ))
                     continue
                 else:
@@ -1305,7 +1580,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     file_results.append(FileCompletionResult(
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
-                        success=True
+                        success=True,
+                        largeFileAsynchronousHandling=False
                     ))
                     continue
                 else:
@@ -1318,7 +1594,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     has_failures = True
                     continue
             
-            # Regular multipart upload completion
+            # Regular multipart upload - first check file size before completing
             actual_parts = sorted([p.PartNumber for p in file.parts])
             
             # Check for duplicates in part numbers
@@ -1335,7 +1611,83 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             # Log the parts we received
             logger.info(f"Received {len(actual_parts)} parts for file {file.relativeKey}: {actual_parts}")
             
-            # Complete multipart upload in temporary location
+            # Calculate total file size by listing parts before completing upload
+            total_file_size, size_calc_success, size_calc_error = calculate_total_file_size_from_parts(
+                bucket_name, temp_s3_key, file.uploadIdS3, file.parts
+            )
+            
+            if not size_calc_success:
+                file_results.append(FileCompletionResult(
+                    relativeKey=file.relativeKey,
+                    uploadIdS3=file.uploadIdS3,
+                    success=False,
+                    error=size_calc_error
+                ))
+                has_failures = True
+                continue
+                
+            logger.info(f"File {file.relativeKey} total size: {total_file_size} bytes")
+            
+            # Check file size for preview files - both assetPreview type and .previewFile. files
+            if (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) and total_file_size > MAX_PREVIEW_FILE_SIZE:
+                # Abort the multipart upload since it exceeds the size limit
+                try:
+                    s3.abort_multipart_upload(
+                        Bucket=bucket_name,
+                        Key=temp_s3_key,
+                        UploadId=file.uploadIdS3
+                    )
+                except Exception as abort_error:
+                    logger.warning(f"Error aborting multipart upload for oversized preview file: {abort_error}")
+                
+                file_results.append(FileCompletionResult(
+                    relativeKey=file.relativeKey,
+                    uploadIdS3=file.uploadIdS3,
+                    success=False,
+                    error=f"Preview file exceeds maximum allowed size of 5MB"
+                ))
+                has_failures = True
+                continue
+            
+            # Check if file should be processed asynchronously based on size
+            process_async = should_process_asynchronously(total_file_size)
+            
+            if process_async:
+                logger.info(f"File {file.relativeKey} ({total_file_size} bytes) will be processed asynchronously")
+                
+                # Create file info for SQS message - DO NOT complete the multipart upload yet
+                file_info = {
+                    "relativeKey": file.relativeKey,
+                    "uploadIdS3": file.uploadIdS3,
+                    "parts": [{"PartNumber": p.PartNumber, "ETag": p.ETag} for p in file.parts],
+                    "tempS3Key": temp_s3_key,
+                    "finalS3Key": final_s3_key,
+                    "bucketName": bucket_name,
+                    "databaseId": databaseId,
+                    "assetId": assetId,
+                    "uploadId": uploadId,
+                    "uploadType": uploadType,
+                    "totalFileSize": total_file_size
+                }
+                
+                # Try to queue the file for asynchronous processing
+                if queue_large_file_for_processing(file_info, large_file_processing_queue_url):
+                    # Successfully queued - mark as successful with async flag
+                    # DO NOT add to successful_files since we haven't completed the upload yet
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=True,
+                        largeFileAsynchronousHandling=True
+                    ))
+                    logger.info(f"Large file {file.relativeKey} queued for asynchronous processing")
+                    continue
+                else:
+                    # Failed to queue - fall back to synchronous processing
+                    logger.warning(f"Failed to queue large file {file.relativeKey}, falling back to synchronous processing")
+                    process_async = False
+            
+            # Complete multipart upload synchronously (for small files or fallback)
             try:
                 s3.complete_multipart_upload(
                     Bucket=bucket_name,
@@ -1376,6 +1728,18 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 metadata = head_response.get('Metadata', {})
                 s3_upload_id = metadata.get('uploadid')
                 
+                # Get file size with error handling
+                file_size = 0
+                try:
+                    file_size = head_response.get('ContentLength', 0)
+                    if file_size is None:
+                        logger.warning(f"ContentLength is None for file {file.relativeKey}, defaulting to 0")
+                        file_size = 0
+                except Exception as size_error:
+                    logger.warning(f"Error getting file size for {file.relativeKey}: {size_error}")
+                    # Default to 0 for unknown file sizes (will process synchronously)
+                    file_size = 0
+                
                 # Verify the uploadId matches
                 if s3_upload_id != uploadId:
                     # Delete the uploaded file since metadata doesn't match
@@ -1391,7 +1755,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     continue
                 
                 # Check file size for preview files - both assetPreview type and .previewFile. files
-                if (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) and head_response.get('ContentLength', 0) > MAX_PREVIEW_FILE_SIZE:
+                if (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) and file_size > MAX_PREVIEW_FILE_SIZE:
                     # Delete the uploaded file since it exceeds the size limit
                     delete_s3_object(bucket_name, temp_s3_key)
                     
@@ -1403,6 +1767,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     ))
                     has_failures = True
                     continue
+                
+                # At this point, we've already completed the multipart upload synchronously
+                # (large files would have been queued earlier and continued)
                 
             except Exception as e:
                 # Delete the uploaded file since we couldn't verify metadata
@@ -1521,7 +1888,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             file_results.append(FileCompletionResult(
                 relativeKey=file.relativeKey,
                 uploadIdS3=file.uploadIdS3,
-                success=True
+                success=True,
+                largeFileAsynchronousHandling=False
             ))
             
         except Exception as e:
@@ -1548,12 +1916,15 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     # If no files were successfully uploaded, return error
     if not successful_files:
         delete_upload_details(uploadId, assetId)
+        # Check if any file has largeFileAsynchronousHandling=true
+        has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
         return CompleteUploadResponseModel(
             message="No files were successfully uploaded",
             uploadId=uploadId,
             assetId=assetId,
             fileResults=file_results,
-            overallSuccess=False
+            overallSuccess=False,
+            largeFileAsynchronousHandling=has_async_files
         )
     
     # Get the asset's specified bucket and key location
@@ -1595,12 +1966,15 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 # If no files remain successful, return error
                 if not successful_files:
                     delete_upload_details(uploadId, assetId)
+                    # Check if any file has largeFileAsynchronousHandling=true
+                    has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
                     return CompleteUploadResponseModel(
                         message="No files were successfully uploaded",
                         uploadId=uploadId,
                         assetId=assetId,
                         fileResults=file_results,
-                        overallSuccess=False
+                        overallSuccess=False,
+                        largeFileAsynchronousHandling=has_async_files
                     )
     
     # Copy successful files from temporary to final location
@@ -1612,7 +1986,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             bucket_name, 
             file_detail['temp_s3_key'], 
             bucket_name, 
-            file_detail['final_s3_key']
+            file_detail['final_s3_key'],
+            databaseId,
+            assetId
         )
         
         if not copy_success:
@@ -1681,6 +2057,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     # Check if all files failed
     all_files_failed = all(not result.success for result in file_results)
     
+    # Check if any file has largeFileAsynchronousHandling=true
+    has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
+    
     # Create response model
     response = CompleteUploadResponseModel(
         message="Upload completed" + (" with some failures" if has_failures else " successfully"),
@@ -1688,7 +2067,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         assetId=assetId,
         assetType=asset.get('assetType'),
         fileResults=file_results,
-        overallSuccess=not has_failures
+        overallSuccess=not has_failures,
+        largeFileAsynchronousHandling=has_async_files
     )
     
     # Return 409 status if all files failed, otherwise return 200

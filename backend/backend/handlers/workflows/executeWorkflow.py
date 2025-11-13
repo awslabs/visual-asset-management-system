@@ -118,56 +118,121 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
-def get_asset_metadata(databaseId, assetId, keyPrefix, event):
+def get_asset_metadata(databaseId, assetId, event):
+    """Get base asset metadata (no file prefix)"""
     try:
         l_payload = {
             "pathParameters": {
                 "databaseId": databaseId,
                 "assetId": assetId
-            }
-        }
-
-        #If keyprefix doesn't end-with a /, add additional data to get the files specific metadata too
-        if not keyPrefix.endswith("/"):
-            l_payload.update({
-                "queryStringParameters": {
-                "prefix": keyPrefix
-            }
-            })
-        
-        l_payload.update({
+            },
             "requestContext": {
                 "http": {
-                    "path": "event['requestContext']['http']['path']",
+                    "path": event['requestContext']['http']['path'],
                     "method": event['requestContext']['http']['method']
                 },
                 "authorizer": event['requestContext']['authorizer']
             }
-        })
+        }
 
-        logger.info("Fetching metadata:")
+        logger.info("Fetching base asset metadata:")
         logger.info(l_payload)
         metadata_response = _metadata_lambda(l_payload)
-        logger.info("metaData read response:")
+        logger.info("Base metadata read response:")
         logger.info(metadata_response)
         stream = metadata_response.get('Payload', "")
         response_body = {}
         if stream:
             json_response = json.loads(stream.read().decode("utf-8"))
-            logger.info("uploadAsset payload:", json_response)
+            logger.info("Base metadata payload:", json_response)
             if "body" in json_response:
                 response_body = json.loads(json_response['body'])
-
-                # if "asset" in response_body:
-                #     assets.append(response_body['asset'])
         return response_body
     except Exception as e:
-        logger.exception("Failed fetching metadata")
+        logger.exception("Failed fetching base asset metadata")
         logger.exception(e)
         return {}
 
 
-def launchWorkflow(inputAssetBucket, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, inputMetadata = {}):
+def get_file_metadata(databaseId, assetId, filePath, event):
+    """Get file-specific metadata using the file path prefix"""
+    try:
+        # Format the prefix as /assetId/path/to/file (matching fileIndexer.py pattern)
+        # The metadata is stored with keys like: assetId/path/to/file or /assetId/path/to/file
+        # We use the /assetId/path/to/file format for the prefix
+        
+        # Ensure filePath starts with /
+        if not filePath.startswith('/'):
+            filePath = '/' + filePath
+        
+        # Create the prefix with leading / before assetId
+        keyPrefix = f"{filePath}"
+        
+        l_payload = {
+            "pathParameters": {
+                "databaseId": databaseId,
+                "assetId": assetId
+            },
+            "queryStringParameters": {
+                "prefix": keyPrefix
+            },
+            "requestContext": {
+                "http": {
+                    "path": event['requestContext']['http']['path'],
+                    "method": event['requestContext']['http']['method']
+                },
+                "authorizer": event['requestContext']['authorizer']
+            }
+        }
+
+        logger.info(f"Fetching file-specific metadata with prefix: {keyPrefix}")
+        logger.info(l_payload)
+        metadata_response = _metadata_lambda(l_payload)
+        logger.info("File metadata read response:")
+        logger.info(metadata_response)
+        stream = metadata_response.get('Payload', "")
+        response_body = {}
+        if stream:
+            json_response = json.loads(stream.read().decode("utf-8"))
+            logger.info("File metadata payload:", json_response)
+            if "body" in json_response:
+                response_body = json.loads(json_response['body'])
+        return response_body
+    except Exception as e:
+        logger.exception("Failed fetching file-specific metadata")
+        logger.exception(e)
+        return {}
+
+
+def get_separate_metadata(databaseId, assetId, filePath, event):
+    """Get base asset metadata and file-specific metadata separately"""
+    try:
+        # Always get base asset metadata
+        base_metadata_response = get_asset_metadata(databaseId, assetId, event)
+        base_metadata = base_metadata_response.get("metadata", {})
+        
+        # If a file path is provided, also get file-specific metadata
+        file_metadata = {}
+        if filePath:
+            file_metadata_response = get_file_metadata(databaseId, assetId, filePath, event)
+            file_metadata = file_metadata_response.get("metadata", {})
+        
+        logger.info(f"Separate metadata - Asset metadata keys: {list(base_metadata.keys())}, File metadata keys: {list(file_metadata.keys())}")
+        
+        return {
+            "assetMetadata": base_metadata,
+            "fileMetadata": file_metadata
+        }
+    except Exception as e:
+        logger.exception("Failed fetching separate metadata")
+        logger.exception(e)
+        return {
+            "assetMetadata": {},
+            "fileMetadata": {}
+        }
+
+
+def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, inputMetadata = {}):
 
     logger.info("Launching workflow with arn: "+workflow_arn)
 
@@ -176,7 +241,7 @@ def launchWorkflow(inputAssetBucket, inputAssetFileKey, workflow_arn, database_i
 
     response = sfn_client.start_execution(
         stateMachineArn=workflow_arn,
-        input=json.dumps({'bucketAsset': inputAssetBucket, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
+        input=json.dumps({'bucketAsset': inputAssetBucket, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetLocationKey': inputAssetLocationKey, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
                           'assetId': asset_id, 'inputMetadata': json.dumps(inputMetadata), 'workflowDatabaseId': workflow_database_id,
                           'workflowId': workflow_id, 'executingUserName': executingUserName, 'executingRequestContext': executingRequestContext})
     )
@@ -466,24 +531,33 @@ def lambda_handler(event, context):
                             
                             # Determine which file key to use
                             # If fileKey is provided in request body, use it, otherwise use asset's base prefix key
-                            file_key = asset['assetLocation']['Key']
+                            asset_file_key = asset['assetLocation']['Key']
                             
                             # Get bucket name from bucketId using get_default_bucket_details
                             bucketDetails = get_default_bucket_details(asset['bucketId'])
                             asset_bucket = bucketDetails['bucketName']
                             
+                            file_key = asset_file_key
+                            relative_file_path = None
                             if request_body and 'fileKey' in request_body:
                                 file_key = resolve_asset_file_path(file_key, request_body['fileKey'])
-                                logger.info(f"Using file key from request: {file_key}")
+                                # Extract relative path for metadata lookup
+                                relative_file_path = request_body['fileKey']
+                                logger.info(f"Using file key from request: {file_key}, relative path: {relative_file_path}")
                             else:
                                 logger.info(f"Using asset's base prefix key (no particular file): {file_key}")
                             
-                            metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], file_key, event)
-                            metadata = metadataResponse.get("metadata", {})
+                            # Get separate metadata (base asset + file-specific separately)
+                            metadata_result = get_separate_metadata(pathParams['databaseId'], pathParams['assetId'], relative_file_path, event)
+                            
+                            asset_metadata = metadata_result.get("assetMetadata", {})
+                            file_metadata = metadata_result.get("fileMetadata", {})
 
-                            #remove databaseId/assetId from metadata if exists
-                            metadata.pop('databaseId', None)
-                            metadata.pop('assetId', None)
+                            # Remove databaseId/assetId from both metadata dictionaries if they exist
+                            asset_metadata.pop('databaseId', None)
+                            asset_metadata.pop('assetId', None)
+                            file_metadata.pop('databaseId', None)
+                            file_metadata.pop('assetId', None)
 
                             inputMetadata = {
                                 "VAMS": {
@@ -492,13 +566,14 @@ def lambda_handler(event, context):
                                         "description": asset.get("description", ""),
                                         "tags": asset.get("tags", [])
                                     },
-                                    "assetMetadata": metadata
+                                    "assetMetadata": asset_metadata,
+                                    "fileMetadata": file_metadata
                                 },
                                 #"User": {}
                             }
 
                             logger.info("Launching Workflow:")
-                            executionId = launchWorkflow(asset_bucket, file_key, workflow['workflow_arn'], pathParams['databaseId'],
+                            executionId = launchWorkflow(asset_bucket, asset_file_key, file_key, workflow['workflow_arn'], pathParams['databaseId'],
                                                          pathParams['assetId'], request_body.get('workflowDatabaseId'), workflow['workflowId'],
                                                          executingUserName, executingRequestContext, inputMetadata)
                             response["statusCode"] = 200

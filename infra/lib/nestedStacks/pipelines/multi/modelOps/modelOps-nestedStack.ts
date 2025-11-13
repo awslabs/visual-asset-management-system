@@ -22,6 +22,7 @@ export interface ModelOpsNestedStackProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
+    importGlobalPipelineWorkflowFunctionName: string;
 }
 
 /**
@@ -45,6 +46,8 @@ export class ModelOpsNestedStack extends NestedStack {
             pipelineSubnetsIsolated: props.pipelineSubnetsIsolated,
             pipelineSecurityGroups: props.pipelineSecurityGroups,
             lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+            importGlobalPipelineWorkflowFunctionName:
+                props.importGlobalPipelineWorkflowFunctionName,
         });
 
         this.pipelineVamsLambdaFunctionName =

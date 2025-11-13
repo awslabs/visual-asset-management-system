@@ -49,24 +49,16 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                     zIndex: 1,
                 }}
             >
-                <SpaceBetween direction="horizontal" size="xs">
-                    <Button iconName="refresh" onClick={() => setReload(true)}>
-                        Refresh
-                    </Button>
-                    <Button
-                        variant={"primary"}
-                        onClick={() => {
-                            // Call the parent's onExecuteWorkflow function
-                            onExecuteWorkflow();
-                            // Set hasIncompleteJobs to true to start the auto-refresh timer
-                            setHasIncompleteJobs(true);
-                            // Trigger an immediate refresh
-                            setReload(true);
-                        }}
-                    >
-                        Execute Workflow
-                    </Button>
-                </SpaceBetween>
+                <Button
+                    variant={"primary"}
+                    onClick={() => {
+                        // Call the parent's onExecuteWorkflow function to open the modal
+                        // The refresh will be triggered by the refreshTrigger prop when the workflow completes
+                        onExecuteWorkflow();
+                    }}
+                >
+                    Execute Workflow
+                </Button>
             </div>
         );
     };
@@ -181,6 +173,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                         }
 
                         // Now add workflows and their executions in the correct order
+                        // Only add workflows that have executions
                         for (let i = 0; i < workflows.length; i++) {
                             const workflow = workflows[i];
                             // Make sure workflowId is a string
@@ -194,24 +187,29 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                             console.log(`Workflow ${i} workflowId:`, workflowId);
                             console.log(`Workflow ${i} workflowDatabaseId:`, workflowDatabaseId);
 
-                            // Add the workflow parent row
-                            const newParentRow = Object.assign({}, workflow);
-
-                            // Set the name property to the workflowKey for unique identification
-                            // This is what child executions will reference in their parentId
-                            newParentRow.name = workflowKey;
-
-                            // Set a displayName property that will be shown in the UI
-                            newParentRow.displayName = `${workflowId} (${workflowDatabaseId})`;
-                            newRows.push(newParentRow);
-
-                            // Add all executions for this workflow
+                            // Get executions for this workflow
                             const workflowExecutions = workflowMap.get(workflowKey) || [];
                             console.log(
                                 `Executions for workflow ${workflowKey}:`,
                                 workflowExecutions
                             );
-                            newRows.push(...workflowExecutions);
+
+                            // Only add workflow if it has executions
+                            if (workflowExecutions.length > 0) {
+                                // Add the workflow parent row
+                                const newParentRow = Object.assign({}, workflow);
+
+                                // Set the name property to the workflowKey for unique identification
+                                // This is what child executions will reference in their parentId
+                                newParentRow.name = workflowKey;
+
+                                // Set a displayName property that will be shown in the UI
+                                newParentRow.displayName = `${workflowId} (${workflowDatabaseId})`;
+                                newRows.push(newParentRow);
+
+                                // Add all executions for this workflow
+                                newRows.push(...workflowExecutions);
+                            }
                         }
 
                         console.log("Final newRows:", newRows);
@@ -313,6 +311,8 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                     databaseId={databaseId}
                     setReload={setReload}
                     parentId={"parentId"}
+                    defaultSortingColumn="startDate"
+                    defaultSortingDescending={true}
                     //@ts-ignore
                     HeaderControls={WorkflowHeaderControls}
                 />

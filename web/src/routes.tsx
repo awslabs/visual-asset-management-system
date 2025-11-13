@@ -14,7 +14,6 @@ import { useNavigate } from "react-router";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
-//const Assets = React.lazy(() => import("./pages/Assets")); //Deprecated
 const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload/AssetUpload"));
 const ViewAsset = React.lazy(() => import("./components/asset/ViewAsset"));
 const Pipelines = React.lazy(() => import("./pages/Pipelines"));
@@ -285,6 +284,8 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                         navigationOpen={navigationOpen}
                         onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}
                         toolsHide={true}
+                        maxContentWidth={Number.MAX_SAFE_INTEGER}
+                        contentType="default"
                     />
                 }
             />

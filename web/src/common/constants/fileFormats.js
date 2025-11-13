@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export const audioFileFormats = [".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"];
-export const videoFileFormats = [".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v"];
+// File formats used for asset filtering and pipeline configuration
 export const pcFileFormats = [".e57", ".las", ".laz", ".ply"];
 export const cadFileFormats = [
     ".step",
@@ -37,13 +36,12 @@ export const modelFileFormats = [
 ];
 export const columnarFileFormats = [".rds", ".fcs", ".csv"];
 export const imageFileFormats = [".png", ".jpg", ".jpeg", ".svg", ".gif"];
-export const previewFileFormats = imageFileFormats;
 export const archiveFileFormats = [".zip"];
-//html files are view-only, should not be made available for upload or as sources in pipeline
-//there may be a need in some cases to output notes on the pipeline execution
-//future state could add txt and rename from "presentation"
-export const presentationFileFormats = [".html"];
 
+// Still used by upload components and file preview functionality
+export const previewFileFormats = imageFileFormats;
+
+// Still used by AssetSelector for filtering
 export const onlineViewer3DFileFormats = [
     ".3dm",
     ".3ds",
@@ -57,7 +55,7 @@ export const onlineViewer3DFileFormats = [
     ".stl",
     ".obj",
     ".off",
-    //".ply" //- Excluded as it will be shown on the point clouder viewer instead
+    //".ply" //- Excluded as it will be shown on the point cloud viewer instead
     ".wrl",
     //".fcstd", //- Excluded by default due to license restrictive sub-library use. Enable if you accept this license. Install the appropriate library listed in documentation.
     //".ifc", //- Excluded by default due to license restrictive sub-library use. Enable if you accept this license. Install the appropriate library listed in documentation.
@@ -67,18 +65,6 @@ export const onlineViewer3DFileFormats = [
     //".brep", //- Excluded by default due to license restrictive sub-library use. Enable if you accept this license. Install the appropriate library listed in documentation.
 ];
 
-export const FILE_FORMATS = {
-    CAD: cadFileFormats,
-    PRINT: [],
-    VR: [],
-    PC: pcFileFormats,
-    IMAGE: imageFileFormats,
-    MODEL: modelFileFormats,
-    ONLINE_3D_VIEWER: onlineViewer3DFileFormats,
-    COLUMNAR: columnarFileFormats,
-    PREVIEW: previewFileFormats,
-    ARCHIVE: archiveFileFormats,
-    PRESENTATION: presentationFileFormats,
-    VIDEO: videoFileFormats,
-    AUDIO: audioFileFormats,
-};
+// Note: Audio, video, presentation, and online3D viewer file formats are now
+// defined in the visualizer plugin system configuration (viewerConfig.json)
+// and no longer need to be maintained here.

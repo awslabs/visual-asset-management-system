@@ -49,7 +49,6 @@ export class CognitoWebNativeConstructStack extends Construct {
     public identityPoolId: string;
     public webClientId: string;
     public nativeClientId: string;
-    public authenticatedRole: iam.Role;
     public unauthenticatedRole: iam.Role;
 
     constructor(parent: Construct, name: string, props: CognitoWebNativeConstructStackProps) {
@@ -82,8 +81,10 @@ export class CognitoWebNativeConstructStack extends Construct {
         );
         globalLambdaEnvironmentsAndPermissions(preTokenGeneration, props.config);
 
-        const message =
-            "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is:  {####}  ";
+        const messageVerification =
+            "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is: {####}";
+        const messageInvitation =
+            "Hello, You have been registered to join the Visual Asset Management System! Your username is {username} and your temporary password is: {####}";
         const userPool = new cognito.UserPool(this, "UserPool", {
             selfSignUpEnabled: false,
             autoVerify: { email: true },
@@ -95,10 +96,14 @@ export class CognitoWebNativeConstructStack extends Construct {
             },
             accountRecovery: cognito.AccountRecovery.PHONE_WITHOUT_MFA_AND_EMAIL,
             userVerification: {
-                emailSubject: "Verify your email with Visual Asset Management System!",
-                emailBody: message,
+                emailSubject: "Visual Asset Management System - Email Verification",
+                emailBody: messageVerification,
                 emailStyle: cognito.VerificationEmailStyle.CODE,
-                smsMessage: message,
+                smsMessage: messageVerification,
+            },
+            userInvitation: {
+                emailSubject: "Visual Asset Management System - Registration",
+                emailBody: messageInvitation,
             },
             passwordPolicy: {
                 minLength: 8,
@@ -195,9 +200,8 @@ export class CognitoWebNativeConstructStack extends Construct {
         });
 
         const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
-                const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
-        const cognitoIdentityAudString = cognitoIdentityPrincipal+":aud";
-        const cognitoIdentityAmrString = cognitoIdentityPrincipal+":amr";
+        const cognitoIdentityAudString = cognitoIdentityPrincipal + ":aud";
+        const cognitoIdentityAmrString = cognitoIdentityPrincipal + ":amr";
         const unauthenticatedRole = new iam.Role(this, "DefaultUnauthenticatedRole", {
             assumedBy: new iam.FederatedPrincipal(
                 cognitoIdentityPrincipal,
@@ -213,34 +217,13 @@ export class CognitoWebNativeConstructStack extends Construct {
             ),
         });
 
-        const authenticatedRole = this.createAuthenticatedRole(
-            "DefaultAuthenticatedRole",
-            identityPool,
-            props
-        );
-
         const defaultPolicy = new cognito.CfnIdentityPoolRoleAttachment(
             this,
             "IdentityPoolRoleAttachment",
             {
                 identityPoolId: identityPool.ref,
-                // Disabled due to using Classic Auth Flow which doesn't support roleMappings
-                // Instead this should be handled in in s3scopedaccess
-                /*
-                roleMappings: {
-                    default: {
-                        type: "Token",
-                        ambiguousRoleResolution: "AuthenticatedRole",
-                        identityProvider: `${Service("COGNITO_IDP", false).Endpoint}/${
-                            //Don't use fips endpoints here due to RoleMapping ProviderName error
-                            userPool.userPoolId
-                        }:${userPoolWebClient.userPoolClientId}`,
-                    },
-                },
-                */
                 roles: {
                     unauthenticated: unauthenticatedRole.roleArn,
-                    authenticated: authenticatedRole.roleArn,
                 },
             }
         );
@@ -304,7 +287,6 @@ export class CognitoWebNativeConstructStack extends Construct {
         // assign public properties
         this.userPool = userPool;
         this.webClientUserPool = userPoolWebClient;
-        this.authenticatedRole = authenticatedRole;
         this.unauthenticatedRole = unauthenticatedRole;
         this.userPoolId = userPool.userPoolId;
         this.identityPoolId = identityPool.ref;
@@ -322,36 +304,4 @@ export class CognitoWebNativeConstructStack extends Construct {
             true
         );
     }
-
-        private createAuthenticatedRole(
-        id: string,
-        identityPool: cognito.CfnIdentityPool,
-        props: CognitoWebNativeConstructStackProps
-    ) {
-        const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
-        const cognitoIdentityAudString = cognitoIdentityPrincipal+":aud";
-        const cognitoIdentityAmrString = cognitoIdentityPrincipal+":amr";
-        const authenticatedRole = new iam.Role(this, id, {
-            assumedBy: new iam.FederatedPrincipal(
-                cognitoIdentityPrincipal,
-                {
-                    StringEquals: {
-                        [cognitoIdentityAudString]: identityPool.ref,
-                    },
-                    "ForAnyValue:StringLike": {
-                        [cognitoIdentityAmrString]: "authenticated",
-                    },
-                },
-                "sts:AssumeRoleWithWebIdentity"
-            ),
-            maxSessionDuration: cdk.Duration.seconds(
-                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
-            ),
-        });
-
-        return authenticatedRole;
-    }
-            maxSessionDuration: cdk.Duration.seconds(
-                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
-            ),
-        })
+}

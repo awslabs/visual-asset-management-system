@@ -24,6 +24,7 @@ interface TabbedContainerProps {
     loadingFiles: boolean;
     onExecuteWorkflow: () => void;
     onWorkflowExecuted?: () => void; // Callback when workflow execution is complete
+    filePathToNavigate?: string; // Optional file path to navigate to in File Manager
 }
 
 export const TabbedContainer: React.FC<TabbedContainerProps> = ({
@@ -34,7 +35,9 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     loadingFiles,
     onExecuteWorkflow,
     onWorkflowExecuted,
+    filePathToNavigate,
 }) => {
+    // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
     const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
 
@@ -67,6 +70,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                         databaseId={databaseId}
                                         loading={loadingFiles}
                                         onExecuteWorkflow={onExecuteWorkflow} // Keeping prop for compatibility
+                                        filePathToNavigate={filePathToNavigate}
                                     />
                                 </Suspense>
                             ),

@@ -12,6 +12,8 @@ import {
     Grid,
     SpaceBetween,
     TextContent,
+    Alert,
+    Icon,
 } from "@cloudscape-design/components";
 import { useParams } from "react-router";
 import TableList from "../components/list/TableList";
@@ -33,32 +35,45 @@ export default function ListPage(props) {
         onCreateCallback,
         isRelatedTable,
         editEnabled,
+        hideDeleteButton = false,
     } = props;
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState([]);
+    const [error, setError] = useState(null);
 
     const [openNewElement, setOpenNewElement] = useState(false);
 
     useEffect(() => {
         const getData = async () => {
             setLoading(true);
-            let items;
-            if (databaseId !== undefined) {
-                // This handles both specific database IDs and Global
-                items = await fetchElements({ databaseId: databaseId });
-            } else {
-                // This is for the main pipelines page showing all pipelines
-                items = await fetchAllElements();
-            }
+            setError(null);
+            try {
+                let items;
+                if (databaseId !== undefined) {
+                    // This handles both specific database IDs and Global
+                    items = await fetchElements({ databaseId: databaseId });
+                } else {
+                    // This is for the main pipelines page showing all pipelines
+                    items = await fetchAllElements();
+                }
 
-            if (items !== false && Array.isArray(items)) {
+                if (items !== false && Array.isArray(items)) {
+                    setAllItems(
+                        //@todo fix workflow delete return
+                        items.filter((item) => item.databaseId.indexOf("#deleted") === -1)
+                    );
+                } else {
+                    setError("Failed to load data. Please try refreshing.");
+                }
+            } catch (err) {
+                console.error("Error loading data:", err);
+                setError(
+                    err.message || "An error occurred while loading data. Please try refreshing."
+                );
+            } finally {
                 setLoading(false);
                 setReload(false);
-                setAllItems(
-                    //@todo fix workflow delete return
-                    items.filter((item) => item.databaseId.indexOf("#deleted") === -1)
-                );
             }
         };
         if (reload) {
@@ -69,6 +84,10 @@ export default function ListPage(props) {
     const handleOpenNewElement = () => {
         if (onCreateCallback) onCreateCallback();
         else if (CreateNewElement) setOpenNewElement(true);
+    };
+
+    const handleRefresh = () => {
+        setReload(true);
     };
 
     return (
@@ -87,7 +106,7 @@ export default function ListPage(props) {
                         ariaLabel="Breadcrumbs"
                     />
                 )}
-                <Grid gridDefinition={[{ colspan: { default: "6" } }]}>
+                <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
                     <div>
                         <TextContent>
                             <h1>
@@ -98,6 +117,20 @@ export default function ListPage(props) {
                     </div>
                 </Grid>
                 <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
+                    {error && (
+                        <Alert
+                            type="error"
+                            dismissible
+                            onDismiss={() => setError(null)}
+                            action={
+                                <Button onClick={handleRefresh} iconName="refresh">
+                                    Retry
+                                </Button>
+                            }
+                        >
+                            {error}
+                        </Alert>
+                    )}
                     {isRelatedTable && (
                         <RelatedTableList
                             allItems={allItems}
@@ -115,6 +148,7 @@ export default function ListPage(props) {
                         editEnabled={editEnabled}
                         setReload={setReload}
                         UpdateSelectedElement={CreateNewElement}
+                        hideDeleteButton={hideDeleteButton}
                         createNewElement={
                             (CreateNewElement || onCreateCallback) && (
                                 <div style={{ float: "right" }}>
@@ -153,4 +187,5 @@ ListPage.propTypes = {
     onCreateCallback: PropTypes.func,
     isRelatedTable: PropTypes.bool,
     editEnabled: PropTypes.bool,
+    hideDeleteButton: PropTypes.bool,
 };

@@ -1,0 +1,14 @@
+{
+    "name": "cesium-custom-install",
+    "version": "1.0.0",
+    "description": "Cesium Viewer Custom Installation",
+    "license": "Apache-2.0",
+    "author": "",
+    "type": "commonjs",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "dependencies": {
+        "cesium": "1.118.0"
+    }
+}

@@ -170,7 +170,7 @@ class CreatePipeline():
 
         if 'lambdaName' in body and body.get('lambdaName', "") != "":
             userResource['isProvided'] = True
-            userResource['resourceId'] = body['lambdaName']
+            userResource['resourceId'] = body['lambdaName'].strip() #Strip whitespace
 
         #Create new lambda function if one not provided
         if userResource['isProvided'] == False:

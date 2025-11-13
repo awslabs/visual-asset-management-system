@@ -21,6 +21,7 @@ export interface CreateAssetLinkRequest {
     toAssetId: string;
     toAssetDatabaseId: string;
     relationshipType: "related" | "parentChild";
+    assetLinkAliasId?: string;
     tags?: string[];
 }
 
@@ -88,6 +89,7 @@ export interface FileCompletionResult {
     uploadIdS3: string;
     success: boolean;
     error?: string;
+    largeFileAsynchronousHandling?: boolean;
 }
 
 export interface CompleteUploadResponse {
@@ -98,6 +100,7 @@ export interface CompleteUploadResponse {
     version?: string;
     fileResults: FileCompletionResult[];
     overallSuccess: boolean;
+    largeFileAsynchronousHandling?: boolean;
 }
 
 export class AssetUploadService {

@@ -4,37 +4,30 @@
 import os
 import boto3
 import botocore
+from botocore.exceptions import ClientError
+from botocore.config import Config
 import json
 import datetime
-import os
 import uuid
 import random
 import string
 from common.validators import validate
 from common.constants import STANDARD_JSON_RESPONSE
+from common.stepfunctions_builder import (
+    create_lambda_task_state,
+    create_fail_state,
+    create_retry_config,
+    create_catch_config,
+    create_workflow_definition,
+    create_state_machine,
+    update_state_machine
+)
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-
-import stepfunctions
-from stepfunctions.steps import (
-    Chain,
-    ProcessingStep,
-    LambdaStep
-)
-from stepfunctions.workflow import Workflow
-
-# ########################################### NOTE############################################
-# Due to the unique library imports of stepfunctions, this function is assigned
-# its own lambda layer due to library sizes (close to the 250mb layer limit by itself).
-# --------------------------------------------------------------------------------------------
-# Please be cautious of adding anymore new library references, including downstream references
-# when importing VAMS common files that use other libraries.
-# ############################################################################################
+from models.common import VAMSGeneralErrorResponse
 
 # Set boto environment variable to use regional STS endpoint
-# (https://stackoverflow.com/questions/71255594/request-times-out-when-try-to-assume-a-role-with-aws-sts-from-a-private-subnet-u)
-# AWS_STS_REGIONAL_ENDPOINTS='regional'
 os.environ["AWS_STS_REGIONAL_ENDPOINTS"] = 'regional'
 
 logger = safeLogger(service="CreateWorkflow")
@@ -42,10 +35,18 @@ logger = safeLogger(service="CreateWorkflow")
 main_rest_response = STANDARD_JSON_RESPONSE
 
 claims_and_roles = {}
-lambda_client= boto3.client('lambda')
-sf_client = boto3.client('stepfunctions')
-#sts_client = boto3.client('sts')
-dynamodb = boto3.resource('dynamodb')
+
+# Configure AWS clients with retry configuration
+retry_config = Config(
+    retries={
+        'max_attempts': 5,
+        'mode': 'adaptive'
+    }
+)
+
+lambda_client = boto3.client('lambda', config=retry_config)
+sf_client = boto3.client('stepfunctions', config=retry_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 
 try:
     workflow_Database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
@@ -54,11 +55,10 @@ try:
     region = os.environ['AWS_REGION']
     role = os.environ['LAMBDA_ROLE_ARN']
     logGroupArn = os.environ['LOG_GROUP_ARN']
-except:
+except Exception as e:
     logger.exception("Failed loading environment variables")
-    main_rest_response['body'] = json.dumps({
-        "message": "Failed Loading Environment Variables"
-    })
+    raise e
+
 
 def generate_random_string(length=8):
     """Generates a random character alphanumeric string with a set input length."""
@@ -66,251 +66,426 @@ def generate_random_string(length=8):
     return ''.join(random.choice(chars) for i in range(length))
 
 
-def create_workflow(payload):
-    workflow_arn = create_step_function(
-        payload['specifiedPipelines']['functions'], payload['databaseId'], payload['workflowId'])
-    table = dynamodb.Table(workflow_Database)
-    logger.info("Payload")
-    logger.info(payload)
-    dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
-    Item = {
-        'databaseId': payload['databaseId'],
-        'workflowId': payload['workflowId'],
-        'description': payload['description'],
-        'specifiedPipelines': payload['specifiedPipelines'],
-        'workflow_arn': workflow_arn,
-        'dateCreated': json.dumps(dtNow),
-    }
-    table.put_item(
-        Item=Item
-    )
-    return json.dumps({"message": 'Succeeded'})
+def get_existing_workflow(database_id, workflow_id):
+    """
+    Check if workflow already exists in DynamoDB.
+    
+    Args:
+        database_id: Database ID
+        workflow_id: Workflow ID
+        
+    Returns:
+        Existing workflow item or None
+        
+    Raises:
+        VAMSGeneralErrorResponse: On database errors
+    """
+    try:
+        table = dynamodb.Table(workflow_Database)
+        response = table.get_item(
+            Key={
+                'databaseId': database_id,
+                'workflowId': workflow_id
+            }
+        )
+        return response.get('Item')
+    except ClientError as e:
+        logger.exception(f"Error checking existing workflow for {workflow_id}: {e}")
+        raise VAMSGeneralErrorResponse("Error checking workflow existence")
+    except Exception as e:
+        logger.exception(f"Error checking existing workflow for {workflow_id}: {e}")
+        raise VAMSGeneralErrorResponse("Error checking workflow existence")
 
-def create_step_function(pipelines, databaseId, workflowId):
-    logger.info("Creating state machine flow")
 
-    # Generate unique names for Pre-Processing Job, Training Job, and Model Evaluation Job for the Step Functions Workflow
+def verify_state_machine_exists(workflow_arn):
+    """
+    Verify if Step Functions state machine still exists.
+    
+    Args:
+        workflow_arn: ARN of the state machine
+        
+    Returns:
+        True if exists, False otherwise
+    """
+    try:
+        sf_client.describe_state_machine(stateMachineArn=workflow_arn)
+        logger.info(f"State machine exists: {workflow_arn}")
+        return True
+    except sf_client.exceptions.StateMachineDoesNotExist:
+        logger.warn(f"State machine does not exist: {workflow_arn}")
+        return False
+    except Exception as e:
+        logger.exception(f"Error verifying state machine existence for {workflow_arn}: {e}")
+        return False
+
+
+def generate_workflow_asl(pipelines, databaseId, workflowId):
+    """
+    Generate the ASL workflow definition for a workflow.
+    
+    Args:
+        pipelines: List of pipeline configurations
+        databaseId: Database ID for the workflow
+        workflowId: Workflow ID
+        
+    Returns:
+        Tuple of (workflow_definition dict, job_names list)
+    """
+    logger.info("Generating workflow ASL definition")
+
+    # Generate unique names for each pipeline job
+    # Trim UID to first 5 chars, place in front of pipeline name, then trim to 80 chars
     job_names = [
-        # Each Training Job requires a unique name
-        x['name'] + "-{}".format(uuid.uuid1().hex) for x in pipelines
+        (uuid.uuid1().hex[:5] + "-" + x['name'])[:80] for x in pipelines
     ]
-    logger.info(job_names)
+    logger.info(f"Generated job names: {job_names}")
 
-    # Step function failed state
-    failed_state_processing_failure = stepfunctions.steps.states.Fail(
-        "Workflow failed", cause="WorkflowProcessingJobFailed"
+    # Create failure state
+    failed_state_id = "WorkflowProcessingJobFailed"
+    failed_state = create_fail_state(
+        state_id=failed_state_id,
+        cause="WorkflowProcessingJobFailed",
+        error="States.TaskFailed"
     )
 
-    catch_state_processing = stepfunctions.steps.states.Catch(
+    # Create catch configuration that points to failure state
+    catch_config = [create_catch_config(
         error_equals=["States.TaskFailed"],
-        next_step=failed_state_processing_failure,
+        next_state=failed_state_id
+    )]
+
+    # Create retry configuration
+    retry_config = create_retry_config(
+        error_equals=["States.ALL"],
+        interval_seconds=5,
+        backoff_rate=2.0,
+        max_attempts=3
     )
 
+    # Generate GLOBAL output paths (shared by ALL pipelines)
+    # Use the FIRST pipeline's name for the global output location
+    first_pipeline_name = pipelines[0]['name']
+    first_job_name = job_names[0]
+    
+    global_output_s3_asset_files_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/files/', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_preview_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/previews/', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/metadata/', $.bucketAsset, $$.Execution.Name)"
 
-
-    steps = []
+    # Build list of pipeline states
+    states = []
+    
     for i, pipeline in enumerate(pipelines):
-
         assetAuxiliaryAssetSubFolderName = "pipelines"
         if pipeline.get('pipelineType', 'standardFile') == 'previewFile':
             assetAuxiliaryAssetSubFolderName = "preview"
 
-        output_s3_asset_files_uri = "States.Format('s3://{}/pipelines/" + \
-                pipeline["name"] + "/" + job_names[i] + "/output/{}/files/', $.bucketAsset, $$.Execution.Name)"
+        inputOutput_s3_assetAuxiliary_files_uri = f"States.Format('s3://{{}}/{{}}/{assetAuxiliaryAssetSubFolderName}/{pipeline['name']}/', $.bucketAssetAuxiliary, $.inputAssetFileKey)"
 
-        output_s3_asset_preview_uri = "States.Format('s3://{}/pipelines/" + \
-                pipeline["name"] + "/" + job_names[i] + "/output/{}/previews/', $.bucketAsset, $$.Execution.Name)"
-
-        output_s3_asset_metadata_uri = "States.Format('s3://{}/pipelines/" + \
-                pipeline["name"] + "/" + job_names[i] + "/output/{}/metadata/', $.bucketAsset, $$.Execution.Name)"
-
-        inputOutput_s3_assetAuxiliary_files_uri = "States.Format('s3://{}/{}/" + \
-               assetAuxiliaryAssetSubFolderName + "/" + pipeline["name"] + "/', $.bucketAssetAuxiliary, $.inputAssetFileKey)"
-
+        # First pipeline uses original input, subsequent pipelines use global output paths
         if i == 0:
             input_s3_asset_uri = "States.Format('s3://{}/{}', $.bucketAsset, $.inputAssetFileKey)"
         else:
-            input_s3_asset_uri = output_s3_asset_files_uri
+            input_s3_asset_uri = global_output_s3_asset_files_uri
 
-        logger.info(output_s3_asset_files_uri)
+        logger.info(f"Processing pipeline {i}: {pipeline['name']}")
+        
         if ('pipelineExecutionType' in pipeline and pipeline['pipelineExecutionType'] == 'Lambda'):
-            step = create_lambda_step(pipeline, input_s3_asset_uri, output_s3_asset_files_uri, output_s3_asset_preview_uri, output_s3_asset_metadata_uri, inputOutput_s3_assetAuxiliary_files_uri)
-            step.add_retry(retry=stepfunctions.steps.Retry(
-                error_equals=["States.ALL"],
-                interval_seconds=5,
-                backoff_rate=2,
-                max_attempts=3
-            ))
-            step.add_catch(catch_state_processing)
-            logger.info(step)
-            steps.append(step)
+            # Create Lambda step
+            # Trim UID to first 5 chars, place in front of pipeline name, then trim to 80 chars
+            lambda_state_id = (uuid.uuid1().hex[:5] + "-" + pipeline['name'])[:80]
+            
+            # Build callback configuration
+            callback_config = {}
+            if 'waitForCallback' in pipeline and pipeline['waitForCallback'] == 'Enabled':
+                callback_config['wait_for_callback'] = True
+                
+                if 'taskTimeout' in pipeline and pipeline['taskTimeout'].isdigit() and int(pipeline['taskTimeout']) > 0:
+                    callback_config['timeout_seconds'] = int(pipeline['taskTimeout'])
+                
+                if 'taskHeartbeatTimeout' in pipeline and pipeline['taskHeartbeatTimeout'].isdigit() and int(pipeline['taskHeartbeatTimeout']) > 0:
+                    callback_config['heartbeat_seconds'] = int(pipeline['taskHeartbeatTimeout'])
 
-        #For standard pipelines executed on a file, add a upload asset step at the end of the workflow
-        #TODO: Make this global after a workflow as right now its being added after pipeline component
-        l_payload = {
-            "body": {
-                "databaseId.$": "$.databaseId",
-                "assetId.$": "$.assetId",
-                "workflowDatabaseId.$": "$.workflowDatabaseId",
-                "workflowId.$": "$.workflowId",
-                "filesPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
-                    i] + "/output/{}/files/', $$.Execution.Name)",
-                "metadataPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
-                    i] + "/output/{}/metadata/', $$.Execution.Name)",
-                "previewPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
-                    i] + "/output/{}/previews/', $$.Execution.Name)",
-                "description": f'Output from {pipeline["name"]}',
-                "executionId.$": "$$.Execution.Name",
-                "pipeline": pipeline["name"],
-                "outputType": pipeline["outputType"],
-                "executingUserName.$": "$.executingUserName",
-                "executingRequestContext.$": "$.executingRequestContext"
+            # Parse user-provided resource
+            userResource = json.loads(pipeline['userProvidedResource'])
+            functionName = userResource['resourceId']
+
+            # Check for input parameters
+            inputParameters = ''
+            if 'inputParameters' in pipeline and pipeline["inputParameters"] is not None and pipeline["inputParameters"] != "":
+                try:
+                    json.loads(pipeline['inputParameters'])
+                    inputParameters = pipeline['inputParameters']
+                except json.decoder.JSONDecodeError:
+                    logger.warn("Input parameters provided is not a JSON object.... skipping inclusion")
+
+            # Build Lambda payload with GLOBAL output paths (shared by all pipelines)
+            lambda_payload = {
+                "body": {
+                    "inputS3AssetFilePath.$": input_s3_asset_uri,
+                    "outputS3AssetFilesPath.$": global_output_s3_asset_files_uri,
+                    "outputS3AssetPreviewPath.$": global_output_s3_asset_preview_uri,
+                    "outputS3AssetMetadataPath.$": global_output_s3_asset_metadata_uri,
+                    "inputOutputS3AssetAuxiliaryFilesPath.$": inputOutput_s3_assetAuxiliary_files_uri,
+                    "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
+                    "bucketAsset.$": "$.bucketAsset",
+                    "inputAssetFileKey.$": "$.inputAssetFileKey",
+                    "inputAssetLocationKey.$": "$.inputAssetLocationKey",
+                    "outputType": pipeline["outputType"],
+                    "inputMetadata.$": "$.inputMetadata",
+                    "inputParameters": inputParameters,
+                    "executingUserName.$": "$.executingUserName",
+                    "executingRequestContext.$": "$.executingRequestContext"
+                }
             }
-        }
 
-        steps.append(LambdaStep(
-            state_id="process-outputs-{}".format(uuid.uuid1().hex),
-            parameters={
-                "FunctionName": process_workflow_output_function,  # replace with the name of your function
-                "Payload": l_payload
-            }
-        ))
+            # Add TaskToken if callback is enabled
+            if callback_config.get('wait_for_callback'):
+                lambda_payload['body']['TaskToken.$'] = "$$.Task.Token"
 
-    #Generate unique name for the Step Functions Workflow with randomization
-    #Workflow name must have 'vams' in it for permissiong
-    # Make sure workFlowName is not longer than 80 characters
-    workFlowName = workflowId
-    if len(workFlowName) > 66:
-        workFlowName = workFlowName[-66:]  # use 66 characters
-    workFlowName = workFlowName + generate_random_string(8)
-    workFlowName = "vams-"+ workFlowName
-    if len(workFlowName) > 80:
-        workFlowName = workFlowName[-79:]  # use 79 characters for buffer
+            # Create the Lambda task state
+            lambda_state = create_lambda_task_state(
+                state_id=lambda_state_id,
+                function_name=functionName,
+                payload=lambda_payload,
+                result_path=f"$.{lambda_state_id}.output",
+                wait_for_callback=callback_config.get('wait_for_callback', False),
+                timeout_seconds=callback_config.get('timeout_seconds'),
+                heartbeat_seconds=callback_config.get('heartbeat_seconds'),
+                retry_config=retry_config,
+                catch_config=catch_config
+            )
+            
+            states.append((lambda_state_id, lambda_state))
 
-    workflow_graph = Chain(steps)
-
-    branching_workflow = Workflow(
-        name=workFlowName,
-        definition=workflow_graph,
-        role=role
-    )
-
-    logger.info("Submitting state machine flow 1")
-
-    workflow_arn = branching_workflow.create()
-    response = sf_client.describe_state_machine(
-        stateMachineArn=workflow_arn
-    )
-
-    original_workflow = json.loads(response['definition'])
-    for i, step_name in enumerate(original_workflow["States"]):
-        try:
-
-            if original_workflow["States"][step_name]["Type"] == "Task":
-                outputResultPath = "$." + step_name + ".output"
-                original_workflow["States"][step_name]["ResultPath"] = outputResultPath
-
-            pipelineName = step_name.split("-")[0]
-            original_workflow["States"][step_name]["Parameters"].pop(
-                "ProcessingJobName")
-            # Two jobs can't have the same name, appending job name with ExecutionId
-            original_workflow["States"][step_name]["Parameters"][
-                "ProcessingJobName.$"] = "States.Format('" + pipelineName + "-" + str(
-                i) + "-{}', $$.Execution.Name)"
-
-            original_workflow["States"][step_name]["Parameters"]["ProcessingInputs"][0]['S3Input']["S3Uri.$"] = \
-                original_workflow["States"][step_name]["Parameters"]["ProcessingInputs"][0]['S3Input'].pop(
-                    "S3Uri")
-
-            original_workflow["States"][step_name]["Parameters"]["ProcessingOutputConfig"]['Outputs'][0]['S3Output'][
-                "S3Uri.$"] = \
-                original_workflow["States"][step_name]["Parameters"]["ProcessingOutputConfig"]['Outputs'][0][
-                    'S3Output'].pop(
-                    "S3Uri")
-
-        except KeyError:
-            continue
-
-    new_workflow = json.dumps(original_workflow, indent=2)
-
-    logger.info("Submitting state machine flow 2")
-
-    sf_client.update_state_machine(
-        stateMachineArn=workflow_arn,
-        definition=new_workflow,
-        roleArn=role,
-        loggingConfiguration={
-            'destinations': [{
-                'cloudWatchLogsLogGroup': {
-                    'logGroupArn': logGroupArn
-                }}],
-            'level': 'ALL'
-        },
-        tracingConfiguration={
-            'enabled': True
-        }
-    )
-    logger.info("State machine created successfully")
-    return workflow_arn
-
-
-def create_lambda_step(pipeline, input_s3_asset_file_uri, output_s3_asset_files_uri, output_s3_asset_preview_uri, output_s3_asset_metadata_uri, inputOutput_s3_assetAuxiliary_files_uri):
-
-    userResource = json.loads(pipeline['userProvidedResource'])
-    functionName = userResource['resourceId']
-
-    #Check if we have inputParameters in pipeline and if so, check to make sure we can JSON parse them
-    inputParameters = ''
-    if 'inputParameters' in pipeline and pipeline["inputParameters"] != None and pipeline["inputParameters"] != "":
-        try:
-            json.loads(pipeline['inputParameters'])
-            inputParameters = pipeline['inputParameters']
-        except json.decoder.JSONDecodeError:
-            logger.warn("Input parameters provided is not a JSON object.... skipping inclusion")
-
-    #TODO: Generate Presigned URLs for download to S3. Create function / API for pipelines to call to generate upload URLs. More secure and extensible.
-    lambda_payload = {
+    # Create SINGLE process output state (runs ONCE after ALL pipelines complete)
+    # Use the LAST pipeline's information for the process output
+    last_pipeline = pipelines[-1]
+    last_job_name = job_names[-1]
+    
+    process_output_state_id = f"process-outputs-{uuid.uuid1().hex}"
+    process_output_payload = {
         "body": {
-            "inputS3AssetFilePath.$": input_s3_asset_file_uri,
-            "outputS3AssetFilesPath.$": output_s3_asset_files_uri,
-            "outputS3AssetPreviewPath.$": output_s3_asset_preview_uri,
-            "outputS3AssetMetadataPath.$": output_s3_asset_metadata_uri,
-            "inputOutputS3AssetAuxiliaryFilesPath.$": inputOutput_s3_assetAuxiliary_files_uri,
-            "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
-            "bucketAsset.$": "$.bucketAsset",
-            "inputAssetFileKey.$": "$.inputAssetFileKey",
-            "outputType": pipeline["outputType"],           
-            "inputMetadata.$": "$.inputMetadata",
-            "inputParameters": inputParameters,
+            "databaseId.$": "$.databaseId",
+            "assetId.$": "$.assetId",
+            "workflowDatabaseId.$": "$.workflowDatabaseId",
+            "workflowId.$": "$.workflowId",
+            "assetLocationKey.$": "$.inputAssetLocationKey",
+            "filesPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/files/', $$.Execution.Name)",
+            "metadataPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/metadata/', $$.Execution.Name)",
+            "previewPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/previews/', $$.Execution.Name)",
+            "description": f'Output from {last_job_name}',
+            "executionId.$": "$$.Execution.Name",
+            "pipeline": last_pipeline['name'],
+            "outputType": last_pipeline["outputType"],
             "executingUserName.$": "$.executingUserName",
             "executingRequestContext.$": "$.executingRequestContext"
         }
     }
 
-    callback_args = {}
-    if 'waitForCallback' in pipeline and pipeline['waitForCallback'] == 'Enabled':
-        callback_args['wait_for_callback'] = True
-
-        #Add taskToken parameter to lambda payload
-        lambda_payload['body']['TaskToken.$'] = "$$.Task.Token"
-
-        f = 'taskTimeout'
-        if f in pipeline and pipeline[f].isdigit() and int(pipeline[f]) > 0:
-            callback_args['timeout_seconds'] = int(pipeline[f])
-
-        f = 'taskHeartbeatTimeout'
-        if f in pipeline and pipeline[f].isdigit() and int(pipeline[f]) > 0:
-            callback_args['heartbeat_seconds'] = int(pipeline[f])
-
-    return LambdaStep(
-        state_id="{}-{}".format(pipeline['name'], uuid.uuid1().hex),
-        parameters={
-            # replace with the name of your function
-            "FunctionName": functionName,
-            "Payload": lambda_payload
-        },
-        **callback_args,
+    process_output_state = create_lambda_task_state(
+        state_id=process_output_state_id,
+        function_name=process_workflow_output_function,
+        payload=process_output_payload,
+        result_path=f"$.{process_output_state_id}.output",
+        retry_config=retry_config,
+        catch_config=catch_config
     )
+    
+    # Add the single process_output state to the states list
+    states.append((process_output_state_id, process_output_state))
+
+    # Create the complete workflow definition (without fail state in sequential flow)
+    workflow_definition = create_workflow_definition(
+        states=states,
+        comment=f"VAMS Pipeline Workflow for {workflowId}"
+    )
+    
+    # Add the failure state to States dict (reachable only via Catch handlers)
+    workflow_definition["States"][failed_state_id] = failed_state
+
+    return workflow_definition, job_names
+
+
+def create_step_function_new(pipelines, databaseId, workflowId):
+    """
+    Create a NEW Step Functions state machine.
+    
+    Args:
+        pipelines: List of pipeline configurations
+        databaseId: Database ID for the workflow
+        workflowId: Workflow ID
+        
+    Returns:
+        ARN of the created state machine
+        
+    Raises:
+        VAMSGeneralErrorResponse: On errors
+    """
+    logger.info(f"Creating NEW state machine for workflow: {workflowId}")
+    
+    try:
+        # Generate workflow definition
+        workflow_definition, job_names = generate_workflow_asl(pipelines, databaseId, workflowId)
+        
+        # Generate unique name for the Step Functions Workflow
+        # Workflow name must have 'vams' in it for permissions
+        # Make sure workFlowName is not longer than 80 characters
+        workFlowName = workflowId
+        if len(workFlowName) > 66:
+            workFlowName = workFlowName[-66:]
+        workFlowName = workFlowName + generate_random_string(8)
+        workFlowName = "vams-" + workFlowName
+        if len(workFlowName) > 80:
+            workFlowName = workFlowName[-79:]
+        
+        logger.info(f"Creating state machine with name: {workFlowName}")
+        
+        # Create the state machine
+        workflow_arn = create_state_machine(
+            sf_client=sf_client,
+            name=workFlowName,
+            definition=workflow_definition,
+            role_arn=role,
+            log_group_arn=logGroupArn,
+            state_machine_type='STANDARD'
+        )
+        
+        logger.info(f"State machine created successfully: {workflow_arn}")
+        return workflow_arn
+        
+    except Exception as e:
+        logger.exception(f"Error creating state machine for workflow {workflowId}: {e}")
+        raise VAMSGeneralErrorResponse("Error creating workflow state machine")
+
+
+def update_step_function_existing(existing_arn, pipelines, databaseId, workflowId):
+    """
+    Update an EXISTING Step Functions state machine.
+    
+    Args:
+        existing_arn: ARN of existing state machine
+        pipelines: List of pipeline configurations
+        databaseId: Database ID for the workflow
+        workflowId: Workflow ID
+        
+    Returns:
+        ARN of the updated state machine (same as input)
+        
+    Raises:
+        VAMSGeneralErrorResponse: On errors
+    """
+    logger.info(f"Updating EXISTING state machine: {existing_arn}")
+    
+    try:
+        # Generate workflow definition (same logic as create)
+        workflow_definition, job_names = generate_workflow_asl(pipelines, databaseId, workflowId)
+        
+        # Update the existing state machine
+        update_state_machine(
+            sf_client=sf_client,
+            state_machine_arn=existing_arn,
+            definition=workflow_definition,
+            role_arn=role,
+            log_group_arn=logGroupArn
+        )
+        
+        logger.info(f"State machine updated successfully: {existing_arn}")
+        return existing_arn
+        
+    except Exception as e:
+        logger.exception(f"Error updating state machine {existing_arn}: {e}")
+        raise VAMSGeneralErrorResponse("Error updating workflow state machine")
+
+
+def create_workflow(payload):
+    """
+    Create or update a workflow.
+    
+    Handles three scenarios:
+    1. New workflow - Creates new state machine and DynamoDB record
+    2. Update existing - Updates state machine definition (preserves execution history)
+    3. Orphaned record - Creates new state machine if old one was deleted
+    
+    Args:
+        payload: Workflow creation/update payload
+        
+    Returns:
+        JSON success message
+        
+    Raises:
+        VAMSGeneralErrorResponse: On errors
+    """
+    database_id = payload['databaseId']
+    workflow_id = payload['workflowId']
+    pipelines = payload['specifiedPipelines']['functions']
+    
+    # Check if workflow already exists in DynamoDB
+    existing_workflow = get_existing_workflow(database_id, workflow_id)
+    
+    workflow_arn = None
+    is_update = False
+    
+    if existing_workflow and 'workflow_arn' in existing_workflow:
+        # Workflow exists - check if state machine still exists
+        existing_arn = existing_workflow['workflow_arn']
+        logger.info(f"Found existing workflow with ARN: {existing_arn}")
+        
+        if verify_state_machine_exists(existing_arn):
+            # UPDATE existing state machine (preserves execution history)
+            logger.info(f"Updating existing workflow: {workflow_id}")
+            workflow_arn = update_step_function_existing(
+                existing_arn,
+                pipelines,
+                database_id,
+                workflow_id
+            )
+            is_update = True
+        else:
+            # State machine was deleted - CREATE new one
+            logger.info(f"State machine {existing_arn} not found, creating new one")
+            workflow_arn = create_step_function_new(pipelines, database_id, workflow_id)
+    else:
+        # New workflow - CREATE
+        logger.info(f"Creating new workflow: {workflow_id}")
+        workflow_arn = create_step_function_new(pipelines, database_id, workflow_id)
+    
+    # Update DynamoDB record
+    try:
+        table = dynamodb.Table(workflow_Database)
+        dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
+        
+        # Get username from claims_and_roles tokens array
+        username = claims_and_roles["tokens"][0] if len(claims_and_roles.get("tokens", [])) > 0 else "system"
+        
+        Item = {
+            'databaseId': database_id,
+            'workflowId': workflow_id,
+            'description': payload['description'],
+            'specifiedPipelines': payload['specifiedPipelines'],
+            'workflow_arn': workflow_arn,
+            'dateModified': json.dumps(dtNow),
+            'modifiedBy': username
+        }
+        
+        # Preserve dateCreated for updates
+        if existing_workflow:
+            Item['dateCreated'] = existing_workflow.get('dateCreated', json.dumps(dtNow))
+        else:
+            Item['dateCreated'] = json.dumps(dtNow)
+        
+        table.put_item(Item=Item)
+        
+        action = "updated" if is_update else "created"
+        logger.info(f"Workflow {action} by {username}: {workflow_id}")
+        
+        return json.dumps({"message": 'Succeeded'})
+        
+    except ClientError as e:
+        logger.exception(f"Error saving workflow {workflow_id} to DynamoDB: {e}")
+        raise VAMSGeneralErrorResponse("Error saving workflow")
+    except Exception as e:
+        logger.exception(f"Error saving workflow {workflow_id} to DynamoDB: {e}")
+        raise VAMSGeneralErrorResponse("Error saving workflow")
 
 
 def lambda_handler(event, context):
@@ -335,7 +510,7 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": "Invalid JSON in request body"})
             return response
-    # event['body']=json.loads(event['body'])
+
     try:
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
@@ -356,6 +531,14 @@ def lambda_handler(event, context):
                 response['statusCode'] = 400
                 response['body'] = json.dumps({"message": message})
                 logger.info(response['body'])
+                return response
+            
+            # Validate that functions array exists and is not empty
+            if 'functions' not in event['body']['specifiedPipelines'] or len(event['body']['specifiedPipelines']['functions']) == 0:
+                message = "No pipeline functions specified in API Call"
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": message})
+                logger.error(response)
                 return response
 
             pipelineArray = []
@@ -389,8 +572,7 @@ def lambda_handler(event, context):
                     response['body'] = json.dumps({"message": "Not Authorized to read the pipeline"})
                     return response
 
-            # Check for missing fields - TODO: would need to keep these synchronized
-            #
+            # Check for missing fields
             required_field_names = ['databaseId', 'workflowId', 'description']
             missing_field_names = list(set(required_field_names).difference(event['body']))
             if missing_field_names:
@@ -425,7 +607,7 @@ def lambda_handler(event, context):
                 response['statusCode'] = 400
                 return response
 
-            logger.info("Trying to get Data")
+            logger.info("Validating workflow authorization")
             workflow_allowed = False
             # Add Casbin Enforcer to check if the current user has permissions to PUT the workflow:
             workflow = {
@@ -450,6 +632,11 @@ def lambda_handler(event, context):
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Not Authorized"})
             return response
+    except VAMSGeneralErrorResponse as v:
+        logger.exception("VAMS error in workflow creation. ")
+        response['statusCode'] = 500
+        response['body'] = json.dumps({"message": str(v)})
+        return response
     except botocore.exceptions.ClientError as err:
         if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException':
             logger.exception("Throttling Error")
@@ -457,12 +644,12 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": "ThrottlingException: Too many requests within a given period."})
             return response
         else:
-            logger.exception(err)
+            logger.exception("AWS Client Error")
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})
             return response
     except Exception as e:
-        logger.exception(e)
+        logger.exception("Internal error in workflow creation")
         response['statusCode'] = 500
         response['body'] = json.dumps({"message": "Internal Server Error"})
         return response

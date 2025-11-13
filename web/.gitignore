@@ -5,8 +5,10 @@
 /.pnp
 .pnp.js
 
-/customInstalls/potree/source
-/public/potree_libs
+/customInstalls/*/source
+/customInstalls/*/dist
+/customInstalls/*/node_modules
+/public/viewers/*
 
 # testing
 /coverage

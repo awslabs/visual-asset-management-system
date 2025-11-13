@@ -27,6 +27,22 @@ except:
 
 def create_tag_type(body):
     table = dynamodb.Table(tag_type_db_table_name)
+    
+    # Check if tag type already exists
+    try:
+        existing_tag_type = table.get_item(
+            Key={'tagTypeName': body["tagTypeName"]}
+        )
+        if 'Item' in existing_tag_type:
+            response = STANDARD_JSON_RESPONSE
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Tag type already exists."})
+            return response
+    except Exception as e:
+        # If the error is not about the item not existing, re-raise it
+        if hasattr(e, 'response') and e.response.get('Error', {}).get('Code') != 'ResourceNotFoundException':
+            raise e
+    
     item = {
         "tagTypeName": body["tagTypeName"],
         "description": body["description"],

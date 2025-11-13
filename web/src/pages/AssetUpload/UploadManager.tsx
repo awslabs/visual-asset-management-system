@@ -68,6 +68,7 @@ interface UploadState {
     hasFailedParts: boolean;
     hasSkippedParts: boolean;
     assetLinksErrors: string[];
+    largeFileAsynchronousHandling: boolean;
 }
 
 interface FilePart {
@@ -114,6 +115,7 @@ export default function UploadManager({
         hasFailedParts: false,
         hasSkippedParts: false,
         assetLinksErrors: [],
+        largeFileAsynchronousHandling: false,
     });
 
     const [fileParts, setFileParts] = useState<FilePart[]>([]);
@@ -710,6 +712,9 @@ export default function UploadManager({
                                 toAssetId: assetId,
                                 toAssetDatabaseId: assetDetail.databaseId || "",
                                 relationshipType: "parentChild",
+                                ...(parentAsset.assetLinkAliasId
+                                    ? { assetLinkAliasId: parentAsset.assetLinkAliasId }
+                                    : {}),
                             })
                                 .then((response) => {
                                     console.log("Parent link created successfully:", response);
@@ -748,6 +753,9 @@ export default function UploadManager({
                                 toAssetId: childAsset.assetId,
                                 toAssetDatabaseId: childAsset.databaseId,
                                 relationshipType: "parentChild",
+                                ...(childAsset.assetLinkAliasId
+                                    ? { assetLinkAliasId: childAsset.assetLinkAliasId }
+                                    : {}),
                             })
                                 .then((response) => {
                                     console.log("Child link created successfully:", response);
@@ -872,45 +880,46 @@ export default function UploadManager({
                             }
                         } else {
                             console.log(
-                                `No metadata found for asset ${link.assetId} in relationship ${link.relationshipType}`
+                                `No metadata in originalAsset for ${link.assetId}, checking fallback structure`
                             );
-                        }
 
-                        // Also check the assetLinksMetadata structure as fallback
-                        if (assetDetail.assetLinksMetadata) {
-                            const fallbackMetadata =
-                                assetDetail.assetLinksMetadata[
-                                    link.relationshipType as keyof typeof assetDetail.assetLinksMetadata
-                                ]?.[link.assetId];
+                            // Only check fallback if originalAsset didn't have metadata
+                            if (assetDetail.assetLinksMetadata) {
+                                const fallbackMetadata =
+                                    assetDetail.assetLinksMetadata[
+                                        link.relationshipType as keyof typeof assetDetail.assetLinksMetadata
+                                    ]?.[link.assetId];
 
-                            if (fallbackMetadata && fallbackMetadata.length > 0) {
-                                console.log(
-                                    `Creating metadata for link ${link.assetLinkId} from fallback structure:`,
-                                    fallbackMetadata
-                                );
-                                for (const metadataItem of fallbackMetadata) {
-                                    metadataPromises.push(
-                                        AssetUploadService.createAssetLinkMetadata(
-                                            link.assetLinkId,
-                                            {
-                                                metadataKey: metadataItem.metadataKey,
-                                                metadataValue: metadataItem.metadataValue,
-                                                metadataValueType: metadataItem.metadataValueType,
-                                            }
-                                        )
-                                            .then((response) => {
-                                                console.log(
-                                                    `Asset link metadata created successfully for ${link.assetLinkId} (fallback):`,
-                                                    response
-                                                );
-                                                return response;
-                                            })
-                                            .catch((error) => {
-                                                const errorMsg = `Asset link metadata creation failed for ${link.assetLinkId} (fallback): ${error.message}`;
-                                                errors.push(errorMsg);
-                                                console.error(errorMsg, error);
-                                            })
+                                if (fallbackMetadata && fallbackMetadata.length > 0) {
+                                    console.log(
+                                        `Creating metadata for link ${link.assetLinkId} from fallback structure:`,
+                                        fallbackMetadata
                                     );
+                                    for (const metadataItem of fallbackMetadata) {
+                                        metadataPromises.push(
+                                            AssetUploadService.createAssetLinkMetadata(
+                                                link.assetLinkId,
+                                                {
+                                                    metadataKey: metadataItem.metadataKey,
+                                                    metadataValue: metadataItem.metadataValue,
+                                                    metadataValueType:
+                                                        metadataItem.metadataValueType,
+                                                }
+                                            )
+                                                .then((response) => {
+                                                    console.log(
+                                                        `Asset link metadata created successfully for ${link.assetLinkId} (fallback):`,
+                                                        response
+                                                    );
+                                                    return response;
+                                                })
+                                                .catch((error) => {
+                                                    const errorMsg = `Asset link metadata creation failed for ${link.assetLinkId} (fallback): ${error.message}`;
+                                                    errors.push(errorMsg);
+                                                    console.error(errorMsg, error);
+                                                })
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -1498,6 +1507,10 @@ export default function UploadManager({
 
             console.log("Completion response:", JSON.stringify(response, null, 2));
 
+            // Extract the largeFileAsynchronousHandling field from the response
+            const hasLargeFileProcessing = response.largeFileAsynchronousHandling === true;
+            console.log("Large file asynchronous handling:", hasLargeFileProcessing);
+
             // Check if the response indicates partial failure (overallSuccess is false)
             const hasPartialFailure = response.overallSuccess === false;
             const failedFiles = response.fileResults?.filter((file) => !file.success) || [];
@@ -1513,6 +1526,7 @@ export default function UploadManager({
                 setUploadState((prev) => ({
                     ...prev,
                     completionStatus: "completed",
+                    largeFileAsynchronousHandling: hasLargeFileProcessing,
                     errors: [
                         ...prev.errors,
                         {
@@ -1526,6 +1540,7 @@ export default function UploadManager({
                 const modifiedResponse = {
                     ...response,
                     message: response.message + " (Preview file upload failed)",
+                    largeFileAsynchronousHandling: hasLargeFileProcessing,
                 };
                 onUploadComplete(modifiedResponse);
             } else if (hasPartialFailure) {
@@ -1540,6 +1555,7 @@ export default function UploadManager({
                 setUploadState((prev) => ({
                     ...prev,
                     completionStatus: allFilesFailed ? "failed" : "partial",
+                    largeFileAsynchronousHandling: hasLargeFileProcessing,
                     errors: [...prev.errors, ...failedFileErrors],
                     hasFailedParts: true,
                 }));
@@ -1547,7 +1563,11 @@ export default function UploadManager({
                 // Call onUploadComplete with the response
                 onUploadComplete(response);
             } else {
-                setUploadState((prev) => ({ ...prev, completionStatus: "completed" }));
+                setUploadState((prev) => ({
+                    ...prev,
+                    completionStatus: "completed",
+                    largeFileAsynchronousHandling: hasLargeFileProcessing,
+                }));
                 onUploadComplete(response);
             }
 

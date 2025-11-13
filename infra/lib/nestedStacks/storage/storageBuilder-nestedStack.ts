@@ -521,6 +521,18 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
+    assetStorageTable.addGlobalSecondaryIndex({
+        indexName: "assetIdGSI",
+        partitionKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
     const databaseStorageTable = new dynamodb.Table(scope, "DatabaseStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -701,6 +713,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             name: "assetLinkId",
             type: dynamodb.AttributeType.STRING,
         },
+        stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
     assetLinksStorageTableV2.addGlobalSecondaryIndex({
@@ -740,6 +753,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                 name: "metadataKey",
                 type: dynamodb.AttributeType.STRING,
             },
+            stream: dynamodb.StreamViewType.NEW_IMAGE,
         }
     );
 

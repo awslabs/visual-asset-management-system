@@ -18,16 +18,17 @@ import {
 } from "@cloudscape-design/components";
 import { useState, useEffect } from "react";
 import { API } from "aws-amplify";
-import { StringDictionary } from "babylonjs";
 import OptionDefinition from "./form-definitions/types/OptionDefinition";
 import {
-    fileTypeOptions,
     pipelineTypeOptions,
     pipelineExecutionTypeOptions,
 } from "./form-definitions/PipelineFormDefinition";
 import DatabaseSelector from "../selectors/DatabaseSelector";
 import { dataBind } from "jodit/types/core/helpers";
 import { check } from "prettier";
+
+// Type definition for string dictionary (was imported from babylonjs)
+type StringDictionary = { [key: string]: string };
 
 interface CreatePipelineProps {
     open: boolean;
@@ -47,8 +48,8 @@ interface PipelineFields {
     taskHeartbeatTimeout: string;
     lambdaName: string;
     description: string;
-    assetType: OptionDefinition;
-    outputType: OptionDefinition;
+    assetType: string;
+    outputType: string;
     inputParameters: string;
 }
 
@@ -105,8 +106,8 @@ export default function CreatePipeline({
         taskHeartbeatTimeout: "",
         lambdaName: "",
         description: "",
-        assetType: fileTypeOptions[0],
-        outputType: fileTypeOptions[0],
+        assetType: initState?.assetType || ".all",
+        outputType: initState?.outputType || ".all",
         inputParameters: "",
         ...initState,
     });
@@ -125,14 +126,8 @@ export default function CreatePipeline({
             label: waitForCallbackOptions[0].label,
             value: waitForCallbackOptions[0].value,
         };
-        let initAssetType: OptionDefinition = {
-            label: fileTypeOptions[0].label,
-            value: fileTypeOptions[0].value,
-        };
-        let initOutputType: OptionDefinition = {
-            label: fileTypeOptions[0].label,
-            value: fileTypeOptions[0].value,
-        };
+        let initAssetType: string = ".all";
+        let initOutputType: string = ".all";
         let initDatabase: OptionDefinition = { label: null, value: null };
         let initLambdaName: string = "";
 
@@ -145,10 +140,8 @@ export default function CreatePipeline({
             initPipelineExecutionType = { label: type?.label, value: type?.value };
             type = waitForCallbackOptions.find((item) => item.value === initState.waitForCallback);
             initWaitForCallback = { label: type?.label, value: type?.value };
-            type = fileTypeOptions.find((item) => item.value === initState.assetType);
-            initAssetType = { label: type?.label, value: type?.value };
-            type = fileTypeOptions.find((item) => item.value === initState.outputType);
-            initOutputType = { label: type?.label, value: type?.value };
+            initAssetType = initState.assetType || ".all";
+            initOutputType = initState.outputType || ".all";
             initDatabase = { label: initState.databaseId, value: initState.databaseId };
             let obj = JSON.parse(initState.userProvidedResource);
             initLambdaName = obj.resourceId;
@@ -187,20 +180,6 @@ export default function CreatePipeline({
         }));
     };
 
-    const handleInputTypeChange = (e: any) => {
-        setFormState((prev) => ({
-            ...prev,
-            assetType: e.detail.selectedOption,
-        }));
-    };
-
-    const handleOutputTypeChange = (e: any) => {
-        setFormState((prev) => ({
-            ...prev,
-            outputType: e.detail.selectedOption,
-        }));
-    };
-
     const handleDatabaseChange = (e: any) => {
         setFormState((prev) => ({
             ...prev,
@@ -224,8 +203,8 @@ export default function CreatePipeline({
         taskHeartbeatTimeout: "",
         lambdaName: "",
         description: "",
-        assetType: fileTypeOptions[0],
-        outputType: fileTypeOptions[0],
+        assetType: initState?.assetType || ".all",
+        outputType: initState?.outputType || ".all",
         inputParameters: "",
         ...initState,
     });
@@ -245,8 +224,8 @@ export default function CreatePipeline({
                         taskHeartbeatTimeout: "",
                         lambdaName: "",
                         description: "",
-                        assetType: fileTypeOptions[0],
-                        outputType: fileTypeOptions[0],
+                        assetType: ".all",
+                        outputType: ".all",
                         inputParameters: "",
                         ...initState,
                     });
@@ -271,8 +250,8 @@ export default function CreatePipeline({
                                         taskHeartbeatTimeout: "",
                                         lambdaName: "",
                                         description: "",
-                                        assetType: fileTypeOptions[0],
-                                        outputType: fileTypeOptions[0],
+                                        assetType: ".all",
+                                        outputType: ".all",
                                         inputParameters: "",
                                     });
                                     setFormError("");
@@ -298,8 +277,8 @@ export default function CreatePipeline({
                                                     formState.taskHeartbeatTimeout,
                                                 lambdaName: formState.lambdaName,
                                                 description: formState.description,
-                                                assetType: formState.assetType.value,
-                                                outputType: formState.outputType.value,
+                                                assetType: formState.assetType,
+                                                outputType: formState.outputType,
                                                 inputParameters: formState.inputParameters,
                                                 updateAssociatedWorkflows: false,
                                             },
@@ -328,7 +307,9 @@ export default function CreatePipeline({
                                     !(
                                         validatePipelineName(formState.pipelineId) === null &&
                                         validatePipelineDescriptionLength(formState.description) ===
-                                            null
+                                            null &&
+                                        formState.assetType.trim() !== "" &&
+                                        formState.outputType.trim() !== ""
                                     )
                                 }
                                 data-testid={`${createOrUpdate}-pipeline-button`}
@@ -489,24 +470,42 @@ export default function CreatePipeline({
                                     data-testid="pipeline-desc"
                                 />
                             </FormField>
-                            <FormField label="Asset Type">
-                                <Select
-                                    options={fileTypeOptions}
-                                    selectedOption={formState.assetType}
-                                    onChange={handleInputTypeChange}
-                                    filteringType="auto"
-                                    selectedAriaLabel="Selected"
-                                    data-testid="inputFileType-select"
+                            <FormField
+                                label="Asset Type"
+                                constraintText="Required. Specify the asset type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used. Does not restrict pipeline use as part of VAMS execution."
+                                errorText={
+                                    formState.assetType.trim() === ""
+                                        ? "Asset Type is required"
+                                        : null
+                                }
+                            >
+                                <Input
+                                    value={formState.assetType}
+                                    disabled={inProgress}
+                                    onChange={({ detail }) =>
+                                        setFormState({ ...formState, assetType: detail.value })
+                                    }
+                                    placeholder=".all"
+                                    data-testid="inputFileType-input"
                                 />
                             </FormField>
-                            <FormField label="Output Type">
-                                <Select
-                                    options={fileTypeOptions}
-                                    selectedOption={formState.outputType}
-                                    onChange={handleOutputTypeChange}
-                                    filteringType="auto"
-                                    selectedAriaLabel="Selected"
-                                    data-testid="outputFileType-select"
+                            <FormField
+                                label="Output Type"
+                                constraintText="Required. Specify the output type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used."
+                                errorText={
+                                    formState.outputType.trim() === ""
+                                        ? "Output Type is required"
+                                        : null
+                                }
+                            >
+                                <Input
+                                    value={formState.outputType}
+                                    disabled={inProgress}
+                                    onChange={({ detail }) =>
+                                        setFormState({ ...formState, outputType: detail.value })
+                                    }
+                                    placeholder=".all"
+                                    data-testid="outputFileType-input"
                                 />
                             </FormField>
                             <FormField label="Input Parameters (Optional)">
@@ -555,8 +554,8 @@ export default function CreatePipeline({
                                                 taskHeartbeatTimeout: pipeline.taskHeartbeatTimeout,
                                                 lambdaName: pipeline.lambdaName,
                                                 description: pipeline.description,
-                                                assetType: pipeline.assetType.value,
-                                                outputType: pipeline.outputType.value,
+                                                assetType: pipeline.assetType,
+                                                outputType: pipeline.outputType,
                                                 inputParameters: pipeline.inputParameters,
                                                 updateAssociatedWorkflows: true,
                                             },
@@ -591,8 +590,8 @@ export default function CreatePipeline({
                                                 taskHeartbeatTimeout: pipeline.taskHeartbeatTimeout,
                                                 lambdaName: pipeline.lambdaName,
                                                 description: pipeline.description,
-                                                assetType: pipeline.assetType.value,
-                                                outputType: pipeline.outputType.value,
+                                                assetType: pipeline.assetType,
+                                                outputType: pipeline.outputType,
                                                 inputParameters: pipeline.inputParameters,
                                                 updateAssociatedWorkflows: false,
                                             },

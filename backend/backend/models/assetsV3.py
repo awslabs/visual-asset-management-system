@@ -49,17 +49,25 @@ class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for creating a new asset (metadata only)"""
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     assetId: Optional[str] = Field(None, min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
-    s3AssetBucket: Optional[str] = None
     assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     isDistributable: bool
     tags: Optional[list[str]] = []
-    bucketExistingKey: Optional[str] = None  # Optional existing key in the S3 bucket
+    bucketExistingKey: Optional[str] = None  # Optional existing key in the database default S3 bucket
 
     @root_validator
     def validate_fields(cls, values):
         #Validate fields that require more scrutiny past the basic data type (str, bool, etc.) or custom validation logic
         logger.info("Validating custom parameters")
+        
+        # Validate assetId doesn't contain forward slashes
+        asset_id = values.get('assetId', None)
+        if asset_id and '/' in asset_id:
+            message = "Asset identifier cannot contain forward slashes"
+            logger.error(message)
+            raise ValueError(message)
+        
+        # Validate tags
         (valid, message) = validate({
             'tags': {
                 'value': values.get('tags'), 
@@ -220,8 +228,9 @@ class CompleteUploadRequestModel(BaseModel, extra=Extra.ignore):
             logger.error(message)
             raise ValueError(message)
             
-        # Check for duplicate uploadIds
-        upload_ids = [file.uploadIdS3 for file in values.get('files', [])]
+        # Check for duplicate uploadIds, but allow "zero-byte" to be duplicated
+        # (multiple zero-byte files all get uploadIdS3="zero-byte" from initialization)
+        upload_ids = [file.uploadIdS3 for file in values.get('files', []) if file.uploadIdS3 != "zero-byte"]
         if len(upload_ids) != len(set(upload_ids)):
             message = "Duplicate uploadIdS3 values are not allowed"
             logger.error(message)
@@ -249,6 +258,7 @@ class FileCompletionResult(BaseModel, extra=Extra.ignore):
     uploadIdS3: str
     success: bool
     error: Optional[str] = None
+    largeFileAsynchronousHandling: bool = False
 
 class ExternalFileModel(BaseModel, extra=Extra.ignore):
     """Model for an external file in a completion request"""
@@ -293,6 +303,7 @@ class CompleteUploadResponseModel(BaseModel, extra=Extra.ignore):
     assetType: Optional[str] = None
     fileResults: List[FileCompletionResult] = []
     overallSuccess: bool = True
+    largeFileAsynchronousHandling: bool = False
 
 ######################## Create Folder API Models ##########################
 class CreateFolderRequestModel(BaseModel, extra=Extra.ignore):
@@ -593,6 +604,7 @@ class IngestAssetCompleteResponseModel(BaseModel, extra=Extra.ignore):
     assetId: str
     fileResults: List[FileCompletionResult] = []
     overallSuccess: bool = True
+    largeFileAsynchronousHandling: bool = False
 
 ######################## Asset Service API Models ##########################
 class GetAssetRequestModel(BaseModel, extra=Extra.ignore):

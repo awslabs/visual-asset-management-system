@@ -1,10 +1,12 @@
 import { createContext, useContext, useEffect, useReducer, useState } from "react";
 import { useParams } from "react-router";
+import { Alert } from "@cloudscape-design/components";
 import { AssetDetailContext, AssetDetailContextType } from "../../context/AssetDetailContext";
 import { fetchAssetS3Files } from "../../services/AssetVersionService";
 import AssetPreviewModal from "./modals/AssetPreviewModal";
 import { DirectoryTree, FileManagerContext } from "./components/FileTreeView";
 import { FileDetailsPanel } from "./components/FileDetailsPanel";
+import { ResizableSplitter } from "./components/ResizableSplitter";
 import {
     FileKey,
     FileManagerState,
@@ -16,7 +18,11 @@ import { fileManagerReducer } from "./utils/FileManagerReducer";
 import "./EnhancedFileManager.css";
 
 // Main Component
-export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFileManagerProps) {
+export function EnhancedFileManager({
+    assetName,
+    assetFiles = [],
+    filePathToNavigate,
+}: EnhancedFileManagerProps) {
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
 
@@ -71,8 +77,31 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFile
             const fileTree = addFiles(filteredFiles, initialState.fileTree);
             dispatch({ type: "FETCH_SUCCESS", payload: fileTree });
 
-            // If there's exactly 1 file, select it by default
-            if (
+            // Handle file path navigation if provided
+            if (filePathToNavigate) {
+                // Find the file in the tree by path
+                const targetFile = getRootByPath(fileTree, filePathToNavigate);
+
+                if (targetFile) {
+                    // Select the file
+                    dispatch({ type: "SELECT_ITEM", payload: { item: targetFile } });
+                } else {
+                    // File not found - show non-blocking error
+                    dispatch({
+                        type: "SET_ERROR",
+                        payload: `File path "${filePathToNavigate}" does not exist in this asset.`,
+                    });
+
+                    // Clear error after 5 seconds
+                    setTimeout(() => {
+                        dispatch({ type: "CLEAR_ERROR", payload: null });
+                    }, 5000);
+
+                    // Still select root so user can browse
+                    dispatch({ type: "SELECT_ITEM", payload: { item: fileTree } });
+                }
+            } else if (
+                // If there's exactly 1 file, select it by default
                 assetFiles.length === 1 &&
                 !assetFiles[0].isFolder &&
                 !assetFiles[0].key.endsWith("/")
@@ -98,7 +127,7 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFile
         } else {
             dispatch({ type: "FETCH_SUCCESS", payload: initialState.fileTree });
         }
-    }, [assetFiles]);
+    }, [assetFiles, filePathToNavigate]);
 
     // Handle refreshing files when refreshTrigger changes
     useEffect(() => {
@@ -213,13 +242,26 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFile
 
     return (
         <FileManagerContext.Provider value={{ state, dispatch }}>
+            {/* Non-blocking error alert */}
+            {state.error && (
+                <Alert
+                    type="warning"
+                    dismissible
+                    onDismiss={() => dispatch({ type: "CLEAR_ERROR", payload: null })}
+                    header="File Navigation"
+                >
+                    {state.error}
+                </Alert>
+            )}
+
             <div className="enhanced-file-manager">
-                <div className="file-manager-tree">
-                    <DirectoryTree />
-                </div>
-                <div className="file-manager-info">
-                    <FileDetailsPanel />
-                </div>
+                <ResizableSplitter
+                    leftPanel={<DirectoryTree />}
+                    rightPanel={<FileDetailsPanel />}
+                    initialLeftWidth={300}
+                    minLeftWidth={250}
+                    maxLeftWidth={600}
+                />
             </div>
 
             {/* Asset Preview Modal */}

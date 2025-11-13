@@ -1,0 +1,71 @@
+.resizable-splitter-container {
+    display: flex;
+    height: 100%;
+    width: 100%;
+    position: relative;
+}
+
+.resizable-left-panel {
+    flex-shrink: 0;
+    overflow: auto;
+    border-right: 1px solid #eaeded;
+    padding: 10px 0;
+}
+
+.resizable-right-panel {
+    flex: 1;
+    overflow: auto;
+    padding: 0 10px;
+}
+
+.resizable-splitter {
+    width: 6px;
+    background-color: transparent;
+    cursor: col-resize;
+    position: relative;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s ease;
+}
+
+.resizable-splitter:hover {
+    background-color: #e9ecef;
+}
+
+.resizable-splitter.dragging {
+    background-color: #007bff;
+}
+
+.splitter-handle {
+    width: 2px;
+    height: 40px;
+    background-color: #dee2e6;
+    border-radius: 1px;
+    transition: background-color 0.2s ease;
+}
+
+.resizable-splitter:hover .splitter-handle {
+    background-color: #6c757d;
+}
+
+.resizable-splitter.dragging .splitter-handle {
+    background-color: #ffffff;
+}
+
+/* Prevent text selection during drag */
+.resizable-splitter-container * {
+    user-select: none;
+}
+
+/* Override user-select for content areas when not dragging */
+.resizable-left-panel *,
+.resizable-right-panel * {
+    user-select: text;
+}
+
+/* Disable text selection during drag */
+body.dragging * {
+    user-select: none !important;
+}

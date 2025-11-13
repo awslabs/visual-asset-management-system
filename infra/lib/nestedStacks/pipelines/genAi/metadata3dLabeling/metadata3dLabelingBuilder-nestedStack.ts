@@ -21,6 +21,7 @@ export interface Metadata3dLabelingNestedStackProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
+    importGlobalPipelineWorkflowFunctionName: string;
 }
 
 /**
@@ -46,6 +47,8 @@ export class Metadata3dLabelingNestedStack extends NestedStack {
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                importGlobalPipelineWorkflowFunctionName:
+                    props.importGlobalPipelineWorkflowFunctionName,
             }
         );
 

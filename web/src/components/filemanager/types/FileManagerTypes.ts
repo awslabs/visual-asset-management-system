@@ -93,6 +93,7 @@ export interface CreateFolderModalProps {
 export interface EnhancedFileManagerProps {
     assetName: string;
     assetFiles?: FileKey[];
+    filePathToNavigate?: string; // Optional file path to navigate to and select
 }
 
 export interface SetPrimaryTypeModalProps {

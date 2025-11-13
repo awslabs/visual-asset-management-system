@@ -17,31 +17,30 @@ logger = safeLogger(service="ReadMetadata")
 
 def generate_prefixes(path):
     prefixes = []
-    parts = path.split('/')
-    for i in range(1, len(parts)):
-        prefix = '/'.join(parts[:i]) + '/'
-        prefixes.insert(0, prefix)
+    # parts = path.split('/')
+    # for i in range(1, len(parts)):
+    #     prefix = '/'.join(parts[:i]) + '/'
+    #     prefixes.insert(0, prefix)
 
-    if (not path.endswith('/')):
-        prefixes.insert(0, path)
+    # if (not path.endswith('/')):
+    prefixes.insert(0, path)
     return prefixes
 
 def get_metadata_with_prefix(databaseId, assetId, prefix):
     result = {}
     if prefix is not None:
-
-        for paths in generate_prefixes(prefix):
-            resp = metadata_table.get_item(
-                Key={
-                    "databaseId": databaseId,
-                    "assetId": paths,
-                }
-            )
-            if "Item" in resp:
-                result = resp['Item'] | result
         try:
-            asset_metadata = get_metadata(databaseId, assetId)
-            result = asset_metadata | result
+            # asset_metadata = get_metadata(databaseId, assetId)
+            # result = asset_metadata | result
+            for paths in generate_prefixes(prefix):
+                resp = metadata_table.get_item(
+                    Key={
+                        "databaseId": databaseId,
+                        "assetId": paths,
+                    }
+                )
+                if "Item" in resp:
+                    result = resp['Item'] | result
             return result
         except ValidationError:
             return result

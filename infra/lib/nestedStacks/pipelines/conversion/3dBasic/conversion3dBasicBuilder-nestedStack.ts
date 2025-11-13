@@ -21,6 +21,7 @@ export interface Conversion3dBasicNestedStackProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
+    importGlobalPipelineWorkflowFunctionName: string;
 }
 
 /**
@@ -29,7 +30,7 @@ export interface Conversion3dBasicNestedStackProps extends cdk.StackProps {
 const defaultProps: Partial<Conversion3dBasicNestedStackProps> = {};
 
 export class Conversion3dBasicNestedStack extends NestedStack {
-    public pipelineVamsLambdaFunctionName = "";
+    public pipelineVamsLambdaFunctionName: string;
     constructor(parent: Construct, name: string, props: Conversion3dBasicNestedStackProps) {
         super(parent, name);
 
@@ -46,6 +47,8 @@ export class Conversion3dBasicNestedStack extends NestedStack {
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                importGlobalPipelineWorkflowFunctionName:
+                    props.importGlobalPipelineWorkflowFunctionName,
             }
         );
 

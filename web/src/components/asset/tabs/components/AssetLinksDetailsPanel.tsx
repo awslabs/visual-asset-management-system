@@ -393,6 +393,18 @@ export function AssetLinksDetailsPanel({
                             </div>
                         </div>
                     )}
+                    {/* Show Alias ID if present for parent/child relationships */}
+                    {selectedNode.type === "asset" &&
+                        selectedNode.assetData?.assetLinkAliasId &&
+                        (selectedNode.relationshipType === "parent" ||
+                            selectedNode.relationshipType === "child") && (
+                            <div className="asset-links-info-item">
+                                <div className="asset-links-info-label">Alias ID:</div>
+                                <div className="asset-links-info-value">
+                                    {selectedNode.assetData.assetLinkAliasId}
+                                </div>
+                            </div>
+                        )}
                     {selectedNode.relationshipType && (
                         <div className="asset-links-info-item">
                             <div className="asset-links-info-label">Unauthorized Sub-Assets:</div>

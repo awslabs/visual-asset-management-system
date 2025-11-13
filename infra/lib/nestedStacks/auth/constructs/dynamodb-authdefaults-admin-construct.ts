@@ -38,8 +38,8 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
     ) {
         super(parent, name);
 
-        const roleName = "admin";
-        const roleNameIDClean = "admin";
+        const roleNameAdmin = "admin";
+        const roleNameIDCleanAdmin = "admin";
 
         const awsSdkCallRoleAdmin: AwsSdkCall = {
             service: "DynamoDB",
@@ -48,13 +48,13 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                 TableName: props.storageResources.dynamo.rolesStorageTable.tableName,
                 Item: {
                     roleName: {
-                        S: roleName,
+                        S: roleNameAdmin,
                     },
                     description: {
                         S: "System Administrator",
                     },
                     id: {
-                        S: `initial_${roleNameIDClean}_role_creation`,
+                        S: `initial_${roleNameIDCleanAdmin}_role_creation`,
                     },
                     source: {
                         S: "INTERNAL_SYSTEM",
@@ -70,14 +70,47 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
             },
             physicalResourceId: PhysicalResourceId.of(
                 props.storageResources.dynamo.rolesStorageTable.tableName +
-                    `_${roleNameIDClean}initialization`
+                    `_${roleNameIDCleanAdmin}initialization`
             ),
         };
 
         //Deploy custom resources to tables
-        new AwsCustomResource(this, `rolesStorageTable_${roleNameIDClean}CustomResource`, {
+        new AwsCustomResource(this, `rolesStorageTable_${roleNameIDCleanAdmin}CustomResource`, {
             onCreate: awsSdkCallRoleAdmin,
             onUpdate: awsSdkCallRoleAdmin,
+            role: props.customResourceRole,
+        });
+
+        const awsSdkCallUserRolesSystem: AwsSdkCall = {
+            service: "DynamoDB",
+            action: "putItem",
+            parameters: {
+                TableName: props.storageResources.dynamo.userRolesStorageTable.tableName,
+                Item: {
+                    userId: {
+                        S: "SYSTEM_USER",
+                    },
+                    roleName: {
+                        S: roleNameAdmin,
+                    },
+                    createdOn: {
+                        S: new Date().toISOString(),
+                    },
+                    object__type: {
+                        S: "userRole",
+                    },
+                },
+                //ConditionExpression: "attribute_not_exists(userId)",
+            },
+            physicalResourceId: PhysicalResourceId.of(
+                props.storageResources.dynamo.userRolesStorageTable.tableName +
+                    `_SystemUserInitialization`
+            ),
+        };
+
+        new AwsCustomResource(this, `userRolesStorageTable_SystemUserCustomResource`, {
+            onCreate: awsSdkCallUserRolesSystem,
+            onUpdate: awsSdkCallUserRolesSystem,
             role: props.customResourceRole,
         });
 
@@ -91,7 +124,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         S: props.config.app.adminUserId,
                     },
                     roleName: {
-                        S: roleName,
+                        S: roleNameAdmin,
                     },
                     createdOn: {
                         S: new Date().toISOString(),
@@ -104,11 +137,11 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
             },
             physicalResourceId: PhysicalResourceId.of(
                 props.storageResources.dynamo.userRolesStorageTable.tableName +
-                    `_${roleNameIDClean}initialization`
+                    `_${roleNameIDCleanAdmin}initialization`
             ),
         };
 
-        new AwsCustomResource(this, `userRolesStorageTable_${roleNameIDClean}CustomResource`, {
+        new AwsCustomResource(this, `userRolesStorageTable_${roleNameIDCleanAdmin}CustomResource`, {
             onCreate: awsSdkCallUserRolesAdmin,
             onUpdate: awsSdkCallUserRolesAdmin,
             role: props.customResourceRole,
@@ -153,7 +186,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-web-paths",
@@ -169,7 +202,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-web-paths",
@@ -185,7 +218,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-web-paths",
@@ -201,7 +234,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-web-paths",
@@ -261,7 +294,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-apis",
@@ -277,7 +310,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-apis",
@@ -293,7 +326,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-apis",
@@ -309,7 +342,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-apis",
@@ -369,7 +402,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-databases",
@@ -385,7 +418,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-databases",
@@ -401,7 +434,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-databases",
@@ -417,7 +450,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-databases",
@@ -477,7 +510,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-assets",
@@ -493,7 +526,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-assets",
@@ -509,7 +542,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-assets",
@@ -525,7 +558,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-assets",
@@ -585,7 +618,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-pipelines",
@@ -601,7 +634,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-pipelines",
@@ -617,7 +650,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-pipelines",
@@ -633,7 +666,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-pipelines",
@@ -693,7 +726,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-workflows",
@@ -709,7 +742,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-workflows",
@@ -725,7 +758,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-workflows",
@@ -741,7 +774,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-workflows",
@@ -801,7 +834,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-metadataschemas",
@@ -817,7 +850,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-metadataschemas",
@@ -833,7 +866,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-metadataschemas",
@@ -849,7 +882,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-metadataschemas",
@@ -909,7 +942,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-tags",
@@ -925,7 +958,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-tags",
@@ -941,7 +974,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-tags",
@@ -957,7 +990,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-tags",
@@ -1017,7 +1050,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-tagtypes",
@@ -1033,7 +1066,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-tagtypes",
@@ -1049,7 +1082,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-tagtypes",
@@ -1065,7 +1098,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-tagtypes",
@@ -1125,7 +1158,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-roles",
@@ -1141,7 +1174,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-roles",
@@ -1157,7 +1190,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-roles",
@@ -1173,7 +1206,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-roles",
@@ -1233,7 +1266,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-get-all-userroles",
@@ -1249,7 +1282,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-put-all-userroles",
@@ -1265,7 +1298,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-post-all-userroles",
@@ -1281,7 +1314,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                         {
                             M: {
                                 groupId: {
-                                    S: roleName,
+                                    S: roleNameAdmin,
                                 },
                                 id: {
                                     S: "admin-allow-delete-all-userroles",
@@ -1316,15 +1349,19 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     //ConditionExpression: "attribute_not_exists(sk)",
                 },
                 physicalResourceId: PhysicalResourceId.of(
-                    `${props.storageResources.dynamo.authEntitiesStorageTable.tableName}_initialization${roleNameIDClean}_${i}`
+                    `${props.storageResources.dynamo.authEntitiesStorageTable.tableName}_initialization${roleNameIDCleanAdmin}_${i}`
                 ),
             };
 
-            new AwsCustomResource(this, `authEntitiesTable_${roleNameIDClean}CustomResource_${i}`, {
-                onCreate: awsSdkCall,
-                onUpdate: awsSdkCall,
-                role: props.customResourceRole,
-            });
+            new AwsCustomResource(
+                this,
+                `authEntitiesTable_${roleNameIDCleanAdmin}CustomResource_${i}`,
+                {
+                    onCreate: awsSdkCall,
+                    onUpdate: awsSdkCall,
+                    role: props.customResourceRole,
+                }
+            );
             i++;
         }
     }
