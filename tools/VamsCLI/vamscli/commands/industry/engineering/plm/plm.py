@@ -164,7 +164,7 @@ def suppress_output(func):
 # PHASE 0: XML PARSING
 # ============================================================================
 
-def parse_all_xml_files(xml_files: List[Path], json_output: bool) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+def parse_all_xml_files(xml_files: List[Path], json_output: bool) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     """
     Phase 0: Parse all XML files completely before any API calls.
     
@@ -173,10 +173,12 @@ def parse_all_xml_files(xml_files: List[Path], json_output: bool) -> Tuple[Dict[
         json_output: Whether JSON output mode is enabled
         
     Returns:
-        Tuple of (global_components, global_relationships)
+        Tuple of (global_components, global_relationships, xml_file_mapping)
+        xml_file_mapping: Maps item_revision to {'xml_file': Path, 'is_root': bool}
     """
     global_components = {}
     global_relationships = []
+    xml_file_mapping = {}
     
     for xml_file in tqdm(xml_files, desc="Parsing XML files", disable=json_output):
         ingestor = PLMXMLIngestor()
@@ -187,11 +189,21 @@ def parse_all_xml_files(xml_files: List[Path], json_output: bool) -> Tuple[Dict[
                 click.echo(f"No components found in {xml_file}")
             continue
         
+        # Identify root component for this XML file
+        root_component = ingestor.root_component
+        
+        # Map each component to its source XML and root status
+        for item_revision in ingestor.components.keys():
+            xml_file_mapping[item_revision] = {
+                'xml_file': xml_file,
+                'is_root': (item_revision == root_component)
+            }
+        
         # Store components and relationships globally
         global_components.update(ingestor.components)
         global_relationships.extend(ingestor.relationships)
     
-    return global_components, global_relationships
+    return global_components, global_relationships, xml_file_mapping
 
 
 # ============================================================================
@@ -346,57 +358,100 @@ def create_single_metadata(
         return (False, str(e))
 
 
-def upload_single_geometry(
+def upload_single_files(
     ctx: click.Context,
     database_id: str,
     asset_id: str,
     component: Dict[str, Any],
-    plmxml_dir: str
-) -> Tuple[bool, int, Optional[str]]:
-    """Upload geometry files for a single asset (thread-safe)."""
+    plmxml_dir: str,
+    xml_mapping_info: Optional[Dict[str, Any]],
+    upload_xml: bool
+) -> Tuple[bool, int, int, int, Optional[str]]:
+    """
+    Upload geometry and optionally XML files for a single asset (thread-safe).
+    
+    Args:
+        ctx: Click context
+        database_id: Database ID
+        asset_id: Asset ID
+        component: Component data
+        plmxml_dir: PLM XML directory path
+        xml_mapping_info: XML file mapping info {'xml_file': Path, 'is_root': bool}
+        upload_xml: Whether to upload XML files
+        
+    Returns:
+        Tuple of (success, geometry_count, xml_count, xml_skipped, error_message)
+    """
     try:
+        uploaded_geometry = 0
+        uploaded_xml = 0
+        skipped_xml = 0
+        
+        # Upload geometry files
         geometry_location = component.get("geometry_file_location")
-        if not geometry_location:
-            return (True, 0, None)
-        
-        sanitized_path = sanitize_path(geometry_location)
-        geometry_parent_dir = os.path.dirname(sanitized_path)
-        geometry_filename = os.path.basename(sanitized_path)
-        geometry_basename = os.path.splitext(geometry_filename)[0]
-        
-        full_geometry_dir = os.path.join(plmxml_dir, geometry_parent_dir)
-        
-        if not os.path.exists(full_geometry_dir):
-            return (True, 0, None)
-        
-        uploaded_count = 0
-        for file_name in os.listdir(full_geometry_dir):
-            file_path = os.path.join(full_geometry_dir, file_name)
+        if geometry_location:
+            sanitized_path = sanitize_path(geometry_location)
+            geometry_parent_dir = os.path.dirname(sanitized_path)
+            geometry_filename = os.path.basename(sanitized_path)
+            geometry_basename = os.path.splitext(geometry_filename)[0]
             
-            if os.path.isfile(file_path):
-                file_basename = os.path.splitext(file_name)[0]
-                
-                if file_basename == geometry_basename:
+            full_geometry_dir = os.path.join(plmxml_dir, geometry_parent_dir)
+            
+            if os.path.exists(full_geometry_dir):
+                for file_name in os.listdir(full_geometry_dir):
+                    file_path = os.path.join(full_geometry_dir, file_name)
+                    
+                    if os.path.isfile(file_path):
+                        file_basename = os.path.splitext(file_name)[0]
+                        
+                        if file_basename == geometry_basename:
+                            try:
+                                # Suppress file upload output (has its own progress bar)
+                                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                                    result = ctx.invoke(
+                                        file_upload,
+                                        files_or_directory=[file_path],
+                                        database_id=database_id,
+                                        asset_id=asset_id,
+                                        directory=None,
+                                        json_input=None,
+                                    )
+                                if result.get("overall_success", False):
+                                    uploaded_geometry += 1
+                            except Exception:
+                                pass
+        
+        # Upload XML file only if:
+        # 1. upload_xml flag is True
+        # 2. This component is a root in its XML file
+        if upload_xml and xml_mapping_info:
+            if xml_mapping_info.get('is_root', False):
+                xml_file_path = xml_mapping_info.get('xml_file')
+                if xml_file_path and xml_file_path.exists():
                     try:
-                        # Suppress file upload output (has its own progress bar)
+                        # Suppress file upload output
                         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                             result = ctx.invoke(
                                 file_upload,
-                                files_or_directory=[file_path],
+                                files_or_directory=[str(xml_file_path)],
                                 database_id=database_id,
                                 asset_id=asset_id,
                                 directory=None,
                                 json_input=None,
                             )
                         if result.get("overall_success", False):
-                            uploaded_count += 1
+                            uploaded_xml = 1
                     except Exception:
+                        # XML upload failed - this is a partial failure
                         pass
+            else:
+                # Not a root component - skip XML upload
+                skipped_xml = 1
         
-        return (True, uploaded_count, None)
+        return (True, uploaded_geometry, uploaded_xml, skipped_xml, None)
     
     except Exception as e:
-        return (False, 0, str(e))
+        return (False, 0, 0, 0, str(e))
 
 
 def create_single_link(
@@ -493,10 +548,16 @@ def process_parallel_operations(
     plmxml_dir: str,
     max_workers: int,
     json_output: bool,
-    failed_assets: Set[str]
+    failed_assets: Set[str],
+    xml_file_mapping: Dict[str, Dict[str, Any]],
+    upload_xml: bool
 ) -> Dict[str, Any]:
     """
     Phase 2: Run metadata, files, and links in parallel.
+    
+    Args:
+        xml_file_mapping: Maps item_revision to {'xml_file': Path, 'is_root': bool}
+        upload_xml: Whether to upload XML files
     
     Returns:
         Dictionary with statistics and link metadata to create
@@ -506,6 +567,9 @@ def process_parallel_operations(
         'metadata_failed': 0,
         'files_uploaded': 0,
         'files_failed': 0,
+        'xml_files_uploaded': 0,
+        'xml_files_failed': 0,
+        'xml_files_skipped': 0,
         'links_created': 0,
         'links_failed': 0,
         'link_metadata_list': []  # List of (link_id, key, value, type)
@@ -539,19 +603,26 @@ def process_parallel_operations(
                     component
                 )))
         
-        # Submit file upload tasks
+        # Submit file upload tasks (geometry + XML)
         for item_revision, component in components.items():
             if item_revision in failed_assets:
                 continue
             asset_id = component.get('actual_asset_id')
-            if asset_id and component.get('geometry_file_location'):
+            # Upload if there's geometry OR if XML upload is enabled for root components
+            has_geometry = component.get('geometry_file_location')
+            xml_info = xml_file_mapping.get(item_revision)
+            should_upload_xml = upload_xml and xml_info and xml_info.get('is_root', False)
+            
+            if asset_id and (has_geometry or should_upload_xml):
                 futures.append(('file', executor.submit(
-                    upload_single_geometry,
+                    upload_single_files,
                     ctx,
                     database_id,
                     asset_id,
                     component,
-                    plmxml_dir
+                    plmxml_dir,
+                    xml_info,
+                    upload_xml
                 )))
         
         # Submit link creation tasks
@@ -582,9 +653,21 @@ def process_parallel_operations(
                             stats['metadata_failed'] += 1
                     
                     elif op_type == 'file':
-                        success, count, error = future.result()
+                        success, geometry_count, xml_count, xml_skipped, error = future.result()
                         if success:
-                            stats['files_uploaded'] += count
+                            stats['files_uploaded'] += geometry_count
+                            stats['xml_files_uploaded'] += xml_count
+                            stats['xml_files_skipped'] += xml_skipped
+                            # Track XML failures (when upload was attempted but failed)
+                            if upload_xml and xml_count == 0 and xml_skipped == 0:
+                                # XML upload was expected but didn't succeed
+                                xml_info = None
+                                for item_rev, comp in components.items():
+                                    if comp.get('actual_asset_id') == asset_id:
+                                        xml_info = xml_file_mapping.get(item_rev)
+                                        break
+                                if xml_info and xml_info.get('is_root', False):
+                                    stats['xml_files_failed'] += 1
                         else:
                             stats['files_failed'] += 1
                     
@@ -735,6 +818,12 @@ def get_existing_asset_id(ctx: click.Context, database_id: str, asset_name: str)
     type=int,
     help="[OPTIONAL] Maximum number of parallel workers (default: 15)",
 )
+@click.option(
+    "--upload-xml",
+    is_flag=True,
+    default=False,
+    help="[OPTIONAL] Upload source PLMXML files to their corresponding root assets (default: False)",
+)
 @click.option("--json-output", is_flag=True, help="[OPTIONAL] Output raw JSON response")
 @click.pass_context
 @requires_setup_and_auth
@@ -743,6 +832,7 @@ def import_plmxml(
     database_id: str,
     plmxml_dir: str,
     max_workers: int,
+    upload_xml: bool,
     json_output: bool,
 ):
     """
@@ -751,11 +841,21 @@ def import_plmxml(
     This command imports PLM XML files and creates assets, metadata, file uploads,
     and asset links in parallel for improved performance.
 
+    The --upload-xml flag enables uploading source PLMXML files to their corresponding
+    root assets for audit trails and source preservation. Only root (top-level) components
+    from each XML file will receive the XML file upload.
+
     Examples:
         # Basic PLM XML import
         vamscli industry engineering plm plmxml import \\
           -d my-database \\
           --plmxml-dir /path/to/plmxml
+
+        # Import with XML file upload to root assets
+        vamscli industry engineering plm plmxml import \\
+          -d my-database \\
+          --plmxml-dir /path/to/plmxml \\
+          --upload-xml
 
         # Import with custom worker count
         vamscli industry engineering plm plmxml import \\
@@ -767,6 +867,7 @@ def import_plmxml(
         vamscli industry engineering plm plmxml import \\
           -d my-database \\
           --plmxml-dir /path/to/plmxml \\
+          --upload-xml \\
           --json-output
     """
     start_time = time.time()
@@ -792,7 +893,7 @@ def import_plmxml(
     if not json_output:
         click.secho(f"\n📋 Phase 0: Parsing {len(xml_files)} XML files...", fg="cyan", bold=True, err=True)
     
-    global_components, global_relationships = parse_all_xml_files(xml_files, json_output)
+    global_components, global_relationships, xml_file_mapping = parse_all_xml_files(xml_files, json_output)
     phase0_duration = time.time() - phase0_start
     
     if not json_output:
@@ -830,16 +931,18 @@ def import_plmxml(
         plmxml_dir,
         max_workers,
         json_output,
-        asset_stats['failed_items']
+        asset_stats['failed_items'],
+        xml_file_mapping,
+        upload_xml
     )
     phase2_duration = time.time() - phase2_start
     
     if not json_output:
-        click.secho(
-            f"✓ Metadata: {parallel_stats['metadata_created']} created, Files: {parallel_stats['files_uploaded']} uploaded, Links: {parallel_stats['links_created']} created in {phase2_duration:.2f}s",
-            fg="green",
-            err=True
-        )
+        files_msg = f"Metadata: {parallel_stats['metadata_created']} created, Files: {parallel_stats['files_uploaded']} uploaded"
+        if upload_xml:
+            files_msg += f", XML: {parallel_stats['xml_files_uploaded']} uploaded"
+        files_msg += f", Links: {parallel_stats['links_created']} created in {phase2_duration:.2f}s"
+        click.secho(f"✓ {files_msg}", fg="green", err=True)
     
     # Phase 3: Link metadata in parallel
     phase3_start = time.time()
@@ -902,7 +1005,13 @@ def import_plmxml(
         click.secho(f"  🏗️  VAMS Entities Created:", fg="yellow", bold=True, err=True)
         click.secho(f"     Assets: {asset_stats['created']} created, {asset_stats['existing']} existing, {asset_stats['failed']} failed", fg="cyan", err=True)
         click.secho(f"     Asset Metadata: {parallel_stats['metadata_created']} created", fg="cyan", err=True)
-        click.secho(f"     Files Uploaded: {parallel_stats['files_uploaded']}", fg="cyan", err=True)
+        click.secho(f"     Geometry Files Uploaded: {parallel_stats['files_uploaded']}", fg="cyan", err=True)
+        if upload_xml:
+            click.secho(f"     XML Files Uploaded: {parallel_stats['xml_files_uploaded']}", fg="cyan", err=True)
+            if parallel_stats['xml_files_failed'] > 0:
+                click.secho(f"     XML Files Failed: {parallel_stats['xml_files_failed']}", fg="yellow", err=True)
+            if parallel_stats['xml_files_skipped'] > 0:
+                click.secho(f"     XML Files Skipped (non-root): {parallel_stats['xml_files_skipped']}", fg="cyan", err=True)
         click.secho(f"     Asset Links: {parallel_stats['links_created']} created, {parallel_stats['links_failed']} failed", fg="cyan", err=True)
         click.secho(f"     Asset Link Metadata: {link_metadata_stats['created']} created", fg="cyan", err=True)
         
@@ -940,7 +1049,11 @@ def import_plmxml(
             "assets_existing": asset_stats['existing'],
             "assets_failed": asset_stats['failed'],
             "metadata_created": parallel_stats['metadata_created'],
-            "files_uploaded": parallel_stats['files_uploaded'],
+            "geometry_files_uploaded": parallel_stats['files_uploaded'],
+            "xml_files_uploaded": parallel_stats['xml_files_uploaded'],
+            "xml_files_failed": parallel_stats['xml_files_failed'],
+            "xml_files_skipped": parallel_stats['xml_files_skipped'],
+            "xml_upload_enabled": upload_xml,
             "asset_links_created": parallel_stats['links_created'],
             "asset_link_metadata_created": link_metadata_stats['created'],
             "asset_link_failures": parallel_stats['links_failed'],

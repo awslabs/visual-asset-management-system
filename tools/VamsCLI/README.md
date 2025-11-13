@@ -159,11 +159,17 @@ vamscli assets delete my-asset -d my-database --confirm --reason "Project cancel
 vamscli industry spatial glbassetcombine -d my-database -a root-asset-id
 vamscli industry spatial glbassetcombine -d my-database -a root-asset-id --asset-create-name "Combined Model"
 
+# Import PLM XML files with parallel processing (industry engineering)
+vamscli industry engineering plm plmxml import -d my-database --plmxml-dir /path/to/plmxml
+vamscli industry engineering plm plmxml import -d my-database --plmxml-dir /path/to/plmxml --upload-xml
+vamscli industry engineering plm plmxml import -d my-database --plmxml-dir /path/to/plmxml --upload-xml --max-workers 20
+
 # Get help for any command
 vamscli --help
 vamscli tag --help
 vamscli tag-type --help
 vamscli industry spatial --help
+vamscli industry engineering plm --help
 ```
 
 ## Available Commands
@@ -184,7 +190,7 @@ VamsCLI provides fifteen main command groups:
 -   **`vamscli database`** - Database creation and management
 -   **`vamscli tag`** - Tag creation and management for asset organization
 -   **`vamscli tag-type`** - Tag type creation and management
--   **`vamscli industry`** - Industry-specific commands (spatial data processing)
+-   **`vamscli industry`** - Industry-specific commands (spatial data processing, PLM import)
 -   **`vamscli profile`** - Profile management for multiple environments
 
 For complete command documentation, see the [Commands Documentation](docs/commands/) directory.
@@ -232,6 +238,7 @@ VamsCLI provides comprehensive documentation organized by functional area:
 -   **[Database Administration](docs/commands/database-admin.md)** - Database and bucket management
 -   **[Tag Management](docs/commands/tag-management.md)** - Tag and tag type operations
 -   **[Industry Spatial](docs/commands/industry-spatial.md)** - Spatial data processing (GLB combining)
+-   **[PLM Commands](docs/commands/plm-commands.md)** - Product Lifecycle Management (PLM XML import)
 -   **[Global Options](docs/commands/global-options.md)** - JSON patterns, automation, and best practices
 
 ### Troubleshooting Documentation
