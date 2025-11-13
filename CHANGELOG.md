@@ -4,7 +4,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [2.3.0] (2025-11-13)
 
-Major Changes:
+### Major Change Summary:
+
 • New VAMS CLI Tool - Complete command-line interface with robust file handling for large-scale automation and integration workflows
 • Overhauled Search & Asset Management - Redesigned asset and file search system with enhanced UI, advanced filtering, and improved location services integration
 • Advanced File Visualization System - New plugin-based viewer architecture with new CesiumJS, BabylonJS, PlayCanvas, VNTANA, PDF, Video, and Text viewers plus modal popup access

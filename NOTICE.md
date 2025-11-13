@@ -4,133 +4,259 @@ Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 ---
 
-THIRD PARTY COMPONENTS - CORE VAMS
+## THIRD PARTY COMPONENTS - ROOT PROJECT
 
 ---
 
 This software includes third party software subject to the following copyrights:
 
-Javascript Libraries (Open Licensing):
+**Development Dependencies (NPM)**
 
-| Package                  | Version                                                              | Licenses                |
-| :----------------------- | :------------------------------------------------------------------- | :---------------------- |
-| @aws-amplify/ui-react    | @aws-amplify/ui-react@1.2.9                                          | Apache\*                |
-| @aws-amplify/ui-react    | @aws-amplify/ui-react@2.20.0                                         | Apache-2.0              |
-| @awsui/collection-hooks  | @awsui/collection-hooks@1.0.40                                       | Apache-2.0              |
-| @awsui/components-react  | @awsui/components-react@3.0.628                                      | Apache-2.0              |
-| @awsui/design-tokens     | @awsui/design-tokens@3.0.32                                          | Apache-2.0              |
-| @awsui/global-styles     | @awsui/global-styles@1.0.19                                          | Apache-2.0              |
-| @babylonjs/core          | @babylonjs/core@4.2.2                                                | Apache-2.0              |
-| @types/styled-components | @types/styled-components@5.1.26                                      | MIT                     |
-| arraybuffer-to-buffer    | arraybuffer-to-buffer@0.0.7                                          | MIT                     |
-| aws-amplify-react        | aws-amplify-react@5.1.9                                              | Apache-2.0              |
-| aws-amplify              | aws-amplify@4.3.39                                                   | Apache-2.0              |
-| babylonjs-loaders        | babylonjs-loaders@7.0.0                                              | Apache-2.0              |
-| babylonjs                | babylonjs@7.0.0                                                      | Apache-2.0              |
-| buffer                   | buffer@4.9.2                                                         | MIT                     |
-| buffer                   | buffer@6.0.3                                                         | MIT                     |
-| dompurify                | dompurify@2.4.0                                                      | (MPL-2.0 OR Apache-2.0) |
-| fcs                      | fcs@0.1.2                                                            | MIT                     |
-| patch-package            | patch-package@6.5.0                                                  | MIT                     |
-| postinstall-postinstall  | postinstall-postinstall@2.1.0                                        | MIT                     |
-| prop-types               | prop-types@15.8.1                                                    | MIT                     |
-| react-data-grid          | react-data-grid@7.0.0-beta.16                                        | MIT                     |
-| react-dom                | react-dom@17.0.2                                                     | MIT                     |
-| react-flow-renderer      | react-flow-renderer@9.7.4                                            | MIT                     |
-| react-papaparse          | react-papaparse@3.18.2                                               | MIT                     |
-| react-router-dom         | react-router-dom@6.4.2                                               | MIT                     |
-| react-router             | react-router@6.4.2                                                   | MIT                     |
-| react-scripts            | react-scripts@5.0.1                                                  | MIT                     |
-| react                    | react@17.0.2                                                         | MIT                     |
-| styled-components        | styled-components@5.3.6                                              | MIT                     |
-| typescript               | typescript@4.4.4                                                     | Apache-2.0              |
-| web-vitals               | web-vitals@1.1.2                                                     | Apache-2.0              |
-| esbuild                  | esbuild@0.19.9                                                       | MIT                     |
-| online-3d-viewer         | [online-3d-viewer@0.8.22](https://github.com/kovacsv/Online3DViewer) | MIT                     |
-| PotreeViewer             | [potree@develop-latest](https://github.com/potree/potree)            | BSD-2-Clause            |
-| pickr                    | [pickr@1.8.2](https://github.com/Simonwep/pickr)                     | MIT                     |
-| draco                    | [draco@1.5.6](https://github.com/google/draco)                       | Apache-2.0              |
-| rhino3dm                 | [rhino3dm@7.15.0](https://github.com/mcneel/rhino3dm)                | MIT                     |
-| web-ifc                  | [web-ifc@0.0.39](https://github.com/IFCjs/web-ifc)                   | Mozilla-2.0             |
-| cesium                   | [cesium@1.118.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0              |
-| playcanvas               | [playcanvas@2.11.8](https://github.com/playcanvas/engine)            | MIT                     |
-
-Python Libraries
-
-| Name                | Version   | License                              |
-| ------------------- | --------- | ------------------------------------ |
-| boto3               | 1.24.45   | Apache Software License              |
-| botocore            | 1.27.45   | Apache Software License              |
-| google-pasta        | 0.2.0     | Apache Software License              |
-| importlib-metadata  | 4.12.0    | Apache Software License              |
-| requests            | 2.28.1    | Apache Software License              |
-| s3transfer          | 0.6.0     | Apache Software License              |
-| smdebug-rulesconfig | 1.0.1     | Apache Software License              |
-| stepfunctions       | 2.3.0     | Apache Software License              |
-| packaging           | 21.3      | Apache Software License; BSD License |
-| python-dateutil     | 2.8.2     | Apache Software License; BSD License |
-| dill                | 0.3.5.1   | BSD License                          |
-| idna                | 3.3       | BSD License                          |
-| multiprocess        | 0.70.13   | BSD License                          |
-| numpy               | 1.23.1    | BSD License                          |
-| pandas              | 1.4.3     | BSD License                          |
-| pathos              | 0.2.9     | BSD License                          |
-| pox                 | 0.3.1     | BSD License                          |
-| ppft                | 1.7.6.5   | BSD License                          |
-| protobuf            | 3.20.1    | BSD-3-Clause                         |
-| PyYAML              | 6.0       | MIT License                          |
-| attrs               | 22.1.0    | MIT License                          |
-| charset-normalizer  | 2.1.0     | MIT License                          |
-| jmespath            | 1.0.1     | MIT License                          |
-| pyparsing           | 3.0.9     | MIT License                          |
-| pytz                | 2022.1    | MIT License                          |
-| six                 | 1.16.0    | MIT License                          |
-| urllib3             | 1.26.11   | MIT License                          |
-| zipp                | 3.8.1     | MIT License                          |
-| certifi             | 2022.6.15 | Mozilla Public License 2.0 (MPL 2.0) |
-| protobuf3-to-dict   | 0.1.5     | Public Domain                        |
-| Casbin              | 2.29.0    | Apache-2.0                           |
+| Package                          | Version | License      |
+| :------------------------------- | :------ | :----------- |
+| @typescript-eslint/eslint-plugin | ^5.57.0 | MIT          |
+| @typescript-eslint/parser        | ^5.57.0 | BSD-2-Clause |
+| eslint                           | ^8.37.0 | MIT          |
+| eslint-plugin-react              | ^7.32.2 | MIT          |
+| prettier                         | ^2.8.7  | MIT          |
+| standard-version                 | ^9.3.2  | ISC          |
+| @types/sanitize-html             | ^2.9.0  | MIT          |
+| minimist                         | ^1.2.7  | MIT          |
 
 ---
 
-THIRD PAID PARTY COMPONENTS - WEB VIEWERS
+## THIRD PARTY COMPONENTS - WEB APPLICATION
 
 ---
 
-NPM Libraries
+This software includes third party software subject to the following copyrights:
 
-| Package | Version | Licenses |
+**Core Web Libraries (NPM)**
+
+| Package                             | Version        | License                 |
+| :---------------------------------- | :------------- | :---------------------- |
+| @aws-amplify/auth                   | 5.6.15         | Apache-2.0              |
+| @aws-amplify/core                   | 5.8.14         | Apache-2.0              |
+| @aws-amplify/ui-react               | ^2.1.5         | Apache-2.0              |
+| @aws-sdk/client-s3                  | ^3.400.0       | Apache-2.0              |
+| @aws-sdk/lib-storage                | ^3.400.0       | Apache-2.0              |
+| @aws-sdk/s3-request-presigner       | ^3.400.0       | Apache-2.0              |
+| @badgateway/oauth2-client           | 2.4.2          | MIT                     |
+| @cloudscape-design/collection-hooks | ^1.0.19        | Apache-2.0              |
+| @cloudscape-design/components       | ^3.0.196       | Apache-2.0              |
+| @cloudscape-design/design-tokens    | ^3.0.8         | Apache-2.0              |
+| @dnd-kit/core                       | ^6.3.1         | MIT                     |
+| @dnd-kit/sortable                   | ^10.0.0        | MIT                     |
+| @dnd-kit/utilities                  | ^3.2.2         | MIT                     |
+| @mapbox/mapbox-gl-draw              | ^1.4.1         | ISC                     |
+| @maplibre/maplibre-gl-geocoder      | ^1.5.0         | MIT                     |
+| @turf/bbox                          | ^6.5.0         | MIT                     |
+| @turf/turf                          | ^6.5.0         | MIT                     |
+| @types/mapbox\_\_mapbox-gl-draw     | ^1.4.0         | MIT                     |
+| @types/styled-components            | ^5.1.21        | MIT                     |
+| @types/three                        | ^0.180.0       | MIT                     |
+| @types/wicg-file-system-access      | 2020.9.6       | MIT                     |
+| arraybuffer-to-buffer               | ^0.0.7         | MIT                     |
+| aws-amplify                         | 5.3.27         | Apache-2.0              |
+| aws-amplify-react                   | ^5.1.9         | Apache-2.0              |
+| axios                               | ^1.6.0         | MIT                     |
+| buffer                              | ^6.0.3         | MIT                     |
+| del-cli                             | ^5.0.0         | MIT                     |
+| dompurify                           | ^2.3.6         | (MPL-2.0 OR Apache-2.0) |
+| fast-xml-parser                     | ^4.2.5         | MIT                     |
+| fcs                                 | ^0.1.2         | MIT                     |
+| file-system-access                  | 1.0.4          | MIT                     |
+| geojson                             | ^0.5.0         | MIT                     |
+| jodit                               | ^4.0.0-beta.61 | MIT                     |
+| jodit-react                         | ^1.3.39        | MIT                     |
+| loader-utils                        | ^3.2.0         | MIT                     |
+| localforage                         | ^1.10.0        | Apache-2.0              |
+| maplibre-gl                         | ^5.8.0         | BSD-3-Clause            |
+| moment                              | ^2.29.4        | MIT                     |
+| papaparse                           | ^5.4.1         | MIT                     |
+| patch-package                       | ^6.4.7         | MIT                     |
+| postcss                             | ^8.4.31        | MIT                     |
+| postinstall-postinstall             | ^2.1.0         | MIT                     |
+| prop-types                          | ^15.8.1        | MIT                     |
+| react                               | ^17.0.2        | MIT                     |
+| react-data-grid                     | 7.0.0-beta.16  | MIT                     |
+| react-dom                           | ^17.0.2        | MIT                     |
+| react-error-boundary                | ^4.0.9         | MIT                     |
+| react-flow-renderer                 | ^9.6.11        | MIT                     |
+| react-folder-tree                   | ^5.1.1         | MIT                     |
+| react-loading-icons                 | ^1.1.0         | MIT                     |
+| react-map-gl                        | ^8.1.0         | MIT                     |
+| react-papaparse                     | ^3.18.1        | MIT                     |
+| react-pdf                           | ^10.1.0        | MIT                     |
+| react-router                        | ^6.0.0         | MIT                     |
+| react-router-dom                    | ^6.0.0         | MIT                     |
+| react-scripts                       | 5.0.1          | MIT                     |
+| react-syntax-highlighter            | ^15.5.0        | MIT                     |
+| sanitize-html                       | ^2.11.0        | MIT                     |
+| semver                              | ^7.5.2         | ISC                     |
+| styled-components                   | ^5.3.3         | MIT                     |
+| tough-cookie                        | ^4.1.3         | BSD-3-Clause            |
+| typescript                          | 4.4.4          | Apache-2.0              |
+| web-ifc                             | ^0.0.39        | MPL-2.0                 |
+| web-vitals                          | ^1.1.2         | Apache-2.0              |
+
+---
+
+## THIRD PARTY COMPONENTS - WEB CUSTOM INSTALLS (3D VIEWERS)
+
+---
+
+This software includes third party software subject to the following copyrights:
+
+**3D Visualization Libraries**
+
+| Package            | Version                                                    | License      |
+| :----------------- | :--------------------------------------------------------- | :----------- |
+| @babylonjs/core    | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)    | Apache-2.0   |
+| @babylonjs/loaders | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders) | Apache-2.0   |
+| cesium             | [1.118.0](https://github.com/CesiumGS/cesium)              | Apache-2.0   |
+| online-3d-viewer   | [0.16.0](https://github.com/kovacsv/Online3DViewer)        | MIT          |
+| playcanvas         | [2.11.8](https://github.com/playcanvas/engine)             | MIT          |
+| potree             | [develop-latest](https://github.com/potree/potree)         | BSD-2-Clause |
+| web-ifc            | [0.0.39](https://github.com/IFCjs/web-ifc)                 | MPL-2.0      |
+| draco              | [1.5.6](https://github.com/google/draco)                   | Apache-2.0   |
+| rhino3dm           | [7.15.0](https://github.com/mcneel/rhino3dm)               | MIT          |
+| pickr              | [1.8.2](https://github.com/Simonwep/pickr)                 | MIT          |
+
+---
+
+## THIRD PARTY PAID COMPONENTS - WEB VIEWERS
+
+---
+
+**Commercial/Paid Licenses**
+
+| Package                | Version                                                              | License           |
+| :--------------------- | :------------------------------------------------------------------- | :---------------- |
 | VNTANA 3D Model Viewer | [@vntana/viewer@2.2.0](https://www.npmjs.com/package/@vntana/viewer) | PAID - Commercial |
 
 ---
 
-THIRD PARTY COMPONENTS - USE-CASE SPECIFIC PIPELINE IMPLEMENTATIONS
+## THIRD PARTY COMPONENTS - BACKEND
 
 ---
 
 This software includes third party software subject to the following copyrights:
 
-Python Libraries
+**Python Backend Libraries**
 
-| Name     | Version | Related Pipeline             | License                     |
-| -------- | ------- | ---------------------------- | --------------------------- |
-| pillow   | 10.3.0  | GENAI 3D METADATA GENERATION | HPND--MIT/3-Clause-BSD      |
-| NumPy    | latest  | MULTIPLE                     | BSD-3-Clause                |
-| TriMesh  | latest  | CONVERSION 3D BASIC          | MIT License                 |
-| CadQuery | latest  | METADATA EXTRACTION          | Apache 2.0/LGPL-2.1 LICENSE |
+| Name                  | Version    | License    |
+| :-------------------- | :--------- | :--------- |
+| aws-lambda-powertools | 2.36.0     | MIT-0      |
+| pydantic              | 1.10.7     | MIT        |
+| opensearch-py         | 2.5.0      | Apache-2.0 |
+| casbin                | 1.33.0     | Apache-2.0 |
+| locked-dict           | 2023.10.22 | MIT        |
+| boto3                 | 1.34.84    | Apache-2.0 |
 
-Other Libraries (Use-case Pipelines)
+---
 
-| Name            | Version                                                                                                                                                                                                                                  | Related Pipeline             | Licenses     |
-| :-------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------- | :----------- |
-| PDAL            | [pdal@master-latest] (https://github.com/PDAL/PDAL)                                                                                                                                                                                      | POTREE VIEWER                | BSD          |
-| PotreeConverter | [potreeconverter@develop-latest] (https://github.com/potree/PotreeConverter)                                                                                                                                                             | POTREE VIEWER                | BSD-2-Clause |
-| Blender         | [blender@master-latest] (https://github.com/blender)                                                                                                                                                                                     | GENAI 3D METADATA GENERATION | GNU GPLv3    |
-| SplatToolbox    | [guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws@feature/batch-sogs-vggt] (https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                | MIT          |
+## THIRD PARTY COMPONENTS - BACKEND PIPELINES
 
-Third Party AWS Marketplace Products (Use-case Pipelines)
+---
 
-| Name                          | Version                                                                                                              | Related Pipeline | Licenses                                                                                                            |
+This software includes third party software subject to the following copyrights:
+
+**GenAI Metadata 3D Labeling Pipeline**
+
+| Name   | Version | License |
+| :----- | :------ | :------ |
+| pillow | ^10.3.0 | HPND    |
+
+**3D Basic Conversion Pipeline**
+
+| Name                  | Version | License |
+| :-------------------- | :------ | :------ |
+| trimesh               | ^4.5.2  | MIT     |
+| aws-lambda-powertools | ^3.2.0  | MIT-0   |
+
+**Mesh/CAD Metadata Extraction Pipeline**
+
+| Name                  | Version | License             |
+| :-------------------- | :------ | :------------------ |
+| aws-lambda-powertools | 3.2.0   | MIT-0               |
+| jmespath              | 1.0.1   | MIT                 |
+| numpy                 | 2.0.1   | BSD-3-Clause        |
+| trimesh               | 4.8.3   | MIT                 |
+| cadquery              | 2.6.0   | Apache-2.0/LGPL-2.1 |
+| typing-extensions     | 4.12.2  | Python-2.0          |
+
+**Other Pipeline Components**
+
+| Name            | Version                                                                                                                                                   | Related Pipeline             | License      |
+| :-------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------- | :----------- |
+| PDAL            | [master-latest](https://github.com/PDAL/PDAL)                                                                                                             | POTREE VIEWER                | BSD          |
+| PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                | BSD-2-Clause |
+| Blender         | [master-latest](https://github.com/blender)                                                                                                               | GENAI 3D METADATA GENERATION | GNU GPLv3    |
+| SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                | MIT          |
+
+---
+
+## THIRD PARTY PAID COMPONENTS - BACKEND PIPELINES (AWS MARKETPLACE)
+
+---
+
+**AWS Marketplace Products**
+
+| Name                          | Version                                                                                                              | Related Pipeline | License                                                                                                             |
 | :---------------------------- | :------------------------------------------------------------------------------------------------------------------- | :--------------- | :------------------------------------------------------------------------------------------------------------------ |
 | RapidPipeline 3D Processor    | [0.0.4](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi?sr=0-1&ref_=beagle&applicationId=AWSMPContessa) | RAPID PIPELINE   | Custom                                                                                                              |
 | VNTANA 3D Optimization Engine | [1.0.0](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4?applicationId=AWSMPContessa&ref_=beagle&sr=0-1) | MODEL OPS        | [EULA](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4?applicationId=AWSMPContessa&ref_=beagle&sr=0-1) |
+
+---
+
+## THIRD PARTY COMPONENTS - INFRASTRUCTURE (CDK)
+
+---
+
+This software includes third party software subject to the following copyrights:
+
+**CDK and Infrastructure Libraries (NPM)**
+
+| Package                          | Version          | License      |
+| :------------------------------- | :--------------- | :----------- |
+| @aws-cdk/aws-lambda-python-alpha | ^2.214.0-alpha.0 | Apache-2.0   |
+| @aws-sdk/client-iam              | ^3.883.0         | Apache-2.0   |
+| @aws-sdk/client-ssm              | ^3.883.0         | Apache-2.0   |
+| @opensearch-project/opensearch   | ^3.5.1           | Apache-2.0   |
+| @types/aws-lambda                | ^8.10.152        | MIT          |
+| @types/aws4                      | ^1.11.6          | MIT          |
+| aws-cdk-lib                      | ^2.215.0         | Apache-2.0   |
+| aws-lambda                       | ^1.0.7           | Apache-2.0   |
+| aws-sdk                          | ^2.1692.0        | Apache-2.0   |
+| aws4                             | ^1.13.2          | MIT          |
+| cdk-nag                          | ^2.37.29         | Apache-2.0   |
+| constructs                       | ^10.4.2          | Apache-2.0   |
+| dotenv                           | ^17.2.2          | BSD-2-Clause |
+| source-map-support               | ^0.5.21          | MIT          |
+| aws-cdk                          | ^2.1029.2        | Apache-2.0   |
+| esbuild                          | ^0.25.10         | MIT          |
+| typescript                       | ^5.9.2           | Apache-2.0   |
+
+---
+
+## THIRD PARTY COMPONENTS - TOOLS (VAMSCLI)
+
+---
+
+This software includes third party software subject to the following copyrights:
+
+**VamsCLI Python Dependencies**
+
+| Name       | Version    | License      |
+| :--------- | :--------- | :----------- |
+| click      | >=8.0.0    | BSD-3-Clause |
+| requests   | >=2.25.0   | Apache-2.0   |
+| boto3      | >=1.26.0   | Apache-2.0   |
+| pycognito  | >=2024.5.1 | Apache-2.0   |
+| aiohttp    | >=3.8.0    | Apache-2.0   |
+| aiofiles   | >=23.0.0   | Apache-2.0   |
+| geojson    | >=3.2.0    | BSD-3-Clause |
+| rich       | >=14.2.0   | MIT          |
+| tqdm       | >=4.67.1   | MPL-2.0/MIT  |
+| defusedxml | >=0.7.1    | Python-2.0   |

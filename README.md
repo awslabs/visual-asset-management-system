@@ -9,27 +9,29 @@
 
 _Visual Asset Management System (VAMS) is a solution that is non-production-grade at its default. Consult with your organizational security prior to production use._
 
+_This solution falls into the Spatial Data Management (SDMA) framework for AWS solutions; previously called Spatial Data Planes._
+
 ## Introduction
 
-_Visual Asset Management System (VAMS)_ is a purpose-built, AWS native solution for the management and distribution of specialized visual assets used in spatial computing. VAMS offers a simplified solution for organizations to ingest, store, and manage visual assets in the cloud, which empowers any user with a web browser to upload, manage, visualize, transform, and retrieve visual assets. Existing workflows that leverage both custom code and pre-built or third-party applications can also be migrated to VAMS and ran in the AWS cloud, as opposed to being limited by the on-premise capacity available. VAMS is customizable and expandable with option of being further tailored to specific use-cases by development teams.
+_Visual Asset Management System (VAMS)_ is a purpose-built, AWS native solution for the management and distribution of specialized visual assets used in Physical AI and Spatial Computing. VAMS offers a simplified solution for organizations to ingest, store, and manage visual assets in the cloud, which empowers any user with a web browser to upload, manage, visualize, transform, and retrieve visual assets. Existing workflows that leverage both custom code and pre-built or third-party applications can also be migrated to VAMS and ran in the AWS cloud, as opposed to being limited by the on-premise capacity available. VAMS is customizable and expandable with option of being further tailored to specific use-cases by development teams.
 
-_Customer Value:_ VAMS addresses challenges faced by customers embarking on Spatial Computing initiatives, such as Robotics, Digital Twins, Augmented and Virtual Reality (AR/VR), or other 3D-data related technologies. Organizations that previously had to manage these assets on local systems can now do so from a web-based application.
+_Customer Value:_ VAMS addresses challenges faced by customers embarking on Spatial Computing initiatives, such as Robotics (Physical AI), Digital Twins, Augmented and Virtual Reality (AR/VR/XR), or other 2D/3D-data related technologies. Organizations that previously had to manage these assets on local systems can now do so from a web-based application.
 
-Leveraging Amazon Simple Storage Service (Amazon S3) as a low-cost, high availability storage layer, VAMS provides a purpose-built API for 3D asset management. This API provides a layer of abstraction, allowing custom integrations to be built. Custom integrations allow workloads and applications to be moved to the cloud, unlocking access to the entire breadth and depth of the AWS ecosystem.
+Leveraging Amazon Simple Storage Service (Amazon S3) as a low-cost, high availability storage layer, VAMS provides a purpose-built API for digital asset management. This API provides a layer of abstraction, allowing custom integrations to be built. Custom integrations allow workloads and applications to be moved to the cloud, unlocking access to the entire breadth and depth of the AWS ecosystem.
 
 Overall, VAMS super power comes from its use of common AWS services, open source logic, and extensibility to add to or combine with other architectures, solutions, and strategies.
 
 _Use Cases:_
 Sample use cases that have leveraged early iterations of VAMS include:
 
--   Distribution and management of 3D Assets using highly available S3 storage
--   Modifications of 3D assets using VAMS Pipelines
--   Creating workflows for 3D asset modification using VAMS Workflows
+-   Distribution and management of 2D or 3D digital assets using highly available S3 storage
+-   Modifications of assets using VAMS Pipelines
+-   Creating workflows for asset modification using VAMS Workflows
 
 ## Web Interface Screenshots
 
 ![Database View](./documentation/diagrams/screenshots/database_view.png)
-![Asset Search](./documentation/diagrams/screenshots/assets.png)
+![Asset and File Search](./documentation/diagrams/screenshots/assets.png)
 ![Asset Details](./documentation/diagrams/screenshots/asset_detail_view.png)
 ![3D Model Viewer](./documentation/diagrams/screenshots/model_view.png)
 ![Asset Metadata](./documentation/diagrams/screenshots/metadata.png)
@@ -96,6 +98,8 @@ Direct REST API integration for custom applications and integrations:
 > You are responsible for ensuring that your use of the third-party software libraries and GAI models comply with the terms governing them, and any laws, rules, regulations, policies, or standards that apply to you.
 
 > You are also responsible for making your own independent assessment of the third-party software libraries and GAI models that you use, including their outputs and how third-party software libraries GAI model providers use any data that might be transmitted to them based on your deployment configuration. AWS does not make any representations, warranties, or guarantees regarding the third-party software libraries and GAI models, which are “Third-Party Content” under your agreement with AWS. This solution is offered to you as “AWS Content” under your agreement with AWS.
+
+> See ![Third Party Notice](./NOTICE.md) for all applicable licenses
 
 ### Requirements
 
@@ -186,7 +190,7 @@ See [Permissions Guide](./documentation/PermissionsGuide.md) for how to use the 
 
 ## Architecture components
 
-Refer to the ![Architecture Components in the Developer Guide](./documentation/DeveloperGuide.md/#architecture-components).
+Refer to the ![Architecture Components in the Developer Guide](./documentation/DeveloperGuide.md#architecture-components).
 
 ## Demo and Workshop
 
@@ -198,7 +202,7 @@ To know more about how VAMS works and for instructions on configuring pipeline &
 
 ## Writing your own VAMS pipelines
 
-Refer to the ![Writing your own pipelines section in the Developer Guide](./documentation/DeveloperGuide.md/#adding-your-own-pipelines).
+Refer to the ![Writing your own pipelines section in the Developer Guide](./documentation/DeveloperGuide.md#adding-your-own-pipelines).
 
 ## Uninstalling
 
