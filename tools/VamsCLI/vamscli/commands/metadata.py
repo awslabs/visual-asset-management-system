@@ -17,7 +17,8 @@ from ..utils.api_client import APIClient
 
 def parse_json_input(json_input: str) -> dict:
     """Parse JSON input from string or file."""
-    if not json_input:
+    # Handle None, empty string, or Click Sentinel objects
+    if not json_input or (hasattr(json_input, '__class__') and 'Sentinel' in json_input.__class__.__name__):
         return {}
         
     # Check if it's a file path

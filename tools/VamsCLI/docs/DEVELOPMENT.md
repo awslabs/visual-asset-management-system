@@ -6,7 +6,7 @@ This guide provides information for developers who want to contribute to VamsCLI
 
 ### Prerequisites
 
--   **Python**: 3.8 or higher
+-   **Python**: 3.12 or higher
 -   **Git**: For version control
 -   **pip**: Python package installer
 
@@ -55,6 +55,46 @@ VamsCLI includes the following development dependencies:
 
 ## Code Quality Standards
 
+### Handling Click Sentinel Objects (Critical for Programmatic Command Invocation)
+
+When commands are invoked programmatically using `ctx.invoke()`, Click may pass `Sentinel.UNSET` objects for optional parameters that weren't provided. All `parse_json_input()` functions MUST handle these Sentinel objects to prevent JSON parsing errors.
+
+#### Required Pattern for parse_json_input()
+
+```python
+def parse_json_input(json_input: str) -> Dict[str, Any]:
+    """Parse JSON input from string or file."""
+    # Handle None, empty string, or Click Sentinel objects
+    if not json_input or (hasattr(json_input, '__class__') and 'Sentinel' in json_input.__class__.__name__):
+        return {}
+
+    try:
+        # Try to parse as JSON string first
+        return json.loads(json_input)
+    except json.JSONDecodeError:
+        # If that fails, try to read as file path
+        try:
+            with open(json_input, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, IOError):
+            raise click.BadParameter(
+                f"Invalid JSON input: '{json_input}' is neither valid JSON nor a readable file path"
+            )
+```
+
+#### Why This Is Critical
+
+1. **Programmatic Invocation**: Commands like `glbassetcombine` invoke other commands via `ctx.invoke()`
+2. **Sentinel Objects**: Click passes `Sentinel.UNSET` for unset optional parameters
+3. **JSON Parsing Failure**: Without the check, `json.loads(Sentinel.UNSET)` raises TypeError
+4. **Cross-Platform Issues**: Appears intermittently across different Python/Click versions
+
+#### When to Apply This Pattern
+
+-   **All `parse_json_input()` functions** in command files
+-   **Any function** that may receive Click Sentinel objects as parameters
+-   **Commands** that may be invoked programmatically by other commands
+
 ### Code Formatting
 
 Use Black for consistent code formatting:
@@ -70,7 +110,7 @@ black --check vamscli/
 **Configuration:** Black is configured in `pyproject.toml` with:
 
 -   Line length: 100 characters
--   Target Python version: 3.8+
+-   Target Python version: 3.12+
 
 ### Type Checking
 

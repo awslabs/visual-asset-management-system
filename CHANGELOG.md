@@ -8,10 +8,13 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **CLI** Fixed bugs with sentinel object check, file upload exception returns, and pattern updates
+
 ### Chores
 
-### Known Outstanding Issues
+-   **CLI** Updated CLI to require python 3.12 minimum and updated dependency versions (Click to 8.3.1 for Sentinel object changes for default parameters)
 
+### Known Outstanding Issues
 
 ## [2.3.0] (2025-11-13)
 
