@@ -6,8 +6,10 @@
 const { execSync } = require("child_process");
 const fs = require("fs-extra");
 const path = require("path");
+const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
+const viewerId = "online3d-viewer";
 const npmPackageDir = "./customInstalls/online3dviewer";
 const npmRepoSourceDestDir = "./customInstalls/online3dviewer/node_modules";
 const publicDestinationDir = "./public/viewers/online3dviewer";
@@ -83,7 +85,17 @@ const main = async () => {
         console.log("Online3DViewer Installation");
         console.log("=".repeat(60));
 
+        // Always cleanup previous builds first
         await previousCleanUp();
+
+        // Check if viewer is enabled in config
+        if (!checkViewerEnabled(viewerId)) {
+            console.log(`Online3DViewer: Viewer "${viewerId}" is disabled in viewerConfig.json`);
+            console.log("Online3DViewer: Skipping installation");
+            console.log("=".repeat(60));
+            return;
+        }
+
         await npmInstall();
         await copyFiles();
 

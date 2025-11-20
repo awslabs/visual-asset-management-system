@@ -256,7 +256,7 @@
             "dependencies": ["@vntana/viewer"],
             "loadStrategy": "lazy",
             "category": "3d",
-            "enabled": true
+            "enabled": false
         },
         {
             "id": "preview-viewer",

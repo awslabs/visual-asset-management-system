@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
+-   **Web** Added checks to web yarn install custom installers to look at which viewers are enabled/disabled before installing the dynamic libraries. This was mostly to reduce install and deployment times to not include viewer assets that are not enabled for the end-user.
+-   **Web** Updated to disable licensed file viewers by default in their configuration file
 -   **CLI** Updated CLI to require python 3.12 minimum and updated dependency versions (Click to 8.3.1 for Sentinel object changes for default parameters)
 
 ### Known Outstanding Issues

@@ -6,8 +6,10 @@
 const { execSync } = require("child_process");
 const fs = require("fs-extra");
 const path = require("path");
+const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
+const viewerId = "cesium-viewer";
 const npmPackageDir = "./customInstalls/cesium";
 const npmRepoSourceDestDir = "./customInstalls/cesium/node_modules";
 const cesiumBuildDir = "./customInstalls/cesium/node_modules/cesium/Build/Cesium";
@@ -106,7 +108,17 @@ const main = async () => {
         console.log("Cesium Viewer Installation");
         console.log("=".repeat(60));
 
+        // Always cleanup previous builds first
         await previousCleanUp();
+
+        // Check if viewer is enabled in config
+        if (!checkViewerEnabled(viewerId)) {
+            console.log(`Cesium: Viewer "${viewerId}" is disabled in viewerConfig.json`);
+            console.log("Cesium: Skipping installation");
+            console.log("=".repeat(60));
+            return;
+        }
+
         await npmInstall();
         await copyFiles();
 

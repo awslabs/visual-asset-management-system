@@ -6,8 +6,10 @@
 const { execSync } = require("child_process");
 const fs = require("fs-extra");
 const path = require("path");
+const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
+const viewerId = "gaussian-splat-viewer-playcanvas";
 const npmPackageDir = "./customInstalls/playcanvas";
 const npmRepoSourceDestDir = "./customInstalls/playcanvas/node_modules";
 const bundleSourceDir = "./customInstalls/playcanvas/dist";
@@ -80,7 +82,17 @@ const main = async () => {
         console.log("PlayCanvas Installation");
         console.log("=".repeat(60));
 
+        // Always cleanup previous builds first
         await previousCleanUp();
+
+        // Check if viewer is enabled in config
+        if (!checkViewerEnabled(viewerId)) {
+            console.log(`PlayCanvas: Viewer "${viewerId}" is disabled in viewerConfig.json`);
+            console.log("PlayCanvas: Skipping installation");
+            console.log("=".repeat(60));
+            return;
+        }
+
         await npmInstall();
         await buildBundle();
         await copyBundledFiles();
