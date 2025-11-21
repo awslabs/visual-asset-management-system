@@ -16,6 +16,9 @@ from ..utils.exceptions import (
 
 def parse_json_input(json_input: str) -> Any:
     """Parse JSON input from string or file."""
+    # Handle None, empty string, or Click Sentinel objects
+    if not json_input or (hasattr(json_input, '__class__') and 'Sentinel' in json_input.__class__.__name__):
+        return {}
     try:
         # Try to parse as JSON string first
         return json.loads(json_input)

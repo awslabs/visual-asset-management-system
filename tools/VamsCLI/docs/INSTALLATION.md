@@ -4,7 +4,7 @@ This guide provides detailed instructions for installing and setting up VamsCLI 
 
 ## System Requirements
 
--   **Python**: 3.8 or higher
+-   **Python**: 3.12 or higher
 -   **Operating System**: Windows, macOS, or Linux
 -   **Network**: HTTPS access to your VAMS API Gateway
 -   **Dependencies**: Automatically installed with VamsCLI

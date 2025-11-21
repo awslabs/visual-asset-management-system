@@ -6,8 +6,10 @@
 const { execSync } = require("child_process");
 const fs = require("fs-extra");
 const path = require("path");
+const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
+const viewerId = "vntana-viewer";
 const npmPackageDir = "./customInstalls/vntana";
 const npmRepoSourceDestDir = "./customInstalls/vntana/node_modules";
 const bundleSourceDir = "./customInstalls/vntana/dist";
@@ -91,7 +93,17 @@ const main = async () => {
         console.log("Vntana Viewer Bundle Installation");
         console.log("=".repeat(60));
 
+        // Always cleanup previous builds first
         await previousCleanUp();
+
+        // Check if viewer is enabled in config
+        if (!checkViewerEnabled(viewerId)) {
+            console.log(`Vntana: Viewer "${viewerId}" is disabled in viewerConfig.json`);
+            console.log("Vntana: Skipping installation");
+            console.log("=".repeat(60));
+            return;
+        }
+
         await npmInstall();
         await buildBundle();
         await copyBundledFiles();

@@ -99,7 +99,8 @@ class ProgressDisplay:
 
 def parse_json_input(json_input: str) -> dict:
     """Parse JSON input from string or file."""
-    if not json_input:
+    # Handle None, empty string, or Click Sentinel objects
+    if not json_input or (hasattr(json_input, '__class__') and 'Sentinel' in json_input.__class__.__name__):
         return {}
         
     # Check if it's a file path
@@ -283,7 +284,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
                 error_type="Upload Validation Error",
                 helpful_message=helpful_message
             )
-            sys.exit(1)
+            raise click.ClickException(str(e))
         
         if not json_output and not hide_progress:
             click.echo(f"\nUpload Summary:")
@@ -430,11 +431,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             cli_formatter=format_upload_result
         )
         
-        # Exit with appropriate code
-        if not result["overall_success"]:
-            log_debug(f"Upload failed: {result['failed_files']} files failed")
-            sys.exit(1)
-        
+        # Return result for programmatic use (Rule 16)
         log_debug("Upload command completed successfully")
         return result
             
@@ -443,7 +440,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         # Only handle file-specific business logic errors
         log_debug(f"File upload error caught: {type(e).__name__}: {str(e)}")
         output_error(e, json_output, error_type="File Upload Error")
-        sys.exit(1)
+        raise click.ClickException(str(e))
 
 
 @file.command('create-folder')

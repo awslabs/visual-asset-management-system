@@ -316,6 +316,8 @@ def [command_name](ctx: click.Context, user_id: str, option_name: str, json_outp
             cli_formatter=lambda r: f"Details: {r}"
         )
 
+        return result
+
     except [SpecificBusinessLogicError] as e:
         # Only handle command-specific business logic errors
         output_error(
@@ -1272,7 +1274,98 @@ def test_command_success(self, ...):  # VIOLATION - use fixtures instead
 -   **Individual test files**: File-specific fixtures that are only used within that test file
 -   **Fixture Documentation**: Document fixture purpose and usage in docstrings
 
-### **Rule 16: JSON Output MUST Be Pure**
+### **Rule 16: Commands MUST Return Their Result Data**
+
+All VamsCLI commands MUST explicitly return their result data after calling `output_result()`:
+
+#### **Return Statement Requirements:**
+
+-   [ ] **Always Return Result**: Add `return result` after `output_result()` call
+-   [ ] **Enable Programmatic Use**: Allows commands to be invoked via `ctx.invoke()`
+-   [ ] **Cross-Platform Consistency**: Prevents Click Sentinel object issues
+-   [ ] **Standard Pattern**: Follows established VamsCLI command architecture
+
+#### **Why This Is Critical:**
+
+When commands are invoked programmatically using `ctx.invoke()`, Click needs an explicit return value to pass back to the caller. Without it, `ctx.invoke()` returns a Click `Sentinel` object instead of the actual result dictionary, causing errors like:
+
+```
+✗ Unexpected error: the JSON object must be str, bytes or bytearray, not Sentinel
+```
+
+This issue appears intermittently across different machines due to variations in Click/Python versions.
+
+#### **Correct Return Pattern:**
+
+```python
+# ✅ CORRECT - Always return result after output_result()
+@command.command()
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def my_command(ctx: click.Context, json_output: bool):
+    """Command that can be used both via CLI and programmatically."""
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        result = api_client.some_operation()
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Operation successful!",
+            cli_formatter=format_output
+        )
+
+        return result  # ✅ CRITICAL: Always return for programmatic use
+
+    except SomeBusinessLogicError as e:
+        output_error(e, json_output, error_type="Error")
+        raise click.ClickException(str(e))
+
+# ❌ INCORRECT - Missing return statement
+@command.command()
+def bad_command(ctx, json_output):
+    """Command without return - causes Sentinel object issues."""
+    result = api_client.some_operation()
+
+    output_result(result, json_output, success_message="✓ Success!")
+    # VIOLATION: No return statement - ctx.invoke() will return Sentinel
+```
+
+#### **Programmatic Command Invocation:**
+
+Commands with explicit return statements can be safely invoked programmatically:
+
+```python
+# ✅ CORRECT - Programmatic invocation works reliably
+@command.command()
+def wrapper_command(ctx):
+    """Command that invokes other commands."""
+    # This works because export_command returns its result
+    export_result = ctx.invoke(
+        export_command,
+        database_id='my-db',
+        asset_id='my-asset',
+        json_output=True
+    )
+
+    # export_result is a dict, not a Sentinel object
+    assets = export_result.get('assets', [])
+    # ... process data ...
+```
+
+#### **Benefits of Explicit Returns:**
+
+1. **Programmatic Reusability**: Commands can be invoked by other commands
+2. **Cross-Platform Reliability**: Works consistently across all Python/Click versions
+3. **No Sentinel Objects**: Eliminates intermittent JSON parsing errors
+4. **Clean Architecture**: Commands return data, callers decide how to use it
+5. **Testing**: Easier to test command return values directly
+
+### **Rule 17: JSON Output MUST Be Pure**
 
 All commands with `--json-output` parameter MUST output ONLY valid JSON with no additional messages:
 
@@ -1677,6 +1770,8 @@ def my_command(ctx: click.Context, json_output: bool, ...):
             success_message="✓ Success message",
             cli_formatter=lambda r: format_output(r)
         )
+
+        return result
 
     except SpecificBusinessLogicError as e:
         # Only handle command-specific business logic errors
