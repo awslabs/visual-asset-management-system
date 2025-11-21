@@ -9,7 +9,7 @@
 
 _Visual Asset Management System (VAMS) is a solution that is non-production-grade at its default. Consult with your organizational security prior to production use._
 
-_VAMS is categorized as an AWS Spatial Data Management (SDMA) solution, previously called Spatial Data Planes._
+_VAMS is categorized as Spatial Data Plane solution._
 
 ## Introduction
 
