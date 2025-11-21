@@ -7,8 +7,10 @@
 const { simpleGit, SimpleGit, SimpleGitOptions } = require("simple-git");
 const { execSync } = require("child_process");
 const fs = require("fs-extra");
+const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
+const viewerId = "potree-viewer";
 const gitRepoSourceDestDir = "./customInstalls/potree/source"; //Relative to base web directory where yarn/npm is run
 const gitRepoUrl = "https://github.com/potree/potree.git";
 const gitRepoCommitHash = "f6ac2d3b";
@@ -75,10 +77,28 @@ const copyFiles = async () => {
 
 // Main function
 const main = async () => {
+    console.log("=".repeat(60));
+    console.log("Potree Viewer Installation");
+    console.log("=".repeat(60));
+
+    // Always cleanup previous builds first
     await previousCleanUp();
+
+    // Check if viewer is enabled in config
+    if (!checkViewerEnabled(viewerId)) {
+        console.log(`Potree: Viewer "${viewerId}" is disabled in viewerConfig.json`);
+        console.log("Potree: Skipping installation");
+        console.log("=".repeat(60));
+        return;
+    }
+
     await gitActions();
     npmBuild();
     await copyFiles();
+
+    console.log("=".repeat(60));
+    console.log("Potree: Installation complete!");
+    console.log("=".repeat(60));
 };
 
 // Run the main function

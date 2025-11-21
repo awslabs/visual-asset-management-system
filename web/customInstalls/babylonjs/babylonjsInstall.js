@@ -6,8 +6,10 @@
 const { execSync } = require("child_process");
 const fs = require("fs-extra");
 const path = require("path");
+const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
+const viewerId = "gaussian-splat-viewer-babylonjs";
 const npmPackageDir = "./customInstalls/babylonjs";
 const npmRepoSourceDestDir = "./customInstalls/babylonjs/node_modules";
 const bundleSourceDir = "./customInstalls/babylonjs/dist";
@@ -80,7 +82,17 @@ const main = async () => {
         console.log("BabylonJS Installation");
         console.log("=".repeat(60));
 
+        // Always cleanup previous builds first
         await previousCleanUp();
+
+        // Check if viewer is enabled in config
+        if (!checkViewerEnabled(viewerId)) {
+            console.log(`BabylonJS: Viewer "${viewerId}" is disabled in viewerConfig.json`);
+            console.log("BabylonJS: Skipping installation");
+            console.log("=".repeat(60));
+            return;
+        }
+
         await npmInstall();
         await buildBundle();
         await copyBundledFiles();

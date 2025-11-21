@@ -848,7 +848,8 @@ class TestFileUploadCommandEdgeCases:
                         tmp_path
                     ])
                     
-                    assert result.exit_code == 1  # Should exit with error code
+                    # After Rule 16 fix: Command returns result instead of sys.exit(1)
+                    assert result.exit_code == 0  # Returns successfully with result
                     assert '⚠️  Upload completed with some failures' in result.output
                     assert 'Successful files: 1/2' in result.output
                     assert 'Failed files: 1' in result.output
@@ -889,7 +890,8 @@ class TestFileUploadCommandEdgeCases:
                         tmp_path
                     ])
                     
-                    assert result.exit_code == 1  # Should exit with error code
+                    # After Rule 16 fix: Command returns result instead of sys.exit(1)
+                    assert result.exit_code == 0  # Returns successfully with result
                     # With new output format, failed uploads show results without success message
                     assert 'Successful files: 0/1' in result.output
                     assert 'Failed files: 1' in result.output
