@@ -2,7 +2,7 @@
     "comments": "Configuration for VAMS v2.2 to v2.3 migration - Lambda-based reindexing",
 
     "_comment_lambda": "Lambda function configuration (required)",
-    "function_name": "vams-core-prod5-us-east-1-Se-crOsReindexer518D309B-IUHx7T9Fuu2G",
+    "function_name": "YOUR_REINDEXER_LAMBDA_FUNCTION_NAME",
 
     "_comment_operation": "Reindexing operation settings",
     "operation": "both",
@@ -12,7 +12,7 @@
 
     "_comment_aws": "AWS configuration (optional)",
     "aws_profile": null,
-    "aws_region": "us-east-1",
+    "aws_region": null,
 
     "_comment_logging": "Logging settings",
     "log_level": "INFO",
@@ -35,3 +35,4 @@
         "Note: Only 'function_name' is required. All other settings are optional."
     ]
 }
+
