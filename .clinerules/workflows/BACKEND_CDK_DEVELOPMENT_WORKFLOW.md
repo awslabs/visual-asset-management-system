@@ -280,7 +280,7 @@ raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}
 #### **Example: Secure Model with Validator Integration**
 
 ```python
-class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
+class CreateAssetRequestModel(BaseModel, extra='ignore'):
     """Secure request model with proper validation"""
     assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
@@ -401,11 +401,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 ```python
 # ✅ CORRECT - Follow assetsV3.py patterns
 from typing import Dict, List, Optional, Literal
-from pydantic import Field, Extra
+from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import validate, id_pattern, object_name_pattern
 
-class [Domain]RequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]RequestModel(BaseModel, extra='ignore'):
     """Request model for [operation] [domain]"""
     requiredField: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=id_pattern)
     optionalField: Optional[str] = Field(None, min_length=1, max_length=256)
@@ -425,7 +425,7 @@ class [Domain]RequestModel(BaseModel, extra=Extra.ignore):
             raise ValueError(message)
         return values
 
-class [Domain]ResponseModel(BaseModel, extra=Extra.ignore):
+class [Domain]ResponseModel(BaseModel, extra='ignore'):
     """Response model for [domain] data"""
     id: str
     name: str
@@ -459,6 +459,7 @@ export function build[Domain]Service(
             REQUIRED_TABLE_NAME: storageResources.dynamo.requiredTable.tableName,
             REQUIRED_BUCKET_NAME: storageResources.s3.requiredBucket.bucketName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -468,6 +469,7 @@ export function build[Domain]Service(
     storageResources.dynamo.requiredTable.grantReadWriteData(fun);
     storageResources.s3.requiredBucket.grantReadWrite(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
@@ -841,6 +843,7 @@ def mock_environment():
         'REQUIRED_TABLE_NAME': 'test-table',
         'REQUIRED_BUCKET_NAME': 'test-bucket',
         'AUTH_TABLE_NAME': 'test-auth-table',
+        'CONSTRAINTS_TABLE_NAME': 'test-constraint-table',
         'USER_ROLES_TABLE_NAME': 'test-user-roles-table',
         'ROLES_TABLE_NAME': 'test-roles-table',
     }):
@@ -990,18 +993,12 @@ claims_and_roles = {}
 try:
     required_table_name = os.environ["REQUIRED_TABLE_NAME"]
     required_bucket_name = os.environ["REQUIRED_BUCKET_NAME"]
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
 
 # Initialize resources
 required_table = dynamodb.Table(required_table_name)
-auth_table = dynamodb.Table(auth_table_name)
-user_roles_table = dynamodb.Table(user_roles_table_name)
-roles_table = dynamodb.Table(roles_table_name)
 
 #######################
 # Business Logic Functions
@@ -1283,7 +1280,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 """[Domain] API models for VAMS."""
 
 from typing import Dict, List, Optional, Literal
-from pydantic import Field, Extra
+from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
@@ -1292,18 +1289,18 @@ logger = safeLogger(service_name="[Domain]Models")
 
 ######################## [Domain] API Models ##########################
 
-class [Domain]RequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]RequestModel(BaseModel, extra='ignore'):
     """Request model for getting a [domain]"""
     includeDeleted: Optional[bool] = False
 
-class [Domain]ListRequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]ListRequestModel(BaseModel, extra='ignore'):
     """Request model for listing [domain]s"""
     maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
     pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
     startingToken: Optional[str] = None
     includeDeleted: Optional[bool] = False
 
-class [Domain]CreateRequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]CreateRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a [domain]"""
     [domain]Id: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     [domain]Name: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
@@ -1327,7 +1324,7 @@ class [Domain]CreateRequestModel(BaseModel, extra=Extra.ignore):
                 raise ValueError(message)
         return values
 
-class [Domain]UpdateRequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]UpdateRequestModel(BaseModel, extra='ignore'):
     """Request model for updating a [domain]"""
     [domain]Name: Optional[str] = Field(None, min_length=1, max_length=256, pattern=object_name_pattern)
     description: Optional[str] = Field(None, min_length=4, max_length=256)
@@ -1355,7 +1352,7 @@ class [Domain]UpdateRequestModel(BaseModel, extra=Extra.ignore):
 
         return values
 
-class [Domain]DeleteRequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]DeleteRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting a [domain]"""
     confirmDelete: bool = Field(default=False)
     reason: Optional[str] = Field(None, max_length=256)
@@ -1367,7 +1364,7 @@ class [Domain]DeleteRequestModel(BaseModel, extra=Extra.ignore):
             raise ValueError("confirmDelete must be true for deletion")
         return v
 
-class [Domain]ResponseModel(BaseModel, extra=Extra.ignore):
+class [Domain]ResponseModel(BaseModel, extra='ignore'):
     """Response model for [domain] data"""
     [domain]Id: str
     [domain]Name: str
@@ -1377,7 +1374,7 @@ class [Domain]ResponseModel(BaseModel, extra=Extra.ignore):
     dateCreated: Optional[str] = None
     createdBy: Optional[str] = None
 
-class [Domain]OperationResponseModel(BaseModel, extra=Extra.ignore):
+class [Domain]OperationResponseModel(BaseModel, extra='ignore'):
     """Response model for [domain] operations (create, update, delete)"""
     success: bool
     message: str
@@ -1438,6 +1435,7 @@ export function build[Domain]Service(
         environment: {
             [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -1446,6 +1444,7 @@ export function build[Domain]Service(
     // Grant permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
@@ -1485,6 +1484,7 @@ export function buildCreate[Domain]Function(
         environment: {
             [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -1493,6 +1493,7 @@ export function buildCreate[Domain]Function(
     // Grant permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
@@ -1525,6 +1526,7 @@ def mock_environment():
     with patch.dict('os.environ', {
         '[DOMAIN]_STORAGE_TABLE_NAME': 'test-[domain]-table',
         'AUTH_TABLE_NAME': 'test-auth-table',
+        'CONSTRAINTS_TABLE_NAME': 'test-constraint-table',
         'USER_ROLES_TABLE_NAME': 'test-user-roles-table',
         'ROLES_TABLE_NAME': 'test-roles-table',
     }):
@@ -2093,7 +2095,7 @@ vamscli --help
 """[Domain] API models for VAMS."""
 
 from typing import Dict, List, Optional, Literal
-from pydantic import Field, Extra
+from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger

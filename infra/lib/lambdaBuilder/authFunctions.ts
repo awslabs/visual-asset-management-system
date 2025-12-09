@@ -77,7 +77,7 @@ export function buildAuthConstraintsFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "authConstraintsService";
-    const authServiceFun = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -96,14 +96,16 @@ export function buildAuthConstraintsFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
         },
     });
-    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(authServiceFun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(authServiceFun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(authServiceFun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(authServiceFun, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(authServiceFun, config);
-    return authServiceFun;
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildAuthLoginProfile(
@@ -116,7 +118,7 @@ export function buildAuthLoginProfile(
     environment?: { [key: string]: string }
 ): lambda.Function {
     const name = "authLoginProfile";
-    const authLoginProfileFunc = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -133,6 +135,7 @@ export function buildAuthLoginProfile(
                 : undefined,
         environment: {
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
@@ -143,17 +146,15 @@ export function buildAuthLoginProfile(
         },
     });
 
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(authLoginProfileFunc);
-    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(authLoginProfileFunc);
-    storageResources.dynamo.rolesStorageTable.grantReadData(authLoginProfileFunc);
-    storageResources.dynamo.userStorageTable.grantReadWriteData(authLoginProfileFunc);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        authLoginProfileFunc,
-        storageResources.encryption.kmsKey
-    );
-    globalLambdaEnvironmentsAndPermissions(authLoginProfileFunc, config);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
-    return authLoginProfileFunc;
+    return fun;
 }
 
 export function buildRoutesService(
@@ -166,7 +167,7 @@ export function buildRoutesService(
     environment?: { [key: string]: string }
 ): lambda.Function {
     const name = "routes";
-    const routesFunc = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -183,19 +184,21 @@ export function buildRoutesService(
                 : undefined,
         environment: {
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ...environment,
         },
     });
 
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(routesFunc);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(routesFunc);
-    storageResources.dynamo.rolesStorageTable.grantReadData(routesFunc);
-    kmsKeyLambdaPermissionAddToResourcePolicy(routesFunc, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(routesFunc, config);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
-    return routesFunc;
+    return fun;
 }
 
 export function buildApiGatewayAuthorizerHttpFunction(

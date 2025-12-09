@@ -52,12 +52,18 @@ Some configuration options can be overriden at time of deployment with either en
 
 -   `app.useLocationService.enabled` | default: true | #Feature to use location services to display maps data for asset metadata types that store global position coordinates. Note that currently map view won't show up if OpenSearch is not enabled.
 
--   `app.useAlb.enabled` | default: false | #Feature to swap in a Application Load Balancer instead of a CloudFront Deployment. This will 1) disable static webpage caching, 2) require a fixed web domain to be specified, 3) require a SSL/TLS certicate to be registered in AWS Certifcate Manager, 4) have a S3 bucket name available in the partition that matches the domain name for the static website contents, 5) prevent some cross-site-scripting security preventions / secure HTTPOnly cookies from taking full affect and 6) cause a modified A/B stack deployment scenario on VAMS upgrades due to the common S3 bucket name used by the ALB.
+-   `app.useAlb.enabled` | default: false | #Feature to swap in a Application Load Balancer instead of a CloudFront Deployment for the static website deployment (neither can also be chosen). This will 1) disable static webpage caching, 2) require a fixed web domain to be specified, 3) require a SSL/TLS certicate to be registered in AWS Certifcate Manager, 4) have a S3 bucket name available in the partition that matches the domain name for the static website contents, 5) prevent some cross-site-scripting security preventions / secure HTTPOnly cookies from taking full affect and 6) cause a modified A/B stack deployment scenario on VAMS upgrades due to the common S3 bucket name used by the ALB.
 -   `app.useAlb.usePublicSubnet` | default: false | #Specifies if the ALB should use a public subnet. If creating a new VPC, will create seperate public subnets for ALB. If importing an existing VPC, will require `app.useGlobalVpc.optionalExternalPublicSubnetIds` to be filled out.
 -   `app.useAlb.addAlbS3SpecialVpcEndpoint` | default: true | #Creates the special S3 VPC endpoint needed by the ALB to serve S3 static web files. If turned false, this will need to be manualyl created afterwards. See the DeveloperGuide for more information.
 -   `app.useAlb.domainHost` | default: vams1.example.com | #Specifies the domain to use for the ALB and static webpage S3 bucket. Required to be filled out to use ALB.
 -   `app.useAlb.certificateARN` | default: arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID> | #Specifies the existing ACM certificate to use for the ALB for HTTPS connections. ACM certificate must be for the `domainHost` specified and reside in the same region being deployed to. Required to be filled out to use ALB.
 -   `app.useAlb.optionalHostedZoneID` | default: NULL | #Optional route53 zone host ID to automatically create an alias for the `domainHost` specified to the created ALB.
+
+-   `app.useCloudFront.enabled` | default: true | #Feature to enable deploying the VAMS static website to Cloudfront (not GovCloud supported). Either this option or app.useAlb.enabled should be used. Both cannot be turned on but neither can be selected to have a API-only deployment.
+-   `app.useCloudFront.customDomain.enabled` | default: false | #Feature to enable custom domain name for CloudFront distribution. When disabled, CloudFront will use the auto-generated domain name. When enabled, requires certificateArn and domainHost to be specified.
+-   `app.useCloudFront.customDomain.domainHost` | default: "" | #Specifies the custom domain name to use for the CloudFront distribution (e.g., vams.example.com). Required when customDomain.enabled is true. The domain must match the certificate provided.
+-   `app.useCloudFront.customDomain.certificateArn` | default: "" | #Specifies the ACM certificate ARN to use for HTTPS connections on the custom domain. **IMPORTANT**: Certificate must be in the us-east-1 region regardless of where VAMS is deployed, as this is a CloudFront requirement. Required when customDomain.enabled is true.
+-   `app.useCloudFront.customDomain.optionalHostedZoneId` | default: "" | #Optional Route53 hosted zone ID to automatically create a DNS alias record for the custom domain pointing to the CloudFront distribution. If not provided, you must manually configure DNS.
 
 -   `app.pipelines.usePreviewPcPotreeViewer.enabled` | default: false | #Feature to create a point cloud potree viewer processing pipeline to support point cloud file type viewing within the VAMS web UI. This will enable the global VPC option and all pipeline components will be put behind the VPC. NOTICE: This feature uses a third-party open-source library with a GPL license, refer to your legal team before enabling.
 -   `app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS` | default: false | #Feature to automatically register the point cloud potree viewer pipeline and associated workflow in the global VAMS database during CDK deployment. When enabled, the pipeline will be available immediately after deployment without manual registration through the UI.
@@ -97,7 +103,7 @@ Some configuration options can be overriden at time of deployment with either en
 
 ### Additional configuration notes
 
--   `GovCloud` - This will check for Use Global VPC (enabled), Use ALB (enabled - other configuration needed, see ALB section), and Use Location Services (disabled). Additionally does some small implementation changes for components that are different in GovCloud partitions.
+-   `GovCloud` - This will check for Use Global VPC (enabled), Use ALB (enabled - other configuration needed, see ALB section), use Cloudfront (disabled), and Use Location Services (disabled). Additionally does some small implementation changes for components that are different in GovCloud partitions.
 -   `GovCloud - IL6 Compliant` - This will check for Use Cognito (disabled), Use WAF (enabled), Use VPC for all Lambdas (enabled), and Use KMS CMK Encryption (enabled). Additionally does some small implementation changes for components that are different in GovCloud IL6 partition.
 -   `OpenSearch` - If both serverless and provisioned are not enabled, no OpenSearch will be enabled which will reduce the functionality in the application to not have any search capabilities on assets. All authorized assets will be returned always on the assets page.
 -   `OpenSearch - Provisioned` - This service is very sensitive to VPC Subnet Availabilty Zone selection. If using an external VPC, make sure the provided private subnets are a minimum of 3 and are each in their own availability zone. OpenSearch Provisioned CDK creates service-linked roles althoguh sometimes these don't get recognized right away during a first-time deployment by receiving the following error: `Invalid request provided: Before you can proceed, you must enable a service-linked role to give Amazon OpenSearch Service permissions to access your VPC.`. Wait 5 minutes minutes after your first run and then re-run your deployment (after clearing out any previous stack in CloudFormation). If you continue seeing issues, run the following CLI command manually to try to create these roles by hand: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com`, `aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com`
@@ -305,11 +311,79 @@ Example: Restrict access outside of a source IP (Fill in IP addresses and/or CID
 }
 ```
 
+## CloudFront Custom Domain Configuration
+
+VAMS supports custom domain names for CloudFront distributions, allowing you to serve the web application from your own branded domain (e.g., `vams.example.com`) instead of the auto-generated CloudFront domain name.
+
+### Prerequisites
+
+Before enabling custom domain support for CloudFront, ensure you have:
+
+1. **ACM Certificate in us-east-1**: An AWS Certificate Manager (ACM) certificate for your domain **must be in the us-east-1 region**, regardless of where you're deploying VAMS. This is a CloudFront requirement.
+
+    - The certificate must be issued for the exact domain you plan to use (e.g., `vams.example.com`)
+    - Wildcard certificates (e.g., `*.example.com`) are supported
+    - Certificate must be in `ISSUED` status
+
+2. **Domain Name**: A registered domain name that you control
+
+    - Can be an apex domain (e.g., `example.com`) or subdomain (e.g., `vams.example.com`)
+    - Must match the certificate's domain
+
+3. **Route53 Hosted Zone (Optional)**: If you want automatic DNS configuration
+    - Hosted zone must be for the root domain (e.g., `example.com` for subdomain `vams.example.com`)
+    - You'll need the Hosted Zone ID
+
+If you didn't provide `optionalHostedZoneId`, manually create a DNS record:
+
+**For Route53:**
+
+-   Create an A record (Alias) pointing to the CloudFront distribution domain name
+-   The CloudFront domain name is available in the stack outputs
+
+**For Other DNS Providers:**
+
+-   Create a CNAME record pointing to the CloudFront distribution domain name
+-   Note: CNAME records cannot be used for apex domains (use Route53 or another provider that supports ALIAS records)
+
+### Configuration Options Explained
+
+**`enabled`**:
+
+-   Set to `true` to use a custom domain
+-   Set to `false` (default) to use the auto-generated CloudFront domain
+-   When disabled, the other custom domain settings are ignored
+
+**`domainHost`**:
+
+-   The fully qualified domain name (FQDN) for your VAMS deployment
+-   Examples: `vams.example.com`, `assets.company.com`, `example.com`
+-   Must exactly match the domain in your ACM certificate
+
+**`certificateArn`**:
+
+-   The ARN of your ACM certificate in us-east-1
+-   Format: `arn:aws:acm:us-east-1:ACCOUNT_ID:certificate/CERTIFICATE_ID`
+-   **Critical**: Must be in us-east-1 region, even if VAMS is deployed elsewhere
+
+**`optionalHostedZoneId`**:
+
+-   The Route53 Hosted Zone ID for automatic DNS configuration
+-   Format: `Z1234567890ABC`
+-   If provided, VAMS will automatically create an A record (Alias) pointing to CloudFront
+-   If not provided, you must manually configure DNS
+
+CloudFormation Outputs:
+
+-   `CloudFrontDistributionUrl`: Auto-generated CloudFront URL (always available)
+-   `CloudFrontCustomDomainUrl`: Your custom domain URL (when enabled)
+-   `CloudFrontDistributionDomainName`: CloudFront domain for DNS configuration
+
 ## Cloudfront TLS 1.2 Enforcement
 
 Amazon CloudFront is deployed using the default CloudFront domain name and TLS certificate. To use a later TLS version (1.2), use your own custom domain name and custom SSL certificate. For more information, refer to using alternate domain names and HTTPS in the Amazon CloudFront Developer Guide.
 
-This is a post-configuration option or modification to the CDK and not a feature currently available as part of the VAMS CDK Configuration. Domains are currently only supported as part of VAMS CDK configuration with a web ALB deployment.
+Custom domain support is now available as part of the VAMS CDK Configuration through the `app.useCloudFront.customDomain` settings. See the CloudFront Custom Domain Configuration section above for detailed instructions.
 
 https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/distribution-web-values-specify.html#DownloadDistValues-security-policy
 

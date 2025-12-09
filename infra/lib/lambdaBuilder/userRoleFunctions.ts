@@ -12,20 +12,19 @@ import {
     globalLambdaEnvironmentsAndPermissions,
 } from "../helper/security";
 import * as Config from "../../config/config";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
 export function buildUserRolesService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    rolesStorageTable: dynamodb.Table,
-    userRolesStorageTable: dynamodb.Table,
-    authEntitiesStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "userRolesService";
-    const userRolesService = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.userRoles.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -41,16 +40,18 @@ export function buildUserRolesService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ROLES_TABLE_NAME: rolesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
         },
     });
 
-    rolesStorageTable.grantReadWriteData(userRolesService);
-    userRolesStorageTable.grantReadWriteData(userRolesService);
-    authEntitiesStorageTable.grantReadWriteData(userRolesService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(userRolesService, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(userRolesService, config);
-    return userRolesService;
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }

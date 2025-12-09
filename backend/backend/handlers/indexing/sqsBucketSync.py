@@ -8,6 +8,7 @@ import os
 import re
 import boto3
 import time
+import hashlib
 from botocore.config import Config
 from datetime import datetime
 from handlers.metadata import to_update_expr
@@ -42,7 +43,7 @@ try:
     asset_table_name = os.environ.get('ASSET_STORAGE_TABLE_NAME')
     db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     database_id = os.environ.get('DEFAULT_DATABASE_ID')  
-    openSearchIndexing_lambda_name = os.environ["INDEXING_FUNCTION_NAME"]
+    file_indexer_sns_topic_arn = os.environ.get("FILE_INDEXER_SNS_TOPIC_ARN", "")
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -414,6 +415,78 @@ def lookup_asset(bucket_id: str, asset_id: str) -> Optional[Dict]:
         logger.exception(f"Error looking up asset: {e}")
         return None
 
+def lookup_archived_asset(bucket_id: str, asset_id: str) -> Optional[Dict]:
+    """
+    Look up archived asset in DynamoDB (with #deleted suffix in databaseId)
+    
+    Args:
+        bucket_id: The bucket ID
+        asset_id: The asset ID
+        
+    Returns:
+        dict: Archived asset data if found, None otherwise
+    """
+    # Check cache first
+    cache_key = f"{bucket_id}:{asset_id}:archived"
+    cached_result = asset_cache.get(cache_key)
+    if cached_result is not None:
+        logger.info(f"Cache hit for archived asset {asset_id} in bucket {bucket_id}")
+        return cached_result
+    
+    try:
+        # Query the asset table using the GSI
+        table = dynamodb.Table(asset_table_name)
+        response = table.query(
+            IndexName="BucketIdGSI",
+            KeyConditionExpression=Key('bucketId').eq(bucket_id) & Key('assetId').eq(asset_id)
+        )
+        
+        # Filter for archived assets (databaseId ends with #deleted)
+        for item in response.get('Items', []):
+            if item.get('databaseId', '').endswith('#deleted'):
+                logger.info(f"Found archived asset {asset_id} in bucket {bucket_id}")
+                # Cache the result
+                asset_cache.set(cache_key, item)
+                return item
+        
+        return None
+    except Exception as e:
+        logger.exception(f"Error looking up archived asset: {e}")
+        return None
+
+def lookup_archived_database(database_id: str) -> Optional[Dict]:
+    """
+    Look up archived database in DynamoDB (with #deleted suffix)
+    
+    Args:
+        database_id: The database ID (without #deleted suffix)
+        
+    Returns:
+        dict: Archived database data if found, None otherwise
+    """
+    # Check cache first
+    cache_key = f"database:{database_id}:archived"
+    cached_result = database_cache.get(cache_key)
+    if cached_result is not None:
+        logger.info(f"Cache hit for archived database {database_id}")
+        return cached_result
+    
+    try:
+        table = dynamodb.Table(db_table_name)
+        archived_db_id = f"{database_id}#deleted"
+        response = table.get_item(Key={'databaseId': archived_db_id})
+        
+        if 'Item' in response:
+            logger.info(f"Found archived database {database_id}")
+            # Cache the result
+            database_cache.set(cache_key, response['Item'])
+            return response['Item']
+        
+        return None
+    except Exception as e:
+        logger.exception(f"Error looking up archived database: {e}")
+        return None
+
 def lookup_databases(bucket_id: str) -> List[Dict]:
     """
     Look up databases by bucket ID
@@ -479,6 +552,145 @@ def create_new_database(bucket_id: str, database_id: str) -> Optional[str]:
     except Exception as e:
         logger.exception(f"Error creating database: {e}")
         return None
+
+def get_bucket_info_from_bucket_id(bucket_id: str) -> Optional[Dict]:
+    """
+    Get bucket information from S3 asset buckets table using bucket ID.
+    Uses caching to prevent excessive DynamoDB calls.
+    
+    Args:
+        bucket_id: The bucket ID
+        
+    Returns:
+        dict: Bucket information if found, None otherwise
+    """
+    # Check cache first
+    cache_key = f"bucket_info:{bucket_id}"
+    cached_result = s3_buckets_cache.get(cache_key)
+    if cached_result is not None:
+        logger.info(f"Cache hit for bucket info {bucket_id}")
+        return cached_result
+    
+    try:
+        buckets_table = dynamodb.Table(s3_asset_buckets_table)
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucket_id)
+        )
+        if bucket_response.get('Items'):
+            bucket_info = bucket_response['Items'][0]
+            # Cache the result
+            s3_buckets_cache.set(cache_key, bucket_info)
+            return bucket_info
+        
+        return None
+    except Exception as e:
+        logger.exception(f"Error getting bucket info: {e}")
+        return None
+
+def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: str) -> Optional[str]:
+    """
+    Get or create a database for a specific bucket/prefix combination.
+    Ensures unique database names per bucket/prefix and checks for archived databases.
+    Uses caching to prevent excessive DynamoDB calls.
+    
+    Args:
+        bucket_id: The bucket ID
+        bucket_name: The S3 bucket name
+        prefix: The base prefix in the bucket
+        
+    Returns:
+        str: Database ID if found or created successfully, None if archived or error
+    """
+    # Check cache for this specific bucket/prefix combination
+    prefix_for_cache = prefix.rstrip('/') if prefix else 'root'
+    cache_key = f"db_for_bucket_prefix:{bucket_name}:{prefix_for_cache}"
+    cached_db_id = database_cache.get(cache_key)
+    if cached_db_id is not None:
+        logger.info(f"Cache hit for database for bucket {bucket_name} prefix {prefix}")
+        return cached_db_id
+    
+    # Look up databases that match this bucket
+    databases = lookup_databases(bucket_id)
+    
+    # Filter databases to match this specific bucket/prefix combination
+    matching_databases = []
+    for db in databases:
+        # Get bucket info for this database (uses caching)
+        bucket_info = get_bucket_info_from_bucket_id(db.get('defaultBucketId'))
+        if bucket_info:
+            # Normalize prefix for comparison
+            db_prefix = bucket_info.get('baseAssetsPrefix', '').rstrip('/')
+            check_prefix = prefix.rstrip('/') if prefix else ''
+            
+            if bucket_info.get('bucketName') == bucket_name and db_prefix == check_prefix:
+                matching_databases.append(db)
+    
+    # If we found matching databases, use the first one (or default if it exists)
+    if matching_databases:
+        # Check if default database exists in matching databases
+        default_db = next((db for db in matching_databases if db['databaseId'] == database_id), None)
+        if default_db:
+            logger.info(f"Using default database {database_id} for bucket {bucket_name} prefix {prefix}")
+            # Cache the result
+            database_cache.set(cache_key, default_db['databaseId'])
+            return default_db['databaseId']
+        else:
+            logger.info(f"Using existing database {matching_databases[0]['databaseId']} for bucket {bucket_name} prefix {prefix}")
+            # Cache the result
+            database_cache.set(cache_key, matching_databases[0]['databaseId'])
+            return matching_databases[0]['databaseId']
+    
+    # No matching database found - need to create one
+    # Generate unique database ID based on bucket and prefix
+    prefix_for_hash = prefix.rstrip('/') if prefix else 'root'
+    prefix_hash = hashlib.md5(f"{bucket_name}:{prefix_for_hash}".encode()).hexdigest()[:8]
+    unique_db_id = f"{database_id}-{prefix_hash}"
+    
+    # Check cache for this specific database ID
+    db_cache_key = f"database:{unique_db_id}"
+    cached_db = database_cache.get(db_cache_key)
+    if cached_db is not None:
+        logger.info(f"Cache hit for database {unique_db_id}")
+        # Cache the bucket/prefix mapping as well
+        database_cache.set(cache_key, unique_db_id)
+        return unique_db_id
+    
+    # Check if this database ID already exists (active)
+    existing_db = None
+    try:
+        db_table = dynamodb.Table(db_table_name)
+        response = db_table.get_item(Key={'databaseId': unique_db_id})
+        existing_db = response.get('Item')
+        if existing_db:
+            # Cache the result
+            database_cache.set(db_cache_key, existing_db)
+    except Exception as e:
+        logger.warning(f"Error checking for existing database: {e}")
+    
+    # If database exists and is active, use it
+    if existing_db:
+        logger.info(f"Using existing database {unique_db_id} for bucket {bucket_name} prefix {prefix}")
+        # Cache the bucket/prefix mapping
+        database_cache.set(cache_key, unique_db_id)
+        return existing_db['databaseId']
+    
+    # Check for archived version - DO NOT recreate if archived
+    archived_db = lookup_archived_database(unique_db_id)
+    if archived_db:
+        logger.info(f"Database {unique_db_id} is archived, skipping creation")
+        # Cache the fact that this database is archived (cache as None)
+        database_cache.set(cache_key, None)
+        return None
+    
+    # Create new database
+    logger.info(f"Creating new database {unique_db_id} for bucket {bucket_name} prefix {prefix}")
+    created_db_id = create_new_database(bucket_id, unique_db_id)
+    
+    # Cache the result if creation was successful
+    if created_db_id:
+        database_cache.set(cache_key, created_db_id)
+    
+    return created_db_id
 
 def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optional[str]:
     """
@@ -678,45 +890,34 @@ def verify_asset_exists(database_id, asset_id):
         logger.exception(f"Error verifying asset: {e}")
         raise Exception(f"Error verifying asset.")
 
-def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
-    """Invoke a lambda function with the given payload"""
-    try:
-        logger.info(f"Invoking {function_name} lambda...")
-        lambda_response = lambda_client.invoke(
-            FunctionName=function_name,
-            InvocationType=invocation_type,
-            Payload=json.dumps(payload).encode('utf-8')
-        )
-        
-        if invocation_type == "RequestResponse":
-            stream = lambda_response['Payload']
-            response_payload = json.loads(stream.read().decode("utf-8"))
-            logger.info(f"Lambda response: {response_payload}")
-            return response_payload
-        return None
-    except Exception as e:
-        logger.exception(f"Error invoking lambda function {function_name}: {e}")
-        raise Exception(f"Error invoking lambda function.")
-
-def runOpenSearchIndexingLambda(event):
+def publish_to_file_indexer_sns(event):
     """
-    Run the OpenSearch indexing lambda
+    Publish S3 event to file indexer SNS topic for downstream processing.
     
     Args:
-        event: The event to pass to the lambda
+        event: The S3 event to publish
     """
     try:
+        if not file_indexer_sns_topic_arn:
+            logger.warning("FILE_INDEXER_SNS_TOPIC_ARN not configured, skipping SNS publish")
+            return
+        
         # Prepare payload for indexing
         event.update({
             "ASSET_BUCKET_NAME": asset_bucket_name,
             "ASSET_BUCKET_PREFIX": asset_bucket_prefix
         })
         
-        # Invoke openSearchIndexing lambda
-        invoke_lambda(openSearchIndexing_lambda_name, event, 'Event')
-        logger.info("Successfully invoked OpenSearch indexing lambda")
+        # Publish to SNS topic
+        response = sns_client.publish(
+            TopicArn=file_indexer_sns_topic_arn,
+            Message=json.dumps(event, default=str),
+            Subject='S3 Bucket Sync Event'
+        )
+        
+        logger.info(f"Successfully published to file indexer SNS topic: {response['MessageId']}")
     except Exception as e:
-        logger.exception(f"Error running OpenSearch indexing lambda: {e}")
+        logger.exception(f"Error publishing to file indexer SNS topic: {e}")
         # We don't re-raise the exception here to avoid stopping the process
 
 def process_s3_record(record: Dict) -> Tuple[bool, str]:
@@ -802,51 +1003,25 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             logger.info(f"Asset {asset_id} found in bucket {bucket_id}")
             database_id_to_use = asset_data.get('databaseId')
         else:
-            # 2.b. Lookup databases that match the bucketId
-            # Use cache to prevent excessive lookups (TTL: 60 seconds)
-            databases = lookup_databases(bucket_id)
+            # Check if asset is archived before creating new one
+            archived_asset = lookup_archived_asset(bucket_id, asset_id)
+            if archived_asset:
+                logger.info(f"Asset {asset_id} is archived, skipping processing")
+                return True, f"Skipped archived asset {asset_id}"
             
-            if not databases:
-                # Create a new database with defaultDatabaseId
-                logger.info(f"No databases found for bucket {bucket_id}, creating new database")
-                created_db_id = create_new_database(bucket_id, database_id)
-                if not created_db_id:
-                    logger.error(f"Failed to create database for bucket {bucket_id}")
-                    return False, f"Failed to create database for bucket {bucket_id}"
-                database_id_to_use = created_db_id
-            elif len(databases) == 1:
-                # Use the single database
-                database_id_to_use = databases[0]['databaseId']
-                logger.info(f"Using single database {database_id_to_use} for bucket {bucket_id}")
-            else:
-                # Multiple databases, check if any match defaultDatabaseId
-                # First check cache
-                cache_key = f"database:{database_id}"
-                default_db = database_cache.get(cache_key)
-                
-                # If not in cache, check the list of databases
-                if default_db is None:
-                    default_db = next((db for db in databases if db['databaseId'] == database_id), None)
-                
-                if default_db:
-                    database_id_to_use = default_db['databaseId']
-                    logger.info(f"Using default database {database_id_to_use} for bucket {bucket_id}")
-                else:
-                    # Create a new database with defaultDatabaseId
-                    logger.info(f"No default database found for bucket {bucket_id}, creating new database")
-                    created_db_id = create_new_database(bucket_id, database_id)
-                    if not created_db_id:
-                        logger.error(f"Failed to create database for bucket {bucket_id}")
-                        return False, f"Failed to create database for bucket {bucket_id}"
-                    database_id_to_use = created_db_id
+            # Get or create database for this bucket/prefix
+            database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
             
-            # 3. If asset doesn't exist, create it
-            if not asset_data:
-                logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
-                created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
-                if not created_asset_id:
-                    logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
-                    return False, f"Failed to create asset {asset_id} in database {database_id_to_use}"
+            if not database_id_to_use:
+                logger.error(f"Could not get or create database for bucket {bucket_id} (may be archived)")
+                return False, f"Could not get or create database for bucket {bucket_id}"
+            
+            # Create the asset
+            logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
+            created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+            if not created_asset_id:
+                logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
+                return False, f"Failed to create asset {asset_id} in database {database_id_to_use}"
         
         # 4. Check if the object key ends with "init" - If so delete and skip rest of steps
         if object_key.endswith('init') or object_key.endswith('init/'):
@@ -1074,13 +1249,13 @@ def lambda_handler_created(event, context):
             # Process the storage event and get success status
             success = on_storage_event_created(parsed_event)
             
-            # Only run indexing if there were no hard errors
+            # Only publish to SNS if there were no hard errors
             if success:
-                # Run OpenSearch indexing
-                logger.info("No hard errors encountered, running OpenSearch indexing")
-                runOpenSearchIndexingLambda(event)
+                # Publish to file indexer SNS topic
+                logger.info("No hard errors encountered, publishing to file indexer SNS")
+                publish_to_file_indexer_sns(event)
             else:
-                logger.warning("Hard errors encountered, skipping OpenSearch indexing")
+                logger.warning("Hard errors encountered, skipping file indexer SNS publish")
         else:
             logger.warning("No records found in parsed event, nothing to process")
     except Exception as e:
@@ -1170,9 +1345,9 @@ def lambda_handler_deleted(event, context):
             except Exception as e:
                 logger.exception(f"Error processing deletion event.. continueing with index: {e}")
             
-            # Run OpenSearch indexing
-            logger.info("Running OpenSearch indexing for deletion event")
-            runOpenSearchIndexingLambda(event)
+            # Publish to file indexer SNS topic
+            logger.info("Publishing deletion event to file indexer SNS")
+            publish_to_file_indexer_sns(event)
         else:
             logger.warning("No records found in parsed deletion event, nothing to process")
     except Exception as e:

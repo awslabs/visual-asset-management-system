@@ -1,0 +1,46 @@
+{
+    "comments": "Configuration for VAMS v2.3 to v2.4 constraints table migration",
+
+    "_comment_tables": "DynamoDB table names (required) - Get from CloudFormation stack outputs",
+    "auth_entities_table_name": "OLD-AuthEntitiesTable",
+    "constraints_table_name": "NEW-ConstraintsStorageTable",
+
+    "_comment_operation": "Migration operation settings",
+    "delete_old_data": false,
+    "dry_run": false,
+    "limit": null,
+    "batch_size": 25,
+
+    "_comment_aws": "AWS configuration (optional)",
+    "aws_profile": null,
+    "aws_region": "us-east-1",
+
+    "_comment_logging": "Logging settings",
+    "log_level": "INFO",
+
+    "_comment_instructions": "How to use this configuration file",
+    "_instructions": [
+        "1. Get table names from CloudFormation stack outputs:",
+        "   aws cloudformation describe-stacks --stack-name your-vams-stack \\",
+        "     --query 'Stacks[0].Outputs[?contains(OutputKey, `Table`)].{Key:OutputKey,Value:OutputValue}' \\",
+        "     --output table",
+        "",
+        "2. Update 'auth_entities_table_name' and 'constraints_table_name' with actual names",
+        "",
+        "3. Run dry-run first (recommended):",
+        "   python v2.3_to_v2.4_migration.py --config v2.3_to_v2.4_migration_config.json --dry-run",
+        "",
+        "4. Run production migration:",
+        "   python v2.3_to_v2.4_migration.py --config v2.3_to_v2.4_migration_config.json",
+        "",
+        "5. Optional: Delete old data after verification:",
+        "   python v2.3_to_v2.4_migration.py --config v2.3_to_v2.4_migration_config.json --delete-old-data",
+        "",
+        "Note: Command-line arguments override config file settings.",
+        "",
+        "Safety Features:",
+        "- dry_run: Test without making changes",
+        "- limit: Test with subset of constraints",
+        "- delete_old_data: false by default (keeps old data for safety)"
+    ]
+}

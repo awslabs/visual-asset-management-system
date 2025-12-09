@@ -24,6 +24,7 @@ def mock_environment():
         'ASSET_STORAGE_TABLE_NAME': 'test-asset-table',
         'DATABASE_STORAGE_TABLE_NAME': 'test-database-table',
         'AUTH_TABLE_NAME': 'test-auth-table',
+        'CONSTRAINTS_TABLE_NAME': 'test-constraint-table',
         'USER_ROLES_TABLE_NAME': 'test-user-roles-table',
         'ROLES_TABLE_NAME': 'test-roles-table',
         'AWS_REGION': 'us-east-1',

@@ -6,7 +6,7 @@ from customLogging.logger import safeLogger
 from common.validators import validate, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern
 from typing import Dict, List, Optional, Literal, Union, Any
 from typing_extensions import Annotated
-from pydantic import Json, EmailStr, PositiveInt, Field, Extra
+from pydantic import Json, EmailStr, PositiveInt, Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator, ValidationError
 from aws_lambda_powertools.utilities.parser.models import (
     APIGatewayProxyEventV2Model
@@ -16,15 +16,15 @@ logger = safeLogger(service_name="AssetModelsV3")
 
 ########################Common Asset Models##########################
 
-class AssetLocationModel(BaseModel, extra=Extra.ignore):
+class AssetLocationModel(BaseModel, extra='ignore'):
     """Model for asset location in S3"""
     Key: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
 
-class AssetPreviewLocationModel(BaseModel, extra=Extra.ignore):
+class AssetPreviewLocationModel(BaseModel, extra='ignore'):
     """Model for asset preview location in S3"""
     Key: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
 
-class CurrentVersionModel(BaseModel, extra=Extra.ignore):
+class CurrentVersionModel(BaseModel, extra='ignore'):
     """Model for current version information"""
     Version: str
     DateModified: str
@@ -33,7 +33,7 @@ class CurrentVersionModel(BaseModel, extra=Extra.ignore):
     specifiedPipelines: List[str] = []
     createdBy: str = "system"
 
-class AssetVersionListItemModel(BaseModel, extra=Extra.ignore):
+class AssetVersionListItemModel(BaseModel, extra='ignore'):
     """Model for individual version items in version lists"""
     Version: str
     DateModified: str
@@ -45,7 +45,7 @@ class AssetVersionListItemModel(BaseModel, extra=Extra.ignore):
     fileCount: int = 0  # Number of available files for this version
 
 ######################## Create Asset API Models ##########################
-class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
+class CreateAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new asset (metadata only)"""
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     assetId: Optional[str] = Field(None, min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
@@ -81,13 +81,13 @@ class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
 
         return values
 
-class CreateAssetResponseModel(BaseModel, extra=Extra.ignore):
+class CreateAssetResponseModel(BaseModel, extra='ignore'):
     """Response model for creating a new asset"""
     assetId: str
     message: str
 
 ######################## Initialize Upload API Models ##########################
-class UploadFileModel(BaseModel, extra=Extra.ignore):
+class UploadFileModel(BaseModel, extra='ignore'):
     """Model for file to be uploaded"""
     relativeKey: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     file_size: Optional[int] = Field(None, ge=0)  # Allow zero-byte files, use int instead of PositiveInt
@@ -125,7 +125,7 @@ class UploadFileModel(BaseModel, extra=Extra.ignore):
         
         return values
 
-class InitializeUploadRequestModel(BaseModel, extra=Extra.ignore):
+class InitializeUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for initializing a file upload"""
     assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
@@ -177,37 +177,37 @@ class InitializeUploadRequestModel(BaseModel, extra=Extra.ignore):
             
         return values
 
-class UploadPartModel(BaseModel, extra=Extra.ignore):
+class UploadPartModel(BaseModel, extra='ignore'):
     """Model for a part in a multipart upload"""
     PartNumber: int
     UploadUrl: str
 
-class UploadFileResponseModel(BaseModel, extra=Extra.ignore):
+class UploadFileResponseModel(BaseModel, extra='ignore'):
     """Response model for a file in an upload initialization"""
     relativeKey: str
     uploadIdS3: str
     numParts: int
     partUploadUrls: List[UploadPartModel]
 
-class InitializeUploadResponseModel(BaseModel, extra=Extra.ignore):
+class InitializeUploadResponseModel(BaseModel, extra='ignore'):
     """Response model for initializing a file upload"""
     uploadId: str
     files: List[UploadFileResponseModel]
     message: str
 
 ######################## Complete Upload API Models ##########################
-class UploadPartCompletionModel(BaseModel, extra=Extra.ignore):
+class UploadPartCompletionModel(BaseModel, extra='ignore'):
     """Model for a completed part in a multipart upload"""
     PartNumber: int
     ETag: str
 
-class UploadFileCompletionModel(BaseModel, extra=Extra.ignore):
+class UploadFileCompletionModel(BaseModel, extra='ignore'):
     """Model for a completed file in a multipart upload"""
     relativeKey: str
     uploadIdS3: str
     parts: List[UploadPartCompletionModel]
 
-class CompleteUploadRequestModel(BaseModel, extra=Extra.ignore):
+class CompleteUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing a file upload"""
     assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
@@ -252,7 +252,7 @@ class CompleteUploadRequestModel(BaseModel, extra=Extra.ignore):
                 
         return values
 
-class FileCompletionResult(BaseModel, extra=Extra.ignore):
+class FileCompletionResult(BaseModel, extra='ignore'):
     """Result of a file completion operation"""
     relativeKey: str
     uploadIdS3: str
@@ -260,12 +260,12 @@ class FileCompletionResult(BaseModel, extra=Extra.ignore):
     error: Optional[str] = None
     largeFileAsynchronousHandling: bool = False
 
-class ExternalFileModel(BaseModel, extra=Extra.ignore):
+class ExternalFileModel(BaseModel, extra='ignore'):
     """Model for an external file in a completion request"""
     relativeKey: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     tempKey: str = Field(min_length=1, strip_whitespace=True)  # Full temporary key in S3
 
-class CompleteExternalUploadRequestModel(BaseModel, extra=Extra.ignore):
+class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing an external file upload"""
     assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
@@ -295,7 +295,7 @@ class CompleteExternalUploadRequestModel(BaseModel, extra=Extra.ignore):
             
         return values
 
-class CompleteUploadResponseModel(BaseModel, extra=Extra.ignore):
+class CompleteUploadResponseModel(BaseModel, extra='ignore'):
     """Response model for completing a file upload"""
     message: str
     uploadId: str
@@ -306,7 +306,7 @@ class CompleteUploadResponseModel(BaseModel, extra=Extra.ignore):
     largeFileAsynchronousHandling: bool = False
 
 ######################## Create Folder API Models ##########################
-class CreateFolderRequestModel(BaseModel, extra=Extra.ignore):
+class CreateFolderRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a folder in S3 for an asset"""
     relativeKey: str = Field(min_length=1, strip_whitespace=True)
     
@@ -317,14 +317,14 @@ class CreateFolderRequestModel(BaseModel, extra=Extra.ignore):
             raise ValueError("Relative key must end with a slash to represent a folder")
         return v
 
-class CreateFolderResponseModel(BaseModel, extra=Extra.ignore):
+class CreateFolderResponseModel(BaseModel, extra='ignore'):
     """Response model for creating a folder in S3"""
     message: str
     relativeKey: str
 
 ######################## Asset Files API Models ##########################
 
-class AssetFileItemModel(BaseModel, extra=Extra.ignore):
+class AssetFileItemModel(BaseModel, extra='ignore'):
     """Base model for file/folder items"""
     fileName: str
     key: str
@@ -339,7 +339,7 @@ class AssetFileItemModel(BaseModel, extra=Extra.ignore):
     primaryType: Optional[str] = None  # Primary type metadata from S3
     previewFile: Optional[str] = ""  # Path to preview file for this file
 
-class ListAssetFilesRequestModel(BaseModel, extra=Extra.ignore):
+class ListAssetFilesRequestModel(BaseModel, extra='ignore'):
     """Query parameters for listing asset files"""
     maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
     pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
@@ -347,17 +347,17 @@ class ListAssetFilesRequestModel(BaseModel, extra=Extra.ignore):
     prefix: Optional[str] = None
     includeArchived: Optional[bool] = Field(default=False)  # Show archived files
 
-class ListAssetFilesResponseModel(BaseModel, extra=Extra.ignore):
+class ListAssetFilesResponseModel(BaseModel, extra='ignore'):
     """Response model for listing asset files"""
     items: List[AssetFileItemModel]
     nextToken: Optional[str] = None
 
-class FileInfoRequestModel(BaseModel, extra=Extra.ignore):
+class FileInfoRequestModel(BaseModel, extra='ignore'):
     """Request model for getting detailed file information"""
     filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     includeVersions: Optional[bool] = Field(default=False)
 
-class FileVersionModel(BaseModel, extra=Extra.ignore):
+class FileVersionModel(BaseModel, extra='ignore'):
     """Model for individual file version information"""
     versionId: str
     lastModified: str
@@ -368,7 +368,7 @@ class FileVersionModel(BaseModel, extra=Extra.ignore):
     isArchived: bool = False
     currentAssetVersionFileVersionMismatch: Optional[bool] = None  # Indicates if file version doesn't match asset version
 
-class FileInfoResponseModel(BaseModel, extra=Extra.ignore):
+class FileInfoResponseModel(BaseModel, extra='ignore'):
     """Response model for detailed file information"""
     fileName: str
     key: str
@@ -384,43 +384,43 @@ class FileInfoResponseModel(BaseModel, extra=Extra.ignore):
     previewFile: Optional[str] = ""  # Path to preview file for this file
     versions: Optional[List[FileVersionModel]] = None
 
-class MoveFileRequestModel(BaseModel, extra=Extra.ignore):
+class MoveFileRequestModel(BaseModel, extra='ignore'):
     """Request model for moving/renaming files"""
     sourcePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     destinationPath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
 
-class CopyFileRequestModel(BaseModel, extra=Extra.ignore):
+class CopyFileRequestModel(BaseModel, extra='ignore'):
     """Request model for copying files within same database"""
     sourcePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     destinationPath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     destinationAssetId: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
 
-class ArchiveFileRequestModel(BaseModel, extra=Extra.ignore):
+class ArchiveFileRequestModel(BaseModel, extra='ignore'):
     """Request model for archiving files (soft delete)"""
     filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     isPrefix: Optional[bool] = Field(default=False)  # Archive all files under prefix
 
-class UnarchiveFileRequestModel(BaseModel, extra=Extra.ignore):
+class UnarchiveFileRequestModel(BaseModel, extra='ignore'):
     """Request model for unarchiving files (restore from soft delete)"""
     filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
 
-class DeleteFileRequestModel(BaseModel, extra=Extra.ignore):
+class DeleteFileRequestModel(BaseModel, extra='ignore'):
     """Request model for permanently deleting files"""
     filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     isPrefix: Optional[bool] = Field(default=False)  # Delete all files under prefix
     confirmPermanentDelete: bool = Field(default=False)  # Safety confirmation
 
-class FileOperationResponseModel(BaseModel, extra=Extra.ignore):
+class FileOperationResponseModel(BaseModel, extra='ignore'):
     """Generic response model for file operations"""
     success: bool
     message: str
     affectedFiles: List[str] = []
 
-class RevertFileVersionRequestModel(BaseModel, extra=Extra.ignore):
+class RevertFileVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for reverting a file to a previous version"""
     filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
 
-class RevertFileVersionResponseModel(BaseModel, extra=Extra.ignore):
+class RevertFileVersionResponseModel(BaseModel, extra='ignore'):
     """Response model for reverting a file version"""
     success: bool
     message: str
@@ -428,7 +428,7 @@ class RevertFileVersionResponseModel(BaseModel, extra=Extra.ignore):
     revertedFromVersionId: str
     newVersionId: str
 
-class SetPrimaryFileRequestModel(BaseModel, extra=Extra.ignore):
+class SetPrimaryFileRequestModel(BaseModel, extra='ignore'):
     """Request model for setting a file's primary type metadata"""
     filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     primaryType: str = Field(strip_whitespace=True)  # Empty string or one of the allowed values
@@ -470,24 +470,24 @@ class SetPrimaryFileRequestModel(BaseModel, extra=Extra.ignore):
         
         return values
 
-class SetPrimaryFileResponseModel(BaseModel, extra=Extra.ignore):
+class SetPrimaryFileResponseModel(BaseModel, extra='ignore'):
     """Response model for setting a file's primary type metadata"""
     success: bool
     message: str
     filePath: str
     primaryType: Optional[str] = None  # The primary type that was set
 
-class DeleteAssetPreviewResponseModel(BaseModel, extra=Extra.ignore):
+class DeleteAssetPreviewResponseModel(BaseModel, extra='ignore'):
     """Response model for deleting an asset preview"""
     success: bool
     message: str
     assetId: str
 
-class DeleteAuxiliaryPreviewAssetFilesRequestModel(BaseModel, extra=Extra.ignore):
+class DeleteAuxiliaryPreviewAssetFilesRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting auxiliary preview asset files"""
     filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
 
-class DeleteAuxiliaryPreviewAssetFilesResponseModel(BaseModel, extra=Extra.ignore):
+class DeleteAuxiliaryPreviewAssetFilesResponseModel(BaseModel, extra='ignore'):
     """Response model for deleting auxiliary preview asset files"""
     success: bool
     message: str
@@ -495,7 +495,7 @@ class DeleteAuxiliaryPreviewAssetFilesResponseModel(BaseModel, extra=Extra.ignor
     deletedCount: int  # Number of auxiliary files deleted
 
 ######################## Ingest Asset API Models ##########################
-class IngestAssetInitializeRequestModel(BaseModel, extra=Extra.ignore):
+class IngestAssetInitializeRequestModel(BaseModel, extra='ignore'):
     """Request model for initializing an asset ingest operation"""
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
@@ -543,13 +543,13 @@ class IngestAssetInitializeRequestModel(BaseModel, extra=Extra.ignore):
             
         return values
 
-class IngestAssetInitializeResponseModel(BaseModel, extra=Extra.ignore):
+class IngestAssetInitializeResponseModel(BaseModel, extra='ignore'):
     """Response model for initializing an asset ingest operation"""
     message: str
     uploadId: str
     files: List[UploadFileResponseModel]
 
-class IngestAssetCompleteRequestModel(BaseModel, extra=Extra.ignore):
+class IngestAssetCompleteRequestModel(BaseModel, extra='ignore'):
     """Request model for completing an asset ingest operation"""
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
@@ -597,7 +597,7 @@ class IngestAssetCompleteRequestModel(BaseModel, extra=Extra.ignore):
                 
         return values
 
-class IngestAssetCompleteResponseModel(BaseModel, extra=Extra.ignore):
+class IngestAssetCompleteResponseModel(BaseModel, extra='ignore'):
     """Response model for completing an asset ingest operation"""
     message: str
     uploadId: str
@@ -607,18 +607,18 @@ class IngestAssetCompleteResponseModel(BaseModel, extra=Extra.ignore):
     largeFileAsynchronousHandling: bool = False
 
 ######################## Asset Service API Models ##########################
-class GetAssetRequestModel(BaseModel, extra=Extra.ignore):
+class GetAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for getting a single asset"""
     showArchived: Optional[bool] = False
 
-class GetAssetsRequestModel(BaseModel, extra=Extra.ignore):
+class GetAssetsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing assets"""
     maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
     pageSize: Optional[int] = Field(default=1000, ge=1, le=1000) 
     startingToken: Optional[str] = None
     showArchived: Optional[bool] = False
 
-class UpdateAssetRequestModel(BaseModel, extra=Extra.ignore):
+class UpdateAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for updating an asset"""
     assetName: Optional[str] = Field(None, min_length=1, max_length=256, pattern=object_name_pattern)
     description: Optional[str] = Field(None, min_length=4, max_length=256)
@@ -647,12 +647,12 @@ class UpdateAssetRequestModel(BaseModel, extra=Extra.ignore):
             
         return values
 
-class ArchiveAssetRequestModel(BaseModel, extra=Extra.ignore):
+class ArchiveAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for archiving an asset (soft delete)"""
     confirmArchive: bool = Field(default=False)
     reason: Optional[str] = Field(None, max_length=256)  # Optional reason for archiving
 
-class DeleteAssetRequestModel(BaseModel, extra=Extra.ignore):
+class DeleteAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for permanently deleting an asset"""
     confirmPermanentDelete: bool = Field(default=False)  # Stronger confirmation required
     reason: Optional[str] = Field(None, max_length=256)  # Optional reason for deletion
@@ -664,7 +664,7 @@ class DeleteAssetRequestModel(BaseModel, extra=Extra.ignore):
             raise ValueError("confirmPermanentDelete must be true for permanent deletion")
         return v
 
-class AssetResponseModel(BaseModel, extra=Extra.ignore):
+class AssetResponseModel(BaseModel, extra='ignore'):
     """Response model for asset data"""
     databaseId: str
     assetId: str
@@ -683,7 +683,7 @@ class AssetResponseModel(BaseModel, extra=Extra.ignore):
     archivedBy: Optional[str] = None
     archivedReason: Optional[str] = None
 
-class AssetOperationResponseModel(BaseModel, extra=Extra.ignore):
+class AssetOperationResponseModel(BaseModel, extra='ignore'):
     """Response model for asset operations (update, archive, delete)"""
     success: bool
     message: str
@@ -692,13 +692,13 @@ class AssetOperationResponseModel(BaseModel, extra=Extra.ignore):
     timestamp: str
 
 ######################## Asset Versions API Models ##########################
-class AssetFileVersionItemModel(BaseModel, extra=Extra.ignore):
+class AssetFileVersionItemModel(BaseModel, extra='ignore'):
     """Model for a file in an asset version"""
     relativeKey: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     versionId: str  # S3 version ID
     isArchived: bool = False
 
-class CreateAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
+class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new asset version"""
     useLatestFiles: bool = False  # If true, use latest files in S3 bucket
     files: Optional[List[AssetFileVersionItemModel]] = None  # List of files and their S3 versions
@@ -728,22 +728,22 @@ class CreateAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
                 
         return values
 
-class RevertAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
+class RevertAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for reverting to a previous asset version"""
     assetVersionId: str = Field(min_length=1, strip_whitespace=True)  # The version ID to revert to
     comment: str = Field(min_length=1, max_length=256, strip_whitespace=True)  # comment for the new version
 
-class GetAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
+class GetAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for getting a specific asset version"""
     assetVersionId: str = Field(min_length=1, strip_whitespace=True)  # The version ID to get
 
-class GetAssetVersionsRequestModel(BaseModel, extra=Extra.ignore):
+class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing asset versions"""
     maxItems: Optional[int] = Field(default=100, ge=1, le=1000)
     pageSize: Optional[int] = Field(default=100, ge=1, le=1000)
     startingToken: Optional[str] = None
 
-class AssetVersionFileModel(BaseModel, extra=Extra.ignore):
+class AssetVersionFileModel(BaseModel, extra='ignore'):
     """Model for a file in an asset version response"""
     relativeKey: str
     versionId: str
@@ -753,7 +753,7 @@ class AssetVersionFileModel(BaseModel, extra=Extra.ignore):
     lastModified: Optional[str] = None
     etag: Optional[str] = None
 
-class AssetVersionResponseModel(BaseModel, extra=Extra.ignore):
+class AssetVersionResponseModel(BaseModel, extra='ignore'):
     """Response model for a specific asset version"""
     assetId: str
     assetVersionId: str
@@ -762,12 +762,12 @@ class AssetVersionResponseModel(BaseModel, extra=Extra.ignore):
     files: List[AssetVersionFileModel] = []
     createdBy: Optional[str] = None
 
-class AssetVersionsListResponseModel(BaseModel, extra=Extra.ignore):
+class AssetVersionsListResponseModel(BaseModel, extra='ignore'):
     """Response model for listing asset versions"""
     versions: List[AssetVersionListItemModel] = []  # List of properly typed version items
     nextToken: Optional[str] = None
 
-class AssetVersionOperationResponseModel(BaseModel, extra=Extra.ignore):
+class AssetVersionOperationResponseModel(BaseModel, extra='ignore'):
     """Response model for asset version operations (create, revert)"""
     success: bool
     message: str
@@ -778,7 +778,7 @@ class AssetVersionOperationResponseModel(BaseModel, extra=Extra.ignore):
     skippedFiles: Optional[List[str]] = None  # Files that couldn't be processed
 
 ######################## Download Asset API Models ##########################
-class DownloadAssetRequestModel(BaseModel, extra=Extra.ignore):
+class DownloadAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for downloading asset files or previews"""
     downloadType: Literal["assetFile", "assetPreview"]
     key: Optional[str] = Field(None, min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
@@ -795,7 +795,7 @@ class DownloadAssetRequestModel(BaseModel, extra=Extra.ignore):
             
         return values
 
-class DownloadAssetResponseModel(BaseModel, extra=Extra.ignore):
+class DownloadAssetResponseModel(BaseModel, extra='ignore'):
     """Response model for asset download"""
     downloadUrl: str
     expiresIn: int = 86400  # URL expiration in seconds (24 hours)
@@ -804,7 +804,7 @@ class DownloadAssetResponseModel(BaseModel, extra=Extra.ignore):
     message: str = "Download URL generated successfully"
 
 ######################## DynamoDB Table Models ##########################
-class AssetUploadTableModel(BaseModel, extra=Extra.ignore):
+class AssetUploadTableModel(BaseModel, extra='ignore'):
     """Model for the asset upload tracking table"""
     uploadId: str
     assetId: str

@@ -41,7 +41,7 @@ export function buildWorkflowService(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "workflowService";
-    const workflowService = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.workflows.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -61,18 +61,20 @@ export function buildWorkflowService(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    storageResources.dynamo.databaseStorageTable.grantReadData(workflowService);
-    storageResources.dynamo.workflowStorageTable.grantReadWriteData(workflowService);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(workflowService);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(workflowService);
-    storageResources.dynamo.rolesStorageTable.grantReadData(workflowService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(workflowService, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(workflowService, config);
-    workflowService.addToRolePolicy(
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: [
@@ -83,7 +85,7 @@ export function buildWorkflowService(
             resources: [IAMArn("*" + config.name + "*").statemachine],
         })
     );
-    return workflowService;
+    return fun;
 }
 
 export function buildListWorkflowExecutionsFunction(
@@ -95,7 +97,7 @@ export function buildListWorkflowExecutionsFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "listExecutions";
-    const listAllWorkflowsFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.workflows.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -115,18 +117,18 @@ export function buildListWorkflowExecutionsFunction(
                 storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(
-        listAllWorkflowsFunction
-    ); //Needs write permission to update execution status after a SFN fetch
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(listAllWorkflowsFunction);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(listAllWorkflowsFunction);
-    storageResources.dynamo.assetStorageTable.grantReadData(listAllWorkflowsFunction);
-    storageResources.dynamo.rolesStorageTable.grantReadData(listAllWorkflowsFunction);
-    listAllWorkflowsFunction.addToRolePolicy(
+    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun); //Needs write permission to update execution status after a SFN fetch
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["states:DescribeExecution"],
@@ -136,13 +138,10 @@ export function buildListWorkflowExecutionsFunction(
             ],
         })
     );
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        listAllWorkflowsFunction,
-        storageResources.encryption.kmsKey
-    );
-    globalLambdaEnvironmentsAndPermissions(listAllWorkflowsFunction, config);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
-    return listAllWorkflowsFunction;
+    return fun;
 }
 
 export function buildCreateWorkflowFunction(
@@ -175,7 +174,7 @@ export function buildCreateWorkflowFunction(
         storageResources.encryption.kmsKey
     );
     const name = "createWorkflow";
-    const createWorkflowFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.workflows.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -195,6 +194,7 @@ export function buildCreateWorkflowFunction(
             PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
                 processWorkflowExecutionOutputFunction.functionName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             VAMS_STACK_NAME: stackName,
             LAMBDA_ROLE_ARN: role.roleArn,
@@ -202,11 +202,12 @@ export function buildCreateWorkflowFunction(
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    storageResources.dynamo.workflowStorageTable.grantReadWriteData(createWorkflowFunction);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(createWorkflowFunction);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(createWorkflowFunction);
-    storageResources.dynamo.rolesStorageTable.grantReadData(createWorkflowFunction);
-    createWorkflowFunction.addToRolePolicy(
+    storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: [
@@ -217,20 +218,17 @@ export function buildCreateWorkflowFunction(
             resources: [IAMArn("*" + config.name + "*").statemachine],
         })
     );
-    createWorkflowFunction.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
             resources: [IAMArn("*" + config.name + "*").role],
         })
     );
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        createWorkflowFunction,
-        storageResources.encryption.kmsKey
-    );
-    globalLambdaEnvironmentsAndPermissions(createWorkflowFunction, config);
-    suppressCdkNagErrorsByGrantReadWrite(createWorkflowFunction);
-    return createWorkflowFunction;
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+    return fun;
 }
 
 export function buildExecuteWorkflowFunction(
@@ -267,6 +265,7 @@ export function buildExecuteWorkflowFunction(
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
                 storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             METADATA_READ_LAMBDA_FUNCTION_NAME: metadataReadFunction.functionName,
@@ -280,6 +279,7 @@ export function buildExecuteWorkflowFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
@@ -346,6 +346,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
             READ_METADATA_LAMBDA_FUNCTION_NAME: readMetadataLambdaFunction.functionName,
             CREATE_METADATA_LAMBDA_FUNCTION_NAME: createMetadataLambdaFunction.functionName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -362,6 +363,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -524,6 +526,7 @@ export function buildImportGlobalPipelineWorkflowFunction(
         environment: {
             // Standard VAMS environment variables
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
 
@@ -537,6 +540,7 @@ export function buildImportGlobalPipelineWorkflowFunction(
 
     // Grant DynamoDB read permissions for auth and role tables
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 

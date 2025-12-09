@@ -4,6 +4,7 @@
 import boto3
 import os
 import time
+import json
 from boto3.dynamodb.types import TypeDeserializer
 from casbin import FastEnforcer
 from casbin import model
@@ -66,19 +67,36 @@ def is_mfa_enabled(claims_and_roles):
 class CasbinEnforcer:
     def __init__(self, claims_and_roles):
         global casbin_user_enforcer_map
+        global casbin_user_policy_map
         self.service_object = None
         user_id = claims_and_roles["tokens"][0]
         mfaEnabled = is_mfa_enabled(claims_and_roles)
+        
         if user_id in casbin_user_enforcer_map:
-            # Previously cached user-specific enforcers?
-            #
-            self.service_object = casbin_user_enforcer_map[user_id]
-            self.service_object._mfaEnabled = mfaEnabled
-        else:
-            self.service_object = CasbinEnforcerService(user_id, mfaEnabled)
-            # Cache the user-specific enforcer future calls
-            #
-            casbin_user_enforcer_map[user_id] = self.service_object
+            # Previously cached user-specific enforcers - validate cache freshness
+            cached_service = casbin_user_enforcer_map[user_id]
+            
+            # Check if cache is stale or MFA state changed
+            cache_age = datetime.now() - cached_service._dateTime_Cached
+            mfa_changed = cached_service._mfaEnabled != mfaEnabled
+            
+            if cache_age.total_seconds() > CASBIN_REFRESH_POLICY_SECONDS or mfa_changed:
+                # Cache is stale or MFA changed - invalidate and recreate
+                logger.info(f"Invalidating enforcer cache for user {user_id}. Age: {cache_age.total_seconds():.1f}s, MFA changed: {mfa_changed}")
+                del casbin_user_enforcer_map[user_id]
+                if user_id in casbin_user_policy_map:
+                    del casbin_user_policy_map[user_id]
+                # Fall through to create new enforcer below
+            else:
+                # Cache is fresh - reuse existing enforcer
+                logger.debug(f"Reusing cached enforcer for user {user_id}. Age: {cache_age.total_seconds():.1f}s")
+                self.service_object = cached_service
+                return
+        
+        # Create new enforcer (either first time or after cache invalidation)
+        self.service_object = CasbinEnforcerService(user_id, mfaEnabled)
+        # Cache the user-specific enforcer for future calls
+        casbin_user_enforcer_map[user_id] = self.service_object
 
     def enforce(self, obj, act):
         return self.service_object.enforce(obj, act)
@@ -120,7 +138,6 @@ class CasbinEnforcerService:
         #
         global casbin_user_policy_map
 
-        self._auth_table_name = ""
         self._user_roles_table_name = ""
         self._roles_table_name = ""
         self._user_id = user_id
@@ -130,8 +147,8 @@ class CasbinEnforcerService:
 
         try:
             self._user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-            self._auth_table_name = os.environ["AUTH_TABLE_NAME"]
             self._roles_table_name = os.environ["ROLES_TABLE_NAME"]
+            self._constraints_table_name = os.environ.get("CONSTRAINTS_TABLE_NAME") 
         except KeyError as ex:
             logger.exception("Failed to find environment variables")
             raise Exception("Failed to initialize Casbin Enforcer as required environment variables are not defined")
@@ -148,75 +165,106 @@ class CasbinEnforcerService:
             policy_text = self._create_policy_text()
         self._create_casbin_enforcer(policy_text)
 
-    def _read_policies_from_table(self, role_name):
-
-        # See: UserRolesStorageTable in: infra/lib/nestedStacks/auth/constructs/*.ts (for groupPermissions)
-        # The ABAC system will eventually have three methods to tie a user to a constraint.
-        # First two are implemented:
-        #	Direct constraint assignment (userPermissions)
-        # 	Role-based approach (groupPermissions)
-        # 	Attribute-based approach (attributePermissions)
-        #
-        page_iterator = paginator.paginate(
-            TableName=self._auth_table_name,
-            FilterExpression="""
-                entityType = :constraintEntityType and
-                (userPermissions[0].userId = :userId or groupPermissions[0].groupId = :roleName)
-                """,
-            PaginationConfig={
-                "MaxItems": 1000,
-                "PageSize": 1000,
-                'StartingToken': None
-            },
-            ExpressionAttributeValues={
-                ":constraintEntityType": {
-                    "S": "constraint"
-                },
-                ":userId": {
-                    "S": self._user_id
-                },
-                ":roleName": {
-                    "S": role_name
-                },
+    def _read_policies_batch_optimized(self, role_names):
+        """Optimized batch read using GSI queries on denormalized ConstraintsStorageTable
+        
+        Args:
+            role_names: List of role names to fetch policies for
+            
+        Returns:
+            List of all policies for the given roles (deduplicated by base constraintId)
+        """
+        all_constraints = {}  # Use dict for deduplication by base constraintId
+        
+        # Query GroupPermissionsIndex for each role with pagination
+        for role_name in role_names:
+            query_kwargs = {
+                'TableName': self._constraints_table_name,
+                'IndexName': 'GroupPermissionsIndex',
+                'KeyConditionExpression': 'groupId = :groupId',
+                'ExpressionAttributeValues': {':groupId': {'S': role_name}}
             }
-        ).build_full_result()
-
-        pageIteratorItems = []
-        pageIteratorItems.extend(page_iterator['Items'])
-
-        while 'NextToken' in page_iterator:
-            nextToken = page_iterator['NextToken']
-            page_iterator = paginator.paginate(
-                TableName=self._auth_table_name,
-                FilterExpression="""
-                    entityType = :constraintEntityType and
-                    (userPermissions[0].userId = :userId or groupPermissions[0].groupId = :roleName)
-                    """,
-                PaginationConfig={
-                    "MaxItems": 1000,
-                    "PageSize": 1000,
-                    "StartingToken": nextToken
-                },
-                ExpressionAttributeValues={
-                    ":constraintEntityType": {
-                        "S": "constraint"
-                    },
-                    ":userId": {
-                        "S": self._user_id
-                    },
-                    ":roleName": {
-                        "S": role_name
-                    },
-                }
-            ).build_full_result()
-            pageIteratorItems.extend(page_iterator['Items'])
-
-        items = []
-        for item in pageIteratorItems:
-            deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-            items.append(deserialized_document)
-
-        return items
+            
+            # Paginate through all results
+            while True:
+                response = _dynamodb_client.query(**query_kwargs)
+                
+                for item in response.get('Items', []):
+                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                    
+                    # Extract base constraintId (remove #group#{groupId} or #user#{userId} suffix)
+                    full_constraint_id = deserialized['constraintId']
+                    base_constraint_id = full_constraint_id.split('#group#')[0].split('#user#')[0]
+                    
+                    # Parse JSON strings back to objects
+                    deserialized['groupPermissions'] = self._parse_json_field(deserialized.get('groupPermissions'), [])
+                    deserialized['userPermissions'] = self._parse_json_field(deserialized.get('userPermissions'), [])
+                    deserialized['criteriaAnd'] = self._parse_json_field(deserialized.get('criteriaAnd'), [])
+                    deserialized['criteriaOr'] = self._parse_json_field(deserialized.get('criteriaOr'), [])
+                    
+                    # Store by base constraintId to deduplicate (same constraint may appear for multiple groups)
+                    all_constraints[base_constraint_id] = deserialized
+                
+                # Check if there are more results
+                if 'LastEvaluatedKey' not in response:
+                    break
+                query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+        
+        # Query UserPermissionsIndex for direct user permissions with pagination
+        query_kwargs = {
+            'TableName': self._constraints_table_name,
+            'IndexName': 'UserPermissionsIndex',
+            'KeyConditionExpression': 'userId = :userId',
+            'ExpressionAttributeValues': {':userId': {'S': self._user_id}}
+        }
+        
+        # Paginate through all results
+        while True:
+            response = _dynamodb_client.query(**query_kwargs)
+            
+            for item in response.get('Items', []):
+                deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                
+                # Extract base constraintId (remove #group#{groupId} or #user#{userId} suffix)
+                full_constraint_id = deserialized['constraintId']
+                base_constraint_id = full_constraint_id.split('#group#')[0].split('#user#')[0]
+                
+                # Parse JSON strings back to objects
+                deserialized['groupPermissions'] = self._parse_json_field(deserialized.get('groupPermissions'), [])
+                deserialized['userPermissions'] = self._parse_json_field(deserialized.get('userPermissions'), [])
+                deserialized['criteriaAnd'] = self._parse_json_field(deserialized.get('criteriaAnd'), [])
+                deserialized['criteriaOr'] = self._parse_json_field(deserialized.get('criteriaOr'), [])
+                
+                # Store by base constraintId to deduplicate
+                all_constraints[base_constraint_id] = deserialized
+            
+            # Check if there are more results
+            if 'LastEvaluatedKey' not in response:
+                break
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+        
+        #logger.info(f"Retrieved {len(all_constraints)} unique constraints from denormalized table")
+        
+        return list(all_constraints.values())
+    
+    def _parse_json_field(self, value, default=[]):
+        """Helper method to parse JSON string fields safely
+        
+        Args:
+            value: The value to parse (can be string, list, or None)
+            default: Default value to return if parsing fails
+            
+        Returns:
+            Parsed value or default
+        """
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return default
+        elif isinstance(value, list):
+            return value
+        return default
 
     def _read_current_user_roles_from_table(self):
 
@@ -401,15 +449,19 @@ class CasbinEnforcerService:
 
         # Append roles
         for user_role in user_roles_from_table:
-            policies_from_table_by_roles.append(self._read_policies_from_table(user_role["roleName"]))
             policy_text = (
                 f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
                 f"""g, user::{user_role["userId"]}, 'role::{user_role["roleName"]}'"""
             )
+        
+        # Use optimized batch read for all roles at once
+        role_names = [user_role["roleName"] for user_role in user_roles_from_table]
+        #logger.info(f"Fetching policies for roles: {role_names}")
+        all_policies = self._read_policies_batch_optimized(role_names)
+        #logger.info(f"Retrieved {len(all_policies)} policies from constraints table")
 
         # Append policies
-        for policies_from_table_by_role in policies_from_table_by_roles:
-            for policy in policies_from_table_by_role:
+        for policy in all_policies:
 
                 if "criteriaAnd" not in policy:
                     policy["criteriaAnd"] = []
@@ -459,7 +511,11 @@ class CasbinEnforcerService:
                                 f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
                                 f"""p, user::{user_permission["userId"]}, {obj_rule_ObjectType[0]} && ({" || ".join(obj_rule_Or)}), {user_permission["permission"]}, {user_permission["permissionType"] or 'allow'}"""
                             )
-        #logger.info(policy_text)
+        
+        #logger.info(f"Generated policy_text with {len(policy_text)} characters")
+        if len(policy_text) < 100:
+            logger.warning(f"Policy text seems too short: {policy_text}")
+        
         return policy_text
 
     # Creates a Casbin enforcer object from the policy_text.
@@ -490,36 +546,15 @@ class CasbinEnforcerService:
         return _enforcer
 
     def enforce(self, obj, act):
-        global CASBIN_REFRESH_POLICY_SECONDS
-        global casbin_user_policy_map
-
         sub = f"user::{self._user_id}"
 
         # If the internal Casbin module is not functioning, then immediately deny all access
+        # Note: Cache validation now happens in CasbinEnforcer.__init__ to ensure cache is always
+        # fresh when enforce() is called. This provides a single point of cache validation.
         #
         if self._enforcer is None:
+            logger.warning(f"Enforcer is None for user {self._user_id}, denying access")
             return False
-
-        # Check if the Casbin policy cache is older than CASBIN_REFRESH_POLICY_SECONDS seconds; if so update cache.
-        # Note: global variables update user roles if they changed in a timely fashion
-        #
-        if (datetime.now() - timedelta(seconds=CASBIN_REFRESH_POLICY_SECONDS)) > self._dateTime_Cached:
-            logger.info("Casbin Policy Cache Expiration - Refreshing Policy")
-            # Refresh cache. Alternatively, it's possible to use DynamoDB Streams to detect changes in DB against
-            # a cache flag.
-            #
-            if self._user_id in casbin_user_policy_map:
-                del casbin_user_policy_map[self._user_id]
-
-            policy_text = self._create_policy_text()
-            self._create_casbin_enforcer(policy_text)
-
-            if POLICY_TEXT_DENY_ALL == policy_text:
-                # Upon policy_text failure, have future calls re-instate the cache entry and enforcer
-                # Avoid relying on stale cache as long-term fallback option
-                #
-                self._enforcer = None
-                return False
 
         enhanced_object = PERMISSION_CONSTRAINT_FIELDS.copy()
         enhanced_object.update(obj)

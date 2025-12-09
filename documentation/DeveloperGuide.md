@@ -984,29 +984,30 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 
 ## Tables
 
-| Table                         | Partition Key          | Sort Key                    | Attributes                                                                                                                                      |
-| ----------------------------- | ---------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| AppFeatureEnabledStorageTable | featureName            | n/a                         |                                                                                                                                                 |
-| AssetStorageTable             | databaseId             | assetId                     | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions, tags, status |
-| AssetLinksStorageTable        | assetIdFrom            | assetIdTo                   |                                                                                                                                                 |
-| AssetFileVersionsStorageTable | assetId:assetVersionId | fileKey                     |                                                                                                                                                 |
-| AssetVersionsStorageTable     | assetId                | assetVersionId              | dateCreated, comment, description, specifiedPipelines, createdBy                                                                                |
-| AssetUploadsStorageTable      | uploadId               | assetId                     | databaseId                                                                                                                                      |
-| AuthEntitiesStorageTable      | entityType             | sk                          |                                                                                                                                                 |
-| CommentStorageTable           | assetId                | assetVersionId:commentId    |                                                                                                                                                 |
-| DatabaseStorageTable          | databaseId             | n/a                         | assetCount, dateCreated, description                                                                                                            |
-| MetadataStorageTable          | databaseId             | assetId                     | Varies with user provided attributes                                                                                                            |
-| MetadataSchemaStorageTable    | databaseId             | field                       |                                                                                                                                                 |
-| PipelineStorageTable          | databaseId             | pipelineId                  | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType, inputParameters                                  |
-| RolesStorageTable             | roleName               | n/a                         |                                                                                                                                                 |
-| SubscriptionsStorageTable     | eventName              | entityName_entityId         |                                                                                                                                                 |
-| TagStorageTable               | tagName                | n/a                         |                                                                                                                                                 |
-| TagTypeStorageTable           | tagTypeName            | n/a                         |                                                                                                                                                 |
-| UserRolesStorageTable         | userId                 | roleName                    |                                                                                                                                                 |
-| UserStorageTable              | userId                 | n/a                         | email                                                                                                                                           |
-| S3AssetBucketsStorageTable    | bucketId               | bucketName:baseAssetsPrefix | bucketName, baseAssetsPrefix                                                                                                                    |
-| WorkflowStorageTable          | databaseId             | workflowId                  | dateCreated, description, specifiedPipelines, workflow_arn                                                                                      |
-| WorkflowExecutionStorageTable | assetId                | executionId                 | workflowId, databaseId, workflow_arn, execution_arn, startDate, stopDate, executionStatus                                                       |
+| Table                         | Partition Key          | Sort Key                    | Attributes                                                                                                                                                                                                         |
+| ----------------------------- | ---------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| AppFeatureEnabledStorageTable | featureName            | n/a                         |                                                                                                                                                                                                                    |
+| AssetStorageTable             | databaseId             | assetId                     | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions, tags, status                                                                    |
+| AssetLinksStorageTable        | assetIdFrom            | assetIdTo                   |                                                                                                                                                                                                                    |
+| AssetFileVersionsStorageTable | assetId:assetVersionId | fileKey                     |                                                                                                                                                                                                                    |
+| AssetVersionsStorageTable     | assetId                | assetVersionId              | dateCreated, comment, description, specifiedPipelines, createdBy                                                                                                                                                   |
+| AssetUploadsStorageTable      | uploadId               | assetId                     | databaseId                                                                                                                                                                                                         |
+| AuthEntitiesStorageTable      | entityType             | sk                          |                                                                                                                                                                                                                    |
+| CommentStorageTable           | assetId                | assetVersionId:commentId    |                                                                                                                                                                                                                    |
+| ConstraintsStorageTable       | constraintId           | n/a                         | name, description, objectType, criteriaAnd (JSON), criteriaOr (JSON), groupPermissions (JSON), userPermissions (JSON), groupIds (StringSet), userIds (StringSet), dateCreated, dateModified, createdBy, modifiedBy |
+| DatabaseStorageTable          | databaseId             | n/a                         | assetCount, dateCreated, description                                                                                                                                                                               |
+| MetadataStorageTable          | databaseId             | assetId                     | Varies with user provided attributes                                                                                                                                                                               |
+| MetadataSchemaStorageTable    | databaseId             | field                       |                                                                                                                                                                                                                    |
+| PipelineStorageTable          | databaseId             | pipelineId                  | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType, inputParameters                                                                                                     |
+| RolesStorageTable             | roleName               | n/a                         |                                                                                                                                                                                                                    |
+| SubscriptionsStorageTable     | eventName              | entityName_entityId         |                                                                                                                                                                                                                    |
+| TagStorageTable               | tagName                | n/a                         |                                                                                                                                                                                                                    |
+| TagTypeStorageTable           | tagTypeName            | n/a                         |                                                                                                                                                                                                                    |
+| UserRolesStorageTable         | userId                 | roleName                    |                                                                                                                                                                                                                    |
+| UserStorageTable              | userId                 | n/a                         | email                                                                                                                                                                                                              |
+| S3AssetBucketsStorageTable    | bucketId               | bucketName:baseAssetsPrefix | bucketName, baseAssetsPrefix                                                                                                                                                                                       |
+| WorkflowStorageTable          | databaseId             | workflowId                  | dateCreated, description, specifiedPipelines, workflow_arn                                                                                                                                                         |
+| WorkflowExecutionStorageTable | assetId                | executionId                 | workflowId, databaseId, workflow_arn, execution_arn, startDate, stopDate, executionStatus                                                                                                                          |
 
 ## AssetStorageTable
 
@@ -1109,6 +1110,79 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | ------------- | ------------- | -------- | -------------------------------- |
 | AssetIdGSI    | assetId       | uploadId | For querying uploads by asset    |
 | DatabaseIdGSI | databaseId    | uploadId | For querying uploads by database |
+
+## ConstraintsStorageTable
+
+The ConstraintsStorageTable stores authorization constraints for the VAMS Casbin-based permission system. This table was introduced in v2.4 to provide optimized query performance using Global Secondary Indexes (GSIs) instead of table scans.
+
+| Field            | Data Type | Description                                                                 |
+| ---------------- | --------- | --------------------------------------------------------------------------- |
+| constraintId     | String    | (PK) Unique identifier for the constraint (UUID or descriptive name)        |
+| name             | String    | Human-readable name for the constraint                                      |
+| description      | String    | Detailed description of what the constraint allows/denies                   |
+| objectType       | String    | Type of object this constraint applies to (api, web, database, asset, etc.) |
+| criteriaAnd      | String    | JSON string of AND criteria for constraint matching                         |
+| criteriaOr       | String    | JSON string of OR criteria for constraint matching                          |
+| groupPermissions | String    | JSON string of role/group-based permissions                                 |
+| userPermissions  | String    | JSON string of user-specific permissions                                    |
+| groupIds         | StringSet | Set of groupIds for GSI queries (extracted from groupPermissions)           |
+| userIds          | StringSet | Set of userIds for GSI queries (extracted from userPermissions)             |
+| dateCreated      | String    | ISO timestamp when constraint was created                                   |
+| dateModified     | String    | ISO timestamp when constraint was last modified                             |
+| createdBy        | String    | Username who created the constraint                                         |
+| modifiedBy       | String    | Username who last modified the constraint                                   |
+
+### Global Secondary Indexes
+
+| Index Name            | Partition Key | Sort Key     | Description                                                     |
+| --------------------- | ------------- | ------------ | --------------------------------------------------------------- |
+| GroupPermissionsIndex | groupId       | objectType   | For querying constraints by role/group (20-100x faster queries) |
+| UserPermissionsIndex  | userId        | objectType   | For querying constraints by user (20-100x faster queries)       |
+| ObjectTypeIndex       | objectType    | constraintId | For querying constraints by object type (admin/management)      |
+
+### Performance Improvements (v2.4)
+
+The ConstraintsStorageTable provides significant performance improvements over the previous AuthEntitiesTable approach:
+
+-   **Query Performance**: 20-100x faster using GSI queries instead of table scans
+-   **Query Complexity**: O(log n) instead of O(n)
+-   **DynamoDB RCU**: 20-100x reduction in read capacity units
+-   **Authorization Latency**: 20-40x faster authorization checks
+-   **Cache Reliability**: Fixed cache expiration (30 seconds vs 15-30 minutes)
+
+### Data Format
+
+**Criteria Format** (stored as JSON strings):
+
+```json
+[
+    {
+        "field": "route__path",
+        "id": "all_api_paths",
+        "operator": "contains",
+        "value": ".*"
+    }
+]
+```
+
+**Permissions Format** (stored as JSON strings):
+
+```json
+[
+    {
+        "groupId": "admin",
+        "id": "admin-allow-get-all-apis",
+        "permission": "GET",
+        "permissionType": "allow"
+    }
+]
+```
+
+### Migration from v2.3 to v2.4
+
+Constraints are automatically created in the new table during CDK deployment for default roles (admin, basicReadOnly, basic, pipeline). For custom constraints, use the migration script in `infra/deploymentDataMigration/v2.3_to_v2.4/upgrade/`.
+
+See the [v2.3 to v2.4 Migration Guide](../infra/deploymentDataMigration/v2.3_to_v2.4/upgrade/v2.3_to_v2.4_migration_README.md) for details.
 
 ## SubscriptionsStorageTable
 
@@ -2439,3 +2513,452 @@ Key functions include:
 4. **Preview file management**:
     - Let the system handle preview file lifecycle management
     - Don't manually delete or move preview files outside of the VAMS API
+
+# SNS-Based Indexing Architecture
+
+VAMS implements a decoupled, event-driven indexing architecture using Amazon SNS and SQS. This architecture eliminates Lambda-to-Lambda invocations (an anti-pattern) and provides a scalable, extensible system for indexing data changes across multiple consumers.
+
+## Architecture Overview
+
+The indexing system uses a publish-subscribe pattern where data changes flow through SNS topics to SQS queues, enabling multiple independent consumers to process the same events.
+
+### Event Flow Diagram
+
+```
+DynamoDB Tables (with streams)
+    ↓
+SNS Queuing Lambdas (in Storage Builder)
+    ↓
+SNS Topics (3 topics for different data types)
+    ↓
+
+   ----- (Specific subscribers below)
+
+SQS Queues (in Search Builder or other consumers)
+    ↓
+Indexer Lambdas (fileIndexer, assetIndexer, etc.)
+    ↓
+OpenSearch Indexes
+
+S3 Buckets
+    ↓
+SNS Topics (per-bucket)
+    ↓
+SQS Queues (in Storage Builder)
+    ↓
+sqsBucketSync Lambda
+    ↓
+File Indexer SNS Topic
+    ↓
+
+   ----- (Specific subscribers below)
+
+File Indexer SQS Queue
+    ↓
+fileIndexer Lambda
+    ↓
+OpenSearch File Index
+```
+
+## Available SNS Topics for Indexing
+
+VAMS provides three global SNS topics in the Storage Builder that publish data change events. These topics are available for any consumer to subscribe to, enabling extensible indexing and data processing.
+
+### 1. File Indexer SNS Topic
+
+**Purpose**: Publishes file-level metadata changes from S3 Object changes and the MetadataStorageTable
+
+**Source**: DynamoDB stream from `MetadataStorageTable`
+
+**Event Content**: DynamoDB stream records containing:
+
+-   `eventName`: INSERT, MODIFY, or REMOVE
+-   `dynamodb.NewImage`: New metadata record (for INSERT/MODIFY)
+-   `dynamodb.OldImage`: Old metadata record (for REMOVE)
+-   `dynamodb.Keys`: Primary keys (databaseId, assetId with file path)
+
+**Use Cases**:
+
+-   OpenSearch file indexing
+-   File metadata analytics
+-   File change notifications
+-   Custom file processing workflows
+
+**Access**: Available via `storageResources.sns.fileIndexerSnsTopic`
+
+### 2. Asset Indexer SNS Topic
+
+**Purpose**: Publishes asset-level changes from multiple DynamoDB tables
+
+**Sources**: DynamoDB streams from:
+
+-   `AssetStorageTable` - Asset record changes
+-   `MetadataStorageTable` - Asset-level metadata changes
+-   `AssetLinksStorageTableV2` - Asset relationship changes
+
+**Event Content**: DynamoDB stream records containing:
+
+-   `eventName`: INSERT, MODIFY, or REMOVE
+-   `dynamodb.NewImage`: New asset/metadata/link record
+-   `dynamodb.OldImage`: Old record (for REMOVE events)
+-   `dynamodb.Keys`: Primary keys
+
+**Use Cases**:
+
+-   OpenSearch asset indexing
+-   Asset analytics and reporting
+-   Asset change notifications
+-   Relationship graph updates
+-   Custom asset processing
+
+**Access**: Available via `storageResources.sns.assetIndexerSnsTopic`
+
+### 3. Database Indexer SNS Topic
+
+**Purpose**: Publishes database-level changes for future indexing expansion
+
+**Source**: DynamoDB stream from `DatabaseStorageTable`
+
+**Event Content**: DynamoDB stream records containing:
+
+-   `eventName`: INSERT, MODIFY, or REMOVE
+-   `dynamodb.NewImage`: New database record
+-   `dynamodb.OldImage`: Old database record (for REMOVE)
+-   `dynamodb.Keys`: Primary key (databaseId)
+
+**Use Cases**:
+
+-   Future database indexing implementations
+-   Database analytics
+-   Database change notifications
+-   Multi-tenant data processing
+
+**Access**: Available via `storageResources.sns.databaseIndexerSnsTopic`
+
+**Note**: This topic is currently reserved for future expansion. No default consumers are configured.
+
+## OpenSearch Integration
+
+The Search Builder nested stack demonstrates how to consume these SNS topics for OpenSearch indexing:
+
+### Search Builder Implementation
+
+The Search Builder creates SQS queues that subscribe to the SNS topics and wire them to indexer Lambda functions:
+
+### OpenSearch Configuration
+
+**When OpenSearch is Disabled**:
+
+-   SNS topics are still created and operational
+-   SNS queuing Lambdas still publish to topics
+-   Search Builder nested stack is not deployed
+-   No SQS queues or search indexer Lambdas are created
+-   S3 bucket sync continues to function normally
+-   Other consumers can still subscribe to SNS topics
+
+This allows you to:
+
+-   Use VAMS without search functionality
+-   Implement custom indexing solutions
+-   Subscribe to data changes for other purposes (analytics, notifications, etc.)
+-   Add OpenSearch later without data migration
+
+## SNS Queuing Lambda Functions
+
+VAMS includes three SNS queuing Lambda functions that bridge DynamoDB streams and S3 Object events to SNS topics:
+
+### 1. File Indexer SNS Queuing Lambda
+
+**Function**: `fileIndexerSnsQueuing`
+
+**Trigger**: DynamoDB stream from `MetadataStorageTable`
+
+**Action**: Publishes metadata changes to `fileIndexerSnsTopic`
+
+**Configuration**:
+
+-   Batch size: 100 records
+-   Timeout: 5 minutes
+-   Environment: `SNS_TOPIC_ARN` = File Indexer SNS Topic ARN
+
+### 2. Asset Indexer SNS Queuing Lambda
+
+**Function**: `assetIndexerSnsQueuing`
+
+**Triggers**: DynamoDB streams from:
+
+-   `AssetStorageTable`
+-   `MetadataStorageTable` (asset-level metadata)
+-   `AssetLinksStorageTableV2`
+
+**Action**: Publishes asset changes to `assetIndexerSnsTopic`
+
+**Configuration**:
+
+-   Batch size: 100 records per stream
+-   Timeout: 5 minutes
+-   Environment: `SNS_TOPIC_ARN` = Asset Indexer SNS Topic ARN
+
+### 3. Database Indexer SNS Queuing Lambda
+
+**Function**: `databaseIndexerSnsQueuing`
+
+**Trigger**: DynamoDB stream from `DatabaseStorageTable`
+
+**Action**: Publishes database changes to `databaseIndexerSnsTopic`
+
+**Configuration**:
+
+-   Batch size: 100 records
+-   Timeout: 5 minutes
+-   Environment: `SNS_TOPIC_ARN` = Database Indexer SNS Topic ARN
+
+## S3 Bucket Sync Integration
+
+The S3 bucket sync system also integrates with the SNS indexing architecture:
+
+### S3 Event Flow
+
+1. **S3 Object Created/Deleted** → S3 Event Notification
+2. **S3 Event Notification** → Per-bucket SNS Topic
+3. **Per-bucket SNS Topic** → SQS Queue (per bucket)
+4. **SQS Queue** → `sqsBucketSync` Lambda
+5. **sqsBucketSync Lambda** → Processes file, updates DynamoDB, publishes to File Indexer SNS Topic
+6. **File Indexer SNS Topic** → File Indexer SQS Queue
+7. **File Indexer SQS Queue** → `fileIndexer` Lambda
+8. **fileIndexer Lambda** → Updates OpenSearch File Index
+
+### sqsBucketSync Lambda
+
+The `sqsBucketSync` Lambda function:
+
+-   Processes S3 file creation and deletion events
+-   Creates/updates assets and databases as needed
+-   Updates S3 object metadata with databaseId and assetId
+-   Publishes events to the File Indexer SNS Topic for downstream indexing
+
+**Key Features**:
+
+-   Automatic asset creation for new S3 folders
+-   Database creation/lookup for bucket/prefix combinations
+-   Asset type detection based on file contents
+-   Handles versioned and non-versioned buckets
+-   Caching for performance optimization
+
+## Creating Custom Indexers
+
+To create a custom indexer that consumes VAMS data changes:
+
+### Step 1: Create Your Nested Stack
+
+```typescript
+import { NestedStack } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
+import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import { storageResources } from "../storage/storageBuilder-nestedStack";
+import * as Config from "../../../config/config";
+
+export class CustomIndexerNestedStack extends NestedStack {
+    constructor(
+        parent: Construct,
+        name: string,
+        config: Config.Config,
+        storageResources: storageResources,
+        lambdaCommonBaseLayer: lambda.LayerVersion
+    ) {
+        super(parent, name);
+
+        // Create your indexer Lambda
+        const customIndexerFunction = new lambda.Function(this, "CustomIndexer", {
+            code: lambda.Code.fromAsset("../backend/backend"),
+            handler: "handlers.customIndexer.lambda_handler",
+            runtime: lambda.Runtime.PYTHON_3_12,
+            layers: [lambdaCommonBaseLayer],
+            timeout: cdk.Duration.minutes(15),
+            environment: {
+                CUSTOM_INDEX_ENDPOINT: "https://your-index-endpoint.com",
+                // Add your environment variables
+            },
+        });
+
+        // Create SQS queue
+        const customIndexerQueue = new sqs.Queue(this, "CustomIndexerQueue", {
+            queueName: `${config.name}-custom-indexer`,
+            visibilityTimeout: cdk.Duration.seconds(960),
+            encryption: storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+
+        // Subscribe to asset indexer SNS topic
+        storageResources.sns.assetIndexerSnsTopic.addSubscription(
+            new SqsSubscription(customIndexerQueue)
+        );
+
+        // Wire Lambda to SQS queue
+        customIndexerFunction.addEventSource(
+            new eventsources.SqsEventSource(customIndexerQueue, {
+                batchSize: 10,
+                maxBatchingWindow: cdk.Duration.seconds(10),
+            })
+        );
+
+        // Grant necessary permissions
+        storageResources.dynamo.assetStorageTable.grantReadData(customIndexerFunction);
+        // Add other permissions as needed
+    }
+}
+```
+
+### Step 2: Create Your Lambda Handler
+
+```python
+"""
+Custom indexer Lambda handler
+Processes asset changes from SNS/SQS
+"""
+import json
+import boto3
+from typing import Dict, Any
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service_name="CustomIndexer")
+
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """
+    Process asset changes from SQS messages containing SNS notifications
+    containing DynamoDB stream records
+    """
+    try:
+        logger.info(f"Processing {len(event.get('Records', []))} SQS records")
+
+        for sqs_record in event.get('Records', []):
+            # Parse SQS message body (contains SNS message)
+            sqs_body = json.loads(sqs_record['body'])
+
+            # Parse SNS message (contains DynamoDB stream record)
+            sns_message = json.loads(sqs_body['Message'])
+
+            # Extract DynamoDB stream data
+            event_name = sns_message.get('eventName')  # INSERT, MODIFY, REMOVE
+            dynamodb_data = sns_message.get('dynamodb', {})
+
+            # Get new image (for INSERT/MODIFY)
+            new_image = dynamodb_data.get('NewImage', {})
+
+            # Get old image (for REMOVE)
+            old_image = dynamodb_data.get('OldImage', {})
+
+            # Extract data from DynamoDB format
+            database_id = new_image.get('databaseId', {}).get('S') or \
+                         old_image.get('databaseId', {}).get('S')
+            asset_id = new_image.get('assetId', {}).get('S') or \
+                      old_image.get('assetId', {}).get('S')
+
+            # Process the change
+            if event_name == 'INSERT' or event_name == 'MODIFY':
+                index_asset(database_id, asset_id, new_image)
+            elif event_name == 'REMOVE':
+                remove_from_index(database_id, asset_id)
+
+        return {
+            'statusCode': 200,
+            'body': json.dumps({'message': 'Successfully processed records'})
+        }
+
+    except Exception as e:
+        logger.exception(f"Error processing records: {e}")
+        raise
+
+def index_asset(database_id: str, asset_id: str, data: Dict[str, Any]):
+    """Index asset in your custom system"""
+    logger.info(f"Indexing asset {database_id}/{asset_id}")
+    # Implement your indexing logic here
+    pass
+
+def remove_from_index(database_id: str, asset_id: str):
+    """Remove asset from your custom index"""
+    logger.info(f"Removing asset {database_id}/{asset_id} from index")
+    # Implement your removal logic here
+    pass
+```
+
+### Step 3: Integrate with Core Stack
+
+```typescript
+// In core-stack.ts
+const customIndexerNestedStack = new CustomIndexerNestedStack(
+    this,
+    "CustomIndexer",
+    props.config,
+    storageResourcesNestedStack.storageResources,
+    lambdaLayers.lambdaCommonBaseLayer
+);
+customIndexerNestedStack.addDependency(storageResourcesNestedStack);
+```
+
+## Event Source Mapping Best Practices
+
+### GovCloud Compatibility
+
+All event source mappings in VAMS must support AWS GovCloud, which doesn't support tags on EventSourceMapping resources. Use this pattern:
+
+```typescript
+if (config.app.govCloud.enabled) {
+    const esm = new lambda.EventSourceMapping(scope, "MyEventSourceMapping", {
+        target: myLambdaFunction,
+        eventSourceArn: myQueue.queueArn,
+        batchSize: 10,
+        maxBatchingWindow: cdk.Duration.seconds(10),
+    });
+    const cfnEsm = esm.node.defaultChild as lambda.CfnEventSourceMapping;
+    cfnEsm.addPropertyDeletionOverride("Tags");
+} else {
+    myLambdaFunction.addEventSource(
+        new eventsources.SqsEventSource(myQueue, {
+            batchSize: 10,
+            maxBatchingWindow: cdk.Duration.seconds(10),
+        })
+    );
+}
+```
+
+## Performance Considerations
+
+### Batch Sizes
+
+The system uses different batch sizes for different components:
+
+-   **DynamoDB Streams → SNS Queuing**: 100 records (optimized for throughput)
+-   **SQS → Indexer Lambdas**: 10 records (optimized for processing time)
+-   **Max Batching Window**: 10 seconds (balances latency and efficiency)
+
+### Timeout Configuration
+
+-   **SNS Queuing Lambdas**: 5 minutes (lightweight processing)
+-   **Indexer Lambdas**: 15 minutes (complex OpenSearch operations)
+-   **SQS Visibility Timeout**: 960 seconds (16 minutes, allows for Lambda retries)
+
+### Adding New Consumers
+
+To add a new consumer:
+
+1. Create SQS queue in your nested stack
+2. Subscribe queue to appropriate SNS topic
+3. Create Lambda function to process messages
+4. Wire Lambda to SQS queue with event source mapping
+5. Grant necessary permissions
+
+No changes needed to:
+
+-   Storage Builder
+-   SNS queuing Lambdas
+-   Existing consumers
+-   DynamoDB tables
+
+This architecture ensures VAMS can grow and adapt to new requirements without major refactoring.

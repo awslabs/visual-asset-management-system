@@ -58,6 +58,7 @@ try:
     s3_assetAuxiliary_bucket = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
     asset_upload_table_name = os.environ.get("ASSET_UPLOAD_TABLE_NAME")
     asset_links_table_name = os.environ.get("ASSET_LINKS_STORAGE_TABLE_NAME")
+    asset_links_metadata_table_name = os.environ.get("ASSET_LINKS_METADATA_STORAGE_TABLE_NAME")
     metadata_table_name = os.environ.get("METADATA_STORAGE_TABLE_NAME")
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
     asset_versions_files_table_name = os.environ.get("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME")
@@ -75,6 +76,7 @@ asset_table = dynamodb.Table(asset_database)
 db_table = dynamodb.Table(db_database)
 asset_upload_table = dynamodb.Table(asset_upload_table_name) if asset_upload_table_name else None
 asset_links_table = dynamodb.Table(asset_links_table_name) if asset_links_table_name else None
+asset_links_metadata_table = dynamodb.Table(asset_links_metadata_table_name) if asset_links_metadata_table_name else None
 metadata_table = dynamodb.Table(metadata_table_name) if metadata_table_name else None
 versions_table = dynamodb.Table(asset_versions_table_name) if asset_versions_table_name else None
 comment_table = dynamodb.Table(comment_table_name) if comment_table_name else None
@@ -432,6 +434,37 @@ def delete_s3_objects(prefix, bucket):
         raise VAMSGeneralErrorResponse(f"Error deleting S3 objects.")
     
     return deleted_keys
+
+def delete_asset_link_metadata_for_permanent_deletion(asset_link_id: str):
+    """Delete all metadata associated with an asset link during permanent asset deletion
+    
+    Args:
+        asset_link_id: The asset link ID
+    """
+    if not asset_links_metadata_table:
+        return
+    
+    try:
+        # Query all metadata for this asset link
+        response = asset_links_metadata_table.query(
+            KeyConditionExpression=Key('assetLinkId').eq(asset_link_id)
+        )
+        
+        # Delete all metadata items
+        for item in response.get('Items', []):
+            asset_links_metadata_table.delete_item(
+                Key={
+                    'assetLinkId': item['assetLinkId'],
+                    'metadataKey': item['metadataKey']
+                }
+            )
+        
+        logger.info(f"Deleted {len(response.get('Items', []))} metadata items for asset link {asset_link_id}")
+        
+    except Exception as e:
+        logger.exception(f"Error deleting asset link metadata: {e}")
+        # Don't fail the whole operation if metadata deletion fails
+        pass
 
 #######################
 # Business Logic Functions
@@ -868,6 +901,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 
                 for item in response.get('Items', []):
                     if 'assetIdTo' in item:
+                        # Delete associated metadata first
+                        if 'assetLinkId' in item:
+                            delete_asset_link_metadata_for_permanent_deletion(item['assetLinkId'])
+                        
+                        # Then delete the link
                         asset_links_table.delete_item(Key={
                             'assetIdFrom': assetId,
                             'assetIdTo': item['assetIdTo']
@@ -886,6 +924,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 
                 for item in response.get('Items', []):
                     if 'assetIdFrom' in item:
+                        # Delete associated metadata first
+                        if 'assetLinkId' in item:
+                            delete_asset_link_metadata_for_permanent_deletion(item['assetLinkId'])
+                        
+                        # Then delete the link
                         asset_links_table.delete_item(Key={
                             'assetIdFrom': item['assetIdFrom'],
                             'assetIdTo': assetId

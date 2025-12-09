@@ -239,7 +239,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
     // Add account root principal for custom resource Lambda roles and CloudFormation
     policyStatement.addPrincipals(new iam.AccountRootPrincipal());
 
-    if (!config.app.useAlb.enabled) {
+    if (!config.app.useCloudFront.enabled) {
         policyStatement.addPrincipals(Service("CLOUDFRONT").Principal);
     }
 

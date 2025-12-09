@@ -118,7 +118,7 @@ export const FilePreviewThumbnailCell: React.FC<FilePreviewThumbnailCellProps> =
                     if (filePreviewKey) {
                         // If there's a dedicated preview file, use it
                         keyToUse = filePreviewKey;
-                        currentDownloadType = "assetPreview";
+                        currentDownloadType = "assetFile";
                         setPreviewKey(filePreviewKey);
                         setDownloadType(currentDownloadType);
 

@@ -2,13 +2,35 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### ⚠ BREAKING CHANGES
+
+The permission authorizations constraints has a new dynamoDB table that is no longer shared with authEntities to increase permission lookup performance. Old constraints added or updated will need to be migrated. VAMS default constructs will be re-added (Admin/RO).
+
+**Recommended Upgrade Path:** Run upgrade script for the new permission constraints table to migrate from the old table to the new if new constraints added or modified on top of the default that VAMS already adds: `infra\deploymentDataMigration\v2.3_to_v2.4\upgrade`
+
 ## [2.4.0] (2026-02-30)
 
 ### Features
 
+-   (Breaking Change) Reactored permission constraints dynamoDB table, Casbin logic for lookup, and authConstraints API to be more performant and follow the new refactor patterns for dynamoDB tables. This should increase performance of the solution for repeat data actions.
+-   Added new CDK deployment configuration support for disabling both Cloudfront and ALB static website deployment options to allow for API-only deployments of VAMS
+-   Added new CDK deployment configuration support for Cloudfront static website custom domains and TLS certificate imports
+-   Refactored backend data indexing flow to allow for both current open search indexing and easy expansion to indexing data and files with other solutions or partner integrations
+
 ### Bug Fixes
 
+-   Permanently deleting an asset now also deletes any associated asset link / asset link metadata in the database (caused inconsistencies with viewing asset links from the other related assets)
+-   Fixed bug where archived assets were not being properly reindexed in OpenSearch as archived
+-   Fixed bug where archiving an asset caused the asset (or a default database) to be re-created in some scenarios as part of the S3 file re-indexing process
+-   S3 Bucket sync processes to create assets from S3 objects will now still operate, even when OpenSearch functionality is disabled (part of the indexing flow re-factor)
+-   Fixed Casbin cache logic to truely be 30 seconds for updating constraints, roles, and users in roles in a lambda for authorization logic
+-   **Web** File previews, if provided as a `.previewFile.`. will now display correctly in the Asset/File search.
+
 ### Chores
+
+-   Refactored the tag, tagType, roles, userRoles, and authConstraints API service backends to meet new API standard for error handling/checking, validation, and request/response models usage.
+-   Refactored some API request/response models to replace deprecated pdyantic v1 "extra" field and replaced with proper v2 pattern
+-   Refactored rest of CDK lambdabuIlder functions to follow new naming pattern for table inputs and permissions
 
 ### Known Outstanding Issues
 

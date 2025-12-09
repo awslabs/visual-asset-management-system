@@ -36,9 +36,6 @@ logger = safeLogger(service_name="StreamAsset")
 try:
     s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -46,9 +43,6 @@ except Exception as e:
 # Initialize DynamoDB tables
 buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 asset_table = dynamodb.Table(asset_storage_table_name)
-auth_table = dynamodb.Table(auth_table_name)
-user_roles_table = dynamodb.Table(user_roles_table_name)
-roles_table = dynamodb.Table(roles_table_name)
 
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""

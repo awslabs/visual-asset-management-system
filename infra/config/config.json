@@ -58,6 +58,15 @@
             "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null
         },
+        "useCloudFront": {
+            "enabled": true,
+            "customDomain": {
+                "enabled": false,
+                "domainHost": "",
+                "certificateArn": "",
+                "optionalHostedZoneId": ""
+            }
+        },
         "pipelines": {
             "useConversion3dBasic": {
                 "enabled": true,

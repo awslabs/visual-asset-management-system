@@ -161,7 +161,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
         );
 
         //Deploy website distribution infrastructure and authentication tie-ins
-        if (!props.config.app.useAlb.enabled) {
+        //Cloudfront deployment
+        if (props.config.app.useCloudFront.enabled) {
             //Deploy through CloudFront (default)
             const website = new CloudFrontS3WebSiteConstruct(this, "WebApp", {
                 ...props,
@@ -237,7 +238,10 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             }
 
             this.endpointURL = website.endPointURL;
-        } else {
+        }
+
+        //ALB deploy
+        if (props.config.app.useAlb.enabled) {
             //TBD: Implement third ALB option to use a middleware NGINX reverse proxy with a EC2. https://www.nginx.com/blog/using-nginx-as-object-storage-gateway/
             //Pro: Reduces need to name S3 bucket the same as the domain name for the ALB/VPCEndpoint architecture to work as ALB does not support host/path rewriting. Would also allow for VAMS A/B deployments with ALB again.
             //Pro: Supports S3 KMS CMK encryption as NGINX can do SigV4 signing

@@ -49,9 +49,6 @@ try:
     opensearch_asset_index_ssm_param = os.environ["OPENSEARCH_ASSET_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -431,24 +428,42 @@ def process_asset_index_request(request: AssetIndexRequest) -> IndexOperationRes
     
     try:
         # Validate input parameters using VAMS validators
-        (valid, message) = validate({
-            'databaseId': {
-                'value': request.databaseId,
-                'validator': 'ID'
-            },
-            'assetId': {
-                'value': request.assetId,
-                'validator': 'ASSET_ID'
-            }
-        })
-        if not valid:
-            logger.error(f"Validation error in asset index request: {message}")
-            return IndexOperationResponse(
-                success=False,
-                message="Invalid input parameters",
-                indexName=opensearch_asset_index,
-                operation="validation_error"
-            )
+        # Skip databaseId validation for archived assets (databaseId ends with #deleted)
+        if not request.databaseId.endswith('#deleted'):
+            (valid, message) = validate({
+                'databaseId': {
+                    'value': request.databaseId,
+                    'validator': 'ID'
+                },
+                'assetId': {
+                    'value': request.assetId,
+                    'validator': 'ASSET_ID'
+                }
+            })
+            if not valid:
+                logger.error(f"Validation error in asset index request: {message}")
+                return IndexOperationResponse(
+                    success=False,
+                    message="Invalid input parameters",
+                    indexName=opensearch_asset_index,
+                    operation="validation_error"
+                )
+        else:
+            # For archived assets, only validate the assetId
+            (valid, message) = validate({
+                'assetId': {
+                    'value': request.assetId,
+                    'validator': 'ASSET_ID'
+                }
+            })
+            if not valid:
+                logger.error(f"Validation error in asset index request: {message}")
+                return IndexOperationResponse(
+                    success=False,
+                    message="Invalid input parameters",
+                    indexName=opensearch_asset_index,
+                    operation="validation_error"
+                )
         
         if request.operation == "delete":
             # Check if asset still exists
@@ -803,6 +818,81 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         
                     else:
                         logger.warning(f"Unknown DynamoDB table in source ARN: {source_arn}")
+                
+                elif event_source == 'aws:sqs':
+                    # SQS message (contains SNS message with DynamoDB stream record)
+                    try:
+                        # Parse SQS message body
+                        body = record.get('body', '')
+                        if isinstance(body, str):
+                            body = json.loads(body)
+                        
+                        # Check if this is an SNS message
+                        if body.get('Type') == 'Notification' and body.get('Message'):
+                            # Parse SNS message
+                            sns_message = body.get('Message')
+                            if isinstance(sns_message, str):
+                                sns_message = json.loads(sns_message)
+                            
+                            # First check if SNS message is a direct DynamoDB stream record (from SNS queuing Lambda)
+                            # This is the direct SNS→SQS path - check by eventSourceARN or eventName
+                            source_arn = sns_message.get('eventSourceARN', '')
+                            
+                            if asset_storage_table_name in source_arn:
+                                # Direct asset table stream from SNS queuing Lambda
+                                result = handle_asset_stream(sns_message)
+                                results.append(result)
+                            elif metadata_storage_table_name in source_arn:
+                                # Direct metadata table stream from SNS queuing Lambda
+                                result = handle_metadata_stream(sns_message)
+                                results.append(result)
+                            elif asset_links_table_name in source_arn:
+                                # Direct asset links table stream from SNS queuing Lambda
+                                link_results = handle_asset_links_stream(sns_message)
+                                results.extend(link_results)
+                            # Fallback: check if it's a DynamoDB stream by eventName and try to determine type
+                            elif sns_message.get('eventName') in ['INSERT', 'MODIFY', 'REMOVE']:
+                                # This is a DynamoDB stream record, try to determine type by data structure
+                                dynamodb_data = sns_message.get('dynamodb', {})
+                                new_image = dynamodb_data.get('NewImage', {})
+                                old_image = dynamodb_data.get('OldImage', {})
+                                keys = dynamodb_data.get('Keys', {})
+                                
+                                # Check if it has assetLinkId (asset links table)
+                                if 'assetLinkId' in new_image or 'assetLinkId' in old_image or 'assetLinkId' in keys:
+                                    link_results = handle_asset_links_stream(sns_message)
+                                    results.extend(link_results)
+                                # Check if it has assetId and databaseId (could be asset or metadata)
+                                elif ('assetId' in new_image or 'assetId' in old_image or 'assetId' in keys) and \
+                                     ('databaseId' in new_image or 'databaseId' in old_image or 'databaseId' in keys):
+                                    # Try to determine if it's asset or metadata by checking assetId format
+                                    asset_id_value = new_image.get('assetId', {}).get('S') or \
+                                                    old_image.get('assetId', {}).get('S') or \
+                                                    keys.get('assetId', {}).get('S')
+                                    
+                                    if asset_id_value and '/' in asset_id_value:
+                                        # Has path, likely metadata
+                                        result = handle_metadata_stream(sns_message)
+                                        results.append(result)
+                                    else:
+                                        # No path, likely asset
+                                        result = handle_asset_stream(sns_message)
+                                        results.append(result)
+                                else:
+                                    logger.warning(f"Cannot determine DynamoDB table type from SNS message structure")
+                            
+                            else:
+                                logger.warning(f"SNS message does not contain recognized event format (no eventSource, eventName, or Records): {list(sns_message.keys())}")
+                        else:
+                            logger.warning("SQS message is not an SNS notification")
+                    except json.JSONDecodeError as e:
+                        logger.exception(f"Error parsing SQS/SNS message: {e}")
+                        results.append(IndexOperationResponse(
+                            success=False,
+                            message=f"Error parsing SQS/SNS message: {str(e)}",
+                            indexName=opensearch_asset_index,
+                            operation="error"
+                        ))
                         
                 else:
                     logger.warning(f"Unknown event source: {event_source}")

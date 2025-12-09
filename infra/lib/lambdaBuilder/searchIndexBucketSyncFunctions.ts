@@ -69,6 +69,7 @@ export function buildSearchFunction(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -83,6 +84,7 @@ export function buildSearchFunction(
     );
 
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
@@ -131,6 +133,7 @@ export function buildFileIndexingFunction(
                 ? "provisioned"
                 : "serverless",
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -149,6 +152,7 @@ export function buildFileIndexingFunction(
     storageResources.dynamo.metadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
@@ -208,6 +212,7 @@ export function buildAssetIndexingFunction(
                 ? "provisioned"
                 : "serverless",
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -228,6 +233,7 @@ export function buildAssetIndexingFunction(
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
@@ -248,7 +254,6 @@ export function buildSqsBucketSyncFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    indexingS3ObjectMetadataFunction: lambda.Function | undefined,
     bucketName: string,
     bucketPrefix: string,
     defaultDatabaseId: string,
@@ -285,9 +290,7 @@ export function buildSqsBucketSyncFunction(
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            INDEXING_FUNCTION_NAME: indexingS3ObjectMetadataFunction
-                ? indexingS3ObjectMetadataFunction.functionName
-                : "",
+            FILE_INDEXER_SNS_TOPIC_ARN: storageResources.sns.fileIndexerSnsTopic.topicArn,
             ASSET_BUCKET_NAME: bucketName,
             ASSET_BUCKET_PREFIX: bucketPrefix,
             DEFAULT_DATABASE_ID: defaultDatabaseId,
@@ -302,9 +305,8 @@ export function buildSqsBucketSyncFunction(
     storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
     storageResources.dynamo.tagStorageTable.grantReadData(fun);
 
-    if (indexingS3ObjectMetadataFunction) {
-        indexingS3ObjectMetadataFunction.grantInvoke(fun);
-    }
+    // Grant SNS publish permissions
+    storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -381,6 +383,134 @@ export function buildReindexerFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
+
+    return fun;
+}
+
+export function buildFileIndexerSnsQueuingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "fileIndexerSnsQueuing";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.snsQueuing.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            SNS_TOPIC_ARN: storageResources.sns.fileIndexerSnsTopic.topicArn,
+        },
+    });
+
+    // Grant SNS publish permissions
+    storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    return fun;
+}
+
+export function buildAssetIndexerSnsQueuingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "assetIndexerSnsQueuing";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.snsQueuing.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            SNS_TOPIC_ARN: storageResources.sns.assetIndexerSnsTopic.topicArn,
+        },
+    });
+
+    // Grant SNS publish permissions
+    storageResources.sns.assetIndexerSnsTopic.grantPublish(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.assetLinksStorageTableV2.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    return fun;
+}
+
+export function buildDatabaseIndexerSnsQueuingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "databaseIndexerSnsQueuing";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.snsQueuing.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            SNS_TOPIC_ARN: storageResources.sns.databaseIndexerSnsTopic.topicArn,
+        },
+    });
+
+    // Grant SNS publish permissions
+    storageResources.sns.databaseIndexerSnsTopic.grantPublish(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.databaseStorageTable.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;
 }

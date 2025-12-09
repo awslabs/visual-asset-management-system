@@ -561,9 +561,26 @@ paths:
     /auth/constraints:
         get:
             summary: "List all constraints."
+            description: "Retrieve a paginated list of all authorization constraints. Constraints define fine-grained access control rules based on object attributes and user/group permissions."
             responses:
                 "200":
-                    description: OK
+                    description: Constraints retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/getConstraintsResponse'
+                "400":
+                    description: Invalid pagination parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to list constraints.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -578,12 +595,29 @@ paths:
             - DefaultCognitoAuthorizer: []    
     /auth/constraints/{constraintId}/:
         get:
-            summary: "Get constraint."
+            summary: "Get a specific constraint."
+            description: "Retrieve details of a specific authorization constraint by its ID."
             responses:
                 "200":
-                    description: OK
+                    description: Constraint retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/getConstraintResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid constraint ID.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view this constraint.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Constraint not found.
                     content:
                         application/json:
                             schema:
@@ -595,9 +629,6 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: "constraintId"
                 in: "path"
                 description: "Unique identifier for constraint."
@@ -607,28 +638,36 @@ paths:
             security:
             -   DefaultCognitoAuthorizer: []
         post:
-            summary: "Update constraint."
+            summary: "Create or update a constraint."
+            description: "Create a new constraint or update an existing one. Constraints define fine-grained access control rules with criteria (AND/OR logic) and permissions for groups/users. At least one criteria (criteriaAnd or criteriaOr) must be provided."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/constraint'
+                            $ref: '#/components/schemas/createConstraintRequest'
             parameters:
-            - $ref: '#/components/parameters/maxItemsParam'
-            - $ref: '#/components/parameters/pageSizeParam'
-            - $ref: '#/components/parameters/startingTokenParam'            
             - name: "constraintId"
               in: "path"
-              description: "Unique identifier for constraint."
+              description: "Unique identifier for constraint. If provided in path, overrides identifier in request body."
               required: true
               schema:
                 $ref: '#/components/schemas/object_name_pattern_regex'
             responses:
                 "200":
-                    description: OK
+                    description: Constraint created/updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, missing required criteria, or role does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create/update constraints.
                     content:
                         application/json:
                             schema:
@@ -642,28 +681,36 @@ paths:
             security:
             -   DefaultCognitoAuthorizer: []
         put:
-            summary: "Create constraint."
+            summary: "Create or update a constraint."
+            description: "Create a new constraint or update an existing one. Constraints define fine-grained access control rules with criteria (AND/OR logic) and permissions for groups/users. At least one criteria (criteriaAnd or criteriaOr) must be provided. PUT method is treated the same as POST for constraints."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/constraint'
+                            $ref: '#/components/schemas/createConstraintRequest'
             parameters:
-            - $ref: '#/components/parameters/maxItemsParam'
-            - $ref: '#/components/parameters/pageSizeParam'
-            - $ref: '#/components/parameters/startingTokenParam'            
             - name: "constraintId"
               in: "path"
-              description: "Unique identifier for constraint."
+              description: "Unique identifier for constraint. If provided in path, overrides identifier in request body."
               required: true
               schema:
                 $ref: '#/components/schemas/object_name_pattern_regex'
             responses:
                 "200":
-                    description: OK
+                    description: Constraint created/updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, missing required criteria, or role does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create/update constraints.
                     content:
                         application/json:
                             schema:
@@ -677,12 +724,29 @@ paths:
             security:
             -   DefaultCognitoAuthorizer: []
         delete: 
-            summary: "Delete constraint."
+            summary: "Delete a constraint."
+            description: "Delete a constraint by its ID. This operation cannot be undone."
             responses:
                 "200":
-                    description: OK
+                    description: Constraint deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid constraint ID.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete constraints.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Constraint not found.
                     content:
                         application/json:
                             schema:
@@ -694,9 +758,6 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: "constraintId"
                 in: "path"
                 description: "Unique identifier for constraint."
@@ -3412,17 +3473,22 @@ paths:
     /roles:
         get:
             summary: "List all roles."
+            description: "Retrieve a paginated list of all roles. Only returns roles the user is authorized to view."
             responses:
                 "200":
-                    description: OK
+                    description: Roles retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/getRolesResponse'
                 "400":
-                    description: No asset ID in API call.
+                    description: Invalid parameters.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to list roles.
                     content:
                         application/json:
                             schema:
@@ -3433,25 +3499,36 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
         post:
-            summary: "Create roles."
+            summary: "Create a new role."
+            description: "Create a new role with the specified name, description, and optional source information. Role names must be unique."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: "#/components/schemas/role"
+                            $ref: "#/components/schemas/createRoleRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Role created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/roleOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or role already exists.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to create roles.
                     content:
                         application/json:
                             schema:
@@ -3465,24 +3542,29 @@ paths:
             security:
                 - DefaultCognitoAuthorizer: []
         put:
-            summary: "Update role."
+            summary: "Update an existing role."
+            description: "Update a role's description, source, sourceIdentifier, and mfaRequired fields. The role name cannot be changed."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: "#/components/schemas/role"
+                            $ref: "#/components/schemas/updateRoleRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Role updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/roleOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or role not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to update roles.
                     content:
                         application/json:
                             schema:
@@ -3493,6 +3575,48 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+    /roles/{roleId}:
+        delete:
+            summary: "Delete a role."
+            description: "Delete a role by its name. This operation cannot be undone."
+            responses:
+                "200":
+                    description: Role deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "success"
+                "400":
+                    description: Invalid role name or role does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete roles.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: roleId
+                in: path
+                description: "Role name to delete."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
             security:
               - DefaultCognitoAuthorizer: []
     /subscriptions: 
@@ -3619,9 +3743,25 @@ paths:
     /tags:
         get:
             summary: "List all tags."
+            description: "Retrieve a paginated list of all tags. Tags are returned with their associated tag type, and required tags are marked with [R] suffix."
             responses:
                 "200":
-                    description: OK
+                    description: Tags retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/tagResponse"
+                                            NextToken:
+                                                type: string
+                                                description: "Pagination token for retrieving next page"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -3629,7 +3769,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to list tags.
                     content:
                         application/json:
                             schema:
@@ -3647,29 +3787,29 @@ paths:
             security:
               - DefaultCognitoAuthorizer: []
         post:
-            summary: "Create new tags."
+            summary: "Create a new tag."
+            description: "Create a new tag with the specified name, description, and tag type. Tag names must be unique across all tag types."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: object
-                            properties:
-                                tags:
-                                    type: array
-                                    items:
-                                        $ref: "#/components/schemas/tag"
+                            $ref: "#/components/schemas/createTagRequest"
             responses:
                 "200":
-                    description: Succeeded
+                    description: Tag created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or tag already exists.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to create tags.
                     content:
                         application/json:
                             schema:
@@ -3683,29 +3823,29 @@ paths:
             security:
               - DefaultCognitoAuthorizer: []
         put:
-            summary: "Update tags."
+            summary: "Update an existing tag."
+            description: "Update a tag's description and/or tag type. The tag name cannot be changed."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: object
-                            properties:
-                                tags:
-                                    type: array
-                                    items:
-                                        $ref: "#/components/schemas/tag"
+                            $ref: "#/components/schemas/updateTagRequest"
             responses:
                 "200":
-                    description: Succeeded.
+                    description: Tag updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or tag not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to update tags.
                     content:
                         application/json:
                             schema:
@@ -3720,24 +3860,29 @@ paths:
               - DefaultCognitoAuthorizer: []
     /tags/{tagId}:
         delete:
-            summary: "Delete tags."
+            summary: "Delete a tag."
+            description: "Delete a tag by its name. This operation cannot be undone."
             responses:
                 "200":
-                    description: OK
+                    description: Tag deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid tag name.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to delete tags.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database not found.
+                    description: Tag not found.
                     content:
                         application/json:
                             schema:
@@ -3749,25 +3894,36 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
               - name: tagId
                 in: path
-                description: One or more tag ids to delete.
+                description: "Tag name to delete."
                 required: true
                 schema:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/object_name_pattern_regex"
+                    $ref: "#/components/schemas/object_name_pattern_regex"
             security:
               - DefaultCognitoAuthorizer: []
     /tag-types:
         get:
             summary: "List all tag types."
+            description: "Retrieve a paginated list of all tag types with their associated tags. Tag types marked as required will have the required field set to 'True'."
             responses:
                 "200":
-                    description: OK
+                    description: Tag types retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/tagTypeResponse"
+                                            NextToken:
+                                                type: string
+                                                description: "Pagination token for retrieving next page"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -3775,7 +3931,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to list tag types.
                     content:
                         application/json:
                             schema:
@@ -3793,29 +3949,29 @@ paths:
             security:
               - DefaultCognitoAuthorizer: []
         post:
-            summary: "Create new tag types."
+            summary: "Create a new tag type."
+            description: "Create a new tag type with the specified name, description, and required flag. Tag type names must be unique."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: object
-                            properties:
-                              tagTypes:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/tagType"
+                            $ref: "#/components/schemas/createTagTypeRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Tag type created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagTypeOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or tag type already exists.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to create tag types.
                     content:
                         application/json:
                             schema:
@@ -3826,40 +3982,38 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []            
         put:
-            summary: "Update tag types."
+            summary: "Update an existing tag type."
+            description: "Update a tag type's description and/or required flag. The tag type name cannot be changed."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: object
-                            properties:
-                              tagTypes:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/tagType"
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
+                            $ref: "#/components/schemas/updateTagTypeRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Tag type updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagTypeOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or tag type not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to update tag types.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Tag type not found.
                     content:
                         application/json:
                             schema:
@@ -3875,17 +4029,28 @@ paths:
     /tag-types/{tagTypeId}:
         delete:
             summary: "Delete a tag type."
+            description: "Delete a tag type by its name. This operation cannot be undone. Tag types that are currently in use by tags cannot be deleted."
             responses:
                 "200":
-                    description: OK
+                    description: Tag type deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagTypeOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid tag type name or tag type is in use by tags.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to delete tag types.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Tag type not found.
                     content:
                         application/json:
                             schema:
@@ -3897,12 +4062,9 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
               - name: tagTypeId
                 in: path
-                description: Tag type.
+                description: "Tag type name to delete."
                 required: true
                 schema:
                     $ref: "#/components/schemas/object_name_pattern_regex"
@@ -3938,17 +4100,22 @@ paths:
     /user-roles:
         get:
             summary: "List all user roles."
+            description: "Retrieve a paginated list of all user-role assignments grouped by user. Returns users with their assigned roles. Only returns user roles the requesting user is authorized to view based on Casbin policies."
             responses:
                 "200":
-                    description: OK
+                    description: User roles retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/getUserRolesResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid pagination parameters.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to list user roles.
                     content:
                         application/json:
                             schema:
@@ -3963,37 +4130,32 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
-              - name: roleName
-                in: query
-                description: One or more role names to add.
-                required: true
-                schema:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/object_name_pattern_regex"
-              - name: userId
-                in: query
-                description: User e-mails.
-                required: true
-                schema:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/email_pattern_regex"
             security:
               - DefaultCognitoAuthorizer: []
         post: 
             summary: "Create new user roles."
+            description: "Assign one or more roles to a user. All specified roles must exist in the system. Validates that roles don't already exist for the user before creating. Requires POST permission on userRole objects via Casbin."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createUserRolesRequest"
             responses:
                 "200":
-                    description: OK
+                    description: User roles created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/userRoleOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, role doesn't exist, or role already assigned to user.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to create user roles.
                     content:
                         application/json:
                             schema:
@@ -4004,87 +4166,32 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            type: array
-                            items:
-                                $ref: "#/components/schemas/userRole"
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
-              - name: roleName
-                in: query
-                description: One or more role names to add.
-                required: true
-                schema:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/object_name_pattern_regex"
-              - name: userId
-                in: query
-                description: User e-mails.
-                required: true
-                schema:
-                    type: array
-                    items:
-                     $ref: "#/components/schemas/email_pattern_regex"
             security:
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update user roles."
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "403":
-                    description: Action not allowed or not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
+            description: "Update a user's role assignments by specifying the complete new set of roles. Performs a differential update - adds new roles and removes roles not in the list. All specified roles must exist in the system. Requires POST permission for new roles and DELETE permission for removed roles via Casbin."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: array
-                            items:
-                                $ref: "#/components/schemas/userRole"
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
-            security:
-              - DefaultCognitoAuthorizer: []
-        delete: 
-            summary: "Delete user roles."
-            description: "userId (email regex) is a required field."
+                            $ref: "#/components/schemas/updateUserRolesRequest"
             responses:
                 "200":
-                    description: OK
+                    description: User roles updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/userRoleOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or role doesn't exist.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to update user roles.
                     content:
                         application/json:
                             schema:
@@ -4095,10 +4202,42 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete: 
+            summary: "Delete all roles for a user."
+            description: "Remove all role assignments for a specified user. Requires DELETE permission on userRole objects via Casbin for each role being removed."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteUserRolesRequest"
+            responses:
+                "200":
+                    description: User roles deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/userRoleOperationResponse"
+                "400":
+                    description: Invalid userId parameter.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete user roles.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
             security:
               - DefaultCognitoAuthorizer: []
     /visualizerAssets/{proxy+}/:
@@ -4480,24 +4619,257 @@ components:
                 - assetId
                 - commentId
                 - commentBody
-        constraint:
+        # Constraint API Request/Response Schemas
+        constraintCriteria:
             type: object
             properties:
-                criteriaAnd:
+                field:
                     type: string
-                    pattern: ^[a-zA-Z0-9\.\-_]+$
-                criteriaOrValue:
+                    minLength: 1
+                    maxLength: 256
+                    description: "Field name to evaluate in the constraint"
+                operator:
                     type: string
-                    pattern: ^[a-zA-Z0-9\.\-_]+$
-                groupPermissions:
-                    $ref: '#/components/schemas/object_name_pattern_regex'
-                userPermissions:
-                    $ref: "#/components/schemas/email_pattern_regex"
+                    enum: [equals, contains, does_not_contain, starts_with, ends_with, is_one_of, is_not_one_of]
+                    description: "Comparison operator for the criteria"
+                value:
+                    oneOf:
+                        - type: string
+                        - type: array
+                          items:
+                              type: string
+                    description: "Value or array of values to compare against. Must be a valid regex pattern."
             required:
-                - criteriaAnd
-                - criteriaOrValue
-                - groupPermissions
-                - userPermissions
+                - field
+                - operator
+                - value
+        
+        groupPermission:
+            type: object
+            properties:
+                groupId:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Role/group name (must exist in roles table)"
+                permission:
+                    type: string
+                    enum: [GET, PUT, POST, DELETE]
+                    description: "Permission type"
+                permissionType:
+                    type: string
+                    enum: [allow, deny]
+                    description: "Whether to allow or deny the permission"
+            required:
+                - groupId
+                - permission
+                - permissionType
+        
+        userPermission:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/userid_regex"
+                    description: "User ID (email format)"
+                permission:
+                    type: string
+                    enum: [GET, PUT, POST, DELETE]
+                    description: "Permission type"
+                permissionType:
+                    type: string
+                    enum: [allow, deny]
+                    description: "Whether to allow or deny the permission"
+            required:
+                - userId
+                - permission
+                - permissionType
+        
+        createConstraintRequest:
+            type: object
+            properties:
+                identifier:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Unique constraint identifier (1-256 characters)"
+                name:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Constraint name (1-256 characters)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Constraint description (1-256 characters)"
+                objectType:
+                    type: string
+                    enum: [database, asset, api, web, tag, tagType, role, userRole, pipeline, workflow, metadataSchema]
+                    description: "Type of object this constraint applies to"
+                criteriaAnd:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintCriteria"
+                    description: "Array of criteria that must ALL be true (AND logic)"
+                    default: []
+                criteriaOr:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintCriteria"
+                    description: "Array of criteria where at least ONE must be true (OR logic)"
+                    default: []
+                groupPermissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/groupPermission"
+                    description: "Permissions for groups/roles"
+                    default: []
+                userPermissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/userPermission"
+                    description: "Permissions for specific users"
+                    default: []
+            required:
+                - identifier
+                - name
+                - description
+                - objectType
+            example:
+                identifier: "asset-viewer-constraint"
+                name: "Asset Viewer Constraint"
+                description: "Allow viewers to access distributable assets"
+                objectType: "asset"
+                criteriaAnd:
+                    - field: "isDistributable"
+                      operator: "equals"
+                      value: "true"
+                criteriaOr: []
+                groupPermissions:
+                    - groupId: "viewer"
+                      permission: "GET"
+                      permissionType: "allow"
+                userPermissions: []
+        
+        constraintResponse:
+            type: object
+            properties:
+                constraintId:
+                    type: string
+                    description: "Constraint ID"
+                name:
+                    type: string
+                    description: "Constraint name"
+                description:
+                    type: string
+                    description: "Constraint description"
+                objectType:
+                    type: string
+                    enum: [database, asset, api, web, tag, tagType, role, userRole, pipeline, workflow, metadataSchema]
+                    description: "Type of object this constraint applies to"
+                criteriaAnd:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintCriteria"
+                    description: "Array of AND criteria"
+                    default: []
+                criteriaOr:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintCriteria"
+                    description: "Array of OR criteria"
+                    default: []
+                groupPermissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/groupPermission"
+                    description: "Group permissions"
+                    default: []
+                userPermissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/userPermission"
+                    description: "User permissions"
+                    default: []
+            required:
+                - constraintId
+                - name
+                - description
+                - objectType
+        
+        getConstraintResponse:
+            type: object
+            properties:
+                constraint:
+                    $ref: "#/components/schemas/constraintResponse"
+                    description: "Constraint details"
+            required:
+                - constraint
+        
+        getConstraintsResponse:
+            type: object
+            properties:
+                message:
+                    type: object
+                    properties:
+                        Items:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/constraintResponse"
+                            description: "List of constraints"
+                        NextToken:
+                            type: string
+                            description: "Pagination token for retrieving next page"
+                    required:
+                        - Items
+            required:
+                - message
+            example:
+                message:
+                    Items:
+                        - constraintId: "asset-viewer-constraint"
+                          name: "Asset Viewer Constraint"
+                          description: "Allow viewers to access distributable assets"
+                          objectType: "asset"
+                          criteriaAnd:
+                              - field: "isDistributable"
+                                operator: "equals"
+                                value: "true"
+                          criteriaOr: []
+                          groupPermissions:
+                              - groupId: "viewer"
+                                permission: "GET"
+                                permissionType: "allow"
+                          userPermissions: []
+        
+        constraintOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                constraintId:
+                    type: string
+                    description: "Constraint ID that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+                constraint:
+                    type: string
+                    description: "JSON string of the constraint data (for create/update operations)"
+            required:
+                - success
+                - message
+                - constraintId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "Constraint asset-viewer-constraint created/updated successfully"
+                constraintId: "asset-viewer-constraint"
+                operation: "create"
+                timestamp: "2024-01-15T10:30:00.000Z"
+                constraint: "{\"identifier\":\"asset-viewer-constraint\",\"name\":\"Asset Viewer Constraint\",...}"
         database:
             type: object
             properties:
@@ -4539,6 +4911,9 @@ components:
         id_regex:
             type: string
             pattern: ^[a-z]([-_a-z0-9]){3,63}$
+        asset_id_regex:
+            type: string
+            pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
         ingest_asset: 
             type: object
             properties:
@@ -4609,6 +4984,129 @@ components:
             required:
                 - roleName
                 - description
+        
+        # Role API Request/Response Schemas
+        createRoleRequest:
+            type: object
+            properties:
+                roleName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Unique role name (1-256 characters)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Role description (1-256 characters)"
+                source:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Optional source identifier (must be 'INTERNAL_SYSTEM' if provided)"
+                sourceIdentifier:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Optional source identifier value"
+                mfaRequired:
+                    type: boolean
+                    description: "Whether MFA is required for this role"
+                    default: false
+            required:
+                - roleName
+                - description
+        
+        updateRoleRequest:
+            type: object
+            properties:
+                roleName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Role name to update (cannot be changed)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated role description"
+                source:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated source identifier (must be 'INTERNAL_SYSTEM' if provided)"
+                sourceIdentifier:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated source identifier value"
+                mfaRequired:
+                    type: boolean
+                    description: "Updated MFA requirement flag"
+                    default: false
+            required:
+                - roleName
+                - description
+        
+        roleResponse:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: "Unique role ID (UUID)"
+                roleName:
+                    type: string
+                    description: "Role name"
+                description:
+                    type: string
+                    description: "Role description"
+                createdOn:
+                    type: string
+                    format: date-time
+                    description: "Date when role was created"
+                source:
+                    type: string
+                    description: "Source identifier"
+                sourceIdentifier:
+                    type: string
+                    description: "Source identifier value"
+                mfaRequired:
+                    type: boolean
+                    description: "Whether MFA is required for this role"
+                    default: false
+            required:
+                - roleName
+                - description
+        
+        getRolesResponse:
+            type: object
+            properties:
+                message:
+                    type: object
+                    properties:
+                        Items:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/roleResponse"
+                            description: "List of roles"
+                        NextToken:
+                            type: string
+                            description: "Pagination token for retrieving next page"
+                    required:
+                        - Items
+            required:
+                - message
+        
+        roleOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                roleName:
+                    type: string
+                    description: "Role name that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - roleName
+                - operation
+                - timestamp
         route:
             type: object
             properties:
@@ -4667,6 +5165,90 @@ components:
                 - tagName
                 - description
                 - tagTypeName
+        
+        # Tag API Request/Response Schemas
+        createTagRequest:
+            type: object
+            properties:
+                tagName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Unique tag name (1-256 characters)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Tag description (1-256 characters)"
+                tagTypeName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Tag type name that this tag belongs to"
+            required:
+                - tagName
+                - description
+                - tagTypeName
+        
+        updateTagRequest:
+            type: object
+            properties:
+                tagName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Tag name to update (cannot be changed)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated tag description"
+                tagTypeName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Updated tag type name"
+            required:
+                - tagName
+                - description
+                - tagTypeName
+        
+        tagResponse:
+            type: object
+            properties:
+                tagName:
+                    type: string
+                    description: "Tag name"
+                description:
+                    type: string
+                    description: "Tag description"
+                tagTypeName:
+                    type: string
+                    description: "Tag type name (may include [R] suffix for required tags)"
+                required:
+                    type: string
+                    enum: ["True", "False"]
+                    description: "Whether this tag is required (inherited from tag type)"
+                    default: "False"
+            required:
+                - tagName
+                - description
+                - tagTypeName
+        
+        tagOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                tagName:
+                    type: string
+                    description: "Tag name that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - tagName
+                - operation
+                - timestamp
         tagType:
             type: object
             properties: 
@@ -4677,6 +5259,95 @@ components:
             required: 
                 - tagTypeName
                 - description
+        
+        # Tag Type API Request/Response Schemas
+        createTagTypeRequest:
+            type: object
+            properties:
+                tagTypeName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Unique tag type name (1-256 characters)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Tag type description (1-256 characters)"
+                required:
+                    type: string
+                    enum: ["True", "False"]
+                    description: "Whether tags of this type are required"
+                    default: "False"
+            required:
+                - tagTypeName
+                - description
+        
+        updateTagTypeRequest:
+            type: object
+            properties:
+                tagTypeName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Tag type name to update (cannot be changed)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated tag type description"
+                required:
+                    type: string
+                    enum: ["True", "False"]
+                    description: "Updated required flag"
+                    default: "False"
+            required:
+                - tagTypeName
+                - description
+        
+        tagTypeResponse:
+            type: object
+            properties:
+                tagTypeName:
+                    type: string
+                    description: "Tag type name"
+                description:
+                    type: string
+                    description: "Tag type description"
+                required:
+                    type: string
+                    enum: ["True", "False"]
+                    description: "Whether tags of this type are required"
+                    default: "False"
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "List of tag names associated with this tag type"
+                    default: []
+            required:
+                - tagTypeName
+                - description
+                - required
+        
+        tagTypeOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                tagTypeName:
+                    type: string
+                    description: "Tag type name that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - tagTypeName
+                - operation
+                - timestamp
         userid_regex:
             type: string
             pattern: ^[\w\-\.\+\@]{3,256}$
@@ -4690,6 +5361,142 @@ components:
             required:
                 - roleName
                 - description
+        
+        # User Role API Request/Response Schemas
+        createUserRolesRequest:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/userid_regex"
+                    description: "User ID (email format, 3-256 characters)"
+                roleName:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Array of role names to assign to the user (at least one required)"
+            required:
+                - userId
+                - roleName
+            example:
+                userId: "user@example.com"
+                roleName: ["admin", "editor"]
+        
+        updateUserRolesRequest:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/userid_regex"
+                    description: "User ID (email format, 3-256 characters)"
+                roleName:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Complete new set of role names for the user (at least one required). Performs differential update."
+            required:
+                - userId
+                - roleName
+            example:
+                userId: "user@example.com"
+                roleName: ["admin", "viewer"]
+        
+        deleteUserRolesRequest:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/userid_regex"
+                    description: "User ID (email format, 3-256 characters) whose roles should be deleted"
+            required:
+                - userId
+            example:
+                userId: "user@example.com"
+        
+        userRoleResponse:
+            type: object
+            properties:
+                userId:
+                    type: string
+                    description: "User ID (email)"
+                roleName:
+                    type: array
+                    items:
+                        type: string
+                    description: "Array of role names assigned to the user"
+                createdOn:
+                    type: string
+                    format: date-time
+                    description: "Date when the first role was created for this user"
+            required:
+                - userId
+                - roleName
+            example:
+                userId: "user@example.com"
+                roleName: ["admin", "editor"]
+                createdOn: "2024-01-15T10:30:00.000Z"
+        
+        getUserRolesResponse:
+            type: object
+            properties:
+                message:
+                    type: object
+                    properties:
+                        Items:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/userRoleResponse"
+                            description: "List of user role assignments grouped by user"
+                        NextToken:
+                            type: string
+                            description: "Pagination token for retrieving next page"
+                    required:
+                        - Items
+            required:
+                - message
+            example:
+                message:
+                    Items:
+                        - userId: "user1@example.com"
+                          roleName: ["admin", "editor"]
+                          createdOn: "2024-01-15T10:30:00.000Z"
+                        - userId: "user2@example.com"
+                          roleName: ["viewer"]
+                          createdOn: "2024-01-16T14:20:00.000Z"
+                    NextToken: "2024-01-16T14:20:00.000Z"
+        
+        userRoleOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                userId:
+                    type: string
+                    description: "User ID that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - userId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "User roles created successfully"
+                userId: "user@example.com"
+                operation: "create"
+                timestamp: "2024-01-15T10:30:00.000Z"
+        
         uuid_regex:
             type: string
             pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$

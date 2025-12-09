@@ -8,29 +8,24 @@ import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
-import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { NagSuppressions } from "cdk-nag";
 import { OpensearchServerlessConstruct } from "./constructs/opensearch-serverless";
 import { OpensearchProvisionedConstruct } from "./constructs/opensearch-provisioned";
 import {
     buildSearchFunction,
-    buildSqsBucketSyncFunction,
     buildFileIndexingFunction,
     buildAssetIndexingFunction,
     buildReindexerFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import { attachFunctionToApi } from "../apiLambda/apiBuilder-nestedStack";
-import { Stack, NestedStack } from "aws-cdk-lib";
+import { NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as cdk from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
-import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
 import { Service } from "../../helper/service-helper";
-import * as iam from "aws-cdk-lib/aws-iam";
-import { PropagatedTagSource } from "aws-cdk-lib/aws-ecs";
 import * as cr from "aws-cdk-lib/custom-resources";
 
 export class SearchBuilderNestedStack extends NestedStack {
@@ -139,97 +134,90 @@ export function searchBuilder(
             subnets
         );
 
-        // Setup DynamoDB streams for dual indexing
+        // Create SQS queues for indexers and subscribe to SNS topics
+        // File indexer SQS queue
+        const fileIndexerSqsQueue = new sqs.Queue(scope, "FileIndexerSqsQueue", {
+            queueName: `${config.name}-${config.app.baseStackName}-fileIndexer`,
+            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's timeout is 900
+            encryption: storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+        fileIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
+
+        // Subscribe file indexer queue to file indexer SNS topic
+        storageResources.sns.fileIndexerSnsTopic.addSubscription(
+            new SqsSubscription(fileIndexerSqsQueue)
+        );
+
+        fileIndexerSqsQueue.grantConsumeMessages(fileIndexingFunction);
+
+        // Setup event source mapping for file indexer with GovCloud support
         if (config.app.govCloud.enabled) {
-            // File indexer - metadata table stream (for file-level metadata)
-            const esmFileMetadata = new lambda.EventSourceMapping(
+            const esmFileIndexer = new lambda.EventSourceMapping(
                 scope,
-                "FileIndexerMetadataTableStream",
+                "FileIndexerSqsEventSource",
                 {
+                    eventSourceArn: fileIndexerSqsQueue.queueArn,
                     target: fileIndexingFunction,
-                    eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    batchSize: 100,
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(5),
                 }
             );
-            const cfnEsmFileMetadata = esmFileMetadata.node
+            const cfnEsmFileIndexer = esmFileIndexer.node
                 .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmFileMetadata.addPropertyDeletionOverride("Tags");
-
-            // Asset indexer - asset table stream
-            const esmAssetTable = new lambda.EventSourceMapping(
-                scope,
-                "AssetIndexerAssetTableStream",
-                {
-                    target: assetIndexingFunction,
-                    eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    batchSize: 100,
-                }
-            );
-            const cfnEsmAssetTable = esmAssetTable.node
-                .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetTable.addPropertyDeletionOverride("Tags");
-
-            // Asset indexer - metadata table stream (for asset-level metadata)
-            const esmAssetMetadata = new lambda.EventSourceMapping(
-                scope,
-                "AssetIndexerMetadataTableStream",
-                {
-                    target: assetIndexingFunction,
-                    eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    batchSize: 100,
-                }
-            );
-            const cfnEsmAssetMetadata = esmAssetMetadata.node
-                .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetMetadata.addPropertyDeletionOverride("Tags");
-
-            // Asset indexer - asset links table stream
-            const esmAssetLinks = new lambda.EventSourceMapping(
-                scope,
-                "AssetIndexerAssetLinksTableStream",
-                {
-                    target: assetIndexingFunction,
-                    eventSourceArn: storageResources.dynamo.assetLinksStorageTableV2.tableStreamArn,
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    batchSize: 100,
-                }
-            );
-            const cfnEsmAssetLinks = esmAssetLinks.node
-                .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetLinks.addPropertyDeletionOverride("Tags");
+            cfnEsmFileIndexer.addPropertyDeletionOverride("Tags");
         } else {
-            // File indexer - metadata table stream (for file-level metadata)
             fileIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                new eventsources.SqsEventSource(fileIndexerSqsQueue, {
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(5),
                 })
             );
+        }
 
-            // Asset indexer - asset table stream
-            assetIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(storageResources.dynamo.assetStorageTable, {
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                })
+        // Asset indexer SQS queue
+        const assetIndexerSqsQueue = new sqs.Queue(scope, "AssetIndexerSqsQueue", {
+            queueName: `${config.name}-${config.app.baseStackName}-assetIndexer`,
+            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's timeout is 900
+            encryption: storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+        assetIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
+
+        // Subscribe asset indexer queue to asset indexer SNS topic
+        storageResources.sns.assetIndexerSnsTopic.addSubscription(
+            new SqsSubscription(assetIndexerSqsQueue)
+        );
+
+        assetIndexerSqsQueue.grantConsumeMessages(assetIndexingFunction);
+
+        // Setup event source mapping for asset indexer with GovCloud support
+        if (config.app.govCloud.enabled) {
+            const esmAssetIndexer = new lambda.EventSourceMapping(
+                scope,
+                "AssetIndexerSqsEventSource",
+                {
+                    eventSourceArn: assetIndexerSqsQueue.queueArn,
+                    target: assetIndexingFunction,
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(10),
+                }
             );
-
-            // Asset indexer - metadata table stream (for asset-level metadata)
+            const cfnEsmAssetIndexer = esmAssetIndexer.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetIndexer.addPropertyDeletionOverride("Tags");
+        } else {
             assetIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                new eventsources.SqsEventSource(assetIndexerSqsQueue, {
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(5),
                 })
-            );
-
-            // Asset indexer - asset links table stream
-            assetIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(
-                    storageResources.dynamo.assetLinksStorageTableV2,
-                    {
-                        startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    }
-                )
             );
         }
 
@@ -307,103 +295,96 @@ export function searchBuilder(
             subnets
         );
 
+        // Create SQS queues for indexers and subscribe to SNS topics
+        // File indexer SQS queue
+        const fileIndexerSqsQueue = new sqs.Queue(scope, "FileIndexerSqsQueue", {
+            queueName: `${config.name}-${config.app.baseStackName}-fileIndexer`,
+            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's timeout is 900
+            encryption: storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+        fileIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
+
+        // Subscribe file indexer queue to file indexer SNS topic
+        storageResources.sns.fileIndexerSnsTopic.addSubscription(
+            new SqsSubscription(fileIndexerSqsQueue)
+        );
+
+        fileIndexerSqsQueue.grantConsumeMessages(fileIndexingFunction);
+
+        // Setup event source mapping for file indexer with GovCloud support
+        if (config.app.govCloud.enabled) {
+            const esmFileIndexer = new lambda.EventSourceMapping(
+                scope,
+                "FileIndexerSqsEventSource",
+                {
+                    eventSourceArn: fileIndexerSqsQueue.queueArn,
+                    target: fileIndexingFunction,
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(5),
+                }
+            );
+            const cfnEsmFileIndexer = esmFileIndexer.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmFileIndexer.addPropertyDeletionOverride("Tags");
+        } else {
+            fileIndexingFunction.addEventSource(
+                new eventsources.SqsEventSource(fileIndexerSqsQueue, {
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(5),
+                })
+            );
+        }
+
+        // Asset indexer SQS queue
+        const assetIndexerSqsQueue = new sqs.Queue(scope, "AssetIndexerSqsQueue", {
+            queueName: `${config.name}-${config.app.baseStackName}-assetIndexer`,
+            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's timeout is 900
+            encryption: storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+        assetIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
+
+        // Subscribe asset indexer queue to asset indexer SNS topic
+        storageResources.sns.assetIndexerSnsTopic.addSubscription(
+            new SqsSubscription(assetIndexerSqsQueue)
+        );
+
+        assetIndexerSqsQueue.grantConsumeMessages(assetIndexingFunction);
+
+        // Setup event source mapping for asset indexer with GovCloud support
+        if (config.app.govCloud.enabled) {
+            const esmAssetIndexer = new lambda.EventSourceMapping(
+                scope,
+                "AssetIndexerSqsEventSource",
+                {
+                    eventSourceArn: assetIndexerSqsQueue.queueArn,
+                    target: assetIndexingFunction,
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(5),
+                }
+            );
+            const cfnEsmAssetIndexer = esmAssetIndexer.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetIndexer.addPropertyDeletionOverride("Tags");
+        } else {
+            assetIndexingFunction.addEventSource(
+                new eventsources.SqsEventSource(assetIndexerSqsQueue, {
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(5),
+                })
+            );
+        }
+
         // Grant OpenSearch access to both indexers
         aos.grantOSDomainAccess(fileIndexingFunction);
         aos.grantOSDomainAccess(assetIndexingFunction);
-
-        // Setup DynamoDB streams for dual indexing
-        if (config.app.govCloud.enabled) {
-            // File indexer - metadata table stream (for file-level metadata)
-            const esmFileMetadata = new lambda.EventSourceMapping(
-                scope,
-                "FileIndexerMetadataTableStream",
-                {
-                    target: fileIndexingFunction,
-                    eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    batchSize: 100,
-                }
-            );
-            const cfnEsmFileMetadata = esmFileMetadata.node
-                .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmFileMetadata.addPropertyDeletionOverride("Tags");
-
-            // Asset indexer - asset table stream
-            const esmAssetTable = new lambda.EventSourceMapping(
-                scope,
-                "AssetIndexerAssetTableStream",
-                {
-                    target: assetIndexingFunction,
-                    eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    batchSize: 100,
-                }
-            );
-            const cfnEsmAssetTable = esmAssetTable.node
-                .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetTable.addPropertyDeletionOverride("Tags");
-
-            // Asset indexer - metadata table stream (for asset-level metadata)
-            const esmAssetMetadata = new lambda.EventSourceMapping(
-                scope,
-                "AssetIndexerMetadataTableStream",
-                {
-                    target: assetIndexingFunction,
-                    eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    batchSize: 100,
-                }
-            );
-            const cfnEsmAssetMetadata = esmAssetMetadata.node
-                .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetMetadata.addPropertyDeletionOverride("Tags");
-
-            // Asset indexer - asset links table stream
-            const esmAssetLinks = new lambda.EventSourceMapping(
-                scope,
-                "AssetIndexerAssetLinksTableStream",
-                {
-                    target: assetIndexingFunction,
-                    eventSourceArn: storageResources.dynamo.assetLinksStorageTableV2.tableStreamArn,
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    batchSize: 100,
-                }
-            );
-            const cfnEsmAssetLinks = esmAssetLinks.node
-                .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetLinks.addPropertyDeletionOverride("Tags");
-        } else {
-            // File indexer - metadata table stream (for file-level metadata)
-            fileIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                })
-            );
-
-            // Asset indexer - asset table stream
-            assetIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(storageResources.dynamo.assetStorageTable, {
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                })
-            );
-
-            // Asset indexer - metadata table stream (for asset-level metadata)
-            assetIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                })
-            );
-
-            // Asset indexer - asset links table stream
-            assetIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(
-                    storageResources.dynamo.assetLinksStorageTableV2,
-                    {
-                        startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                    }
-                )
-            );
-        }
 
         //grant search function access to AOS
         aos.grantOSDomainAccess(searchFun);
@@ -413,132 +394,7 @@ export function searchBuilder(
     }
 
     /////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////
-
-    //Setup assetbucket sync and indexing
-    //Loop through each asset bucket and setup the new event notifications sync method
-    // and pass in indexing functions created (if they exist due to feature switching)
-    let index = 0;
-    const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-    for (const record of assetBucketRecords) {
-        //Create created queue
-        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated--" + record.bucket, {
-            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncCreated-${index}`,
-            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
-            encryption: storageResources.encryption.kmsKey
-                ? sqs.QueueEncryption.KMS
-                : sqs.QueueEncryption.SQS_MANAGED,
-            encryptionMasterKey: storageResources.encryption.kmsKey,
-            enforceSSL: true,
-        });
-        onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
-
-        //Create new lambda for bucketSync (pass fileIndexingFunction for dual-index system)
-        const sqsBucketSyncFunctionCreated = buildSqsBucketSyncFunction(
-            scope,
-            lambdaCommonBaseLayer,
-            storageResources,
-            fileIndexingFunction,
-            record.bucket.bucketName,
-            record.prefix,
-            record.defaultSyncDatabaseId,
-            "created",
-            index,
-            config,
-            vpc,
-            subnets
-        );
-
-        //Add event notifications for syncing
-        if (record.snsS3ObjectCreatedTopic) {
-            record.snsS3ObjectCreatedTopic.addSubscription(
-                new SqsSubscription(onS3ObjectCreatedQueue)
-            );
-        }
-
-        onS3ObjectCreatedQueue.grantConsumeMessages(sqsBucketSyncFunctionCreated);
-
-        onS3ObjectCreatedQueue.grantConsumeMessages(sqsBucketSyncFunctionCreated);
-
-        // The functions poll the respective queues, which is populated by messages sent to the topic.
-        const esmCreated = new lambda.EventSourceMapping(
-            scope,
-            `SQSEventSourceBucketSyncCreated-${index}`,
-            {
-                eventSourceArn: onS3ObjectCreatedQueue.queueArn,
-                target: sqsBucketSyncFunctionCreated,
-                batchSize: 10, // Max configurable records w/o maxBatchingWindow.
-                maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
-            }
-        );
-
-        // Due to cdk upgrade, not all regions support tags for EventSourceMapping
-        // this line should remove the tags for regions that dont support it (govcloud currently not supported)
-        if (config.app.govCloud.enabled) {
-            const cfnEsm = esmCreated.node.defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsm.addPropertyDeletionOverride("Tags");
-        }
-
-        index = index + 1;
-
-        //Create deleted queue
-        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted--" + record.bucket, {
-            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncDeleted-${index}`,
-            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
-            encryption: storageResources.encryption.kmsKey
-                ? sqs.QueueEncryption.KMS
-                : sqs.QueueEncryption.SQS_MANAGED,
-            encryptionMasterKey: storageResources.encryption.kmsKey,
-            enforceSSL: true,
-        });
-        onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
-
-        //Create new lambda for bucketSync (pass fileIndexingFunction for dual-index system)
-        const sqsBucketSyncFunctionRemoved = buildSqsBucketSyncFunction(
-            scope,
-            lambdaCommonBaseLayer,
-            storageResources,
-            fileIndexingFunction,
-            record.bucket.bucketName,
-            record.prefix,
-            record.defaultSyncDatabaseId,
-            "deleted",
-            index,
-            config,
-            vpc,
-            subnets
-        );
-        index = index + 1;
-
-        if (record.snsS3ObjectDeletedTopic) {
-            record.snsS3ObjectDeletedTopic.addSubscription(
-                new SqsSubscription(onS3ObjectDeletedQueue)
-            );
-        }
-
-        onS3ObjectDeletedQueue.grantConsumeMessages(sqsBucketSyncFunctionRemoved);
-
-        const esmDeleted = new lambda.EventSourceMapping(
-            scope,
-            `SQSEventSourceBucketSyncDeleted-${index}`,
-            {
-                eventSourceArn: onS3ObjectDeletedQueue.queueArn,
-                target: sqsBucketSyncFunctionRemoved,
-                batchSize: 10, // Max configurable records w/o maxBatchingWindow.
-                maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
-            }
-        );
-
-        // Due to cdk upgrade, not all regions support tags for EventSourceMapping
-        // this line should remove the tags for regions that dont support it (govcloud currently not supported)
-        if (config.app.govCloud.enabled) {
-            const cfnEsm = esmDeleted.node.defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsm.addPropertyDeletionOverride("Tags");
-        }
-    }
-
-    /////////////////////////////////////////////////////////////////////////////
-    // Setup Custom Resource for Reindexing (after bucket sync to ensure streams are ready)
+    // Setup Custom Resource for Reindexing
     /////////////////////////////////////////////////////////////////////////////
 
     // Create custom resource to trigger reindex on deployment if enabled
