@@ -505,6 +505,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                             },
                             showPreviewThumbnails: preferences.showThumbnails,
                         }}
+                        onShowToast={showSuccess}
                         dispatch={(action: any) => {
                             // Handle dispatch actions from SearchPageListView
                             switch (action.type) {
@@ -626,6 +627,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                             },
                             showPreviewThumbnails: preferences.showThumbnails,
                         }}
+                        onShowToast={showSuccess}
                         dispatch={(action: any) => {
                             // Handle dispatch actions from SearchPageListView
                             switch (action.type) {

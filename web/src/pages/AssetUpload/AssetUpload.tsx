@@ -1126,13 +1126,23 @@ const AssetUploadReview = ({
                                 return "Asset File";
                             },
                             sortingField: "type",
+                            sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) => {
+                                const getType = (item: FileUploadTableItem) => {
+                                    if (item.index === 99999) return "Preview File";
+                                    if (item.name.includes(".previewFile.")) return "Preview File";
+                                    return "Asset File";
+                                };
+                                return getType(a).localeCompare(getType(b));
+                            },
                             isRowHeader: false,
                         },
                         {
                             id: "filepath",
                             header: "Path",
                             cell: (item: FileUploadTableItem) => item.relativePath,
-                            sortingField: "filepath",
+                            sortingField: "relativePath",
+                            sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+                                a.relativePath.localeCompare(b.relativePath),
                             isRowHeader: true,
                         },
                         {
@@ -1140,7 +1150,9 @@ const AssetUploadReview = ({
                             header: "Size",
                             cell: (item: FileUploadTableItem) =>
                                 item.total ? shortenBytes(item.total) : "0b",
-                            sortingField: "filesize",
+                            sortingField: "total",
+                            sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+                                a.total - b.total,
                             isRowHeader: false,
                         },
                     ]}

@@ -32,9 +32,10 @@ from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS
 class ProgressDisplay:
     """Display upload progress in the terminal."""
     
-    def __init__(self, hide_progress: bool = False, json_output: bool = False):
+    def __init__(self, hide_progress: bool = False, json_output: bool = False, total_sequences: int = 1):
         self.hide_progress = hide_progress or json_output  # Suppress progress in JSON mode
         self.json_output = json_output
+        self.total_sequences = total_sequences
         self.last_update = 0
         self.update_interval = 0.5  # Update every 500ms
         
@@ -50,7 +51,14 @@ class ProgressDisplay:
         self.last_update = current_time
         
         # Clear previous lines
-        click.echo('\033[2K\033[1A' * 10, nl=False)  # Clear up to 10 lines
+        click.echo('\033[2K\033[1A' * 12, nl=False)  # Clear up to 12 lines
+        
+        # Sequence status (if multiple sequences)
+        if self.total_sequences > 1:
+            initialized = progress.initialized_sequences
+            uploaded = progress.uploaded_sequences
+            completed = progress.completed_sequences
+            click.echo(f"\nSequences: {initialized} initialized, {uploaded} uploaded, {completed} completed, {self.total_sequences} total")
         
         # Overall progress
         overall_pct = progress.overall_progress
@@ -69,11 +77,24 @@ class ProgressDisplay:
         eta = progress.estimated_time_remaining
         eta_str = format_duration(eta) if eta else "calculating..."
         
-        click.echo(f"Speed: {speed_str} | Active: {progress.active_uploads} | ETA: {eta_str}")
+        # Show throttling message if detected
+        throttle_msg = ""
+        if hasattr(progress, 'is_throttled') and progress.is_throttled:
+            retry_count = getattr(progress, 'throttle_retry_count', 0)
+            throttle_msg = f" | ⚠️ Processing times undergoing expected throttling (retry {retry_count}, 60s backoff)"
         
-        # File progress (show up to 5 files)
+        click.echo(f"Speed: {speed_str} | Active: {progress.active_uploads} | ETA: {eta_str}{throttle_msg}")
+        
+        # File progress - show actively uploading files first, then pending
+        # Sort by status priority: uploading > pending > completed > failed
+        status_priority = {"uploading": 0, "pending": 1, "completed": 2, "failed": 3}
+        sorted_files = sorted(
+            progress.file_progress.items(),
+            key=lambda x: (status_priority.get(x[1]["status"], 4), x[0])
+        )
+        
         files_shown = 0
-        for file_key, file_progress in progress.file_progress.items():
+        for file_key, file_progress in sorted_files:
             if files_shown >= 5:
                 remaining = len(progress.file_progress) - files_shown
                 if remaining > 0:
@@ -268,13 +289,9 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             error_msg = str(e)
             helpful_message = None
             
-            if "Too many files" in error_msg:
-                from ..constants import MAX_FILES_PER_REQUEST
-                helpful_message = f"You can split your upload by using multiple commands (up to {MAX_FILES_PER_REQUEST} files per command)."
-            elif "Total parts across all files" in error_msg:
-                from ..constants import MAX_TOTAL_PARTS_PER_REQUEST
-                helpful_message = f"Reduce the number of large files or split into smaller uploads. Each upload can have at most {MAX_TOTAL_PARTS_PER_REQUEST} parts total."
-            elif "requires" in error_msg and "parts" in error_msg:
+            # Only individual file part limit errors should occur now
+            # (per-sequence limits are handled automatically by creating multiple sequences)
+            if "requires" in error_msg and "parts" in error_msg:
                 from ..constants import MAX_PARTS_PER_FILE
                 helpful_message = f"Individual files cannot exceed {MAX_PARTS_PER_FILE} parts. Consider compressing very large files before upload."
             
@@ -297,7 +314,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             # Show helpful info for multi-sequence uploads
             if summary['total_sequences'] > 1:
                 click.echo(f"\n📋 Multi-sequence upload: Your files will be uploaded in {summary['total_sequences']} separate requests")
-                click.echo(f"   to comply with backend limits. This is handled automatically.")
+                click.echo(f"   This is handled automatically.")
             
             # Show zero-byte file info if any
             zero_byte_files = [f for f in files if f.size == 0]
@@ -317,7 +334,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         # Run upload
         log_debug(f"Starting upload manager with {parallel_uploads} parallel uploads, {retry_attempts} retry attempts, force_skip={force_skip}")
         async def run_upload():
-            progress_display = ProgressDisplay(hide_progress, json_output)
+            progress_display = ProgressDisplay(hide_progress, json_output, total_sequences=len(sequences))
             
             async with UploadManager(
                 api_client=api_client,
@@ -374,25 +391,39 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         if not json_output and not hide_progress:
             click.echo('\033[2K\033[1A' * 10, nl=False)  # Clear progress lines
         
-        # Check for large file asynchronous handling across all completion results
-        has_large_file_async_handling = False
+        # Check for asynchronous processing across all completion results
+        has_async_processing = False
+        async_processing_note = None
         for seq_result in result.get("sequence_results", []):
             completion_result = seq_result.get("completion_result")
-            if completion_result and completion_result.get("largeFileAsynchronousHandling"):
-                has_large_file_async_handling = True
-                log_debug("Large file asynchronous handling detected in upload result")
-                break
+            if completion_result:
+                # Check for large file async handling (backend-initiated)
+                if completion_result.get("largeFileAsynchronousHandling"):
+                    has_async_processing = True
+                    log_debug("Large file asynchronous handling detected in upload result")
+                    break
+                # Check for 503-triggered async processing (throttling-initiated)
+                elif completion_result.get("asynchronousProcessing"):
+                    has_async_processing = True
+                    async_processing_note = completion_result.get("note")
+                    log_debug("503 asynchronous processing detected in upload result")
+                    break
         
         # Format upload result
         def format_upload_result(data):
             """Format upload result for CLI display."""
             lines = []
             
-            # Show large file async handling message if detected
-            if has_large_file_async_handling:
-                lines.append("\n📋 Large File Processing:")
-                lines.append("   Your upload contains large files that will undergo separate asynchronous processing.")
-                lines.append("   This may take some time, so files may take longer to appear in the asset.")
+            # Show asynchronous processing message if detected
+            if has_async_processing:
+                lines.append("\n📋 Asynchronous Processing:")
+                if async_processing_note:
+                    # 503-triggered async processing with custom note
+                    lines.append(f"   {async_processing_note}")
+                else:
+                    # Large file async handling
+                    lines.append("   Your upload contains large files that will undergo separate asynchronous processing.")
+                    lines.append("   This may take some time, so files may take longer to appear in the asset.")
                 lines.append(f"   You can check the asset files later using: vamscli file list -d {database_id} -a {asset_id}")
                 lines.append("")
             
@@ -508,16 +539,43 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
 @click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
 @click.option('--prefix', help='Filter files by prefix')
 @click.option('--include-archived', is_flag=True, help='Include archived files')
-@click.option('--max-items', type=int, default=1000, help='Maximum number of items to return')
-@click.option('--page-size', type=int, default=100, help='Number of items per page')
-@click.option('--starting-token', help='Token for pagination')
+@click.option('--basic', is_flag=True, help='Skip expensive lookups for faster listing')
+@click.option('--page-size', type=int, help='Number of items per page')
+@click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
+@click.option('--starting-token', help='Token for pagination (manual pagination)')
+@click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
 def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str, include_archived: bool,
-               max_items: int, page_size: int, starting_token: str, json_input: str, json_output: bool):
-    """List files in an asset."""
+               basic: bool, page_size: int, max_items: int, starting_token: str, auto_paginate: bool,
+               json_input: str, json_output: bool):
+    """List files in an asset.
+    
+    Examples:
+        # Basic listing (uses API defaults)
+        vamscli file list -d my-db -a my-asset
+        
+        # Fast listing with basic mode
+        vamscli file list -d my-db -a my-asset --basic
+        
+        # Auto-pagination to fetch all items (default: up to 10,000)
+        vamscli file list -d my-db -a my-asset --auto-paginate
+        
+        # Auto-pagination with custom limit
+        vamscli file list -d my-db -a my-asset --auto-paginate --max-items 5000
+        
+        # Auto-pagination with custom page size
+        vamscli file list -d my-db -a my-asset --auto-paginate --page-size 500
+        
+        # Manual pagination with page size
+        vamscli file list -d my-db -a my-asset --page-size 200
+        vamscli file list -d my-db -a my-asset --starting-token "token123" --page-size 200
+        
+        # With filters
+        vamscli file list -d my-db -a my-asset --prefix "models/" --include-archived
+    """
     try:
         # Parse JSON input if provided
         json_data = parse_json_input(json_input) if json_input else {}
@@ -527,9 +585,11 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
         asset_id = json_data.get('asset_id', asset_id)
         prefix = json_data.get('prefix', prefix)
         include_archived = json_data.get('include_archived', include_archived)
-        max_items = json_data.get('max_items', max_items)
+        basic = json_data.get('basic', basic)
         page_size = json_data.get('page_size', page_size)
+        max_items = json_data.get('max_items', max_items)
         starting_token = json_data.get('starting_token', starting_token)
+        auto_paginate = json_data.get('auto_paginate', auto_paginate)
         
         # Validate required arguments
         if not database_id:
@@ -537,35 +597,119 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
         if not asset_id:
             raise click.ClickException("Asset ID is required (-a/--asset)")
         
+        # Validate pagination options
+        if auto_paginate and starting_token:
+            raise click.ClickException(
+                "Cannot use --auto-paginate with --starting-token. "
+                "Use --auto-paginate for automatic pagination, or --starting-token for manual pagination."
+            )
+        
+        # Warn if max-items used without auto-paginate
+        if max_items and not auto_paginate:
+            output_status("Warning: --max-items only applies with --auto-paginate. Ignoring --max-items.", json_output)
+            max_items = None
+        
         # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
-        # Prepare query parameters
-        params = {
-            'maxItems': max_items,
-            'pageSize': page_size
-        }
-        if prefix:
-            params['prefix'] = prefix
-        if include_archived:
-            params['includeArchived'] = 'true'
-        if starting_token:
-            params['startingToken'] = starting_token
+        if auto_paginate:
+            # Auto-pagination mode: fetch all items up to max_items (default 10,000)
+            max_total_items = max_items or 10000
+            output_status(f"Retrieving files (auto-paginating up to {max_total_items} items)...", json_output)
+            
+            all_items = []
+            next_token = None
+            total_fetched = 0
+            page_count = 0
+            
+            while True:
+                page_count += 1
+                
+                # Prepare query parameters for this page
+                params = {}
+                if prefix:
+                    params['prefix'] = prefix
+                if include_archived:
+                    params['includeArchived'] = 'true'
+                if basic:
+                    params['basic'] = 'true'
+                if page_size:
+                    params['pageSize'] = page_size  # Pass pageSize to API
+                if next_token:
+                    params['startingToken'] = next_token
+                
+                # Note: maxItems is NOT passed to API - it's CLI-side limit only
+                
+                # Make API call
+                result = api_client.list_asset_files(database_id, asset_id, params)
+                
+                # Aggregate items
+                items = result.get('items', [])
+                all_items.extend(items)
+                total_fetched += len(items)
+                
+                # Show progress in CLI mode
+                if not json_output:
+                    output_status(f"Fetched {total_fetched} files (page {page_count})...", False)
+                
+                # Check if we should continue
+                next_token = result.get('nextToken')
+                if not next_token or total_fetched >= max_total_items:
+                    break
+            
+            # Create final result
+            final_result = {
+                'items': all_items,
+                'totalItems': len(all_items),
+                'autoPaginated': True,
+                'pageCount': page_count
+            }
+            
+            if total_fetched >= max_total_items and next_token:
+                final_result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
+            
+        else:
+            # Manual pagination mode: single API call
+            output_status("Retrieving files...", json_output)
+            
+            # Prepare query parameters
+            params = {}
+            if prefix:
+                params['prefix'] = prefix
+            if include_archived:
+                params['includeArchived'] = 'true'
+            if basic:
+                params['basic'] = 'true'
+            if page_size:
+                params['pageSize'] = page_size  # Pass pageSize to API
+            if starting_token:
+                params['startingToken'] = starting_token
+            
+            # Note: maxItems is NOT passed to API in manual mode
+            
+            # Call API
+            final_result = api_client.list_asset_files(database_id, asset_id, params)
         
-        output_status("Retrieving files...", json_output)
-        
-        # Call API
-        result = api_client.list_asset_files(database_id, asset_id, params)
-        
+        # Format output
         def format_files_list(data):
             """Format files list for CLI display."""
             items = data.get('items', [])
             if not items:
                 return "No files found."
             
-            lines = [f"\nFound {len(items)} file(s):", ""]
+            lines = []
+            
+            # Show auto-pagination info if present
+            if data.get('autoPaginated'):
+                lines.append(f"\nAuto-paginated: Retrieved {data.get('totalItems', 0)} items in {data.get('pageCount', 0)} page(s)")
+                if data.get('note'):
+                    lines.append(f"⚠️  {data['note']}")
+                lines.append("")
+            
+            lines.append(f"Found {len(items)} file(s):")
+            lines.append("")
             
             for item in items:
                 file_type = "📁" if item.get('isFolder') else "📄"
@@ -575,14 +719,16 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 
                 lines.append(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{archived}")
             
-            if data.get('nextToken'):
+            # Show nextToken for manual pagination
+            if not data.get('autoPaginated') and data.get('nextToken'):
                 lines.append(f"\nNext token: {data['nextToken']}")
+                lines.append("Use --starting-token to get the next page")
             
             return '\n'.join(lines)
         
-        output_result(result, json_output, cli_formatter=format_files_list)
+        output_result(final_result, json_output, cli_formatter=format_files_list)
         
-        return result
+        return final_result
         
     except AssetNotFoundError as e:
         # Only handle command-specific business logic errors

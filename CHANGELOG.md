@@ -13,9 +13,15 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 ### Features
 
 -   (Breaking Change) Reactored permission constraints dynamoDB table, Casbin logic for lookup, and authConstraints API to be more performant and follow the new refactor patterns for dynamoDB tables. This should increase performance of the solution for repeat data actions.
+-   **Web** Added API and UI on Asset and File search for Unarchive Asset. Additionally cleaned up UI logic for archived asset elements.
+-   **Web** Added a Rename File operation on the asset details file manager when singly selecting files. This uses the existing file move API.
 -   Added new CDK deployment configuration support for disabling both Cloudfront and ALB static website deployment options to allow for API-only deployments of VAMS
 -   Added new CDK deployment configuration support for Cloudfront static website custom domains and TLS certificate imports
 -   Refactored backend data indexing flow to allow for both current open search indexing and easy expansion to indexing data and files with other solutions or partner integrations
+-   **Web** Refactor of the web upload workflow for files again to further parallelize uploads into batches, handles error and retries, and handle backend throttling
+-   Update the ./listFiles API to have an additional `basic` query parameter boolean (default: false) to do a quick file listing pull without additional archival, version, or preview file data (much quicker).
+    -   **CLI** File listing command now has auto-paginate and basic parameter flags
+-   **Web** Updated asset files manager to implement a lazy loading approach to loading files with the API calls to make page loads quicker to getting to file information (helps when an asset has a lot of files)
 
 ### Bug Fixes
 
@@ -24,13 +30,18 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   Fixed bug where archiving an asset caused the asset (or a default database) to be re-created in some scenarios as part of the S3 file re-indexing process
 -   S3 Bucket sync processes to create assets from S3 objects will now still operate, even when OpenSearch functionality is disabled (part of the indexing flow re-factor)
 -   Fixed Casbin cache logic to truely be 30 seconds for updating constraints, roles, and users in roles in a lambda for authorization logic
+-   Fixed bug with move file API command not allowing allowing a move (or rename) due to issues with the destination check logic
 -   **Web** File previews, if provided as a `.previewFile.`. will now display correctly in the Asset/File search.
+-   **Web** File operations in the asset details file manager appropriately refresh the details panel during certain operations
+-   **Web** Fixed UI where some delete operations were not refreshing the page and/or not showing the correct record ID to be deleted (display issue only)
 
 ### Chores
 
 -   Refactored the tag, tagType, roles, userRoles, and authConstraints API service backends to meet new API standard for error handling/checking, validation, and request/response models usage.
 -   Refactored some API request/response models to replace deprecated pdyantic v1 "extra" field and replaced with proper v2 pattern
 -   Refactored rest of CDK lambdabuIlder functions to follow new naming pattern for table inputs and permissions
+-   Further adjusted upload thresholds for throttling and file/part/sequence splitting across the backend API, web, and CLI to tune for not only large files but many files for upload
+-   Updated ./listFiles API to default maxitems to 10000 and max page size to be 1500 for basic mode and 100 for non-basic.
 
 ### Known Outstanding Issues
 

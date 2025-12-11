@@ -805,7 +805,11 @@ class APIClient:
             raise APIError(f"Failed to initialize upload: {e}")
 
     def complete_upload(self, upload_id: str, database_id: str, asset_id: str, upload_type: str, files: list) -> dict:
-        """Complete a multipart upload."""
+        """Complete a multipart upload.
+        
+        Note: 503 Service Unavailable responses are treated as successful asynchronous operations.
+        The backend will process the upload completion asynchronously when it returns 503.
+        """
         from ..constants import API_UPLOADS_COMPLETE
         
         endpoint = API_UPLOADS_COMPLETE.format(uploadId=upload_id)
@@ -821,7 +825,18 @@ class APIClient:
             return response.json()
             
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 400:
+            if e.response.status_code == 503:
+                # 503 Service Unavailable means backend will process asynchronously
+                # This is considered a success - return a synthetic success response
+                return {
+                    "message": "Upload completion accepted for asynchronous processing",
+                    "overallSuccess": True,
+                    "asynchronousProcessing": True,
+                    "uploadId": upload_id,
+                    "note": "Processing times are undergoing expected throttling. Your upload will be processed asynchronously."
+                }
+                
+            elif e.response.status_code == 400:
                 error_data = e.response.json() if e.response.content else {}
                 error_message = error_data.get('message', str(e))
                 raise InvalidAssetDataError(f"Invalid completion data: {error_message}")

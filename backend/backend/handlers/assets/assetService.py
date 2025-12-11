@@ -24,9 +24,9 @@ from common.dynamodb import validate_pagination_info
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.assetsV3 import (
     GetAssetRequestModel, GetAssetsRequestModel, UpdateAssetRequestModel,
-    ArchiveAssetRequestModel, DeleteAssetRequestModel, AssetResponseModel,
-    AssetOperationResponseModel, CurrentVersionModel, AssetLocationModel,
-    AssetPreviewLocationModel
+    ArchiveAssetRequestModel, UnarchiveAssetRequestModel, DeleteAssetRequestModel, 
+    AssetResponseModel, AssetOperationResponseModel, CurrentVersionModel, 
+    AssetLocationModel, AssetPreviewLocationModel
 )
 
 # Configure AWS clients with retry configuration
@@ -389,6 +389,92 @@ def archive_file_preview(location, bucket):
         logger.exception(f"Error archiving file {key}: {e}")
     return
 
+def unarchive_multi_assetFiles(location, bucket):
+    """Unarchive all files in a multi-file asset by removing delete markers
+    
+    Args:
+        location: The asset location object with Key and optional Bucket (dict or AssetLocationModel)
+    """
+    # Convert to AssetLocationModel if it's a dictionary
+    if isinstance(location, dict):
+        try:
+            location_model = AssetLocationModel(**location)
+        except ValidationError as e:
+            logger.warning(f"Invalid asset location format: {e}")
+            return
+    elif isinstance(location, AssetLocationModel):
+        location_model = location
+    else:
+        logger.warning("Invalid asset location type")
+        return
+
+    prefix = location_model.Key
+    if not prefix:
+        return
+    
+    logger.info(f'Unarchiving folder with multiple files from bucket: {bucket}')
+
+    try:
+        # List all versions to find delete markers
+        paginator = s3.get_paginator('list_object_versions')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            # Remove delete markers
+            for delete_marker in page.get('DeleteMarkers', []):
+                if delete_marker.get('IsLatest'):
+                    logger.info(f"Removing delete marker for {delete_marker['Key']}")
+                    s3.delete_object(
+                        Bucket=bucket,
+                        Key=delete_marker['Key'],
+                        VersionId=delete_marker['VersionId']
+                    )
+    except Exception as e:
+        logger.exception(f"Error unarchiving files: {e}")
+
+    return
+
+def unarchive_file_preview(location, bucket):
+    """Unarchive a single file by removing delete marker
+    
+    Args:
+        location: The asset location object with Key and optional Bucket (dict or AssetPreviewLocationModel)
+    """
+    # Convert to AssetPreviewLocationModel if it's a dictionary
+    if isinstance(location, dict):
+        try:
+            location_model = AssetPreviewLocationModel(**location)
+        except ValidationError as e:
+            logger.warning(f"Invalid preview location format: {e}")
+            return
+    elif isinstance(location, AssetPreviewLocationModel):
+        location_model = location
+    else:
+        logger.warning("Invalid preview location type")
+        return
+
+    key = location_model.Key
+    if not key:
+        return
+    
+    logger.info(f"Unarchiving item: {bucket}:{key}")
+
+    try:
+        # List versions to find the delete marker
+        response = s3.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
+        
+        # Remove delete marker if it exists
+        for delete_marker in response.get('DeleteMarkers', []):
+            if delete_marker.get('IsLatest') and delete_marker['Key'] == key:
+                logger.info(f"Removing delete marker for {key}")
+                s3.delete_object(
+                    Bucket=bucket,
+                    Key=key,
+                    VersionId=delete_marker['VersionId']
+                )
+    except Exception as e:
+        logger.exception(f"Error unarchiving file {key}: {e}")
+    
+    return
+
 def delete_s3_objects(prefix, bucket):
     """Delete all S3 objects with the given prefix
     
@@ -743,7 +829,7 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         
         # Update asset record with archived status
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("username", "system")
+        username = claims_and_roles.get("tokens", ["system"])[0]
         
         # Add archive metadata
         asset['status'] = 'archived'
@@ -779,6 +865,99 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     except Exception as e:
         logger.exception(f"Error archiving asset: {e}")
         raise VAMSGeneralErrorResponse(f"Error archiving asset.")
+
+def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
+    """Unarchive an asset (restore from soft delete)
+    
+    Args:
+        databaseId: The database ID (may contain #deleted suffix)
+        assetId: The asset ID
+        request_model: UnarchiveAssetRequestModel with unarchive options
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        AssetOperationResponseModel with operation result
+    """
+    # Normalize databaseId - remove #deleted if present
+    original_db_id = databaseId.replace("#deleted", "")
+    archived_db_id = f"{original_db_id}#deleted"
+    
+    # Get the asset from archived location
+    asset = get_asset_details(archived_db_id, assetId, showArchived=True)
+    if not asset:
+        # Try without #deleted suffix in case user provided clean ID
+        asset = get_asset_details(original_db_id, assetId, showArchived=True)
+        if not asset:
+            raise VAMSGeneralErrorResponse("Asset not found")
+        # If found in original location, check if it's actually archived
+        if asset.get('status') != 'archived':
+            raise VAMSGeneralErrorResponse("Asset is not archived")
+    
+    # Check authorization
+    asset.update({"object__type": "asset"})
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(asset, "PUT"):
+            raise authorization_error()
+    
+    # Get bucket details for asset
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucket_name = bucketDetails['bucketName']
+    
+    # Unarchive S3 files
+    logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
+    
+    try:
+        # Unarchive asset files in S3
+        if "assetLocation" in asset:
+            unarchive_multi_assetFiles(asset['assetLocation'], bucket_name)
+
+        # Unarchive preview if exists
+        if "previewLocation" in asset:
+            unarchive_file_preview(asset['previewLocation'], bucket_name)
+        
+        # Update asset record
+        now = datetime.utcnow().isoformat()
+        username = claims_and_roles.get("tokens", ["system"])[0]
+        
+        # Remove archive metadata - INCLUDING status field
+        asset.pop('status', None)  # Remove status entirely
+        asset.pop('archivedAt', None)
+        asset.pop('archivedBy', None)
+        asset.pop('archivedReason', None)
+        
+        # Add unarchive metadata
+        asset['unarchivedAt'] = now
+        asset['unarchivedBy'] = username
+        if request_model.reason:
+            asset['unarchivedReason'] = request_model.reason
+        
+        # Move back to original database ID
+        asset['databaseId'] = original_db_id
+        
+        # Save to original location
+        asset_table.put_item(Item=asset)
+        
+        # Delete from archived location
+        asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
+        
+        # Update asset count
+        update_asset_count(db_database, asset_database, {}, original_db_id)
+
+        # Send email notification
+        send_subscription_email(original_db_id, assetId)
+        
+        # Return success response
+        return AssetOperationResponseModel(
+            success=True,
+            message=f"Asset {assetId} unarchived successfully",
+            assetId=assetId,
+            operation="unarchive",
+            timestamp=now
+        )
+    except Exception as e:
+        logger.exception(f"Error unarchiving asset: {e}")
+        raise VAMSGeneralErrorResponse("Error unarchiving asset")
 
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems
@@ -1273,6 +1452,7 @@ def handle_put_request(event):
     Returns:
         APIGatewayProxyResponseV2 response
     """
+    path = event['requestContext']['http']['path']
     path_parameters = event.get('pathParameters', {})
     
     # Validate required path parameters
@@ -1282,10 +1462,13 @@ def handle_put_request(event):
     if 'assetId' not in path_parameters:
         return validation_error(body={'message': "No asset ID in API Call"})
     
+    # Normalize databaseId for validation - remove #deleted suffix if present
+    normalized_database_id = path_parameters['databaseId'].replace("#deleted", "")
+    
     # Validate path parameters
     (valid, message) = validate({
         'databaseId': {
-            'value': path_parameters['databaseId'],
+            'value': normalized_database_id,
             'validator': 'ID'
         },
         'assetId': {
@@ -1316,7 +1499,18 @@ def handle_put_request(event):
             logger.error("Request body is not a string")
             return validation_error(body={'message': "Request body cannot be parsed"})
         
-        # Parse and validate the update model
+        # Check if this is an unarchive request
+        if path.endswith('/unarchiveAsset'):
+            request_model = parse(body, model=UnarchiveAssetRequestModel)
+            result = unarchive_asset(
+                path_parameters['databaseId'],
+                path_parameters['assetId'],
+                request_model,
+                claims_and_roles
+            )
+            return success(body=result.dict())
+        
+        # Otherwise, handle regular update
         update_model = parse(body, model=UpdateAssetRequestModel)
         
         # Update the asset

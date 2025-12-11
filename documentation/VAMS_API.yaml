@@ -1777,6 +1777,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/listFiles:
         get:
             summary: "List files in an asset."
+            description: "List files in an asset with optional pagination and filtering. Supports two modes: basic mode (fast, minimal data) and full mode (detailed data with version info, preview files, and metadata). Use basic mode for quick file listings and full mode when you need complete file information."
             responses:
                 "200":
                     description: OK
@@ -1803,8 +1804,22 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - name: maxItems
+                in: query
+                description: "Maximum number of items to return. Default is 200 for full mode, 1500 for basic mode. Maximum allowed is 1500."
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 1500
+              - name: pageSize
+                in: query
+                description: "Number of items per page. Default is 200 for full mode, 1500 for basic mode. Maximum allowed is 1500."
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 1500
               - $ref: "#/components/parameters/startingTokenParam"
               - name: databaseId
                 in: path
@@ -1824,12 +1839,20 @@ paths:
                 required: false
                 schema:
                     type: boolean
+                    default: false
               - name: prefix
                 in: query
                 description: Filter files by prefix
                 required: false
                 schema:
                     type: string
+              - name: basic
+                in: query
+                description: "Enable basic mode for fast file listing. When true, skips expensive operations (head_object calls, preview file lookups, version mismatch checks) and returns only data available from S3 list operation. Fields like versionId, primaryType, and previewFile will be null/empty in basic mode. Use basic mode for quick listings and full mode (basic=false) when you need complete file details."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
     /database/{databaseId}/assets/{assetId}/fileInfo:
         get:
             summary: "Get detailed information about a specific file."
@@ -1888,7 +1911,8 @@ paths:
     
     /database/{databaseId}/assets/{assetId}/moveFile:
         post:
-            summary: "Move a file within an asset."
+            summary: "Move or rename a file within an asset."
+            description: "Move a file to a different path or rename it in place. Handles both moving files to different directories and renaming files within the same directory. Source file must not be archived, and destination must not exist (including archived versions). Preview files and auxiliary files are automatically moved/renamed with the base file."
             requestBody:
                 required: true
                 content:
@@ -1897,19 +1921,19 @@ paths:
                             $ref: "#/components/schemas/moveFileRequest"
             responses:
                 "200":
-                    description: File moved successfully.
+                    description: File moved/renamed successfully.
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or file already exists at destination.
+                    description: Invalid parameters, file already exists at destination, or source file is archived.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to move files in this asset.
+                    description: Not authorized to move/rename files in this asset.
                     content:
                         application/json:
                             schema:
@@ -1941,7 +1965,7 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
               - DefaultCognitoAuthorizer: []
-    
+
     /database/{databaseId}/assets/{assetId}/copyFile:
         post:
             summary: "Copy a file within an asset or to another asset."
@@ -2710,6 +2734,100 @@ paths:
               - name: assetId
                 in: path
                 description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/unarchiveAsset:
+        put:
+            summary: "Unarchive an asset (restore from soft delete)."
+            description: "Restore a previously archived asset by removing S3 delete markers and moving the asset record back to the active database partition. The databaseId can be provided with or without the #deleted suffix, which will be normalized automatically."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                confirmUnarchive:
+                                    type: boolean
+                                    description: "Confirmation flag for unarchiving (must be true)"
+                                    default: false
+                                reason:
+                                    type: string
+                                    maxLength: 256
+                                    description: "Optional reason for unarchiving the asset"
+                            required:
+                                - confirmUnarchive
+                            example:
+                                confirmUnarchive: true
+                                reason: "Restoring asset for active use"
+            responses:
+                "200":
+                    description: Asset unarchived successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    success:
+                                        type: boolean
+                                        example: true
+                                    message:
+                                        type: string
+                                        example: "Asset {assetId} unarchived successfully"
+                                    assetId:
+                                        type: string
+                                        example: "my-asset-id"
+                                    operation:
+                                        type: string
+                                        example: "unarchive"
+                                    timestamp:
+                                        type: string
+                                        format: date-time
+                                        example: "2024-01-15T10:30:00.000Z"
+                                required:
+                                    - success
+                                    - message
+                                    - assetId
+                                    - operation
+                                    - timestamp
+                "400":
+                    description: Invalid parameters, asset not archived, or confirmation not provided.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to unarchive this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: "Database ID (may include #deleted suffix which will be normalized)"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: "Asset ID to unarchive"
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'

@@ -15,6 +15,7 @@ import {
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
+import { fetchAssetS3Files } from "../../services/APIService";
 
 // Helper function to check if a file has an extension (is a file, not a folder)
 const isFile = (file) => {
@@ -23,12 +24,14 @@ const isFile = (file) => {
 };
 
 export default function WorkflowSelectorWithModal(props) {
-    const { databaseId, assetId, setOpen, open, assetFiles = [], onWorkflowExecuted } = props;
+    const { databaseId, assetId, setOpen, open, onWorkflowExecuted } = props;
     const [reload, setReload] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const [selectedWorkflow, setSelectedWorkflow] = useState(null);
     const [selectedFileKey, setSelectedFileKey] = useState(null);
     const [filteredFiles, setFilteredFiles] = useState([]);
+    const [assetFiles, setAssetFiles] = useState([]);
+    const [loadingFiles, setLoadingFiles] = useState(false);
     const [apiError, setApiError] = useState(null);
     const [isExecuting, setIsExecuting] = useState(false);
     const navigate = useNavigate();
@@ -47,6 +50,42 @@ export default function WorkflowSelectorWithModal(props) {
             getData();
         }
     }, [databaseId, reload]);
+
+    // Fetch asset files when modal opens
+    useEffect(() => {
+        const fetchFiles = async () => {
+            if (!open || !databaseId || !assetId) return;
+
+            setLoadingFiles(true);
+            setApiError(null);
+
+            try {
+                const [success, files] = await fetchAssetS3Files({
+                    databaseId: databaseId,
+                    assetId: assetId,
+                    includeArchived: false,
+                    basic: true, // Use basic mode for fast fetching
+                });
+
+                if (success && files && Array.isArray(files)) {
+                    setAssetFiles(files);
+                } else if (!success) {
+                    setApiError(
+                        typeof files === "string"
+                            ? files
+                            : "Failed to load asset files. Please try again."
+                    );
+                }
+            } catch (error) {
+                console.error("Error fetching asset files:", error);
+                setApiError(`Failed to load asset files: ${error.message || "Unknown error"}`);
+            } finally {
+                setLoadingFiles(false);
+            }
+        };
+
+        fetchFiles();
+    }, [open, databaseId, assetId]);
 
     // Initialize filtered files and find primary file when asset files change
     useEffect(() => {

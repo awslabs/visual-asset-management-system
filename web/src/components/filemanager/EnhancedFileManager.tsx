@@ -1,8 +1,17 @@
-import { createContext, useContext, useEffect, useReducer, useState } from "react";
+import {
+    createContext,
+    useContext,
+    useEffect,
+    useReducer,
+    useState,
+    useRef,
+    useCallback,
+} from "react";
 import { useParams } from "react-router";
 import { Alert } from "@cloudscape-design/components";
 import { AssetDetailContext, AssetDetailContextType } from "../../context/AssetDetailContext";
-import { fetchAssetS3Files } from "../../services/AssetVersionService";
+import { fetchAssetS3FilesStreaming } from "../../services/APIService";
+import { fetchFileInfo } from "../../services/APIService";
 import AssetPreviewModal from "./modals/AssetPreviewModal";
 import { DirectoryTree, FileManagerContext } from "./components/FileTreeView";
 import { FileDetailsPanel } from "./components/FileDetailsPanel";
@@ -26,23 +35,30 @@ export function EnhancedFileManager({
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
 
+    const initialTree = {
+        name: assetName || "Loading...",
+        displayName: assetName || "Loading...",
+        relativePath: "/",
+        keyPrefix: "/",
+        level: 0,
+        expanded: true,
+        subTree: [],
+    };
+
     const initialState: FileManagerState = {
-        fileTree: {
-            name: assetName,
-            displayName: assetName,
-            relativePath: "/",
-            keyPrefix: "/",
-            level: 0,
-            expanded: true,
-            subTree: [],
-        },
+        fileTree: initialTree,
+        unfilteredFileTree: initialTree,
         selectedItem: null,
         selectedItems: [],
+        selectedItemPath: null,
+        selectedItemPaths: [],
         multiSelectMode: false,
         lastSelectedIndex: -1,
         assetId: assetId!,
         databaseId: databaseId!,
-        loading: true,
+        loading: false,
+        loadingPhase: "initial",
+        loadingProgress: { current: 0, total: null },
         error: null,
         searchTerm: "",
         searchResults: [],
@@ -52,12 +68,116 @@ export function EnhancedFileManager({
         showNonIncluded: false,
         flattenedItems: [],
         totalAssetSize: 0,
+        paginationTokens: { basic: null, detailed: null },
     };
 
     const [state, dispatch] = useReducer(fileManagerReducer, initialState);
 
-    // Initial load of files
+    // Track if we're currently loading to prevent duplicate loads
+    const loadingRef = useRef(false);
+    const hasInitializedRef = useRef(false);
+
+    // Update the tree name when assetName prop changes
     useEffect(() => {
+        if (assetName && assetName !== state.fileTree.name) {
+            console.log("📝 Updating tree name from", state.fileTree.name, "to", assetName);
+            dispatch({
+                type: "MERGE_FILES",
+                payload: {
+                    files: [],
+                    loadingPhase: state.loadingPhase,
+                    loadingProgress: state.loadingProgress,
+                    paginationTokens: state.paginationTokens,
+                },
+            });
+            // Update the tree with the new name
+            const updatedTree = {
+                ...state.fileTree,
+                name: assetName,
+                displayName: assetName,
+            };
+            dispatch({ type: "FETCH_SUCCESS", payload: updatedTree });
+        }
+    }, [assetName]);
+
+    // Function to load files with streaming pagination
+    const loadFilesStreaming = useCallback(
+        async (basic: boolean, showArchived: boolean) => {
+            if (!databaseId || !assetId) return;
+
+            const phase = basic ? "basic-loading" : "detailed-loading";
+
+            try {
+                const stream = fetchAssetS3FilesStreaming({
+                    databaseId,
+                    assetId,
+                    includeArchived: showArchived,
+                    basic,
+                });
+
+                for await (const page of stream) {
+                    if (!page.success) {
+                        console.error(`Error in ${phase}:`, page.error);
+                        dispatch({
+                            type: "SET_ERROR",
+                            payload: page.error || "Failed to load files",
+                        });
+                        break;
+                    }
+
+                    // Merge files into tree immediately
+                    dispatch({
+                        type: "MERGE_FILES",
+                        payload: {
+                            files: page.items,
+                            loadingPhase: phase,
+                            loadingProgress: {
+                                current: page.pageNumber,
+                                total: page.isLastPage ? page.pageNumber : null,
+                            },
+                            paginationTokens: {
+                                basic: basic ? page.nextToken : null,
+                                detailed: !basic ? page.nextToken : null,
+                            },
+                        },
+                    });
+
+                    if (page.isLastPage) {
+                        break;
+                    }
+                }
+
+                // Update phase to complete
+                const nextPhase = basic ? "basic-complete" : "complete";
+                dispatch({
+                    type: "SET_LOADING_PHASE",
+                    payload: {
+                        phase: nextPhase,
+                    },
+                });
+
+                // Reset loading ref when detailed loading is complete
+                if (nextPhase === "complete") {
+                    loadingRef.current = false;
+                }
+            } catch (error) {
+                console.error(`Error in ${phase}:`, error);
+                dispatch({
+                    type: "SET_ERROR",
+                    payload: `Failed to load files: ${error}`,
+                });
+            }
+        },
+        [databaseId, assetId]
+    );
+
+    // Initial load of files with streaming
+    useEffect(() => {
+        // Prevent duplicate loads
+        if (loadingRef.current) return;
+        if (!databaseId || !assetId) return;
+
+        // If assetFiles prop is provided (legacy mode), use it
         if (assetFiles && assetFiles.length > 0) {
             // Apply filters based on state
             let filteredFiles = assetFiles;
@@ -124,118 +244,96 @@ export function EnhancedFileManager({
                 // Select the root item by default
                 dispatch({ type: "SELECT_ITEM", payload: { item: fileTree } });
             }
-        } else {
-            dispatch({ type: "FETCH_SUCCESS", payload: initialState.fileTree });
+            return;
         }
-    }, [assetFiles, filePathToNavigate]);
+
+        // New streaming mode
+        loadingRef.current = true;
+
+        const loadFiles = async () => {
+            // Initialize loading state FIRST to store selection paths
+            dispatch({ type: "INIT_LOADING", payload: null });
+
+            // Phase 1: Load basic data
+            await loadFilesStreaming(true, state.showArchived);
+
+            // Phase 2: Load detailed data
+            await loadFilesStreaming(false, state.showArchived);
+
+            // loadingRef is reset in loadFilesStreaming when detailed phase completes
+            hasInitializedRef.current = true;
+        };
+
+        // Only run once on mount
+        if (!hasInitializedRef.current) {
+            loadFiles();
+        }
+    }, [
+        databaseId,
+        assetId,
+        assetFiles,
+        filePathToNavigate,
+        loadFilesStreaming,
+        state.showArchived,
+    ]);
 
     // Handle refreshing files when refreshTrigger changes
     useEffect(() => {
         // Skip the initial render
-        if (state.refreshTrigger === 0) return;
+        if (state.refreshTrigger === 0) {
+            return;
+        }
+
+        // IMPORTANT: Don't check loadingRef here for refresh
+        // The REFRESH_FILES action is triggered by user clicking the refresh button
+        // We should always honor that request and reset loadingRef
+        loadingRef.current = true;
 
         const refreshFiles = async () => {
             try {
-                // Fetch the latest files
-                const filesResponse = await fetchAssetS3Files({
-                    databaseId: state.databaseId,
-                    assetId: state.assetId,
-                    includeArchived: state.showArchived,
+                // Initialize loading state FIRST
+                dispatch({ type: "INIT_LOADING", payload: null });
+
+                // Reset tree to empty state with current assetName (keeps loading active)
+                dispatch({
+                    type: "RESET_TREE",
+                    payload: {
+                        name: assetName,
+                        displayName: assetName,
+                        relativePath: "/",
+                        keyPrefix: "/",
+                        level: 0,
+                        expanded: true,
+                    },
                 });
 
-                // Improved error handling for API response
-                if (!filesResponse) {
-                    console.error("API Error: No response received");
-                    dispatch({
-                        type: "FETCH_ERROR",
-                        payload: "Failed to refresh files: No response received",
-                    });
-                    return;
-                }
+                // Phase 1: Load basic data
+                await loadFilesStreaming(true, state.showArchived);
 
-                // Check if the response is in the expected format [boolean, data]
-                if (!Array.isArray(filesResponse)) {
-                    console.error("API Error: Unexpected response format", filesResponse);
-                    dispatch({
-                        type: "FETCH_ERROR",
-                        payload: "Failed to refresh files: Unexpected response format",
-                    });
-                    return;
-                }
+                // Phase 2: Load detailed data
+                await loadFilesStreaming(false, state.showArchived);
 
-                if (filesResponse[0] === false) {
-                    const errorMessage = filesResponse[1] || "Failed to fetch files";
-                    console.error("API Error:", errorMessage);
-                    dispatch({
-                        type: "FETCH_ERROR",
-                        payload: `Failed to refresh files: ${errorMessage}`,
-                    });
-                    return;
-                }
-
-                const files = filesResponse[1];
-
-                if (!files || !Array.isArray(files)) {
-                    console.warn("No valid files array in response:", files);
-                    // If no files were returned, just show an empty file tree
-                    dispatch({ type: "FETCH_SUCCESS", payload: initialState.fileTree });
-                    return;
-                }
-
-                // Log the files for debugging
-                console.log("Files received from API:", files);
-
-                // Apply non-included filter if enabled
-                let filteredFiles = files;
-                if (state.showNonIncluded) {
-                    filteredFiles = filteredFiles.filter(
-                        (file) => file.currentAssetVersionFileVersionMismatch
-                    );
-                }
-
-                // Create a new file tree with the updated files
-                const newFileTree = {
-                    ...initialState.fileTree,
-                    subTree: [], // Clear existing subtree
-                };
-
-                try {
-                    // Add files to the tree with improved error handling
-                    const updatedFileTree = addFiles(filteredFiles, newFileTree);
-
-                    // Update the state with the new file tree
-                    dispatch({ type: "FETCH_SUCCESS", payload: updatedFileTree });
-
-                    // If the previously selected item still exists, select it again
-                    if (state.selectedItem) {
-                        const selectedPath = state.selectedItem.relativePath;
-                        const newSelectedItem = getRootByPath(updatedFileTree, selectedPath);
-
-                        if (newSelectedItem) {
-                            dispatch({ type: "SELECT_ITEM", payload: { item: newSelectedItem } });
-                        } else {
-                            // If the selected item no longer exists, select the root
-                            dispatch({ type: "SELECT_ITEM", payload: { item: updatedFileTree } });
-                        }
-                    }
-                } catch (treeError) {
-                    console.error("Error constructing file tree:", treeError);
-                    dispatch({
-                        type: "FETCH_ERROR",
-                        payload: "Failed to construct file tree. Please try again.",
-                    });
-                }
+                // loadingRef is reset in loadFilesStreaming when detailed phase completes
             } catch (error) {
                 console.error("Error refreshing files:", error);
                 dispatch({
                     type: "FETCH_ERROR",
                     payload: "Failed to refresh files. Please try again.",
                 });
+                // Reset on error
+                loadingRef.current = false;
             }
         };
 
         refreshFiles();
-    }, [state.refreshTrigger, state.assetId, state.databaseId]);
+    }, [
+        state.refreshTrigger,
+        state.assetId,
+        state.databaseId,
+        state.showArchived,
+        loadFilesStreaming,
+        assetName,
+    ]);
 
     // State for the preview modal
     const [showPreviewModal, setShowPreviewModal] = useState(false);

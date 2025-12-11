@@ -191,46 +191,64 @@ def collect_files_from_list(file_paths: List[str], asset_location: str = "/") ->
     return files
 
 
-def validate_upload_constraints(files: List[FileInfo]) -> None:
-    """Validate files against backend upload constraints."""
-    # Check file count limit
-    if len(files) > MAX_FILES_PER_REQUEST:
+def validate_individual_file_constraints(file_info: FileInfo) -> None:
+    """Validate individual file against backend constraints.
+    
+    This validates constraints that apply to individual files, not sequences.
+    Called during sequence creation to ensure each file can be uploaded.
+    """
+    file_parts = calculate_file_parts(file_info.size)
+    num_parts = len(file_parts)
+    
+    # Check individual file part limit
+    if num_parts > MAX_PARTS_PER_FILE:
         raise UploadSequenceError(
-            f"Too many files: {len(files)} files provided, but maximum is {MAX_FILES_PER_REQUEST} files per upload. "
-            f"Please split your upload into smaller batches."
+            f"File '{file_info.relative_key}' requires {num_parts} parts, "
+            f"but maximum is {MAX_PARTS_PER_FILE} parts per file. "
+            f"File size: {format_file_size(file_info.size)}"
+        )
+
+
+def validate_sequence_constraints(sequence: UploadSequence) -> None:
+    """Validate a single upload sequence against backend constraints.
+    
+    This validates constraints that apply per API request/sequence:
+    - Maximum files per request
+    - Maximum total parts per request
+    """
+    # Check file count limit per sequence
+    if len(sequence.files) > MAX_FILES_PER_REQUEST:
+        raise UploadSequenceError(
+            f"Sequence {sequence.sequence_id} has {len(sequence.files)} files, "
+            f"but maximum is {MAX_FILES_PER_REQUEST} files per request."
         )
     
-    # Calculate total parts across all files
-    total_parts = 0
-    for file_info in files:
-        file_parts = calculate_file_parts(file_info.size)
-        num_parts = len(file_parts)
-        
-        # Check individual file part limit
-        if num_parts > MAX_PARTS_PER_FILE:
-            raise UploadSequenceError(
-                f"File '{file_info.relative_key}' requires {num_parts} parts, "
-                f"but maximum is {MAX_PARTS_PER_FILE} parts per file. "
-                f"File size: {format_file_size(file_info.size)}"
-            )
-        
-        total_parts += num_parts
-    
-    # Check total parts limit
-    if total_parts > MAX_TOTAL_PARTS_PER_REQUEST:
+    # Check total parts limit per sequence
+    if sequence.total_parts > MAX_TOTAL_PARTS_PER_REQUEST:
         raise UploadSequenceError(
-            f"Total parts across all files: {total_parts}, but maximum is {MAX_TOTAL_PARTS_PER_REQUEST} parts per upload. "
-            f"Please reduce file sizes or split your upload into smaller batches."
+            f"Sequence {sequence.sequence_id} has {sequence.total_parts} parts, "
+            f"but maximum is {MAX_TOTAL_PARTS_PER_REQUEST} parts per request."
         )
 
 
 def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
-    """Create upload sequences from a list of files with backend constraint validation."""
+    """Create upload sequences from a list of files with backend constraint validation.
+    
+    This function automatically creates multiple sequences when needed to respect
+    backend constraints. Constraints are enforced per-sequence, not for the entire
+    upload, allowing unlimited files to be uploaded in batches.
+    
+    For example, with MAX_FILES_PER_REQUEST=50:
+    - 200 files will create 4 sequences (50 files each)
+    - Each sequence is uploaded as a separate API request
+    - All files are handled automatically without manual splitting
+    """
     if not files:
         raise UploadSequenceError("No files provided for sequencing")
     
-    # Validate against backend constraints first
-    validate_upload_constraints(files)
+    # Validate individual file constraints (applies to all files regardless of sequencing)
+    for file_info in files:
+        validate_individual_file_constraints(file_info)
     
     sequences = []
     regular_files = []
@@ -266,6 +284,7 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
             if current_sequence:
                 sequence = UploadSequence(current_sequence, sequence_id)
                 sequence.calculate_parts()
+                validate_sequence_constraints(sequence)
                 sequences.append(sequence)
                 sequence_id += 1
                 current_sequence = []
@@ -275,6 +294,7 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
             # Large file gets its own sequence
             sequence = UploadSequence([file_info], sequence_id)
             sequence.calculate_parts()
+            validate_sequence_constraints(sequence)
             sequences.append(sequence)
             sequence_id += 1
         else:
@@ -287,6 +307,7 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
     if current_sequence:
         sequence = UploadSequence(current_sequence, sequence_id)
         sequence.calculate_parts()
+        validate_sequence_constraints(sequence)
         sequences.append(sequence)
         sequence_id += 1
     
@@ -309,6 +330,7 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
                 if current_sequence:
                     sequence = UploadSequence(current_sequence, sequence_id)
                     sequence.calculate_parts()
+                    validate_sequence_constraints(sequence)
                     sequences.append(sequence)
                     sequence_id += 1
                     current_sequence = []
@@ -323,6 +345,7 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
         if current_sequence:
             sequence = UploadSequence(current_sequence, sequence_id)
             sequence.calculate_parts()
+            validate_sequence_constraints(sequence)
             sequences.append(sequence)
     
     if not sequences:

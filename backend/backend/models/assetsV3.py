@@ -332,7 +332,7 @@ class AssetFileItemModel(BaseModel, extra='ignore'):
     isFolder: bool
     size: Optional[int] = None
     dateCreatedCurrentVersion: str
-    versionId: str
+    versionId: Optional[str] = None  # S3 version ID (None in basic mode)
     storageClass: Optional[str] = None  # To identify archived files
     isArchived: bool = False  # Computed field based on metadata
     currentAssetVersionFileVersionMismatch: bool = False  # Indicates if file version doesn't match asset version
@@ -341,11 +341,12 @@ class AssetFileItemModel(BaseModel, extra='ignore'):
 
 class ListAssetFilesRequestModel(BaseModel, extra='ignore'):
     """Query parameters for listing asset files"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=None, ge=1, le=10000)
+    pageSize: Optional[int] = Field(default=None, ge=1, le=1500)
     startingToken: Optional[str] = None
     prefix: Optional[str] = None
     includeArchived: Optional[bool] = Field(default=False)  # Show archived files
+    basic: Optional[bool] = Field(default=False)  # Skip expensive lookups (head_object, preview files, version checks)
 
 class ListAssetFilesResponseModel(BaseModel, extra='ignore'):
     """Response model for listing asset files"""
@@ -652,6 +653,18 @@ class ArchiveAssetRequestModel(BaseModel, extra='ignore'):
     confirmArchive: bool = Field(default=False)
     reason: Optional[str] = Field(None, max_length=256)  # Optional reason for archiving
 
+class UnarchiveAssetRequestModel(BaseModel, extra='ignore'):
+    """Request model for unarchiving an asset (restore from soft delete)"""
+    confirmUnarchive: bool = Field(default=False)
+    reason: Optional[str] = Field(None, max_length=256)  # Optional reason for unarchiving
+    
+    @validator('confirmUnarchive')
+    def validate_confirmation(cls, v):
+        """Ensure confirmation is provided for unarchiving"""
+        if not v:
+            raise ValueError("confirmUnarchive must be true for unarchiving")
+        return v
+
 class DeleteAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for permanently deleting an asset"""
     confirmPermanentDelete: bool = Field(default=False)  # Stronger confirmation required
@@ -684,11 +697,11 @@ class AssetResponseModel(BaseModel, extra='ignore'):
     archivedReason: Optional[str] = None
 
 class AssetOperationResponseModel(BaseModel, extra='ignore'):
-    """Response model for asset operations (update, archive, delete)"""
+    """Response model for asset operations (update, archive, unarchive, delete)"""
     success: bool
     message: str
     assetId: str
-    operation: Literal["archive", "delete", "update"]
+    operation: Literal["archive", "unarchive", "delete", "update"]
     timestamp: str
 
 ######################## Asset Versions API Models ##########################

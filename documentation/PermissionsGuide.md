@@ -256,6 +256,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets/{assetId}/deleteAsset` - DELETE
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/unarchiveAsset` - PUT
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
 -   `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/setPrimaryFile` - PUT

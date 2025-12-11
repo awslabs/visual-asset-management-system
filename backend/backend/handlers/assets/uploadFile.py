@@ -60,7 +60,7 @@ TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'  # Prefix for temporary uploads
 PREVIEW_PREFIX = 'previews/'
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
-MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 10
+MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
 LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
 allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
 

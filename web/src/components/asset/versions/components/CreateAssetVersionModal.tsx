@@ -20,11 +20,12 @@ import {
 import { useParams } from "react-router";
 import {
     createAssetVersion,
-    fetchAssetS3Files,
     fetchAssetVersion,
     fetchAssetVersions,
     fetchFileVersions,
 } from "../../../../services/AssetVersionService";
+import { fetchAssetS3Files } from "../../../../services/APIService";
+
 import { FileVersion } from "../AssetVersionManager";
 import { AvailableFilesContainer } from "./AvailableFilesContainer";
 import { SelectedFilesContainer } from "./SelectedFilesContainer";
@@ -159,6 +160,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                 databaseId,
                 assetId,
                 includeArchived: showArchived,
+                basic: false,
             });
 
             if (success && Array.isArray(response)) {

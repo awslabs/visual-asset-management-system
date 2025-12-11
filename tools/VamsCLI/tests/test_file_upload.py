@@ -615,7 +615,7 @@ class TestFileUploadCommand:
                     
                     assert result.exit_code == 0
                     assert 'Upload completed successfully!' in result.output
-                    assert 'Large File Processing:' in result.output
+                    assert 'Asynchronous Processing:' in result.output
                     assert 'large files that will undergo separate asynchronous processing' in result.output
                     assert 'may take longer to appear in the asset' in result.output
                     assert 'vamscli file list -d test-db -a test-asset' in result.output
@@ -663,7 +663,7 @@ class TestFileUploadCommand:
                     
                     assert result.exit_code == 0
                     assert 'Upload completed successfully!' in result.output
-                    assert 'Large File Processing:' not in result.output
+                    assert 'Asynchronous Processing:' not in result.output
         finally:
             Path(tmp_path).unlink()
 
@@ -950,84 +950,114 @@ class TestFileUploadCommandEdgeCases:
 class TestBackendUploadRestrictions:
     """Test new backend upload restrictions (v2.2+)."""
     
-    def test_validate_upload_constraints_too_many_files(self):
-        """Test validation with too many files."""
-        from vamscli.utils.file_processor import validate_upload_constraints
-        
-        # Create just enough files to exceed the limit (lightweight test)
+    def test_create_sequences_with_many_files(self):
+        """Test that many files automatically create multiple sequences."""
+        # Create 200 small files
         files = []
-        for i in range(5):  # Small number for fast test
+        for i in range(200):
             files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 1024))
         
-        # Mock the MAX_FILES_PER_REQUEST to be smaller for testing
-        with patch('vamscli.utils.file_processor.MAX_FILES_PER_REQUEST', 3):
-            with pytest.raises(UploadSequenceError, match="Too many files"):
-                validate_upload_constraints(files)
+        # Mock MAX_FILES_PER_REQUEST to be 50 for testing
+        with patch('vamscli.utils.file_processor.MAX_FILES_PER_REQUEST', 50):
+            sequences = create_upload_sequences(files)
+            
+            # Should create multiple sequences (at least 4 for 200 files with limit of 50)
+            assert len(sequences) >= 4
+            
+            # Each sequence should respect the file limit
+            for seq in sequences:
+                assert len(seq.files) <= 50
+            
+            # Total files should still be 200
+            total_files = sum(len(seq.files) for seq in sequences)
+            assert total_files == 200
     
-    def test_validate_upload_constraints_too_many_parts(self):
-        """Test validation with too many total parts."""
-        from vamscli.utils.file_processor import validate_upload_constraints
-        
-        # Create files that would exceed total parts limit (lightweight test)
-        # Use small files but mock the limit to be smaller
+    def test_create_sequences_with_many_parts(self):
+        """Test that files with many parts automatically create multiple sequences."""
+        # Create files that would exceed parts limit in a single sequence
         files = []
-        for i in range(3):  # 3 files, each with 2 parts = 6 parts total
+        for i in range(10):  # 10 files, each with 2 parts = 20 parts total
             files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 2 * DEFAULT_CHUNK_SIZE_SMALL))
         
-        # Mock the MAX_TOTAL_PARTS_PER_REQUEST to be smaller for testing
-        with patch('vamscli.utils.file_processor.MAX_TOTAL_PARTS_PER_REQUEST', 5):
-            with pytest.raises(UploadSequenceError, match="Total parts across all files"):
-                validate_upload_constraints(files)
+        # Mock MAX_TOTAL_PARTS_PER_REQUEST to be 15 for testing
+        with patch('vamscli.utils.file_processor.MAX_TOTAL_PARTS_PER_REQUEST', 15):
+            sequences = create_upload_sequences(files)
+            
+            # Should create multiple sequences to respect parts limit
+            assert len(sequences) >= 2
+            
+            # Each sequence should respect the parts limit
+            for seq in sequences:
+                assert seq.total_parts <= 15
+            
+            # Total files should still be 10
+            total_files = sum(len(seq.files) for seq in sequences)
+            assert total_files == 10
     
-    def test_validate_upload_constraints_file_too_many_parts(self):
+    def test_individual_file_too_many_parts(self):
         """Test validation with single file requiring too many parts."""
-        from vamscli.utils.file_processor import validate_upload_constraints
-        
-        # Create a file that would require more parts than allowed (lightweight test)
-        # Use a file that requires 3 parts but mock the limit to be 2
+        # Create a file that would require more parts than allowed
         file_size_for_3_parts = 3 * DEFAULT_CHUNK_SIZE_SMALL
         files = [FileInfo("/tmp/large_file.txt", "large_file.txt", file_size_for_3_parts)]
         
-        # Mock the MAX_PARTS_PER_FILE to be smaller for testing
+        # Mock MAX_PARTS_PER_FILE to be smaller for testing
         with patch('vamscli.utils.file_processor.MAX_PARTS_PER_FILE', 2):
+            # Should raise error during sequence creation (individual file validation)
             with pytest.raises(UploadSequenceError, match="requires .* parts"):
-                validate_upload_constraints(files)
+                create_upload_sequences(files)
     
-    def test_validate_upload_constraints_valid_files(self):
-        """Test validation with valid files within limits."""
-        from vamscli.utils.file_processor import validate_upload_constraints
-        
+    def test_create_sequences_valid_files(self):
+        """Test sequence creation with valid files within limits."""
         # Create files within all limits
         files = []
         for i in range(10):  # Well under file limit
             files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 1024 * 1024))  # 1MB each
         
-        # Should not raise any exception
-        validate_upload_constraints(files)
-    
-    def test_create_upload_sequences_respects_file_limit(self):
-        """Test that upload sequences respect file count limits."""
-        # Create files that would exceed file limit (lightweight test)
-        files = []
-        for i in range(5):  # Small number for fast test
-            files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 1024))  # Small files
+        # Should create sequences successfully
+        sequences = create_upload_sequences(files)
         
-        # Mock the MAX_FILES_PER_REQUEST to be smaller for testing
-        with patch('vamscli.utils.file_processor.MAX_FILES_PER_REQUEST', 3):
-            with pytest.raises(UploadSequenceError, match="Too many files"):
-                create_upload_sequences(files)
+        # Should create at least one sequence
+        assert len(sequences) >= 1
+        
+        # All files should be included
+        total_files = sum(len(seq.files) for seq in sequences)
+        assert total_files == 10
     
-    def test_create_upload_sequences_respects_parts_limit(self):
-        """Test that upload sequences respect total parts limits."""
-        # Create files that would exceed parts limit (lightweight test)
+    def test_create_upload_sequences_respects_file_limit_per_sequence(self):
+        """Test that upload sequences respect file count limits per sequence."""
+        # Create files that would exceed file limit in a single sequence
         files = []
-        for i in range(3):  # 3 files, each with 2 parts = 6 parts total
+        for i in range(10):  # 10 files
+            files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 1024))
+        
+        # Mock MAX_FILES_PER_REQUEST to be 3 for testing
+        with patch('vamscli.utils.file_processor.MAX_FILES_PER_REQUEST', 3):
+            sequences = create_upload_sequences(files)
+            
+            # Should create multiple sequences
+            assert len(sequences) >= 4  # At least 4 sequences for 10 files with limit of 3
+            
+            # Each sequence should respect the file limit
+            for seq in sequences:
+                assert len(seq.files) <= 3
+    
+    def test_create_upload_sequences_respects_parts_limit_per_sequence(self):
+        """Test that upload sequences respect total parts limits per sequence."""
+        # Create files that would exceed parts limit in a single sequence
+        files = []
+        for i in range(6):  # 6 files, each with 2 parts = 12 parts total
             files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 2 * DEFAULT_CHUNK_SIZE_SMALL))
         
-        # Mock the MAX_TOTAL_PARTS_PER_REQUEST to be smaller for testing
+        # Mock MAX_TOTAL_PARTS_PER_REQUEST to be 5 for testing
         with patch('vamscli.utils.file_processor.MAX_TOTAL_PARTS_PER_REQUEST', 5):
-            with pytest.raises(UploadSequenceError, match="Total parts across all files"):
-                create_upload_sequences(files)
+            sequences = create_upload_sequences(files)
+            
+            # Should create multiple sequences
+            assert len(sequences) >= 3  # At least 3 sequences for 12 parts with limit of 5
+            
+            # Each sequence should respect the parts limit
+            for seq in sequences:
+                assert seq.total_parts <= 5
     
     def test_zero_byte_file_handling(self):
         """Test zero-byte file handling in sequences."""
@@ -1239,6 +1269,61 @@ class TestRateLimitingCompatibility:
                     assert "Rate limit exceeded" in str(result.exception)
         finally:
             Path(tmp_path).unlink()
+
+
+class TestParallelPipelineArchitecture:
+    """Test parallel pipeline upload architecture."""
+    
+    def test_parallel_initialization_multiple_sequences(self):
+        """Test that multiple sequences are initialized in parallel."""
+        # Create 4 sequences worth of files
+        files = []
+        for i in range(200):
+            files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 1024))
+        
+        # Mock MAX_FILES_PER_REQUEST to create 4 sequences
+        with patch('vamscli.utils.file_processor.MAX_FILES_PER_REQUEST', 50):
+            sequences = create_upload_sequences(files)
+            assert len(sequences) >= 4
+            
+            # Verify sequences were created correctly
+            total_files = sum(len(seq.files) for seq in sequences)
+            assert total_files == 200
+    
+    def test_global_part_upload_pool(self):
+        """Test that parts from all sequences are uploaded in a shared pool."""
+        # Create multiple sequences with parts
+        files = []
+        for i in range(10):
+            # Each file has 2 parts
+            files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 2 * DEFAULT_CHUNK_SIZE_SMALL))
+        
+        # Mock to create 2 sequences
+        with patch('vamscli.utils.file_processor.MAX_FILES_PER_REQUEST', 5):
+            sequences = create_upload_sequences(files)
+            assert len(sequences) >= 2
+            
+            # Calculate total parts across all sequences
+            total_parts = sum(seq.total_parts for seq in sequences)
+            assert total_parts == 20  # 10 files × 2 parts each
+    
+    def test_sequence_completion_monitoring(self):
+        """Test that sequences can complete independently."""
+        # Create files for multiple sequences
+        files = [
+            FileInfo("/tmp/file1.txt", "file1.txt", 1024),
+            FileInfo("/tmp/file2.txt", "file2.txt", 1024),
+            FileInfo("/tmp/file3.txt", "file3.txt", 1024),
+        ]
+        
+        sequences = create_upload_sequences(files)
+        
+        # Each sequence should be independently completable
+        for seq in sequences:
+            assert seq.sequence_id > 0
+            assert len(seq.files) > 0
+            seq.calculate_parts()
+            assert seq.total_parts >= 0
 
 
 class TestZeroByteFileSupport:

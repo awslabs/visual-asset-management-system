@@ -7,7 +7,6 @@ import React, { Suspense, useState, useCallback } from "react";
 import { Container, Header, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
-import { FileKey } from "../filemanager/types/FileManagerTypes";
 
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
@@ -18,10 +17,8 @@ const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
 
 interface TabbedContainerProps {
     assetName: string;
-    assetFiles: FileKey[];
     assetId: string;
     databaseId: string;
-    loadingFiles: boolean;
     onExecuteWorkflow: () => void;
     onWorkflowExecuted?: () => void; // Callback when workflow execution is complete
     filePathToNavigate?: string; // Optional file path to navigate to in File Manager
@@ -29,10 +26,8 @@ interface TabbedContainerProps {
 
 export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     assetName,
-    assetFiles,
     assetId,
     databaseId,
-    loadingFiles,
     onExecuteWorkflow,
     onWorkflowExecuted,
     filePathToNavigate,
@@ -65,11 +60,6 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                 >
                                     <FileManagerTab
                                         assetName={assetName}
-                                        assetFiles={assetFiles}
-                                        assetId={assetId}
-                                        databaseId={databaseId}
-                                        loading={loadingFiles}
-                                        onExecuteWorkflow={onExecuteWorkflow} // Keeping prop for compatibility
                                         filePathToNavigate={filePathToNavigate}
                                     />
                                 </Suspense>

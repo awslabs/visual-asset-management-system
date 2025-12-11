@@ -330,9 +330,12 @@ def build_asset_document(request: AssetIndexRequest, asset_details: Dict[str, An
                         is_archived: bool) -> AssetDocumentModel:
     """Build an asset document for indexing"""
     
+    # Normalize databaseId for storage (remove #deleted suffix)
+    normalized_database_id = request.databaseId.replace('#deleted', '')
+    
     # Create base document
     doc = AssetDocumentModel(
-        str_databaseid=request.databaseId,
+        str_databaseid=normalized_database_id,  # Store normalized version
         str_assetid=request.assetId,
         str_bucketid=bucket_details.get('bucketId'),
         str_assetname=asset_details.get('assetName'),

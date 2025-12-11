@@ -18,13 +18,8 @@ import {
     CollectionPreferences,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams } from "react-router";
-
-import {
-    fetchAssetVersion,
-    fetchAssetS3Files,
-    compareAssetVersions,
-} from "../../../services/AssetVersionService";
-import { downloadAsset } from "../../../services/APIService";
+import { fetchAssetVersion, compareAssetVersions } from "../../../services/AssetVersionService";
+import { fetchAssetS3Files } from "../../../services/APIService";
 import { AssetVersionContext, AssetVersion } from "./AssetVersionManager";
 
 // TypeScript interfaces - using imported AssetVersion from AssetVersionManager
@@ -184,6 +179,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                         databaseId,
                         assetId,
                         includeArchived: false,
+                        basic: false,
                     });
 
                     if (success && files) {

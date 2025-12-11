@@ -567,6 +567,11 @@ export class ApiBuilderNestedStack extends NestedStack {
             api: api,
         });
         attachFunctionToApi(this, assetService, {
+            routePath: "/database/{databaseId}/assets/{assetId}/unarchiveAsset",
+            method: apigateway.HttpMethod.PUT,
+            api: api,
+        });
+        attachFunctionToApi(this, assetService, {
             routePath: "/assets",
             method: apigateway.HttpMethod.GET,
             api: api,
