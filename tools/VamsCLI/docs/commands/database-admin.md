@@ -13,29 +13,52 @@ List all databases in the VAMS system.
 **Options:**
 
 -   `--show-deleted`: Include deleted databases
--   `--max-items`: Maximum number of items to return (default: 1000)
--   `--page-size`: Number of items per page (default: 1000)
--   `--starting-token`: Token for pagination
+-   `--page-size`: Number of items per page
+-   `--max-items`: Maximum total items to fetch (only with --auto-paginate, default: 10000)
+-   `--starting-token`: Token for pagination (manual pagination)
+-   `--auto-paginate`: Automatically fetch all items
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# List all databases
+# Basic listing (uses API defaults)
 vamscli database list
 
 # Include deleted databases
 vamscli database list --show-deleted
 
-# List with pagination
-vamscli database list --max-items 50 --page-size 25
+# Auto-pagination to fetch all items (default: up to 10,000)
+vamscli database list --auto-paginate
 
-# Continue pagination
-vamscli database list --starting-token "next-page-token"
+# Auto-pagination with custom limit
+vamscli database list --auto-paginate --max-items 5000
+
+# Auto-pagination with custom page size
+vamscli database list --auto-paginate --page-size 500
+
+# Manual pagination with page size
+vamscli database list --page-size 200
+vamscli database list --starting-token "token123" --page-size 200
 
 # JSON output for automation
 vamscli database list --json-output
 ```
+
+**Pagination Features:**
+
+-   **Auto-Pagination**: Use `--auto-paginate` to automatically fetch all items up to the limit
+-   **Manual Pagination**: Use `--page-size` and `--starting-token` for manual page-by-page control
+-   **CLI-Side Limit**: `--max-items` is a CLI-side limit (not passed to API) that controls total items fetched
+-   **API-Side Control**: `--page-size` is passed to the API to control items per request
+-   **Default Limit**: Auto-pagination defaults to 10,000 items maximum
+-   **Progress Display**: Shows progress during auto-pagination in CLI mode
+
+**Pagination Restrictions:**
+
+-   Cannot use `--auto-paginate` with `--starting-token` (choose one pagination mode)
+-   `--max-items` only applies with `--auto-paginate` (warning shown if used without it)
+-   When using manual pagination, use the `NextToken` from the response as `--starting-token` for the next page
 
 ### `vamscli database create`
 
@@ -206,23 +229,46 @@ List available S3 bucket configurations for use with databases.
 
 **Options:**
 
--   `--max-items`: Maximum number of items to return (default: 1000)
--   `--page-size`: Number of items per page (default: 1000)
--   `--starting-token`: Token for pagination
+-   `--page-size`: Number of items per page
+-   `--max-items`: Maximum total items to fetch (only with --auto-paginate, default: 10000)
+-   `--starting-token`: Token for pagination (manual pagination)
+-   `--auto-paginate`: Automatically fetch all items
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# List all bucket configurations
+# Basic listing (uses API defaults)
 vamscli database list-buckets
 
-# List with pagination
-vamscli database list-buckets --max-items 10
+# Auto-pagination to fetch all items (default: up to 10,000)
+vamscli database list-buckets --auto-paginate
+
+# Auto-pagination with custom limit
+vamscli database list-buckets --auto-paginate --max-items 5000
+
+# Manual pagination with page size
+vamscli database list-buckets --page-size 200
+vamscli database list-buckets --starting-token "token123" --page-size 200
 
 # JSON output for automation
 vamscli database list-buckets --json-output
 ```
+
+**Pagination Features:**
+
+-   **Auto-Pagination**: Use `--auto-paginate` to automatically fetch all items up to the limit
+-   **Manual Pagination**: Use `--page-size` and `--starting-token` for manual page-by-page control
+-   **CLI-Side Limit**: `--max-items` is a CLI-side limit (not passed to API) that controls total items fetched
+-   **API-Side Control**: `--page-size` is passed to the API to control items per request
+-   **Default Limit**: Auto-pagination defaults to 10,000 items maximum
+-   **Progress Display**: Shows progress during auto-pagination in CLI mode
+
+**Pagination Restrictions:**
+
+-   Cannot use `--auto-paginate` with `--starting-token` (choose one pagination mode)
+-   `--max-items` only applies with `--auto-paginate` (warning shown if used without it)
+-   When using manual pagination, use the `NextToken` from the response as `--starting-token` for the next page
 
 **Output includes:**
 

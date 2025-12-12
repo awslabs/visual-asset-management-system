@@ -59,8 +59,8 @@ class GetDatabaseResponseModel(BaseModel, extra='ignore'):
 
 class GetDatabasesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing databases"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=3000, ge=1)
     startingToken: Optional[str] = None
     showDeleted: Optional[bool] = False
 
@@ -83,8 +83,8 @@ class BucketModel(BaseModel, extra='ignore'):
 
 class GetBucketsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing buckets"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=3000, ge=1)
     startingToken: Optional[str] = None
 
 class GetBucketsResponseModel(BaseModel, extra='ignore'):

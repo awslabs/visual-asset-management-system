@@ -1295,8 +1295,8 @@ class [Domain]RequestModel(BaseModel, extra='ignore'):
 
 class [Domain]ListRequestModel(BaseModel, extra='ignore'):
     """Request model for listing [domain]s"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=3000, ge=1)
     startingToken: Optional[str] = None
     includeDeleted: Optional[bool] = False
 
@@ -1951,34 +1951,154 @@ except ValidationError as v:
     query_params = query_parameters
 ```
 
-### **DynamoDB Query Pattern**
+### **DynamoDB Query Pattern (for API responses)**
 
 ```python
-# Standard DynamoDB query with pagination
+# Standard DynamoDB query with proper pagination using LastEvaluatedKey
+# NOTE: This pattern is for main API query results. For internal data fetching to construct
+# larger query sets, use the regular paginator as larger datasets are required.
+
+# Build query parameters
+query_params_dict = {
+    'TableName': table_name,
+    'KeyConditionExpression': 'partitionKey = :pkValue',
+    'ExpressionAttributeValues': {
+        ':pkValue': {'S': partition_value}
+    },
+    'ScanIndexForward': False,
+    'Limit': int(query_params['pageSize'])
+}
+
+# Add ExclusiveStartKey if startingToken provided (decode base64)
+if query_params.get('startingToken'):
+    try:
+        decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+        query_params_dict['ExclusiveStartKey'] = json.loads(decoded_token)
+    except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+        logger.exception(f"Invalid startingToken format: {e}")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+# Single query call with pagination
+response = dynamodb_client.query(**query_params_dict)
+
+# Process items with authorization filtering
+authorized_items = []
+deserializer = TypeDeserializer()
+for item in response.get('Items', []):
+    # Deserialize the item
+    deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+
+    # Add object type for Casbin enforcement
+    deserialized_item.update({"object__type": "[objectType]"})
+
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(deserialized_item, "GET"):
+            authorized_items.append(deserialized_item)
+
+# Build response with nextToken
+result = {"Items": authorized_items}
+
+# Return LastEvaluatedKey as nextToken if present (base64 encoded)
+if 'LastEvaluatedKey' in response:
+    json_str = json.dumps(response['LastEvaluatedKey'])
+    result["NextToken"] = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+```
+
+### **DynamoDB Scan Pattern (for API responses)**
+
+```python
+# Standard DynamoDB scan with proper pagination using LastEvaluatedKey
+# NOTE: This pattern is for main API scan results. For internal data fetching to construct
+# larger query sets, use the regular paginator as larger datasets are required.
+
+# Build scan parameters
+scan_params = {
+    'TableName': table_name,
+    'Limit': int(query_params['pageSize'])
+}
+
+# Add filter if needed
+if filter_expression:
+    scan_params['ScanFilter'] = filter_expression
+
+# Add ExclusiveStartKey if startingToken provided (decode base64)
+if query_params.get('startingToken'):
+    try:
+        decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+        scan_params['ExclusiveStartKey'] = json.loads(decoded_token)
+    except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+        logger.exception(f"Invalid startingToken format: {e}")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+# Single scan call with pagination
+response = dynamodb_client.scan(**scan_params)
+
+# Process items with authorization filtering
+authorized_items = []
+deserializer = TypeDeserializer()
+for item in response.get('Items', []):
+    # Deserialize the item
+    deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+
+    # Add object type for Casbin enforcement
+    deserialized_item.update({"object__type": "[objectType]"})
+
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(deserialized_item, "GET"):
+            authorized_items.append(deserialized_item)
+
+# Build response with nextToken
+result = {"Items": authorized_items}
+
+# Return LastEvaluatedKey as nextToken if present (base64 encoded)
+if 'LastEvaluatedKey' in response:
+    json_str = json.dumps(response['LastEvaluatedKey'])
+    result["NextToken"] = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+```
+
+### **Internal Data Fetching Pattern (for constructing larger datasets)**
+
+```python
+# Pattern for internal data fetching where complete datasets are needed
+# Use this when you need to fetch ALL items to construct response data, not for API pagination
+# Examples: Getting bucket details for each database, fetching related metadata, etc.
+
+# For Query operations - fetch all items
 paginator = dynamodb.meta.client.get_paginator('query')
 page_iterator = paginator.paginate(
     TableName=table_name,
     KeyConditionExpression=Key('partitionKey').eq(partition_value),
-    ScanIndexForward=False,
-    PaginationConfig={
-        'MaxItems': int(query_params['maxItems']),
-        'PageSize': int(query_params['pageSize']),
-        'StartingToken': query_params.get('startingToken')
-    }
+    ScanIndexForward=False
 ).build_full_result()
 
-# Process items with authorization filtering
-authorized_items = []
+all_items = []
 for item in page_iterator.get('Items', []):
-    item.update({"object__type": "[objectType]"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforce(item, "GET"):
-            authorized_items.append(item)
+    all_items.append(item)
 
-result = {"Items": authorized_items}
-if 'NextToken' in page_iterator:
-    result["NextToken"] = page_iterator['NextToken']
+# For Scan operations - fetch all items
+paginator = dynamodb_client.get_paginator('scan')
+page_iterator = paginator.paginate(
+    TableName=table_name,
+    ScanFilter=filter_expression
+).build_full_result()
+
+all_items = []
+for item in page_iterator.get('Items', []):
+    deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+    all_items.append(deserialized_item)
+
+# For S3 operations - fetch all objects under prefix
+paginator = s3_client.get_paginator('list_objects_v2')
+all_objects = []
+for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+    if 'Contents' in page:
+        for obj in page['Contents']:
+            all_objects.append(obj)
+
+# IMPORTANT: Only use this pattern when you genuinely need ALL items for internal processing.
+# For API responses that return lists to users, always use the LastEvaluatedKey pattern above.
 ```
 
 ## 🔍 **Code Review Checklist**

@@ -413,8 +413,8 @@ class APIClient:
                 
                 # Try to fetch feature switches after successful re-authentication
                 try:
-                    feature_switches_result = self.get_feature_switches()
-                    self.profile_manager.save_feature_switches(feature_switches_result)
+                    secure_config_result = self.get_secure_config()
+                    self.profile_manager.save_feature_switches(secure_config_result)
                     
                     log_auth_diagnostic(
                         auth_type="reauth_saved_creds",
@@ -422,10 +422,10 @@ class APIClient:
                         details={
                             'user_id': saved_credentials['username'],
                             'profile_name': self.profile_manager.profile_name,
-                            'feature_switches': feature_switches_result
+                            'secure_config': secure_config_result
                         }
                     )
-                except Exception as fs_error:
+                except Exception as sc_error:
                     # Feature switches fetch failure is non-blocking
                     log_auth_diagnostic(
                         auth_type="reauth_saved_creds",
@@ -433,7 +433,7 @@ class APIClient:
                         details={
                             'user_id': saved_credentials['username'],
                             'profile_name': self.profile_manager.profile_name,
-                            'feature_switches_error': str(fs_error)
+                            'secure_config_error': str(sc_error)
                         }
                     )
                     
@@ -617,9 +617,9 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to call login profile API: {e}")
     
-    def get_feature_switches(self) -> Dict[str, Any]:
+    def get_secure_config(self) -> Dict[str, Any]:
         """
-        Fetch feature switches from secure-config API.
+        Fetch fsecure config from secure-config API.
         
         Returns:
             API response data with featuresEnabled string
@@ -2767,7 +2767,7 @@ class APIClient:
                 - includeArchivedFiles: Include archived files
                 - fileExtensions: Filter by file extensions
                 - maxAssets: Max assets per page (1-1000)
-                - nextToken: Pagination token
+                - startingToken: Pagination token
         
         Returns:
             API response with assets, relationships, and pagination info

@@ -438,7 +438,7 @@ class TestAssetVersionListCommand:
                         'fileCount': 2
                     }
                 ],
-                'nextToken': None
+                'NextToken': None
             }
             
             result = cli_runner.invoke(asset_version, [
@@ -477,7 +477,7 @@ class TestAssetVersionListCommand:
                         'fileCount': 3
                     }
                 ],
-                'nextToken': 'next-token-123'
+                'NextToken': 'next-token-123'
             }
             
             result = cli_runner.invoke(asset_version, [
@@ -505,7 +505,7 @@ class TestAssetVersionListCommand:
         with asset_version_command_mocks as mocks:
             mocks['api_client'].get_asset_versions.return_value = {
                 'versions': [],
-                'nextToken': None
+                'NextToken': None
             }
             
             result = cli_runner.invoke(asset_version, [

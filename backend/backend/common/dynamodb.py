@@ -95,35 +95,50 @@ def get_asset_object_from_id(databaseId, assetId):
         return asset_object
 
 
-def validate_pagination_info(queryParameters, defaultMaxItemsOverride=1000):
+def validate_pagination_info(queryParameters, defaultMaxItemsOverride=10000, defaultPageSizeOverride=3000):
     """
     Sets the pagination infor from the query parameters
     :param queryParameters: dictionary containing pagination info
-    :param defaultMaxItemsOverride: default max items to return, set to 1000 if not set 
+    :param defaultMaxItemsOverride: default max items to return, set to 10000 if not set 
+    :param defaultPageSizeOverride: default page size to return, set to 3000 if not set 
     """
 
     if queryParameters is None:
         queryParameters = {}
 
-    if 'maxItems' not in queryParameters:
-        queryParameters['maxItems'] = defaultMaxItemsOverride
+    if 'pageSize' not in queryParameters:
         queryParameters['pageSize'] = defaultMaxItemsOverride
     else:
-        #Check to make sure maxItems is a number, otherwise log and reset to 100
+        #Check to make sure maxItems is a number, otherwise log and reset to defaultPageSizeOverride
         try:
-            float(queryParameters['maxItems'])
+            int(queryParameters['pageSize'])
         except ValueError:
-            queryParameters['maxItems'] = 100
-            logger.warn("maxItems parameter is not a number. Re-Setting to 100.")
+            queryParameters['pageSize'] = defaultPageSizeOverride
+            logger.warn("pageSize parameter is not a number. Re-Setting to defaultPageSizeOverride.")
 
-        #Set pageSize equal to maxItems
-        queryParameters['pageSize'] = queryParameters['maxItems']
+
+    if 'maxItems' not in queryParameters:
+        #max items should be page count size if not included
+        queryParameters['maxItems'] = int(queryParameters['pageSize'])
+    else:
+        #Check to make sure maxItems is a number, otherwise log and reset to defaultMaxItemsOverride
+        try:
+            int(queryParameters['maxItems'])
+        except ValueError:
+            queryParameters['maxItems'] = defaultMaxItemsOverride
+            logger.warn("maxItems parameter is not a number. Re-Setting to defaultMaxItemsOverride.")
+
+    #Check min size
+    if int(queryParameters['pageSize']) < 1:
+        queryParameters['pageSize'] = defaultPageSizeOverride
+
+    if int(queryParameters['maxItems']) < 1:
+        queryParameters['maxItems'] = defaultMaxItemsOverride
+
+    #Limit page size to maxitems
+    if int(queryParameters['pageSize']) > int(queryParameters['maxItems']):
+        queryParameters['pageSize'] = int(queryParameters['maxItems'])
+        logger.warn("Data page size exceeds max items, reseting page size to max items. ")
 
     if 'startingToken' not in queryParameters:
         queryParameters['startingToken'] = None
-
-    #Limit page size
-    if int(queryParameters['maxItems']) > defaultMaxItemsOverride:
-        queryParameters['maxItems'] = defaultMaxItemsOverride
-        queryParameters['pageSize'] = defaultMaxItemsOverride
-        logger.warn("Data page size requested exceeds "+str(defaultMaxItemsOverride)+" records. Limiting to "+str(defaultMaxItemsOverride)+". ")

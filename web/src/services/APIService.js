@@ -1574,7 +1574,7 @@ export const fetchAssetS3Files = async (
             let items = response.items;
 
             // Handle pagination if needed
-            let nextToken = response.nextToken;
+            let nextToken = response.NextToken;
             while (nextToken) {
                 const nextResponse = await api.get(
                     "api",
@@ -1589,7 +1589,7 @@ export const fetchAssetS3Files = async (
 
                 if (nextResponse && nextResponse.items) {
                     items = items.concat(nextResponse.items);
-                    nextToken = nextResponse.nextToken;
+                    nextToken = nextResponse.NextToken;
                 } else {
                     break;
                 }
@@ -1700,7 +1700,7 @@ export const fetchAssetS3FilesPage = async (
             return {
                 success: true,
                 items: response.items,
-                nextToken: response.nextToken || null,
+                nextToken: response.NextToken || null,
                 error: null,
             };
         }
@@ -1789,16 +1789,23 @@ export async function* fetchAssetS3FilesStreaming(
  * @param {string} params.databaseId - Database ID
  * @param {string} params.assetId - Asset ID
  * @param {string} params.fileKey - File key/path
+ * @param {boolean} params.includeVersions - If to include file version data on the response
  * @returns {Promise<any>}
  */
-export const fetchFileInfo = async ({ databaseId, assetId, fileKey }, api = API) => {
+export const fetchFileInfo = async (
+    { databaseId, assetId, fileKey, includeVersions = false },
+    api = API
+) => {
     try {
         if (!databaseId || !assetId || !fileKey) {
             return [false, "Missing required parameters"];
         }
 
         const response = await api.get("api", `database/${databaseId}/assets/${assetId}/fileInfo`, {
-            queryStringParameters: { filePath: fileKey },
+            queryStringParameters: {
+                filePath: fileKey,
+                includeVersions: includeVersions ? "true" : "false",
+            },
         });
 
         // Handle different response formats

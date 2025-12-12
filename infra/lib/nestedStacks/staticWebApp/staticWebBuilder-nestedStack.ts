@@ -9,6 +9,7 @@ import { NestedStack } from "aws-cdk-lib";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../config/config";
 import { samlSettings } from "../../../config/saml-config";
+import * as ssm from "aws-cdk-lib/aws-ssm";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { CloudFrontS3WebSiteConstruct } from "./constructs/cloudfront-s3-website-construct";
 import { GatewayAlbDeployConstruct } from "./constructs/gateway-albDeploy-construct";
@@ -238,6 +239,17 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             }
 
             this.endpointURL = website.endPointURL;
+
+            // Store Web URL in SSM Parameter Store
+            const webUrlSSMParameter = new ssm.StringParameter(this, "WebUrlDeploymentParamSSM", {
+                parameterName: props.config.webUrlDeploymentSSMParam,
+                stringValue: website.endPointURL,
+                description: "Web URL for Cloudfront Deployment of VAMS",
+                tier: ssm.ParameterTier.STANDARD,
+            });
+
+            // Add dependency to ensure website is created
+            webUrlSSMParameter.node.addDependency(website);
         }
 
         //ALB deploy
@@ -321,6 +333,17 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 );
                 customCognitoWebClientConfig.node.addDependency(website);
             }
+
+            // Store Web URL in SSM Parameter Store
+            const webUrlSSMParameter = new ssm.StringParameter(this, "WebUrlDeploymentParamSSM", {
+                parameterName: props.config.webUrlDeploymentSSMParam,
+                stringValue: website.endPointURL,
+                description: "Web URL for Cloudfront Deployment of VAMS",
+                tier: ssm.ParameterTier.STANDARD,
+            });
+
+            // Add dependency to ensure website is created
+            webUrlSSMParameter.node.addDependency(website);
 
             this.endpointURL = website.endPointURL;
             this.albEndpoint = website.albEndpoint;

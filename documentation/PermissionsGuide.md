@@ -153,6 +153,7 @@ Below are the web routes possible as part of a `GET` method type. Requests for t
 -   `/databases/:databaseId/assets`
 -   `/databases/:databaseId/assets/:assetId`
 -   `/databases/:databaseId/assets/:assetId/file`
+-   `/databases/:databaseId/assets/:assetId/file/*`
 -   `/databases/:databaseId/assets/:assetId/uploads`
 -   `/databases/:databaseId/assets/:assetId/download`
 -   `/databases/:databaseId/pipelines`

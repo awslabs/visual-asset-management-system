@@ -104,7 +104,7 @@ def format_version_list_output(versions_data: Dict[str, Any], json_output: bool 
         output_lines.append("-" * 80)
     
     # Add pagination info if available
-    if versions_data.get('nextToken'):
+    if versions_data.get('NextToken'):
         output_lines.append("More versions available. Use --starting-token to see additional results.")
     
     return '\n'.join(output_lines)

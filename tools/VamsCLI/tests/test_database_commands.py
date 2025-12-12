@@ -46,9 +46,10 @@ class TestDatabaseListCommand:
         assert result.exit_code == 0
         assert 'List all databases' in result.output
         assert '--show-deleted' in result.output
-        assert '--max-items' in result.output
         assert '--page-size' in result.output
+        assert '--max-items' in result.output
         assert '--starting-token' in result.output
+        assert '--auto-paginate' in result.output
         assert '--json-output' in result.output
     
     def test_list_success(self, cli_runner, generic_command_mocks):
@@ -84,35 +85,165 @@ class TestDatabaseListCommand:
             assert 'test-db-2' in result.output
             assert 'Test Database 1' in result.output
             assert 'Test Database 2' in result.output
-            assert 'More results available' in result.output
+            assert 'Next token: next-page-token' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
             
             # Verify API call
             mocks['api_client'].list_databases.assert_called_once_with(show_deleted=False, params={})
     
-    def test_list_with_pagination(self, cli_runner, generic_command_mocks):
-        """Test database listing with pagination parameters."""
+    def test_list_with_page_size(self, cli_runner, generic_command_mocks):
+        """Test database listing with page size."""
         with generic_command_mocks('database') as mocks:
             mocks['api_client'].list_databases.return_value = {
-                'Items': [],
+                'Items': [{'databaseId': 'db1', 'description': 'Database 1'}],
+                'NextToken': 'next-token-123'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 database(s):' in result.output
+            assert 'Next token: next-token-123' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+            
+            # Verify API call includes pageSize but NOT maxItems
+            call_args = mocks['api_client'].list_databases.call_args
+            assert call_args[1]['params']['pageSize'] == 50
+            assert 'maxItems' not in call_args[1]['params']
+    
+    def test_list_with_starting_token(self, cli_runner, generic_command_mocks):
+        """Test database listing with starting token."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_databases.return_value = {
+                'Items': [{'databaseId': 'db2', 'description': 'Database 2'}]
+            }
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--starting-token', 'token-123',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 database(s):' in result.output
+            
+            # Verify API call includes startingToken and pageSize but NOT maxItems
+            call_args = mocks['api_client'].list_databases.call_args
+            assert call_args[1]['params']['startingToken'] == 'token-123'
+            assert call_args[1]['params']['pageSize'] == 50
+            assert 'maxItems' not in call_args[1]['params']
+    
+    def test_list_auto_paginate(self, cli_runner, generic_command_mocks):
+        """Test database listing with auto-pagination."""
+        with generic_command_mocks('database') as mocks:
+            # Mock multiple pages
+            mocks['api_client'].list_databases.side_effect = [
+                {
+                    'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(100, 150)],
+                    'NextToken': None
+                }
+            ]
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--auto-paginate'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            assert 'Found 150 database(s):' in result.output
+            
+            # Verify API was called twice
+            assert mocks['api_client'].list_databases.call_count == 2
+    
+    def test_list_auto_paginate_with_max_items(self, cli_runner, generic_command_mocks):
+        """Test database listing with auto-pagination and custom max-items."""
+        with generic_command_mocks('database') as mocks:
+            # Mock two pages
+            mocks['api_client'].list_databases.side_effect = [
+                {
+                    'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(100, 150)],
+                    'NextToken': 'token2'
+                }
+            ]
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--auto-paginate',
+                '--max-items', '150'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            
+            # Verify API was called twice and maxItems was NOT passed
+            assert mocks['api_client'].list_databases.call_count == 2
+            for call in mocks['api_client'].list_databases.call_args_list:
+                assert 'maxItems' not in call[1]['params']
+    
+    def test_list_auto_paginate_with_page_size(self, cli_runner, generic_command_mocks):
+        """Test database listing with auto-pagination and custom page size."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_databases.return_value = {
+                'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(50)],
                 'NextToken': None
             }
             
             result = cli_runner.invoke(database, [
-                'list', 
-                '--max-items', '50',
-                '--page-size', '25',
-                '--starting-token', 'test-token'
+                'list',
+                '--auto-paginate',
+                '--page-size', '50'
             ])
             
             assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 50 items in 1 page(s)' in result.output
             
-            # Verify API call with pagination parameters
-            expected_params = {
-                'maxItems': 50,
-                'pageSize': 25,
-                'startingToken': 'test-token'
+            # Verify API call includes pageSize but NOT maxItems
+            call_args = mocks['api_client'].list_databases.call_args
+            assert call_args[1]['params']['pageSize'] == 50
+            assert 'maxItems' not in call_args[1]['params']
+    
+    def test_list_auto_paginate_conflict(self, cli_runner, generic_command_mocks):
+        """Test that auto-paginate conflicts with starting-token."""
+        with generic_command_mocks('database') as mocks:
+            result = cli_runner.invoke(database, [
+                'list',
+                '--auto-paginate',
+                '--starting-token', 'token123'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+    
+    def test_list_max_items_without_auto_paginate_warning(self, cli_runner, generic_command_mocks):
+        """Test that max-items without auto-paginate shows warning."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_databases.return_value = {
+                'Items': [{'databaseId': 'db1', 'description': 'Database 1'}]
             }
-            mocks['api_client'].list_databases.assert_called_once_with(show_deleted=False, params=expected_params)
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--max-items', '100'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Warning: --max-items only applies with --auto-paginate' in result.output
+            
+            # Verify maxItems was NOT passed to API
+            call_args = mocks['api_client'].list_databases.call_args
+            assert 'maxItems' not in call_args[1]['params']
     
     def test_list_json_output(self, cli_runner, generic_command_mocks):
         """Test database listing with JSON output."""
@@ -486,9 +617,10 @@ class TestDatabaseListBucketsCommand:
         result = cli_runner.invoke(database, ['list-buckets', '--help'])
         assert result.exit_code == 0
         assert 'List available S3 bucket configurations' in result.output
-        assert '--max-items' in result.output
         assert '--page-size' in result.output
+        assert '--max-items' in result.output
         assert '--starting-token' in result.output
+        assert '--auto-paginate' in result.output
         assert '--json-output' in result.output
     
     def test_list_buckets_success(self, cli_runner, generic_command_mocks):
@@ -532,6 +664,116 @@ class TestDatabaseListBucketsCommand:
             
             assert result.exit_code == 0
             assert 'No bucket configurations found.' in result.output
+    
+    def test_list_buckets_with_page_size(self, cli_runner, generic_command_mocks):
+        """Test bucket listing with page size."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [{'bucketId': 'bucket1', 'bucketName': 'Bucket 1'}],
+                'NextToken': 'next-token-123'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 bucket configuration(s):' in result.output
+            assert 'Next token: next-token-123' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+            
+            # Verify API call includes pageSize but NOT maxItems
+            call_args = mocks['api_client'].list_buckets.call_args
+            assert call_args[0][0]['pageSize'] == 50
+            assert 'maxItems' not in call_args[0][0]
+    
+    def test_list_buckets_auto_paginate(self, cli_runner, generic_command_mocks):
+        """Test bucket listing with auto-pagination."""
+        with generic_command_mocks('database') as mocks:
+            # Mock multiple pages
+            mocks['api_client'].list_buckets.side_effect = [
+                {
+                    'Items': [{'bucketId': f'bucket{i}', 'bucketName': f'Bucket {i}'} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'Items': [{'bucketId': f'bucket{i}', 'bucketName': f'Bucket {i}'} for i in range(100, 150)],
+                    'NextToken': None
+                }
+            ]
+            
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--auto-paginate'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            assert 'Found 150 bucket configuration(s):' in result.output
+            
+            # Verify API was called twice
+            assert mocks['api_client'].list_buckets.call_count == 2
+    
+    def test_list_buckets_auto_paginate_with_max_items(self, cli_runner, generic_command_mocks):
+        """Test bucket listing with auto-pagination and custom max-items."""
+        with generic_command_mocks('database') as mocks:
+            # Mock two pages
+            mocks['api_client'].list_buckets.side_effect = [
+                {
+                    'Items': [{'bucketId': f'bucket{i}', 'bucketName': f'Bucket {i}'} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'Items': [{'bucketId': f'bucket{i}', 'bucketName': f'Bucket {i}'} for i in range(100, 150)],
+                    'NextToken': 'token2'
+                }
+            ]
+            
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--auto-paginate',
+                '--max-items', '150'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            
+            # Verify API was called twice and maxItems was NOT passed
+            assert mocks['api_client'].list_buckets.call_count == 2
+            for call in mocks['api_client'].list_buckets.call_args_list:
+                assert 'maxItems' not in call[0][0]
+    
+    def test_list_buckets_auto_paginate_conflict(self, cli_runner, generic_command_mocks):
+        """Test that auto-paginate conflicts with starting-token."""
+        with generic_command_mocks('database') as mocks:
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--auto-paginate',
+                '--starting-token', 'token123'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+    
+    def test_list_buckets_max_items_without_auto_paginate_warning(self, cli_runner, generic_command_mocks):
+        """Test that max-items without auto-paginate shows warning."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [{'bucketId': 'bucket1', 'bucketName': 'Bucket 1'}]
+            }
+            
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--max-items', '100'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Warning: --max-items only applies with --auto-paginate' in result.output
+            
+            # Verify maxItems was NOT passed to API
+            call_args = mocks['api_client'].list_buckets.call_args
+            assert 'maxItems' not in call_args[0][0]
 
 
 class TestDatabaseCommandsIntegration:

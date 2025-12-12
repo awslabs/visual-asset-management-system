@@ -101,6 +101,7 @@ export const FilePreviewThumbnailCell: React.FC<FilePreviewThumbnailCellProps> =
                         databaseId,
                         assetId,
                         fileKey,
+                        includeVersions: false,
                     });
 
                     if (!success || !fileInfo) {

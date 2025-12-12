@@ -15,8 +15,8 @@ logger = safeLogger(service_name="TagModels")
 
 class GetTagsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing tags"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=3000, ge=1)
     startingToken: Optional[str] = None
 
 class CreateTagRequestModel(BaseModel, extra='ignore'):
@@ -106,8 +106,8 @@ class TagOperationResponseModel(BaseModel, extra='ignore'):
 
 class GetTagTypesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing tag types"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=3000, ge=1)
     startingToken: Optional[str] = None
 
 class CreateTagTypeRequestModel(BaseModel, extra='ignore'):

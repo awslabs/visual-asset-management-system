@@ -1027,7 +1027,7 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
     # Return response
     return AssetVersionsListResponseModel(
         versions=paginated_versions,
-        nextToken=next_token
+        NextToken=next_token
     )
 
 def get_asset_version_details(databaseId: str, assetId: str, request_model: GetAssetVersionRequestModel, 

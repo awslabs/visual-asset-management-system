@@ -130,6 +130,10 @@ export function getConfig(app: cdk.App): Config {
     config.locationServiceApiKeyArnSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "location", "apiKeyArn"].join("/");
 
+    //Website URL Param Variables
+    config.webUrlDeploymentSSMParam =
+        "/" + [config.name + "-" + config.app.baseStackName, "web", "deployedUrl"].join("/");
+
     //Fill in some basic values to false if blank
     //Note: usually added for backwards compatabibility of an old config file that hasn't had the newest elements added
     if (config.app.openSearch.useServerless.enabled == undefined) {
@@ -796,4 +800,5 @@ export interface Config extends ConfigPublic {
     openSearchFileIndexNameSSMParam: string;
     openSearchDomainEndpointSSMParam: string;
     locationServiceApiKeyArnSSMParam: string; // Location Service API key SSM parameter
+    webUrlDeploymentSSMParam: string; // Web URL Deployment SSM parameter
 }

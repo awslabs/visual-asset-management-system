@@ -128,6 +128,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     databaseId,
                     assetId,
                     fileKey: selectedItem.keyPrefix,
+                    includeVersions: false,
                 });
 
                 if (success && fileInfo) {

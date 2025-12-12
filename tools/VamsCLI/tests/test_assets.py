@@ -387,6 +387,10 @@ class TestAssetListCommand:
         assert 'List assets in a database or all assets' in result.output
         assert '--database-id' in result.output
         assert '--show-archived' in result.output
+        assert '--page-size' in result.output
+        assert '--max-items' in result.output
+        assert '--starting-token' in result.output
+        assert '--auto-paginate' in result.output
         assert '--json-output' in result.output
     
     def test_list_success(self, cli_runner, assets_command_mocks):
@@ -465,6 +469,175 @@ class TestAssetListCommand:
             # Should output raw JSON
             output_json = json.loads(result.output.strip())
             assert output_json == api_response
+    
+    def test_list_with_page_size(self, cli_runner, assets_command_mocks):
+        """Test asset listing with page size."""
+        with assets_command_mocks as mocks:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                'Items': [{'assetId': 'asset1', 'assetName': 'Asset 1'}],
+                'NextToken': 'next-token-123'
+            }
+            mocks['api_client'].get.return_value = mock_response
+            
+            result = cli_runner.invoke(cli, [
+                'assets', 'list',
+                '-d', 'test-database',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 asset(s):' in result.output
+            assert 'Next token: next-token-123' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+            
+            # Verify API call includes pageSize
+            call_args = mocks['api_client'].get.call_args
+            assert call_args[1]['params']['pageSize'] == 50
+    
+    def test_list_with_starting_token(self, cli_runner, assets_command_mocks):
+        """Test asset listing with starting token."""
+        with assets_command_mocks as mocks:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                'Items': [{'assetId': 'asset2', 'assetName': 'Asset 2'}]
+            }
+            mocks['api_client'].get.return_value = mock_response
+            
+            result = cli_runner.invoke(cli, [
+                'assets', 'list',
+                '-d', 'test-database',
+                '--starting-token', 'token-123',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 asset(s):' in result.output
+            
+            # Verify API call includes startingToken and pageSize
+            call_args = mocks['api_client'].get.call_args
+            assert call_args[1]['params']['startingToken'] == 'token-123'
+            assert call_args[1]['params']['pageSize'] == 50
+    
+    def test_list_auto_paginate(self, cli_runner, assets_command_mocks):
+        """Test asset listing with auto-pagination."""
+        with assets_command_mocks as mocks:
+            # Mock multiple pages
+            mock_response1 = Mock()
+            mock_response1.json.return_value = {
+                'Items': [{'assetId': f'asset{i}', 'assetName': f'Asset {i}'} for i in range(100)],
+                'NextToken': 'token1'
+            }
+            mock_response2 = Mock()
+            mock_response2.json.return_value = {
+                'Items': [{'assetId': f'asset{i}', 'assetName': f'Asset {i}'} for i in range(100, 150)],
+                'NextToken': None
+            }
+            mocks['api_client'].get.side_effect = [mock_response1, mock_response2]
+            
+            result = cli_runner.invoke(cli, [
+                'assets', 'list',
+                '-d', 'test-database',
+                '--auto-paginate'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            assert 'Found 150 asset(s):' in result.output
+            
+            # Verify API was called twice
+            assert mocks['api_client'].get.call_count == 2
+    
+    def test_list_auto_paginate_with_max_items(self, cli_runner, assets_command_mocks):
+        """Test asset listing with auto-pagination and custom max-items."""
+        with assets_command_mocks as mocks:
+            # Mock two pages
+            mock_response1 = Mock()
+            mock_response1.json.return_value = {
+                'Items': [{'assetId': f'asset{i}', 'assetName': f'Asset {i}'} for i in range(100)],
+                'NextToken': 'token1'
+            }
+            mock_response2 = Mock()
+            mock_response2.json.return_value = {
+                'Items': [{'assetId': f'asset{i}', 'assetName': f'Asset {i}'} for i in range(100, 150)],
+                'NextToken': 'token2'
+            }
+            mocks['api_client'].get.side_effect = [mock_response1, mock_response2]
+            
+            result = cli_runner.invoke(cli, [
+                'assets', 'list',
+                '-d', 'test-database',
+                '--auto-paginate',
+                '--max-items', '150'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            
+            # Verify API was called twice and maxItems was NOT passed
+            assert mocks['api_client'].get.call_count == 2
+            for call in mocks['api_client'].get.call_args_list:
+                assert 'maxItems' not in call[1]['params']
+    
+    def test_list_auto_paginate_with_page_size(self, cli_runner, assets_command_mocks):
+        """Test asset listing with auto-pagination and custom page size."""
+        with assets_command_mocks as mocks:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                'Items': [{'assetId': f'asset{i}', 'assetName': f'Asset {i}'} for i in range(50)],
+                'NextToken': None
+            }
+            mocks['api_client'].get.return_value = mock_response
+            
+            result = cli_runner.invoke(cli, [
+                'assets', 'list',
+                '-d', 'test-database',
+                '--auto-paginate',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 50 items in 1 page(s)' in result.output
+            
+            # Verify API call includes pageSize but NOT maxItems
+            call_args = mocks['api_client'].get.call_args
+            assert call_args[1]['params']['pageSize'] == 50
+            assert 'maxItems' not in call_args[1]['params']
+    
+    def test_list_auto_paginate_conflict(self, cli_runner, assets_command_mocks):
+        """Test that auto-paginate conflicts with starting-token."""
+        with assets_command_mocks as mocks:
+            result = cli_runner.invoke(cli, [
+                'assets', 'list',
+                '-d', 'test-database',
+                '--auto-paginate',
+                '--starting-token', 'token123'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+    
+    def test_list_max_items_without_auto_paginate_warning(self, cli_runner, assets_command_mocks):
+        """Test that max-items without auto-paginate shows warning."""
+        with assets_command_mocks as mocks:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                'Items': [{'assetId': 'asset1', 'assetName': 'Asset 1'}]
+            }
+            mocks['api_client'].get.return_value = mock_response
+            
+            result = cli_runner.invoke(cli, [
+                'assets', 'list',
+                '-d', 'test-database',
+                '--max-items', '100'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Warning: --max-items only applies with --auto-paginate' in result.output
+            
+            # Verify maxItems was NOT passed to API
+            call_args = mocks['api_client'].get.call_args
+            assert 'maxItems' not in call_args[1]['params']
 
 
 class TestAssetArchiveCommand:

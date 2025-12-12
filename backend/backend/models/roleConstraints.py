@@ -33,8 +33,8 @@ class UserPermissionModel(BaseModel, extra='ignore'):
 
 class GetConstraintsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing constraints"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=10000, ge=1)
     startingToken: Optional[str] = None
 
 
@@ -229,8 +229,8 @@ class ConstraintOperationResponseModel(BaseModel, extra='ignore'):
 
 class GetRolesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing roles"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=3000, ge=1)
     startingToken: Optional[str] = None
 
 
@@ -433,8 +433,8 @@ class RoleOperationResponseModel(BaseModel, extra='ignore'):
 
 class GetUserRolesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing user roles"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=3000, ge=1)
     startingToken: Optional[str] = None
 
 

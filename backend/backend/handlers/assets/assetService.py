@@ -4,6 +4,7 @@
 import os
 import boto3
 import json
+import base64
 import uuid
 import time
 from datetime import datetime, timedelta
@@ -600,8 +601,6 @@ def get_assets(databaseId, query_params, showArchived=False):
     Returns:
         Dictionary with Items and optional NextToken
     """
-    paginator = dynamodb.meta.client.get_paginator('query')
-    
     # If showArchived is True, we need to query both active and archived assets
     db_ids = [databaseId]
     if showArchived:
@@ -613,35 +612,51 @@ def get_assets(databaseId, query_params, showArchived=False):
     # Query for each database ID (active and possibly archived)
     for db_id in db_ids:
         try:
-            page_iterator = paginator.paginate(
-                TableName=asset_database,
-                KeyConditionExpression=Key('databaseId').eq(db_id),
-                ScanIndexForward=False,
-                PaginationConfig={
-                    'MaxItems': int(query_params['maxItems']),
-                    'PageSize': int(query_params['pageSize']),
-                    'StartingToken': query_params.get('startingToken')
-                }
-            ).build_full_result()
+            # Build query parameters
+            query_params_dict = {
+                'TableName': asset_database,
+                'KeyConditionExpression': 'databaseId = :dbId',
+                'ExpressionAttributeValues': {
+                    ':dbId': {'S': db_id}
+                },
+                'ScanIndexForward': False,
+                'Limit': int(query_params['pageSize'])
+            }
+            
+            # Add ExclusiveStartKey if startingToken provided
+            if query_params.get('startingToken'):
+                try:
+                    decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+                    query_params_dict['ExclusiveStartKey'] = json.loads(decoded_token)
+                except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+                    logger.exception(f"Invalid startingToken format: {e}")
+                    raise VAMSGeneralErrorResponse("Invalid pagination token")
+            
+            # Single query call with pagination
+            response = dynamodb_client.query(**query_params_dict)
             
             # Process items and check permissions
-            for item in page_iterator.get('Items', []):
+            for item in response.get('Items', []):
+                # Deserialize the item
+                deserialized_item = {k: TypeDeserializer().deserialize(v) for k, v in item.items()}
+                
                 # Add status field for archived assets if not present
-                if db_id.endswith('#deleted') and 'status' not in item:
-                    item['status'] = 'archived'
+                if db_id.endswith('#deleted') and 'status' not in deserialized_item:
+                    deserialized_item['status'] = 'archived'
                 
                 # Add object type for Casbin enforcement
-                item.update({"object__type": "asset"})
+                deserialized_item.update({"object__type": "asset"})
                 
                 # Check if user has permission to GET the asset
                 if len(claims_and_roles["tokens"]) > 0:
                     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if casbin_enforcer.enforce(item, "GET"):
-                        all_items.append(item)
+                    if casbin_enforcer.enforce(deserialized_item, "GET"):
+                        all_items.append(deserialized_item)
             
-            # Keep track of the next token from the last query
-            if 'NextToken' in page_iterator:
-                next_token = page_iterator['NextToken']
+            # Keep track of the next token from the last query (base64 encoded)
+            if 'LastEvaluatedKey' in response:
+                json_str = json.dumps(response['LastEvaluatedKey'])
+                next_token = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
                 
         except Exception as e:
             logger.exception(f"Error querying assets for database {db_id}: {e}")
@@ -665,7 +680,6 @@ def get_all_assets(query_params, showArchived=False):
         Dictionary with Items and optional NextToken
     """
     deserializer = TypeDeserializer()
-    paginator = dynamodb_client.get_paginator('scan')
     
     # Set up the filter based on showArchived
     operator = "NOT_CONTAINS"
@@ -680,21 +694,29 @@ def get_all_assets(query_params, showArchived=False):
     }
     
     try:
-        page_iterator = paginator.paginate(
-            TableName=asset_database,
-            ScanFilter=filter_expression,
-            PaginationConfig={
-                'MaxItems': int(query_params['maxItems']),
-                'PageSize': int(query_params['pageSize']),
-                'StartingToken': query_params.get('startingToken')
-            }
-        ).build_full_result()
+        # Build scan parameters
+        scan_params = {
+            'TableName': asset_database,
+            'ScanFilter': filter_expression,
+            'Limit': int(query_params['pageSize'])
+        }
+        
+        # Add ExclusiveStartKey if startingToken provided
+        if query_params.get('startingToken'):
+            try:
+                decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+                scan_params['ExclusiveStartKey'] = json.loads(decoded_token)
+            except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+                logger.exception(f"Invalid startingToken format: {e}")
+                raise VAMSGeneralErrorResponse("Invalid pagination token")
+        
+        # Single scan call with pagination
+        response = dynamodb_client.scan(**scan_params)
         
         # Process results
-        result = {}
         items = []
         
-        for item in page_iterator.get('Items', []):
+        for item in response.get('Items', []):
             # Deserialize the DynamoDB item
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
             
@@ -711,10 +733,13 @@ def get_all_assets(query_params, showArchived=False):
                 if casbin_enforcer.enforce(deserialized_document, "GET"):
                     items.append(deserialized_document)
         
-        result['Items'] = items
+        # Build response with nextToken
+        result = {'Items': items}
         
-        if 'NextToken' in page_iterator:
-            result['NextToken'] = page_iterator['NextToken']
+        # Return LastEvaluatedKey as nextToken if present (base64 encoded)
+        if 'LastEvaluatedKey' in response:
+            json_str = json.dumps(response['LastEvaluatedKey'])
+            result['NextToken'] = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
             
         return result
         

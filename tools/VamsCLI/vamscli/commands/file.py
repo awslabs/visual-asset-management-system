@@ -655,7 +655,7 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                     output_status(f"Fetched {total_fetched} files (page {page_count})...", False)
                 
                 # Check if we should continue
-                next_token = result.get('nextToken')
+                next_token = result.get('NextToken')
                 if not next_token or total_fetched >= max_total_items:
                     break
             
@@ -720,8 +720,8 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 lines.append(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{archived}")
             
             # Show nextToken for manual pagination
-            if not data.get('autoPaginated') and data.get('nextToken'):
-                lines.append(f"\nNext token: {data['nextToken']}")
+            if not data.get('autoPaginated') and data.get('NextToken'):
+                lines.append(f"\nNext token: {data['NextToken']}")
                 lines.append("Use --starting-token to get the next page")
             
             return '\n'.join(lines)

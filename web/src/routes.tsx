@@ -66,6 +66,11 @@ export const routeTable: RouteOption[] = [
         active: "#/assets/",
     },
     {
+        path: "/databases/:databaseId/assets/:assetId/file/*",
+        Page: ViewFile,
+        active: "#/assets/",
+    },
+    {
         path: "/databases/:databaseId/assets/:assetId/file",
         Page: ViewFile,
         active: "#/assets/",

@@ -45,7 +45,7 @@ class SimpleSearchRequestModel(BaseModel, extra='ignore'):
     
     # Pagination
     from_: Optional[int] = Field(None, alias="from", ge=0, le=10000, description="Starting offset")
-    size: Optional[int] = Field(None, ge=1, le=1000, description="Number of results to return")
+    size: Optional[int] = Field(None, ge=1, le=2000, description="Number of results to return")
     
     @root_validator
     def validate_simple_search_request(cls, values):

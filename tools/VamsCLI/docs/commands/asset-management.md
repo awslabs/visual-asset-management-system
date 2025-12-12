@@ -106,12 +106,16 @@ List assets in a database or all assets.
 
 -   `-d, --database-id`: Database ID to list assets from (optional for all assets)
 -   `--show-archived`: Include archived assets
+-   `--page-size`: Number of items per page
+-   `--max-items`: Maximum total items to fetch (only with --auto-paginate, default: 10000)
+-   `--starting-token`: Token for pagination (manual pagination)
+-   `--auto-paginate`: Automatically fetch all items
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# List assets in specific database
+# Basic listing (uses API defaults)
 vamscli assets list -d my-database
 
 # List all assets across databases
@@ -120,9 +124,37 @@ vamscli assets list
 # Include archived assets
 vamscli assets list -d my-database --show-archived
 
+# Auto-pagination to fetch all items (default: up to 10,000)
+vamscli assets list -d my-database --auto-paginate
+
+# Auto-pagination with custom limit
+vamscli assets list -d my-database --auto-paginate --max-items 5000
+
+# Auto-pagination with custom page size
+vamscli assets list -d my-database --auto-paginate --page-size 500
+
+# Manual pagination with page size
+vamscli assets list -d my-database --page-size 200
+vamscli assets list -d my-database --starting-token "token123" --page-size 200
+
 # JSON output for automation
 vamscli assets list --json-output
 ```
+
+**Pagination Features:**
+
+-   **Auto-Pagination**: Use `--auto-paginate` to automatically fetch all items up to the limit
+-   **Manual Pagination**: Use `--page-size` and `--starting-token` for manual page-by-page control
+-   **CLI-Side Limit**: `--max-items` is a CLI-side limit (not passed to API) that controls total items fetched
+-   **API-Side Control**: `--page-size` is passed to the API to control items per request
+-   **Default Limit**: Auto-pagination defaults to 10,000 items maximum
+-   **Progress Display**: Shows progress during auto-pagination in CLI mode
+
+**Pagination Restrictions:**
+
+-   Cannot use `--auto-paginate` with `--starting-token` (choose one pagination mode)
+-   `--max-items` only applies with `--auto-paginate` (warning shown if used without it)
+-   When using manual pagination, use the `NextToken` from the response as `--starting-token` for the next page
 
 ### `vamscli assets archive`
 

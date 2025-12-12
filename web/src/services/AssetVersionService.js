@@ -60,7 +60,7 @@ export const fetchAssetVersions = async (
                     true,
                     {
                         versions: response.message,
-                        nextToken: response.nextToken || null,
+                        nextToken: response.NextToken || null,
                     },
                 ];
             } else if (typeof response.message === "object" && response.message.versions) {
@@ -75,7 +75,7 @@ export const fetchAssetVersions = async (
                     true,
                     {
                         versions: [response.message],
-                        nextToken: response.nextToken || null,
+                        nextToken: response.NextToken || null,
                     },
                 ];
             } else {

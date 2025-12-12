@@ -3,6 +3,7 @@
 
 import json
 import os
+import base64
 import boto3
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -135,13 +136,13 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
     try:
         # Parse query parameters
         request_model = GetDatabasesRequestModel(
-            maxItems=int(query_params.get('maxItems', 1000)),
-            pageSize=int(query_params.get('pageSize', 1000)),
+            maxItems=int(query_params.get('maxItems', 10000)),
+            pageSize=int(query_params.get('pageSize', 3000)),
             startingToken=query_params.get('startingToken'),
             showDeleted=show_deleted
         )
         
-        paginator = dbClient.get_paginator('scan')
+        # Build scan parameters
         operator = "NOT_CONTAINS"
         if show_deleted:
             operator = "CONTAINS"
@@ -153,18 +154,26 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
             }
         }
         
-        page_iterator = paginator.paginate(
-            TableName=db_database,
-            ScanFilter=db_filter,
-            PaginationConfig={
-                'MaxItems': request_model.maxItems,
-                'PageSize': request_model.pageSize,
-                'StartingToken': request_model.startingToken
-            }
-        ).build_full_result()
+        scan_params = {
+            'TableName': db_database,
+            'ScanFilter': db_filter,
+            'Limit': request_model.pageSize
+        }
+        
+        # Add ExclusiveStartKey if startingToken provided
+        if request_model.startingToken:
+            try:
+                decoded_token = base64.b64decode(request_model.startingToken).decode('utf-8')
+                scan_params['ExclusiveStartKey'] = json.loads(decoded_token)
+            except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+                logger.exception(f"Invalid startingToken format: {e}")
+                raise VAMSGeneralErrorResponse("Invalid pagination token")
+        
+        # Single scan call with pagination
+        response = dbClient.scan(**scan_params)
 
         items = []
-        for item in page_iterator.get('Items', []):
+        for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
 
             # Add Casbin Enforcer to check if the current user has permissions to GET the database
@@ -201,12 +210,15 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
                     )
                     items.append(database_model)
 
-        response = GetDatabasesResponseModel(
-            Items=items,
-            NextToken=page_iterator.get('NextToken')
-        )
+        # Build response with nextToken
+        result = GetDatabasesResponseModel(Items=items)
         
-        return response
+        # Return LastEvaluatedKey as nextToken if present (base64 encoded)
+        if 'LastEvaluatedKey' in response:
+            json_str = json.dumps(response['LastEvaluatedKey'])
+            result.NextToken = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+        
+        return result
     except Exception as e:
         logger.exception(f"Error getting databases: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting databases.")
@@ -383,23 +395,31 @@ def get_buckets(query_params, claims_and_roles=None):
     try:
         # Parse query parameters
         request_model = GetBucketsRequestModel(
-            maxItems=int(query_params.get('maxItems', 1000)),
-            pageSize=int(query_params.get('pageSize', 1000)),
+            maxItems=int(query_params.get('maxItems', 10000)),
+            pageSize=int(query_params.get('pageSize', 3000)),
             startingToken=query_params.get('startingToken')
         )
         
-        paginator = dbClient.get_paginator('scan')
-        page_iterator = paginator.paginate(
-            TableName=s3_asset_buckets_table,
-            PaginationConfig={
-                'MaxItems': request_model.maxItems,
-                'PageSize': request_model.pageSize,
-                'StartingToken': request_model.startingToken
-            }
-        ).build_full_result()
+        # Build scan parameters
+        scan_params = {
+            'TableName': s3_asset_buckets_table,
+            'Limit': request_model.pageSize
+        }
+        
+        # Add ExclusiveStartKey if startingToken provided
+        if request_model.startingToken:
+            try:
+                decoded_token = base64.b64decode(request_model.startingToken).decode('utf-8')
+                scan_params['ExclusiveStartKey'] = json.loads(decoded_token)
+            except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+                logger.exception(f"Invalid startingToken format: {e}")
+                raise VAMSGeneralErrorResponse("Invalid pagination token")
+        
+        # Single scan call with pagination
+        response = dbClient.scan(**scan_params)
 
         items = []
-        for item in page_iterator.get('Items', []):
+        for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
             
             # # Add object type for authorization
@@ -418,12 +438,15 @@ def get_buckets(query_params, claims_and_roles=None):
             )
             items.append(bucket_model)
 
-        response = GetBucketsResponseModel(
-            Items=items,
-            NextToken=page_iterator.get('NextToken')
-        )
+        # Build response with nextToken
+        result = GetBucketsResponseModel(Items=items)
         
-        return response
+        # Return LastEvaluatedKey as nextToken if present (base64 encoded)
+        if 'LastEvaluatedKey' in response:
+            json_str = json.dumps(response['LastEvaluatedKey'])
+            result.NextToken = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+        
+        return result
     except Exception as e:
         logger.exception(f"Error getting buckets: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting buckets.")

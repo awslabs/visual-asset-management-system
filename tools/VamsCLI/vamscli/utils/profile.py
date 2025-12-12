@@ -248,6 +248,23 @@ class ProfileManager:
         
         return self.credentials_file.exists()
     
+    def get_auth_type(self) -> str:
+        """
+        Determine authentication type based on cognitoUserPoolId.
+        Returns 'Cognito' if cognitoUserPoolId exists, otherwise 'External'.
+        """
+        try:
+            config = self.load_config()
+            amplify_config = config.get('amplify_config', {})
+            cognito_user_pool_id = amplify_config.get('cognitoUserPoolId')
+            
+            # Check if cognitoUserPoolId is present and not empty/null/undefined
+            if cognito_user_pool_id and cognito_user_pool_id not in ['undefined', 'null', '']:
+                return 'Cognito'
+            return 'External'
+        except Exception:
+            return 'Unknown'
+    
     def get_profile_info(self) -> Dict[str, Any]:
         """Get information about this profile."""
         info = {
@@ -265,6 +282,12 @@ class ProfileManager:
                 config = self.load_config()
                 info['api_gateway_url'] = config.get('api_gateway_url', 'Unknown')
                 info['cli_version'] = config.get('cli_version', 'Unknown')
+                
+                # Add full amplify_config (backward compatible)
+                info['amplify_config'] = config.get('amplify_config', {})
+                
+                # Add authType (backward compatible)
+                info['auth_type'] = self.get_auth_type()
             except Exception:
                 info['api_gateway_url'] = 'Error loading config'
                 info['cli_version'] = 'Error loading config'
@@ -284,6 +307,12 @@ class ProfileManager:
                     else:
                         info['token_expires_at'] = None
                         info['token_expired'] = False
+                    
+                    # Add webDeployedUrl (backward compatible - returns None if not present)
+                    info['web_deployed_url'] = auth_profile.get('web_deployed_url')
+                    
+                    # Add locationServiceApiUrl (backward compatible - returns None if not present)
+                    info['location_service_api_url'] = auth_profile.get('location_service_api_url')
             except Exception:
                 info['user_id'] = 'Error loading auth'
                 info['token_type'] = 'Error loading auth'
@@ -398,10 +427,13 @@ class ProfileManager:
     
     def save_feature_switches(self, feature_switches_data: Dict[str, Any]):
         """
-        Save feature switches to authentication profile.
+        Save feature switches, webDeployedUrl, and locationServiceApiUrl from secure-config API.
         
         Args:
-            feature_switches_data: Feature switches data from secure-config API
+            feature_switches_data: Secure config data from API containing:
+                - featuresEnabled: Comma-separated feature flags
+                - webDeployedUrl: Web application deployment URL
+                - locationServiceApiUrl: Location service API URL
         """
         auth_profile = self.load_auth_profile()
         if not auth_profile:
@@ -417,6 +449,12 @@ class ProfileManager:
             'enabled': enabled_features,
             'fetched_at': datetime.now(timezone.utc).isoformat()
         }
+        
+        # Store webDeployedUrl (backward compatible - uses .get())
+        auth_profile['web_deployed_url'] = feature_switches_data.get('webDeployedUrl')
+        
+        # Store locationServiceApiUrl (backward compatible - uses .get())
+        auth_profile['location_service_api_url'] = feature_switches_data.get('locationServiceApiUrl')
         
         # Save updated auth profile
         self.save_auth_profile(auth_profile)

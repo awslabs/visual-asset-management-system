@@ -1131,7 +1131,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         
         # Return the NextContinuationToken directly from S3
         if 'NextContinuationToken' in page:
-            result['nextToken'] = page['NextContinuationToken']
+            result['NextToken'] = page['NextContinuationToken']
         
         # If include_archived is True, also get objects with delete markers
         if include_archived:
@@ -2625,7 +2625,7 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
     
     return ListAssetFilesResponseModel(
         items=file_items,
-        nextToken=result.get('nextToken')
+        NextToken=result.get('NextToken')
     )
 
 def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:

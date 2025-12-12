@@ -461,15 +461,15 @@ class TestFileListCommand:
             mocks['api_client'].list_asset_files.side_effect = [
                 {
                     'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False, 'size': 1024} for i in range(100)],
-                    'nextToken': 'token1'
+                    'NextToken': 'token1'
                 },
                 {
                     'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False, 'size': 1024} for i in range(100, 200)],
-                    'nextToken': 'token2'
+                    'NextToken': 'token2'
                 },
                 {
                     'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False, 'size': 1024} for i in range(200, 250)],
-                    'nextToken': None
+                    'NextToken': None
                 }
             ]
             
@@ -492,7 +492,7 @@ class TestFileListCommand:
         with file_command_mocks as mocks:
             mocks['api_client'].list_asset_files.return_value = {
                 'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False} for i in range(150)],
-                'nextToken': None
+                'NextToken': None
             }
             
             result = cli_runner.invoke(cli, [
@@ -532,7 +532,7 @@ class TestFileListCommand:
         with file_command_mocks as mocks:
             mocks['api_client'].list_asset_files.return_value = {
                 'items': [{'fileName': 'file.gltf', 'relativePath': '/file.gltf', 'isFolder': False, 'size': 1024}],
-                'nextToken': 'next-token-456'
+                'NextToken': 'next-token-456'
             }
             
             result = cli_runner.invoke(cli, [
@@ -563,11 +563,11 @@ class TestFileListCommand:
             mocks['api_client'].list_asset_files.side_effect = [
                 {
                     'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False} for i in range(100)],
-                    'nextToken': 'token1'
+                    'NextToken': 'token1'
                 },
                 {
                     'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False} for i in range(100, 150)],
-                    'nextToken': 'token2'
+                    'NextToken': 'token2'
                 }
             ]
             
@@ -592,7 +592,7 @@ class TestFileListCommand:
         with file_command_mocks as mocks:
             mocks['api_client'].list_asset_files.return_value = {
                 'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False} for i in range(50)],
-                'nextToken': None
+                'NextToken': None
             }
             
             result = cli_runner.invoke(cli, [

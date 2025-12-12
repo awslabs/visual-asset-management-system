@@ -494,7 +494,7 @@ class TestAuthCommands:
             }
             
             mocks['api_client'].call_login_profile.return_value = {'success': True}
-            mocks['api_client'].get_feature_switches.return_value = {
+            mocks['api_client'].get_secure_config.return_value = {
                 'raw': 'FEATURE1,FEATURE2',
                 'enabled': ['FEATURE1', 'FEATURE2']
             }
@@ -548,6 +548,35 @@ class TestAuthCommands:
             assert '✗ Cognito Authentication Error' in result.output
             assert 'Invalid credentials' in result.output
     
+    def test_auth_login_authentication_error_json_output(self, cli_runner, auth_command_mocks):
+        """Test auth login with authentication error in JSON mode - should output pure JSON only."""
+        with auth_command_mocks as mocks:
+            mock_authenticator = Mock()
+            mock_authenticator.authenticate.side_effect = AuthenticationError("Invalid username or password")
+            
+            with patch('vamscli.commands.auth.get_authenticator', return_value=mock_authenticator):
+                result = cli_runner.invoke(cli, [
+                    'auth', 'login',
+                    '-u', 'scheurik',
+                    '-p', '!1111',
+                    '--json-output'
+                ])
+            
+            assert result.exit_code == 1
+            
+            # Verify output is pure JSON (no extra text)
+            try:
+                parsed = json.loads(result.output)
+                assert isinstance(parsed, dict)
+                assert parsed.get('error') == 'Invalid username or password'
+                assert parsed.get('error_type') == 'AuthenticationError'
+                
+                # Verify no duplicate "Error:" text after JSON
+                assert result.output.count('Invalid username or password') == 1
+                assert 'Error: Invalid username or password' not in result.output
+            except json.JSONDecodeError:
+                pytest.fail(f"Output is not valid JSON: {result.output}")
+    
     def test_auth_login_with_password_and_save_credentials(self, cli_runner, auth_command_mocks):
         """Test auth login with password provided and save credentials."""
         with auth_command_mocks as mocks:
@@ -559,7 +588,7 @@ class TestAuthCommands:
             }
             
             mocks['api_client'].call_login_profile.return_value = {'success': True}
-            mocks['api_client'].get_feature_switches.return_value = {
+            mocks['api_client'].get_secure_config.return_value = {
                 'raw': 'FEATURE1',
                 'enabled': ['FEATURE1']
             }
@@ -711,7 +740,7 @@ class TestAuthCommands:
         """Test successful auth set-override."""
         with auth_command_mocks as mocks:
             mocks['api_client'].call_login_profile.return_value = {'success': True}
-            mocks['api_client'].get_feature_switches.return_value = {
+            mocks['api_client'].get_secure_config.return_value = {
                 'raw': 'FEATURE1',
                 'enabled': ['FEATURE1']
             }
@@ -774,7 +803,7 @@ class TestAuthCommands:
         """Test successful auth login with token override."""
         with auth_command_mocks as mocks:
             mocks['api_client'].call_login_profile.return_value = {'success': True}
-            mocks['api_client'].get_feature_switches.return_value = {
+            mocks['api_client'].get_secure_config.return_value = {
                 'raw': 'FEATURE1',
                 'enabled': ['FEATURE1']
             }
@@ -799,7 +828,7 @@ class TestAuthCommands:
         """Test auth login with token override and expiration."""
         with auth_command_mocks as mocks:
             mocks['api_client'].call_login_profile.return_value = {'success': True}
-            mocks['api_client'].get_feature_switches.return_value = {
+            mocks['api_client'].get_secure_config.return_value = {
                 'raw': 'FEATURE1',
                 'enabled': ['FEATURE1']
             }
@@ -879,7 +908,7 @@ class TestAuthCommands:
             }
             
             mocks['api_client'].call_login_profile.return_value = {'success': True}
-            mocks['api_client'].get_feature_switches.return_value = {
+            mocks['api_client'].get_secure_config.return_value = {
                 'raw': 'FEATURE1',
                 'enabled': ['FEATURE1']
             }
@@ -941,7 +970,7 @@ class TestAuthCommands:
             }
             
             mocks['api_client'].call_login_profile.return_value = {'success': True}
-            mocks['api_client'].get_feature_switches.return_value = {
+            mocks['api_client'].get_secure_config.return_value = {
                 'raw': 'FEATURE1',
                 'enabled': ['FEATURE1']
             }

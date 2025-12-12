@@ -22,6 +22,8 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   Update the ./listFiles API to have an additional `basic` query parameter boolean (default: false) to do a quick file listing pull without additional archival, version, or preview file data (much quicker).
     -   **CLI** File listing command now has auto-paginate and basic parameter flags
 -   **Web** Updated asset files manager to implement a lazy loading approach to loading files with the API calls to make page loads quicker to getting to file information (helps when an asset has a lot of files)
+-   **CLI** Added --auto-paginate params (and adjusted other associated pagination parameers) to listing of databases, buckets, assets, and lists
+-   **CLI** Updated CLI profile/auth/setup to pull in and display across various commands more of the environment configurations pulled from the API
 
 ### Bug Fixes
 
@@ -34,14 +36,17 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   **Web** File previews, if provided as a `.previewFile.`. will now display correctly in the Asset/File search.
 -   **Web** File operations in the asset details file manager appropriately refresh the details panel during certain operations
 -   **Web** Fixed UI where some delete operations were not refreshing the page and/or not showing the correct record ID to be deleted (display issue only)
+-   Fixed various API pagination issues with listing database, assets, and files
+-   **CLI** Fix to ensure when the `--json-output` flag is set to make sure all errors coming back are also in proper JSON format
 
 ### Chores
 
 -   Refactored the tag, tagType, roles, userRoles, and authConstraints API service backends to meet new API standard for error handling/checking, validation, and request/response models usage.
 -   Refactored some API request/response models to replace deprecated pdyantic v1 "extra" field and replaced with proper v2 pattern
--   Refactored rest of CDK lambdabuIlder functions to follow new naming pattern for table inputs and permissions
+-   Refactored rest of CDK lambdabuilder functions to follow new naming pattern for table inputs and permissions
 -   Further adjusted upload thresholds for throttling and file/part/sequence splitting across the backend API, web, and CLI to tune for not only large files but many files for upload
 -   Updated ./listFiles API to default maxitems to 10000 and max page size to be 1500 for basic mode and 100 for non-basic.
+-   API for `/secureConfig` now returns the website deployed URL (if a website is deployed)
 
 ### Known Outstanding Issues
 

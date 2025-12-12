@@ -341,8 +341,8 @@ class AssetFileItemModel(BaseModel, extra='ignore'):
 
 class ListAssetFilesRequestModel(BaseModel, extra='ignore'):
     """Query parameters for listing asset files"""
-    maxItems: Optional[int] = Field(default=None, ge=1, le=10000)
-    pageSize: Optional[int] = Field(default=None, ge=1, le=1500)
+    maxItems: Optional[int] = Field(default=None, ge=1)
+    pageSize: Optional[int] = Field(default=None, ge=1)
     startingToken: Optional[str] = None
     prefix: Optional[str] = None
     includeArchived: Optional[bool] = Field(default=False)  # Show archived files
@@ -351,7 +351,7 @@ class ListAssetFilesRequestModel(BaseModel, extra='ignore'):
 class ListAssetFilesResponseModel(BaseModel, extra='ignore'):
     """Response model for listing asset files"""
     items: List[AssetFileItemModel]
-    nextToken: Optional[str] = None
+    NextToken: Optional[str] = None
 
 class FileInfoRequestModel(BaseModel, extra='ignore'):
     """Request model for getting detailed file information"""
@@ -614,8 +614,8 @@ class GetAssetRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing assets"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000) 
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=3000, ge=1) 
     startingToken: Optional[str] = None
     showArchived: Optional[bool] = False
 
@@ -752,8 +752,8 @@ class GetAssetVersionRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing asset versions"""
-    maxItems: Optional[int] = Field(default=100, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=100, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=100, ge=1)
+    pageSize: Optional[int] = Field(default=100, ge=1)
     startingToken: Optional[str] = None
 
 class AssetVersionFileModel(BaseModel, extra='ignore'):
@@ -778,7 +778,7 @@ class AssetVersionResponseModel(BaseModel, extra='ignore'):
 class AssetVersionsListResponseModel(BaseModel, extra='ignore'):
     """Response model for listing asset versions"""
     versions: List[AssetVersionListItemModel] = []  # List of properly typed version items
-    nextToken: Optional[str] = None
+    NextToken: Optional[str] = None
 
 class AssetVersionOperationResponseModel(BaseModel, extra='ignore'):
     """Response model for asset version operations (create, revert)"""

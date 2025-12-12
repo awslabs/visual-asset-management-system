@@ -30,13 +30,21 @@ def mock_profile_manager():
     Returns:
         Mock: ProfileManager mock with:
             - has_config() returns True
-            - load_config() returns standard API gateway URL
+            - load_config() returns standard API gateway URL with amplify_config
             - profile_name set to 'default'
     """
     mock = Mock()
     mock.has_config.return_value = True
     mock.load_config.return_value = {
-        'api_gateway_url': 'https://api.example.com'
+        'api_gateway_url': 'https://api.example.com',
+        'amplify_config': {
+            'region': 'us-east-1',
+            'api': 'https://api.example.com',
+            'cognitoUserPoolId': 'us-east-1_test123',
+            'cognitoAppClientId': 'test-client-id',
+            'cognitoIdentityPoolId': 'us-east-1:test-identity-pool',
+            'stackName': 'test-stack'
+        }
     }
     mock.profile_name = 'default'
     return mock

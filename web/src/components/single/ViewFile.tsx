@@ -7,20 +7,23 @@
 import { useEffect, useState } from "react";
 import { archiveFile } from "../../services/FileOperationsService";
 import {
+    Alert,
     Box,
     BreadcrumbGroup,
     Button,
     Container,
     Grid,
     Header,
+    Link,
     Modal,
     SegmentedControl,
     SpaceBetween,
+    Spinner,
 } from "@cloudscape-design/components";
 import { useLocation, useParams } from "react-router";
 
 import FileMetadata from "../metadata/FileMetadata";
-import { fetchAsset } from "../../services/APIService";
+import { fetchAsset, fetchFileInfo } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
@@ -86,20 +89,61 @@ interface Asset {
 // File format detection now handled by plugin system - no longer needed
 
 export default function ViewFile() {
-    const { state } = useLocation() as { state: ViewFileState };
+    const location = useLocation();
+    const { state } = location as { state: ViewFileState };
     const { databaseId, assetId, pathViewType } = useParams<{
         databaseId: string;
         assetId: string;
         pathViewType?: string;
     }>();
 
+    // Extract file path from URL for direct path access
+    const getFilePathFromUrl = (): string | null => {
+        // First try to match /file/PATH format
+        const filePathParts = location.pathname.split("/file/");
+        if (filePathParts.length > 1 && filePathParts[1]) {
+            return decodeURIComponent(filePathParts[1]);
+        }
+
+        // If not found, try direct /databases/:databaseId/assets/:assetId/PATH format
+        // Match pattern: /databases/{databaseId}/assets/{assetId}/{filePath}
+        const pathMatch = location.pathname.match(/^\/databases\/[^\/]+\/assets\/[^\/]+\/(.+)$/);
+        if (pathMatch && pathMatch[1]) {
+            // Exclude known routes that shouldn't be treated as file paths
+            const excludedPaths = ["download", "uploads", "file"];
+            const firstSegment = pathMatch[1].split("/")[0];
+            if (!excludedPaths.includes(firstSegment)) {
+                return decodeURIComponent(pathMatch[1]);
+            }
+        }
+
+        return null;
+    };
+
+    // Extract version from query parameters
+    const getVersionFromQuery = (): string | null => {
+        const searchParams = new URLSearchParams(location.search);
+        return searchParams.get("version");
+    };
+
+    const urlFilePath = getFilePathFromUrl();
+    const urlVersion = getVersionFromQuery();
+    const isDirectPathAccess = urlFilePath && !state;
+
+    // State for direct path loading
+    const [isLoadingDirectPath, setIsLoadingDirectPath] = useState(isDirectPathAccess);
+    const [directPathError, setDirectPathError] = useState<string | null>(null);
+    const [loadedFileInfo, setLoadedFileInfo] = useState<FileInfo | null>(null);
+
     // Determine if we're in multi-file mode
     const isMultiFileMode = state?.files && state.files.length > 1;
     const currentFiles = isMultiFileMode ? state.files! : [];
 
-    // For single file mode, use existing logic
+    // For single file mode, use existing logic or loaded file info
     const singleFileInfo = isMultiFileMode
         ? null
+        : loadedFileInfo
+        ? loadedFileInfo
         : {
               filename: state?.filename || "",
               key: state?.key || "",
@@ -189,6 +233,126 @@ export default function ViewFile() {
         setViewType(event.detail.selectedId);
     };
 
+    // Handle direct path access - fetch file info from URL
+    useEffect(() => {
+        const loadFileFromDirectPath = async () => {
+            if (!isDirectPathAccess || !databaseId || !assetId || !urlFilePath) {
+                return;
+            }
+
+            setIsLoadingDirectPath(true);
+            setDirectPathError(null);
+
+            try {
+                console.log("Loading file from direct path:", urlFilePath);
+                console.log("Requested version:", urlVersion || "latest");
+
+                // Fetch file info
+                const [success, fileInfoResponse] = await fetchFileInfo({
+                    databaseId,
+                    assetId,
+                    fileKey: urlFilePath,
+                    includeVersions: true,
+                });
+
+                if (!success) {
+                    setDirectPathError(
+                        typeof fileInfoResponse === "string"
+                            ? fileInfoResponse
+                            : "The file you're looking for doesn't exist or has been moved."
+                    );
+                    setIsLoadingDirectPath(false);
+                    return;
+                }
+
+                // Parse file info response
+                let fileInfo: any;
+                if (typeof fileInfoResponse === "string") {
+                    try {
+                        fileInfo = JSON.parse(fileInfoResponse);
+                    } catch {
+                        fileInfo = fileInfoResponse;
+                    }
+                } else {
+                    fileInfo = fileInfoResponse;
+                }
+
+                // Check if file exists
+                if (!fileInfo || !fileInfo.key) {
+                    setDirectPathError(
+                        "The file you're looking for doesn't exist or has been moved."
+                    );
+                    setIsLoadingDirectPath(false);
+                    return;
+                }
+
+                // Check if file is archived
+                if (fileInfo.isArchived) {
+                    setDirectPathError(
+                        "This file is part of an archived asset and cannot be viewed."
+                    );
+                    setIsLoadingDirectPath(false);
+                    return;
+                }
+
+                // Get the filename - use fileName field from API or extract from key
+                const filename = fileInfo.fileName || fileInfo.key.split("/").pop() || "";
+
+                // Get the latest version from versions array or use requested version
+                let versionToUse: string | undefined = urlVersion || undefined;
+                if (!versionToUse && fileInfo.versions && fileInfo.versions.length > 0) {
+                    // Find the latest version
+                    const latestVersion = fileInfo.versions.find((v: any) => v.isLatest);
+                    versionToUse =
+                        latestVersion?.versionId || fileInfo.versions[0]?.versionId || undefined;
+                }
+
+                // Get lastModified date
+                const lastModified =
+                    fileInfo.lastModified ||
+                    (fileInfo.versions && fileInfo.versions.length > 0
+                        ? fileInfo.versions[0].lastModified
+                        : undefined);
+
+                // Create file info object with correct field mappings
+                const loadedFile: FileInfo = {
+                    filename: filename,
+                    key: fileInfo.key,
+                    isDirectory: fileInfo.isFolder || false,
+                    versionId: versionToUse,
+                    size: fileInfo.size,
+                    dateCreatedCurrentVersion: lastModified,
+                    isArchived: fileInfo.isArchived || false,
+                    primaryType: fileInfo.primaryType || null,
+                    previewFile: fileInfo.previewFile,
+                };
+
+                console.log("Loaded file info:", loadedFile);
+                setLoadedFileInfo(loadedFile);
+                setIsLoadingDirectPath(false);
+                setReload(true); // Trigger asset data fetch
+            } catch (error: any) {
+                console.error("Error loading file from direct path:", error);
+
+                // Check for specific error types
+                if (error?.response?.status === 403) {
+                    setDirectPathError("You don't have permission to access this file.");
+                } else if (error?.response?.status === 404) {
+                    setDirectPathError(
+                        "The file you're looking for doesn't exist or has been moved."
+                    );
+                } else {
+                    setDirectPathError(
+                        error?.message || "An error occurred while loading the file."
+                    );
+                }
+                setIsLoadingDirectPath(false);
+            }
+        };
+
+        loadFileFromDirectPath();
+    }, [isDirectPathAccess, databaseId, assetId, urlFilePath, urlVersion]);
+
     useEffect(() => {
         const getData = async () => {
             if (databaseId && assetId) {
@@ -268,292 +432,347 @@ export default function ViewFile() {
         <div style={{ height: "100vh", overflow: "auto" }}>
             {assetId && (
                 <>
-                    <Box padding={{ top: "s", horizontal: "l" }}>
-                        <SpaceBetween direction="vertical" size="l">
-                            <BreadcrumbGroup
-                                items={[
-                                    { text: Synonyms.Databases, href: "#/databases/" },
-                                    {
-                                        text: databaseId || "",
-                                        href: "#/databases/" + databaseId + "/assets/",
-                                    },
-                                    {
-                                        text: asset?.assetName || "",
-                                        href: "#/databases/" + databaseId + "/assets/" + assetId,
-                                    },
-                                    { text: getBreadcrumbText(), href: "#" },
-                                ]}
-                                ariaLabel="Breadcrumbs"
-                            />
-                            <div>
-                                {/* Main title and File/Preview buttons on same row */}
-                                <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
-                                    <Box>
-                                        <h1>
-                                            {getHeaderText()}{" "}
-                                            {asset?.status === "archived" && (
-                                                <span style={{ color: "#888" }}>(Archived)</span>
-                                            )}
-                                        </h1>
-                                    </Box>
-                                    <div
-                                        style={{
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "flex-end",
-                                        }}
-                                    >
-                                        {viewerOptions.length > 0 && (
-                                            <SegmentedControl
-                                                label="Visualizer Control"
-                                                options={viewerOptions}
-                                                selectedId={viewType}
-                                                onChange={changeViewType}
-                                                className="visualizer-segment-control"
-                                            />
-                                        )}
-                                    </div>
-                                </Grid>
+                    {/* Show loading state for direct path access */}
+                    {isLoadingDirectPath && (
+                        <Box padding={{ top: "s", horizontal: "l" }}>
+                            <Container>
+                                <Box padding="xxl" textAlign="center">
+                                    <SpaceBetween direction="vertical" size="m">
+                                        <Spinner size="large" />
+                                        <div style={{ color: "#666", fontSize: "16px" }}>
+                                            Loading file...
+                                        </div>
+                                    </SpaceBetween>
+                                </Box>
+                            </Container>
+                        </Box>
+                    )}
 
-                                {/* Version info on its own row */}
-                                {!isMultiFileMode && singleFileInfo?.versionId && (
-                                    <div style={{ marginTop: "4px" }}>
-                                        <span style={{ fontSize: "14px", color: "#666" }}>
-                                            Version: {singleFileInfo.versionId}
-                                        </span>
-                                    </div>
-                                )}
-                            </div>
+                    {/* Show error state for direct path access */}
+                    {!isLoadingDirectPath && directPathError && (
+                        <Box padding={{ top: "s", horizontal: "l" }}>
+                            <Container>
+                                <Box padding="m">
+                                    <Alert type="error" header="File Not Found">
+                                        {directPathError}
+                                        <br />
+                                        <br />
+                                        <Link href={`#/databases/${databaseId}/assets/${assetId}`}>
+                                            Return to asset
+                                        </Link>
+                                    </Alert>
+                                </Box>
+                            </Container>
+                        </Box>
+                    )}
 
-                            {/* Main content area with horizontal splitter */}
-                            <div style={{ height: "calc(100vh - 200px)", minHeight: "400px" }}>
-                                {(!isMultiFileMode ? !singleFileInfo?.isDirectory : true) &&
-                                !hasArchivedFiles ? (
-                                    <HorizontalResizableSplitter
-                                        topPanel={
-                                            <div
-                                                id="view-edit-asset-right-column"
-                                                className={viewerMode}
-                                            >
-                                                <DynamicViewer
-                                                    key={`${viewType}-${assetId}-${
-                                                        singleFileInfo?.versionId || "no-version"
-                                                    }`} // Force remount on tab switch
-                                                    files={
-                                                        isMultiFileMode || viewType === "files"
-                                                            ? currentFiles
-                                                            : singleFileInfo
-                                                            ? [
-                                                                  {
-                                                                      ...singleFileInfo,
-                                                                      key:
-                                                                          viewType === "preview"
-                                                                              ? singleFileInfo.previewFile ||
-                                                                                singleFileInfo.key
-                                                                              : singleFileInfo.key,
-                                                                  },
-                                                              ]
-                                                            : []
-                                                    }
-                                                    assetId={assetId!}
-                                                    databaseId={databaseId!}
-                                                    viewerMode={viewerMode}
-                                                    onViewerModeChange={changeViewerMode}
-                                                    showViewerSelector={true} // Enable plugin-based viewer selection
-                                                    isPreviewMode={viewType === "preview"}
-                                                    onDeletePreview={undefined} // Don't show delete button in ViewFile.tsx
+                    {/* Show normal content when not loading and no error */}
+                    {!isLoadingDirectPath && !directPathError && (
+                        <Box padding={{ top: "s", horizontal: "l" }}>
+                            <SpaceBetween direction="vertical" size="l">
+                                <BreadcrumbGroup
+                                    items={[
+                                        { text: Synonyms.Databases, href: "#/databases/" },
+                                        {
+                                            text: databaseId || "",
+                                            href: "#/databases/" + databaseId + "/assets/",
+                                        },
+                                        {
+                                            text: asset?.assetName || "",
+                                            href:
+                                                "#/databases/" + databaseId + "/assets/" + assetId,
+                                        },
+                                        { text: getBreadcrumbText(), href: "#" },
+                                    ]}
+                                    ariaLabel="Breadcrumbs"
+                                />
+                                <div>
+                                    {/* Main title and File/Preview buttons on same row */}
+                                    <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
+                                        <Box>
+                                            <h1>
+                                                {getHeaderText()}{" "}
+                                                {asset?.status === "archived" && (
+                                                    <span style={{ color: "#888" }}>
+                                                        (Archived)
+                                                    </span>
+                                                )}
+                                            </h1>
+                                        </Box>
+                                        <div
+                                            style={{
+                                                display: "flex",
+                                                alignItems: "center",
+                                                justifyContent: "flex-end",
+                                            }}
+                                        >
+                                            {viewerOptions.length > 0 && (
+                                                <SegmentedControl
+                                                    label="Visualizer Control"
+                                                    options={viewerOptions}
+                                                    selectedId={viewType}
+                                                    onChange={changeViewType}
+                                                    className="visualizer-segment-control"
                                                 />
-                                            </div>
-                                        }
-                                        bottomPanel={
-                                            <SpaceBetween direction="vertical" size="l">
-                                                {/* Show file list for multi-file mode */}
-                                                {isMultiFileMode && (
-                                                    <Container
-                                                        header={
-                                                            <Header variant="h3">
-                                                                Selected Files
-                                                            </Header>
+                                            )}
+                                        </div>
+                                    </Grid>
+
+                                    {/* Version info on its own row */}
+                                    {!isMultiFileMode && singleFileInfo?.versionId && (
+                                        <div style={{ marginTop: "4px" }}>
+                                            <span style={{ fontSize: "14px", color: "#666" }}>
+                                                Version: {singleFileInfo.versionId}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Main content area with horizontal splitter */}
+                                <div style={{ height: "calc(100vh - 200px)", minHeight: "400px" }}>
+                                    {(!isMultiFileMode ? !singleFileInfo?.isDirectory : true) &&
+                                    !hasArchivedFiles ? (
+                                        <HorizontalResizableSplitter
+                                            topPanel={
+                                                <div
+                                                    id="view-edit-asset-right-column"
+                                                    className={viewerMode}
+                                                >
+                                                    <DynamicViewer
+                                                        key={`${viewType}-${assetId}-${
+                                                            singleFileInfo?.versionId ||
+                                                            "no-version"
+                                                        }`} // Force remount on tab switch
+                                                        files={
+                                                            isMultiFileMode || viewType === "files"
+                                                                ? currentFiles
+                                                                : singleFileInfo
+                                                                ? [
+                                                                      {
+                                                                          ...singleFileInfo,
+                                                                          key:
+                                                                              viewType === "preview"
+                                                                                  ? singleFileInfo.previewFile ||
+                                                                                    singleFileInfo.key
+                                                                                  : singleFileInfo.key,
+                                                                      },
+                                                                  ]
+                                                                : []
                                                         }
-                                                    >
-                                                        <SpaceBetween
-                                                            direction="vertical"
-                                                            size="xs"
+                                                        assetId={assetId!}
+                                                        databaseId={databaseId!}
+                                                        viewerMode={viewerMode}
+                                                        onViewerModeChange={changeViewerMode}
+                                                        showViewerSelector={true} // Enable plugin-based viewer selection
+                                                        isPreviewMode={viewType === "preview"}
+                                                        onDeletePreview={undefined} // Don't show delete button in ViewFile.tsx
+                                                    />
+                                                </div>
+                                            }
+                                            bottomPanel={
+                                                <SpaceBetween direction="vertical" size="l">
+                                                    {/* Show file list for multi-file mode */}
+                                                    {isMultiFileMode && (
+                                                        <Container
+                                                            header={
+                                                                <Header variant="h3">
+                                                                    Selected Files
+                                                                </Header>
+                                                            }
                                                         >
-                                                            {currentFiles.map((file, index) => (
-                                                                <Box
-                                                                    key={index}
-                                                                    padding={{
-                                                                        vertical: "xs",
-                                                                        horizontal: "s",
-                                                                    }}
-                                                                >
-                                                                    <span
-                                                                        style={{
-                                                                            fontFamily: "monospace",
+                                                            <SpaceBetween
+                                                                direction="vertical"
+                                                                size="xs"
+                                                            >
+                                                                {currentFiles.map((file, index) => (
+                                                                    <Box
+                                                                        key={index}
+                                                                        padding={{
+                                                                            vertical: "xs",
+                                                                            horizontal: "s",
                                                                         }}
                                                                     >
-                                                                        {file.filename}
-                                                                        {file.primaryType &&
-                                                                            file.primaryType.trim() !==
-                                                                                "" && (
+                                                                        <span
+                                                                            style={{
+                                                                                fontFamily:
+                                                                                    "monospace",
+                                                                            }}
+                                                                        >
+                                                                            {file.filename}
+                                                                            {file.primaryType &&
+                                                                                file.primaryType.trim() !==
+                                                                                    "" && (
+                                                                                    <span
+                                                                                        style={{
+                                                                                            color: "#666",
+                                                                                            marginLeft:
+                                                                                                "4px",
+                                                                                        }}
+                                                                                    >
+                                                                                        (
+                                                                                        {
+                                                                                            file.primaryType
+                                                                                        }
+                                                                                        )
+                                                                                    </span>
+                                                                                )}
+                                                                            {file.versionId && (
                                                                                 <span
                                                                                     style={{
                                                                                         color: "#666",
                                                                                         marginLeft:
-                                                                                            "4px",
+                                                                                            "8px",
                                                                                     }}
                                                                                 >
-                                                                                    (
-                                                                                    {
-                                                                                        file.primaryType
-                                                                                    }
+                                                                                    (Version:{" "}
+                                                                                    {file.versionId}
                                                                                     )
                                                                                 </span>
                                                                             )}
-                                                                        {file.versionId && (
-                                                                            <span
-                                                                                style={{
-                                                                                    color: "#666",
-                                                                                    marginLeft:
-                                                                                        "8px",
-                                                                                }}
-                                                                            >
-                                                                                (Version:{" "}
-                                                                                {file.versionId})
-                                                                            </span>
-                                                                        )}
-                                                                    </span>
-                                                                </Box>
-                                                            ))}
-                                                        </SpaceBetween>
-                                                    </Container>
-                                                )}
-
-                                                {/* Metadata - only show for single file mode and non-archived files */}
-                                                {!isMultiFileMode && (
-                                                    <FileMetadata
-                                                        databaseId={databaseId!}
-                                                        assetId={assetId!}
-                                                        prefix={singleFileInfo?.key || ""}
-                                                        showHeader={false}
-                                                        className="viewfile-metadata"
-                                                    />
-                                                )}
-
-                                                {/* File Versions Container - only show for single file mode and non-directories */}
-                                                {!isMultiFileMode &&
-                                                    singleFileInfo &&
-                                                    !singleFileInfo.isDirectory &&
-                                                    singleFileInfo.versionId && (
-                                                        <Container
-                                                            header={
-                                                                <Header variant="h3">
-                                                                    File Versions
-                                                                </Header>
-                                                            }
-                                                        >
-                                                            <FileVersionsTable
-                                                                databaseId={databaseId!}
-                                                                assetId={assetId!}
-                                                                filePath={singleFileInfo.key}
-                                                                fileName={singleFileInfo.filename}
-                                                                currentVersionId={
-                                                                    singleFileInfo.versionId
-                                                                }
-                                                                onVersionRevert={
-                                                                    handleVersionRevert
-                                                                }
-                                                                displayMode="container"
-                                                                visible={true}
-                                                            />
+                                                                        </span>
+                                                                    </Box>
+                                                                ))}
+                                                            </SpaceBetween>
                                                         </Container>
                                                     )}
+
+                                                    {/* Metadata - only show for single file mode and non-archived files */}
+                                                    {!isMultiFileMode && singleFileInfo?.key && (
+                                                        <FileMetadata
+                                                            databaseId={databaseId!}
+                                                            assetId={assetId!}
+                                                            prefix={singleFileInfo.key}
+                                                            showHeader={false}
+                                                            className="viewfile-metadata"
+                                                        />
+                                                    )}
+
+                                                    {/* File Versions Container - only show for single file mode and non-directories */}
+                                                    {!isMultiFileMode &&
+                                                        singleFileInfo &&
+                                                        singleFileInfo.key &&
+                                                        !singleFileInfo.isDirectory &&
+                                                        singleFileInfo.versionId && (
+                                                            <Container
+                                                                header={
+                                                                    <Header variant="h3">
+                                                                        File Versions
+                                                                    </Header>
+                                                                }
+                                                            >
+                                                                <FileVersionsTable
+                                                                    databaseId={databaseId!}
+                                                                    assetId={assetId!}
+                                                                    filePath={singleFileInfo.key}
+                                                                    fileName={
+                                                                        singleFileInfo.filename
+                                                                    }
+                                                                    currentVersionId={
+                                                                        singleFileInfo.versionId
+                                                                    }
+                                                                    onVersionRevert={
+                                                                        handleVersionRevert
+                                                                    }
+                                                                    displayMode="container"
+                                                                    visible={true}
+                                                                />
+                                                            </Container>
+                                                        )}
+                                                </SpaceBetween>
+                                            }
+                                            className="viewfile-splitter"
+                                        />
+                                    ) : (
+                                        /* Show message when files are archived or are directories */
+                                        <Container>
+                                            <Box padding="m" textAlign="center">
+                                                <div style={{ color: "#666", fontSize: "16px" }}>
+                                                    {hasArchivedFiles
+                                                        ? "Visualizer is not available for archived files."
+                                                        : "Visualizer is not available for directories."}
+                                                </div>
+                                            </Box>
+
+                                            {/* Show metadata for archived files in single file mode */}
+                                            {!isMultiFileMode && hasArchivedFiles && (
+                                                <Container
+                                                    header={<Header variant="h3">Metadata</Header>}
+                                                >
+                                                    <Box padding="m" textAlign="center">
+                                                        <div
+                                                            style={{
+                                                                color: "#666",
+                                                                fontSize: "16px",
+                                                            }}
+                                                        >
+                                                            Metadata is not available for archived
+                                                            files.
+                                                        </div>
+                                                    </Box>
+                                                </Container>
+                                            )}
+                                        </Container>
+                                    )}
+                                </div>
+
+                                {/* Delete Preview Modal */}
+                                <Modal
+                                    visible={showDeletePreviewModal}
+                                    onDismiss={() => setShowDeletePreviewModal(false)}
+                                    header="Delete Preview File"
+                                    footer={
+                                        <Box float="right">
+                                            <SpaceBetween direction="horizontal" size="xs">
+                                                <Button
+                                                    variant="link"
+                                                    onClick={() => setShowDeletePreviewModal(false)}
+                                                    disabled={isPreviewDeleting}
+                                                >
+                                                    Cancel
+                                                </Button>
+                                                <Button
+                                                    variant="primary"
+                                                    onClick={async () => {
+                                                        setIsPreviewDeleting(true);
+                                                        try {
+                                                            // File preview deletion
+                                                            await archiveFile(
+                                                                databaseId!,
+                                                                assetId!,
+                                                                {
+                                                                    filePath:
+                                                                        singleFileInfo!
+                                                                            .previewFile!,
+                                                                }
+                                                            );
+                                                            // Refresh the page to show updated file
+                                                            window.location.reload();
+                                                            setShowDeletePreviewModal(false);
+                                                        } catch (error) {
+                                                            console.error(
+                                                                "Error deleting preview:",
+                                                                error
+                                                            );
+                                                        } finally {
+                                                            setIsPreviewDeleting(false);
+                                                        }
+                                                    }}
+                                                    loading={isPreviewDeleting}
+                                                >
+                                                    Delete
+                                                </Button>
                                             </SpaceBetween>
-                                        }
-                                        className="viewfile-splitter"
-                                    />
-                                ) : (
-                                    /* Show message when files are archived or are directories */
-                                    <Container>
-                                        <Box padding="m" textAlign="center">
-                                            <div style={{ color: "#666", fontSize: "16px" }}>
-                                                {hasArchivedFiles
-                                                    ? "Visualizer is not available for archived files."
-                                                    : "Visualizer is not available for directories."}
-                                            </div>
                                         </Box>
-
-                                        {/* Show metadata for archived files in single file mode */}
-                                        {!isMultiFileMode && hasArchivedFiles && (
-                                            <Container
-                                                header={<Header variant="h3">Metadata</Header>}
-                                            >
-                                                <Box padding="m" textAlign="center">
-                                                    <div
-                                                        style={{ color: "#666", fontSize: "16px" }}
-                                                    >
-                                                        Metadata is not available for archived
-                                                        files.
-                                                    </div>
-                                                </Box>
-                                            </Container>
-                                        )}
-                                    </Container>
-                                )}
-                            </div>
-
-                            {/* Delete Preview Modal */}
-                            <Modal
-                                visible={showDeletePreviewModal}
-                                onDismiss={() => setShowDeletePreviewModal(false)}
-                                header="Delete Preview File"
-                                footer={
-                                    <Box float="right">
-                                        <SpaceBetween direction="horizontal" size="xs">
-                                            <Button
-                                                variant="link"
-                                                onClick={() => setShowDeletePreviewModal(false)}
-                                                disabled={isPreviewDeleting}
-                                            >
-                                                Cancel
-                                            </Button>
-                                            <Button
-                                                variant="primary"
-                                                onClick={async () => {
-                                                    setIsPreviewDeleting(true);
-                                                    try {
-                                                        // File preview deletion
-                                                        await archiveFile(databaseId!, assetId!, {
-                                                            filePath: singleFileInfo!.previewFile!,
-                                                        });
-                                                        // Refresh the page to show updated file
-                                                        window.location.reload();
-                                                        setShowDeletePreviewModal(false);
-                                                    } catch (error) {
-                                                        console.error(
-                                                            "Error deleting preview:",
-                                                            error
-                                                        );
-                                                    } finally {
-                                                        setIsPreviewDeleting(false);
-                                                    }
-                                                }}
-                                                loading={isPreviewDeleting}
-                                            >
-                                                Delete
-                                            </Button>
-                                        </SpaceBetween>
-                                    </Box>
-                                }
-                            >
-                                <p>
-                                    Are you sure you want to delete this preview file? This action
-                                    cannot be undone.
-                                </p>
-                            </Modal>
-                        </SpaceBetween>
-                    </Box>
+                                    }
+                                >
+                                    <p>
+                                        Are you sure you want to delete this preview file? This
+                                        action cannot be undone.
+                                    </p>
+                                </Modal>
+                            </SpaceBetween>
+                        </Box>
+                    )}
                 </>
             )}
             {pathViewType && <AssetSelectorWithModal pathViewType={pathViewType} />}
