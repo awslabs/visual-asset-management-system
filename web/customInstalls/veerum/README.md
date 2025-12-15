@@ -161,10 +161,11 @@ The dependency manager:
 
 The Veerum viewer supports:
 
-- **Point Clouds**: .e57, .las, .laz
+- **Point Clouds**: .e57, .las, .laz, .ply
   - Uses `PointCloudModel` class
   - Requires Potree preprocessing (auxiliary preview files)
   - Loads from: `auxiliaryPreviewAssets/stream/{fileKey}/preview/PotreeViewer/metadata.json`
+  - **Important**: The Potree pipeline viewer must be enabled in `infra/config/config.json` during VAMS deployment for point cloud files to be preprocessed and viewable. Set `"enablePotreePipeline": true` in the pipelines configuration.
 
 - **3D Tilesets**: .json
   - Uses `TileModel` class

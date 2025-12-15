@@ -240,7 +240,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Priority**: 2
 -   **Category**: 3d
 -   **Enabled**: true
--   **Note**: ⚠️ **VEERUM is a paid commercial viewer service**. This viewer requires your organization to purchase a VEERUM license. To obtain licensing information, visit [https://veerum.com](https://veerum.com). See `web/customInstalls/veerum/README.md` for detailed installation instructions.
+-   **Note**: ⚠️ **VEERUM is a paid commercial viewer service**. This viewer requires your organization to purchase a VEERUM license. To obtain licensing information, visit [https://veerum.com](https://veerum.com). See `web/customInstalls/veerum/README.md` for detailed installation instructions. **VEERUM requires Potree Pipeline to be enabled to view point cloud files**
 
 ### 15. PreviewViewerPlugin
 
