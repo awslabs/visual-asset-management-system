@@ -84,8 +84,8 @@ export function calculateFileParts(fileSize: number): PartInfo[] {
     let startByte = 0;
 
     while (startByte < fileSize) {
-        const endByte = Math.min(startByte + chunkSize - 1, fileSize - 1);
-        const partSize = endByte - startByte + 1;
+        const endByte = Math.min(startByte + chunkSize, fileSize);
+        const partSize = endByte - startByte;
 
         parts.push({
             partNumber,
@@ -94,7 +94,7 @@ export function calculateFileParts(fileSize: number): PartInfo[] {
             size: partSize,
         });
 
-        startByte = endByte + 1;
+        startByte = endByte;
         partNumber++;
     }
 

@@ -376,9 +376,14 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
         
         client = opensearch_manager.get_client()
+
+        # Normalize databaseId for storage (addition of #deleted suffix if archived)
+        normalized_database_id = document.str_databaseid
+        if(document.bool_archived and "#deleted" not in normalized_database_id):
+            normalized_database_id = f"{normalized_database_id}#deleted"
         
         # Create document ID from key components
-        doc_id = f"{document.str_databaseid}#{document.str_assetid}"
+        doc_id = f"{normalized_database_id}#{document.str_assetid}"
         
         # Convert document to dict for indexing
         doc_dict = document.dict(exclude_unset=True)

@@ -40,10 +40,11 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   **Web** Fixed UI where some delete operations were not refreshing the page and/or not showing the correct record ID to be deleted (display issue only)
 -   Fixed various API pagination issues with listing database, assets, and files
 -   **CLI** Fix to ensure when the `--json-output` flag is set to make sure all errors coming back are also in proper JSON format
+-   Fixed the assets and auxiliary assets streaming APIs to properly check for payload sizes to be under 6mb while also now returning presigned S3 URL redirects for larger payloads. This fixes issues with both Potree and 3D Tile viewers where the client may choose to fetch larger range sizes for tiled subsets.
 
 ### Chores
 
--   Refactored the tag, tagType, roles, userRoles, and authConstraints API service backends to meet new API standard for error handling/checking, validation, and request/response models usage.
+-   Refactored the tag, tagType, roles, userRoles, authConstraints, auxiliary asset stream API service backends to meet new API standard for error handling/checking, validation, and request/response models usage.
 -   Refactored some API request/response models to replace deprecated pdyantic v1 "extra" field and replaced with proper v2 pattern
 -   Refactored rest of CDK lambdabuilder functions to follow new naming pattern for table inputs and permissions
 -   Further adjusted upload thresholds for throttling and file/part/sequence splitting across the backend API, web, and CLI to tune for not only large files but many files for upload

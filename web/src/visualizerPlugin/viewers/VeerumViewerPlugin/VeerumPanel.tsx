@@ -46,11 +46,13 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
             }}
         >
             {/* Header with Tabs */}
-            <div style={{ 
-                display: "flex", 
-                alignItems: "center",
-                borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
-            }}>
+            <div
+                style={{
+                    display: "flex",
+                    alignItems: "center",
+                    borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
+                }}
+            >
                 {/* Close Button */}
                 {onClose && (
                     <button
@@ -77,9 +79,15 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
                         onClick={() => setActiveTab("controls")}
                         style={{
                             flex: 1,
-                            background: activeTab === "controls" ? "rgba(33, 150, 243, 0.3)" : "transparent",
+                            background:
+                                activeTab === "controls"
+                                    ? "rgba(33, 150, 243, 0.3)"
+                                    : "transparent",
                             border: "none",
-                            borderBottom: activeTab === "controls" ? "2px solid #2196F3" : "2px solid transparent",
+                            borderBottom:
+                                activeTab === "controls"
+                                    ? "2px solid #2196F3"
+                                    : "2px solid transparent",
                             color: "white",
                             padding: "12px 16px",
                             cursor: "pointer",
@@ -93,9 +101,15 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
                         onClick={() => setActiveTab("sceneGraph")}
                         style={{
                             flex: 1,
-                            background: activeTab === "sceneGraph" ? "rgba(76, 175, 80, 0.3)" : "transparent",
+                            background:
+                                activeTab === "sceneGraph"
+                                    ? "rgba(76, 175, 80, 0.3)"
+                                    : "transparent",
                             border: "none",
-                            borderBottom: activeTab === "sceneGraph" ? "2px solid #4CAF50" : "2px solid transparent",
+                            borderBottom:
+                                activeTab === "sceneGraph"
+                                    ? "2px solid #4CAF50"
+                                    : "2px solid transparent",
                             color: "white",
                             padding: "12px 16px",
                             cursor: "pointer",
@@ -109,13 +123,15 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
             </div>
 
             {/* Tab Content */}
-            <div style={{ 
-                flex: 1,
-                overflowY: "auto",
-                overflowX: "hidden",
-                scrollbarWidth: "thin",
-                scrollbarColor: "rgba(255, 255, 255, 0.5) transparent",
-            }}>
+            <div
+                style={{
+                    flex: 1,
+                    overflowY: "auto",
+                    overflowX: "hidden",
+                    scrollbarWidth: "thin",
+                    scrollbarColor: "rgba(255, 255, 255, 0.5) transparent",
+                }}
+            >
                 {activeTab === "controls" ? (
                     <div style={{ padding: "16px", paddingBottom: "24px" }}>
                         <VeerumControls

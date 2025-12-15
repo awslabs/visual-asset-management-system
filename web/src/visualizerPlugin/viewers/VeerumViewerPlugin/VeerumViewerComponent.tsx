@@ -49,10 +49,11 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 console.log("VEERUM Viewer: Library loaded successfully", veerumModule);
 
                 // Get the VeerumViewer component and model classes from the module
-                const VeerumViewer = veerumModule.VeerumViewer || veerumModule.default?.VeerumViewer;
+                const VeerumViewer =
+                    veerumModule.VeerumViewer || veerumModule.default?.VeerumViewer;
                 const PointCloudModel = veerumModule.PointCloudModel;
                 const TileModel = veerumModule.TileModel;
-                
+
                 if (!VeerumViewer) {
                     const errorMsg = "VeerumViewer component not found in loaded module";
                     setInitError(errorMsg);
@@ -80,7 +81,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 // Get authorization token and create Headers object
                 const authToken = Auth.Credentials.Auth.user.signInUserSession.idToken.jwtToken;
                 const headers = new Headers();
-                headers.append('Authorization', `Bearer ${authToken}`);
+                headers.append("Authorization", `Bearer ${authToken}`);
 
                 setLoadingMessage("Creating viewer...");
 
@@ -92,9 +93,9 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 }
 
                 // Initialize the Veerum viewer using the ViewerController pattern
-                const viewerContainer = document.createElement('div');
-                viewerContainer.style.width = '100%';
-                viewerContainer.style.height = '100%';
+                const viewerContainer = document.createElement("div");
+                viewerContainer.style.width = "100%";
+                viewerContainer.style.height = "100%";
                 containerRef.current.appendChild(viewerContainer);
 
                 // Create viewer controller ref
@@ -107,11 +108,11 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                     setInitError(errorMsg);
                     throw new Error(errorMsg);
                 }
-                
+
                 ReactDOMModule.render(
                     React.createElement(VeerumViewer, {
                         viewerControllerRef: viewerControllerRefInternal,
-                        style: { width: '100%', height: '100%' }
+                        style: { width: "100%", height: "100%" },
                     }),
                     viewerContainer
                 );
@@ -119,7 +120,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 // Wait for viewer controller to initialize
                 let attempts = 0;
                 while (!viewerControllerRefInternal.current && attempts < 50) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    await new Promise((resolve) => setTimeout(resolve, 100));
                     attempts++;
                 }
 
@@ -132,19 +133,22 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 viewerControllerRef.current = viewerControllerRefInternal.current;
 
                 // Determine which files to load
-                const filesToLoad = multiFileKeys && multiFileKeys.length > 0 
-                    ? multiFileKeys 
-                    : (assetKey ? [assetKey] : []);
-                
+                const filesToLoad =
+                    multiFileKeys && multiFileKeys.length > 0
+                        ? multiFileKeys
+                        : assetKey
+                        ? [assetKey]
+                        : [];
+
                 if (filesToLoad.length === 0) {
                     throw new Error("No files specified to load");
                 }
-                
+
                 console.log("VEERUM Viewer: Loading files:", filesToLoad);
 
                 // Helper function to get file extension
                 const getFileExtension = (filename: string): string => {
-                    return filename.toLowerCase().substring(filename.lastIndexOf('.'));
+                    return filename.toLowerCase().substring(filename.lastIndexOf("."));
                 };
 
                 // Load each file
@@ -155,39 +159,47 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 for (let i = 0; i < filesToLoad.length; i++) {
                     const fileKey = filesToLoad[i];
                     const ext = getFileExtension(fileKey);
-                    
-                    console.log(`VEERUM Viewer: Loading file ${i + 1}/${filesToLoad.length}: ${fileKey}`);
+
+                    console.log(
+                        `VEERUM Viewer: Loading file ${i + 1}/${filesToLoad.length}: ${fileKey}`
+                    );
                     setLoadingMessage(`Loading file ${i + 1}/${filesToLoad.length}...`);
 
                     try {
-                        if (ext === '.json') {
+                        if (ext === ".json") {
                             // 3D Tileset file - use TileModel with streaming URL (similar to Cesium)
                             // Construct streaming URL similar to Cesium viewer
                             const pathSegments = fileKey.split("/");
-                            const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
+                            const encodedSegments = pathSegments.map((segment) =>
+                                encodeURIComponent(segment)
+                            );
                             const encodedFileKey = encodedSegments.join("/");
                             const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
-                            
+
                             console.log(`VEERUM Viewer: Loading 3D tileset from ${assetUrl}`);
-                            
+
                             // TileModel constructor: new TileModel(id, url, type?, headers?)
                             const tileModel = new TileModel(
                                 `tileset-${assetId}-${i}`,
                                 assetUrl,
-                                '3DTILES',  // type parameter
-                                headers     // headers is the fourth parameter
+                                "3DTILES", // type parameter
+                                headers // headers is the fourth parameter
                             );
-                            
+
                             // Set the file name for display in Scene Graph
-                            tileModel.name = fileKey.split('/').pop() || fileKey;
-                            
+                            tileModel.name = fileKey.split("/").pop() || fileKey;
+
                             // Wrap add() call with explicit promise handling to catch all errors
-                            await Promise.resolve(viewerControllerRef.current.add(tileModel))
-                                .catch((addError) => {
-                                    console.error(`VEERUM Viewer: Error adding tileset to viewer:`, addError);
+                            await Promise.resolve(viewerControllerRef.current.add(tileModel)).catch(
+                                (addError) => {
+                                    console.error(
+                                        `VEERUM Viewer: Error adding tileset to viewer:`,
+                                        addError
+                                    );
                                     throw addError;
-                                });
-                            
+                                }
+                            );
+
                             loadedModels.push(tileModel);
                             console.log(`VEERUM Viewer: 3D tileset ${fileKey} loaded successfully`);
                         } else {
@@ -196,36 +208,50 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             // and makes it easier to add new point cloud formats later
                             const potreeFileKey = fileKey + "/preview/PotreeViewer/metadata.json";
                             const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
-                            
+
                             console.log(`VEERUM Viewer: Loading point cloud from ${assetUrl}`);
-                            
+
                             const pointCloudModel = new PointCloudModel(
                                 `pointcloud-${assetId}-${i}`,
                                 assetUrl,
                                 headers
                             );
-                            
+
                             // Set the file name for display in Scene Graph
-                            pointCloudModel.name = fileKey.split('/').pop() || fileKey;
-                            
+                            pointCloudModel.name = fileKey.split("/").pop() || fileKey;
+
                             // Wrap add() call with explicit promise handling to catch all errors
                             // The PointCloudModel will fail to load if Potree files don't exist
-                            await Promise.resolve(viewerControllerRef.current.add(pointCloudModel))
-                                .catch((addError) => {
-                                    console.error(`VEERUM Viewer: Error adding point cloud to viewer:`, addError);
-                                    // Provide user-friendly error message for missing Potree files
-                                    const errorMessage = addError?.message || addError?.toString() || "";
-                                    if (errorMessage.includes("404") || errorMessage.includes("not found") || errorMessage.includes("metadata")) {
-                                        throw new Error("Potree Viewer Auxiliary Preview files not currently available");
-                                    }
-                                    throw addError;
-                                });
-                            
+                            await Promise.resolve(
+                                viewerControllerRef.current.add(pointCloudModel)
+                            ).catch((addError) => {
+                                console.error(
+                                    `VEERUM Viewer: Error adding point cloud to viewer:`,
+                                    addError
+                                );
+                                // Provide user-friendly error message for missing Potree files
+                                const errorMessage =
+                                    addError?.message || addError?.toString() || "";
+                                if (
+                                    errorMessage.includes("404") ||
+                                    errorMessage.includes("not found") ||
+                                    errorMessage.includes("metadata")
+                                ) {
+                                    throw new Error(
+                                        "Potree Viewer Auxiliary Preview files not currently available"
+                                    );
+                                }
+                                throw addError;
+                            });
+
                             loadedModels.push(pointCloudModel);
-                            console.log(`VEERUM Viewer: Point cloud ${fileKey} loaded successfully`);
+                            console.log(
+                                `VEERUM Viewer: Point cloud ${fileKey} loaded successfully`
+                            );
                         }
                     } catch (fileError: any) {
-                        const errorMsg = fileError?.message || fileError?.toString() || "Unknown error";
+                        const errorMsg =
+                            fileError?.message || fileError?.toString() || "Unknown error";
                         console.error(`VEERUM Viewer: Error loading file ${fileKey}:`, fileError);
                         errors.push({ file: fileKey, error: errorMsg });
                         // Continue loading other files even if one fails
@@ -261,7 +287,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                     // For multiple models, zoom to the first one (could be enhanced to fit all)
                     await viewerControllerRef.current.zoomCameraToObject(loadedModels[0]);
                 }
-                
+
                 console.log(`VEERUM Viewer: Successfully loaded ${loadedModels.length} model(s)`);
                 setIsLoading(false);
             } catch (error) {
@@ -373,7 +399,8 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             marginBottom: "8px",
                         }}
                     >
-                        ⚠️ Some files failed to load ({fileErrors.length}/{(multiFileKeys?.length || 1)})
+                        ⚠️ Some files failed to load ({fileErrors.length}/
+                        {multiFileKeys?.length || 1})
                     </div>
                     {fileErrors.map((err, idx) => (
                         <div
@@ -492,9 +519,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         zIndex: 1000,
                     }}
                 >
-                    <div style={{ fontWeight: "bold", marginBottom: "4px" }}>
-                        VEERUM 3D Viewer
-                    </div>
+                    <div style={{ fontWeight: "bold", marginBottom: "4px" }}>VEERUM 3D Viewer</div>
                     <div style={{ fontSize: "0.9em", opacity: 0.9 }}>
                         Mouse: Rotate | Wheel: Zoom | Right-click: Pan
                     </div>

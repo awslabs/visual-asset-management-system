@@ -12,12 +12,12 @@ VEERUM viewer and package is a paid license that can be purchased at [veerum.com
 
 ### Bundled Approach
 
-- Veerum viewer is installed only in this custom install directory
-- Webpack bundles the viewer and all dependencies (Three.js, lodash, rxjs, etc.) into a single UMD file
-- React and ReactDOM are externalized to use the host application's versions
-- Bundle files are copied to public folder for dynamic loading
-- Dependency manager loads files via script tags and provides React 17 compatibility polyfills
-- No runtime dependency on node_modules
+-   Veerum viewer is installed only in this custom install directory
+-   Webpack bundles the viewer and all dependencies (Three.js, lodash, rxjs, etc.) into a single UMD file
+-   React and ReactDOM are externalized to use the host application's versions
+-   Bundle files are copied to public folder for dynamic loading
+-   Dependency manager loads files via script tags and provides React 17 compatibility polyfills
+-   No runtime dependency on node_modules
 
 ## Prerequisites
 
@@ -87,25 +87,27 @@ node web/customInstalls/veerum/veerumInstall.js
 
 ### Build Configuration
 
-- **`webpack.config.js`**: Webpack configuration for bundling
-  - Creates UMD bundle exposing `window.VeerumViewerModule`
-  - Externalizes React and ReactDOM to use host app versions
-  - Bundles all other dependencies (Three.js, lodash, rxjs, etc.)
-  - Minifies JavaScript with Terser
-  - Generates source maps for debugging
-  - Copies assets and textures from the Veerum package
+-   **`webpack.config.js`**: Webpack configuration for bundling
 
-- **`package.json`**: NPM package configuration
-  - Dependencies: `@veerum/viewer` (the viewer package)
-  - DevDependencies: webpack, babel, and related plugins
-  - Build script: `npm run build` (runs webpack)
+    -   Creates UMD bundle exposing `window.VeerumViewerModule`
+    -   Externalizes React and ReactDOM to use host app versions
+    -   Bundles all other dependencies (Three.js, lodash, rxjs, etc.)
+    -   Minifies JavaScript with Terser
+    -   Generates source maps for debugging
+    -   Copies assets and textures from the Veerum package
 
-- **`veerumInstall.js`**: Installation script
-  - Cleans previous builds
-  - Checks if viewer is enabled in viewerConfig.json
-  - Verifies @veerum/viewer is installed in node_modules
-  - Builds bundle with webpack
-  - Copies bundled files, assets, and textures to `web/public/viewers/veerum/`
+-   **`package.json`**: NPM package configuration
+
+    -   Dependencies: `@veerum/viewer` (the viewer package)
+    -   DevDependencies: webpack, babel, and related plugins
+    -   Build script: `npm run build` (runs webpack)
+
+-   **`veerumInstall.js`**: Installation script
+    -   Cleans previous builds
+    -   Checks if viewer is enabled in viewerConfig.json
+    -   Verifies @veerum/viewer is installed in node_modules
+    -   Builds bundle with webpack
+    -   Copies bundled files, assets, and textures to `web/public/viewers/veerum/`
 
 ### Build Steps
 
@@ -152,8 +154,8 @@ The dependency manager:
 1. Dynamically imports React and ReactDOM from the host application
 2. Exposes them globally on window object
 3. Creates React 18 API polyfills for React 17 compatibility:
-   - `ReactDOM.createRoot` polyfill
-   - `React['jsx-runtime']` polyfill
+    - `ReactDOM.createRoot` polyfill
+    - `React['jsx-runtime']` polyfill
 4. Loads JavaScript bundle via script tag injection
 5. Accesses viewer from `window.VeerumViewerModule` (UMD export)
 
@@ -161,18 +163,20 @@ The dependency manager:
 
 The Veerum viewer supports:
 
-- **Point Clouds**: .e57, .las, .laz, .ply
-  - Uses `PointCloudModel` class
-  - Requires Potree preprocessing (auxiliary preview files)
-  - Loads from: `auxiliaryPreviewAssets/stream/{fileKey}/preview/PotreeViewer/metadata.json`
-  - **Important**: The Potree pipeline viewer must be enabled in `infra/config/config.json` during VAMS deployment for point cloud files to be preprocessed and viewable. Set `"enablePotreePipeline": true` in the pipelines configuration.
+-   **Point Clouds**: .e57, .las, .laz, .ply
 
-- **3D Tilesets**: .json
-  - Uses `TileModel` class
-  - Streams directly from asset files
-  - Loads from: `download/stream/{encodedFileKey}`
+    -   Uses `PointCloudModel` class
+    -   Requires Potree preprocessing (auxiliary preview files)
+    -   Loads from: `auxiliaryPreviewAssets/stream/{fileKey}/preview/PotreeViewer/metadata.json`
+    -   **Important**: The Potree pipeline viewer must be enabled in `infra/config/config.json` during VAMS deployment for point cloud files to be preprocessed and viewable. Set `"enablePotreePipeline": true` in the pipelines configuration.
 
-- **Multi-File Support**: Can load multiple files of mixed types in a single viewer session
+-   **3D Tilesets**: .json
+
+    -   Uses `TileModel` class
+    -   Streams directly from asset files
+    -   Loads from: `download/stream/{encodedFileKey}`
+
+-   **Multi-File Support**: Can load multiple files of mixed types in a single viewer session
 
 ## React Compatibility
 
@@ -182,18 +186,18 @@ The Veerum viewer is built with React 18, but VAMS uses React 17. The dependency
 
 ```typescript
 // createRoot polyfill (React 18 → React 17)
-ReactDOM.createRoot = function(container) {
+ReactDOM.createRoot = function (container) {
     return {
         render: (element) => ReactDOM.render(element, container),
-        unmount: () => ReactDOM.unmountComponentAtNode(container)
+        unmount: () => ReactDOM.unmountComponentAtNode(container),
     };
 };
 
 // jsx-runtime polyfill
-React['jsx-runtime'] = {
+React["jsx-runtime"] = {
     jsx: React.createElement,
     jsxs: React.createElement,
-    Fragment: React.Fragment
+    Fragment: React.Fragment,
 };
 ```
 
@@ -220,27 +224,27 @@ This ensures the Veerum bundle uses the host application's React instead of bund
 
 ### Reduced File Count
 
-- Only 4 main files plus assets/textures copied to public folder
-- Much smaller footprint than copying entire node_modules
+-   Only 4 main files plus assets/textures copied to public folder
+-   Much smaller footprint than copying entire node_modules
 
 ### Improved Performance
 
-- Single HTTP request for main bundle
-- Minified and optimized bundle (~1.76MB)
-- Better browser caching
-- Source maps for debugging
+-   Single HTTP request for main bundle
+-   Minified and optimized bundle (~1.76MB)
+-   Better browser caching
+-   Source maps for debugging
 
 ### Consistent Pattern
 
-- Matches other viewer loading approaches
-- Uses same script loading utilities
-- Follows VAMS plugin architecture
+-   Matches other viewer loading approaches
+-   Uses same script loading utilities
+-   Follows VAMS plugin architecture
 
 ### No Runtime Dependency
 
-- Veerum not needed in main `web/package.json`
-- Cleaner dependency tree
-- Smaller node_modules in main project
+-   Veerum not needed in main `web/package.json`
+-   Cleaner dependency tree
+-   Smaller node_modules in main project
 
 ## Troubleshooting
 
@@ -331,27 +335,27 @@ To update the Veerum viewer version:
 
 1. Update version in `package.json`:
 
-   ```json
-   {
-       "dependencies": {
-           "@veerum/viewer": "^2.0.13"
-       }
-   }
-   ```
+    ```json
+    {
+        "dependencies": {
+            "@veerum/viewer": "^2.0.13"
+        }
+    }
+    ```
 
 2. Reinstall the package:
 
-   ```bash
-   cd web/customInstalls/veerum
-   npm install
-   ```
+    ```bash
+    cd web/customInstalls/veerum
+    npm install
+    ```
 
 3. Rebuild the bundle:
 
-   ```bash
-   cd web
-   node customInstalls/veerum/veerumInstall.js
-   ```
+    ```bash
+    cd web
+    node customInstalls/veerum/veerumInstall.js
+    ```
 
 4. Test the updated viewer in the application
 
@@ -361,48 +365,48 @@ To update the Veerum viewer version:
 
 The bundle uses UMD (Universal Module Definition) format:
 
-- Works in browsers (exposes global variable)
-- Compatible with AMD and CommonJS
-- Exposes `window.VeerumViewerModule`
+-   Works in browsers (exposes global variable)
+-   Compatible with AMD and CommonJS
+-   Exposes `window.VeerumViewerModule`
 
 ### Bundle Contents
 
 The bundle includes:
 
-- `@veerum/viewer` core library
-- Three.js (3D rendering engine)
-- lodash (utility functions)
-- rxjs (reactive programming)
-- 3d-tiles-renderer (tileset support)
-- @tweenjs/tween.js (animations)
-- bowser (browser detection)
-- file-saver (file downloads)
-- popmotion (animations)
-- tinycolor2 (color utilities)
-- uuid (unique identifiers)
-- All transitive dependencies
+-   `@veerum/viewer` core library
+-   Three.js (3D rendering engine)
+-   lodash (utility functions)
+-   rxjs (reactive programming)
+-   3d-tiles-renderer (tileset support)
+-   @tweenjs/tween.js (animations)
+-   bowser (browser detection)
+-   file-saver (file downloads)
+-   popmotion (animations)
+-   tinycolor2 (color utilities)
+-   uuid (unique identifiers)
+-   All transitive dependencies
 
 ### Externalized Dependencies
 
 These are NOT bundled (provided by host app):
 
-- React (^17.0.2 in host app, ^18.3.1 in Veerum)
-- ReactDOM (^17.0.2 in host app, ^18.3.1 in Veerum)
-- react-dom/client (polyfilled for React 17)
-- react/jsx-runtime (polyfilled for React 17)
+-   React (^17.0.2 in host app, ^18.3.1 in Veerum)
+-   ReactDOM (^17.0.2 in host app, ^18.3.1 in Veerum)
+-   react-dom/client (polyfilled for React 17)
+-   react/jsx-runtime (polyfilled for React 17)
 
 ### Webpack Configuration
 
 Key webpack settings:
 
-- **Mode**: Production (minification enabled)
-- **Entry**: `./node_modules/@veerum/viewer/dist/lib/index.js`
-- **Output**: UMD library format as `VeerumViewerModule`
-- **Externals**: React and ReactDOM (with subpath externals)
-- **Optimization**: TerserPlugin for minification
-- **Source Maps**: Generated for debugging
-- **Performance**: Hints disabled (bundle is intentionally large)
-- **Babel**: Transpiles ES modules for broader compatibility
+-   **Mode**: Production (minification enabled)
+-   **Entry**: `./node_modules/@veerum/viewer/dist/lib/index.js`
+-   **Output**: UMD library format as `VeerumViewerModule`
+-   **Externals**: React and ReactDOM (with subpath externals)
+-   **Optimization**: TerserPlugin for minification
+-   **Source Maps**: Generated for debugging
+-   **Performance**: Hints disabled (bundle is intentionally large)
+-   **Babel**: Transpiles ES modules for broader compatibility
 
 ### Model Classes
 
@@ -440,23 +444,25 @@ new TileModel(
 Located at: `web/src/visualizerPlugin/viewers/VeerumViewerPlugin/VeerumViewerComponent.tsx`
 
 Features:
-- Multi-file support (can load multiple point clouds and/or tilesets)
-- Automatic file type detection based on extension
-- Proper URL construction for each file type
-- JWT authorization via Headers object
-- React 17 compatibility via polyfills
-- Error handling and loading states
+
+-   Multi-file support (can load multiple point clouds and/or tilesets)
+-   Automatic file type detection based on extension
+-   Proper URL construction for each file type
+-   JWT authorization via Headers object
+-   React 17 compatibility via polyfills
+-   Error handling and loading states
 
 ### Dependency Manager
 
 Located at: `web/src/visualizerPlugin/viewers/VeerumViewerPlugin/dependencies.ts`
 
 Responsibilities:
-- Load React and ReactDOM from host application
-- Create React 18 API polyfills for React 17
-- Load Veerum bundle from public folder
-- Expose VeerumViewerModule on window object
-- Manage cleanup and state
+
+-   Load React and ReactDOM from host application
+-   Create React 18 API polyfills for React 17
+-   Load Veerum bundle from public folder
+-   Expose VeerumViewerModule on window object
+-   Manage cleanup and state
 
 ### Configuration
 
@@ -496,10 +502,11 @@ Potential enhancements:
 ## Support
 
 For issues related to:
-- **Veerum viewer functionality**: Contact VEERUM support
-- **VAMS integration**: Check VAMS documentation or create an issue
-- **Bundle build issues**: Review webpack.config.js and ensure all dependencies are installed
-- **React compatibility**: Check browser console for polyfill-related messages
+
+-   **Veerum viewer functionality**: Contact VEERUM support
+-   **VAMS integration**: Check VAMS documentation or create an issue
+-   **Bundle build issues**: Review webpack.config.js and ensure all dependencies are installed
+-   **React compatibility**: Check browser console for polyfill-related messages
 
 ## License
 

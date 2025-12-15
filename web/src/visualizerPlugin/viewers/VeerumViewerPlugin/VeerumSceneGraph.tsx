@@ -58,7 +58,11 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
                         .filter((child: any) => {
                             // Filter out cameras, lights, and helpers unless they're important
                             const type = child.type;
-                            return !type.includes('Camera') && !type.includes('Light') && !type.includes('Helper');
+                            return (
+                                !type.includes("Camera") &&
+                                !type.includes("Light") &&
+                                !type.includes("Helper")
+                            );
                         })
                         .map((child: any) => buildNode(child));
                 }
@@ -82,15 +86,15 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
     useEffect(() => {
         const tree = buildSceneTree();
         setSceneTree(tree);
-        
+
         // Auto-expand root nodes
-        const rootIds = new Set(tree.map(node => node.id));
+        const rootIds = new Set(tree.map((node) => node.id));
         setExpandedNodes(rootIds);
     }, [buildSceneTree]);
 
     // Toggle node expansion
     const toggleExpand = useCallback((nodeId: string) => {
-        setExpandedNodes(prev => {
+        setExpandedNodes((prev) => {
             const newSet = new Set(prev);
             if (newSet.has(nodeId)) {
                 newSet.delete(nodeId);
@@ -105,53 +109,62 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
     const handleObjectClick = useCallback((node: SceneNode) => {
         setSelectedObject(node.object);
         console.log("Selected object:", node.name, node.object);
-        
+
         // TODO: Highlight object in scene if Veerum supports it
         // This might require adding an outline or changing material
     }, []);
 
     // Handle object double-click (zoom to object)
-    const handleObjectDoubleClick = useCallback(async (node: SceneNode) => {
-        if (!viewerController) return;
-        
-        try {
-            await viewerController.zoomCameraToObject(node.object);
-            console.log("Zoomed to object:", node.name);
-        } catch (error) {
-            console.error("Error zooming to object:", error);
-        }
-    }, [viewerController]);
+    const handleObjectDoubleClick = useCallback(
+        async (node: SceneNode) => {
+            if (!viewerController) return;
+
+            try {
+                await viewerController.zoomCameraToObject(node.object);
+                console.log("Zoomed to object:", node.name);
+            } catch (error) {
+                console.error("Error zooming to object:", error);
+            }
+        },
+        [viewerController]
+    );
 
     // Toggle object visibility
-    const toggleObjectVisibility = useCallback((node: SceneNode, event: React.MouseEvent) => {
-        event.stopPropagation(); // Prevent triggering selection
-        
-        try {
-            node.object.visible = !node.object.visible;
-            // Force re-render
-            setSceneTree(buildSceneTree());
-            console.log(`Object ${node.name} visibility: ${node.object.visible}`);
-        } catch (error) {
-            console.error("Error toggling object visibility:", error);
-        }
-    }, [buildSceneTree]);
+    const toggleObjectVisibility = useCallback(
+        (node: SceneNode, event: React.MouseEvent) => {
+            event.stopPropagation(); // Prevent triggering selection
+
+            try {
+                node.object.visible = !node.object.visible;
+                // Force re-render
+                setSceneTree(buildSceneTree());
+                console.log(`Object ${node.name} visibility: ${node.object.visible}`);
+            } catch (error) {
+                console.error("Error toggling object visibility:", error);
+            }
+        },
+        [buildSceneTree]
+    );
 
     // Select/Deselect all objects
-    const setAllVisibility = useCallback((visible: boolean) => {
-        try {
-            const scene = viewerController.getScene();
-            if (!scene) return;
+    const setAllVisibility = useCallback(
+        (visible: boolean) => {
+            try {
+                const scene = viewerController.getScene();
+                if (!scene) return;
 
-            scene.traverse((obj: any) => {
-                obj.visible = visible;
-            });
+                scene.traverse((obj: any) => {
+                    obj.visible = visible;
+                });
 
-            setSceneTree(buildSceneTree());
-            console.log(`All objects ${visible ? "shown" : "hidden"}`);
-        } catch (error) {
-            console.error("Error setting all visibility:", error);
-        }
-    }, [viewerController, buildSceneTree]);
+                setSceneTree(buildSceneTree());
+                console.log(`All objects ${visible ? "shown" : "hidden"}`);
+            } catch (error) {
+                console.error("Error setting all visibility:", error);
+            }
+        },
+        [viewerController, buildSceneTree]
+    );
 
     // Render tree node recursively
     const renderNode = (node: SceneNode, depth: number = 0): React.ReactNode => {
@@ -162,13 +175,13 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
 
         // Get icon based on type
         const getIcon = (type: string) => {
-            if (type.includes('PointCloud')) return '🌫️';
-            if (type.includes('Tile')) return '🎲';
-            if (type.includes('Mesh')) return '📐';
-            if (type.includes('Group')) return '📁';
-            if (type.includes('Points')) return '⚫';
-            if (type.includes('Line')) return '📏';
-            return '📦';
+            if (type.includes("PointCloud")) return "🌫️";
+            if (type.includes("Tile")) return "🎲";
+            if (type.includes("Mesh")) return "📐";
+            if (type.includes("Group")) return "📁";
+            if (type.includes("Points")) return "⚫";
+            if (type.includes("Line")) return "📏";
+            return "📦";
         };
 
         return (
@@ -178,10 +191,10 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
                         padding: "4px 8px",
                         paddingLeft: `${depth * 16 + 8}px`,
                         cursor: "pointer",
-                        backgroundColor: isSelected 
-                            ? "rgba(76, 175, 80, 0.3)" 
-                            : isHovered 
-                            ? "rgba(255, 255, 255, 0.1)" 
+                        backgroundColor: isSelected
+                            ? "rgba(76, 175, 80, 0.3)"
+                            : isHovered
+                            ? "rgba(255, 255, 255, 0.1)"
                             : "transparent",
                         borderRadius: "4px",
                         marginBottom: "2px",
@@ -212,7 +225,11 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
                             {isExpanded ? "▼" : "▶"}
                         </span>
                     )}
-                    {!hasChildren && <span style={{ marginRight: "4px", width: "12px", display: "inline-block" }}></span>}
+                    {!hasChildren && (
+                        <span
+                            style={{ marginRight: "4px", width: "12px", display: "inline-block" }}
+                        ></span>
+                    )}
 
                     {/* Visibility Icon */}
                     <span
@@ -233,7 +250,14 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
                     </span>
 
                     {/* Object Name */}
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span
+                        style={{
+                            flex: 1,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                        }}
+                    >
                         {node.name}
                     </span>
 
@@ -247,9 +271,7 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
 
                 {/* Render children if expanded */}
                 {hasChildren && isExpanded && (
-                    <div>
-                        {node.children.map(child => renderNode(child, depth + 1))}
-                    </div>
+                    <div>{node.children.map((child) => renderNode(child, depth + 1))}</div>
                 )}
             </div>
         );
@@ -262,12 +284,14 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
     return (
         <>
             {/* Select All/Deselect All Buttons */}
-            <div style={{ 
-                padding: "8px 16px",
-                borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
-                display: "flex",
-                gap: "8px"
-            }}>
+            <div
+                style={{
+                    padding: "8px 16px",
+                    borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
+                    display: "flex",
+                    gap: "8px",
+                }}
+            >
                 <button
                     onClick={() => setAllVisibility(true)}
                     style={{
@@ -301,16 +325,18 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
             </div>
 
             {/* Scene Tree */}
-            <div style={{ 
-                flex: 1,
-                overflowY: "auto",
-                overflowX: "hidden",
-                padding: "8px",
-                scrollbarWidth: "thin",
-                scrollbarColor: "rgba(255, 255, 255, 0.5) transparent",
-            }}>
+            <div
+                style={{
+                    flex: 1,
+                    overflowY: "auto",
+                    overflowX: "hidden",
+                    padding: "8px",
+                    scrollbarWidth: "thin",
+                    scrollbarColor: "rgba(255, 255, 255, 0.5) transparent",
+                }}
+            >
                 {sceneTree.length > 0 ? (
-                    sceneTree.map(node => renderNode(node, 0))
+                    sceneTree.map((node) => renderNode(node, 0))
                 ) : (
                     <div style={{ padding: "16px", textAlign: "center", color: "#999" }}>
                         No objects in scene
@@ -320,56 +346,76 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
 
             {/* Object Details Panel */}
             {selectedObject && (
-                <div style={{
-                    borderTop: "1px solid rgba(255, 255, 255, 0.1)",
-                    padding: "12px 16px",
-                    backgroundColor: "rgba(0, 0, 0, 0.3)",
-                    maxHeight: "200px",
-                    overflowY: "auto",
-                }}>
-                    <h5 style={{ margin: "0 0 8px 0", fontSize: "0.9em", color: "#4CAF50", textAlign: "center" }}>
+                <div
+                    style={{
+                        borderTop: "1px solid rgba(255, 255, 255, 0.1)",
+                        padding: "12px 16px",
+                        backgroundColor: "rgba(0, 0, 0, 0.3)",
+                        maxHeight: "200px",
+                        overflowY: "auto",
+                    }}
+                >
+                    <h5
+                        style={{
+                            margin: "0 0 8px 0",
+                            fontSize: "0.9em",
+                            color: "#4CAF50",
+                            textAlign: "center",
+                        }}
+                    >
                         📋 Object Details
                     </h5>
                     <div style={{ fontSize: "0.8em", lineHeight: "1.6", textAlign: "left" }}>
-                        <div><strong>Name:</strong> {selectedObject.name || "Unnamed"}</div>
-                        <div><strong>Type:</strong> {selectedObject.type}</div>
+                        <div>
+                            <strong>Name:</strong> {selectedObject.name || "Unnamed"}
+                        </div>
+                        <div>
+                            <strong>Type:</strong> {selectedObject.type}
+                        </div>
                         {selectedObject.veerumId && (
-                            <div><strong>Veerum ID:</strong> {selectedObject.veerumId}</div>
+                            <div>
+                                <strong>Veerum ID:</strong> {selectedObject.veerumId}
+                            </div>
                         )}
-                        <div><strong>UUID:</strong> {selectedObject.uuid.substring(0, 8)}...</div>
-                        <div><strong>Visible:</strong> {selectedObject.visible ? "Yes" : "No"}</div>
-                        <div><strong>Children:</strong> {selectedObject.children?.length || 0}</div>
-                        
+                        <div>
+                            <strong>UUID:</strong> {selectedObject.uuid.substring(0, 8)}...
+                        </div>
+                        <div>
+                            <strong>Visible:</strong> {selectedObject.visible ? "Yes" : "No"}
+                        </div>
+                        <div>
+                            <strong>Children:</strong> {selectedObject.children?.length || 0}
+                        </div>
+
                         {selectedObject.position && (
                             <div>
-                                <strong>Position:</strong> (
-                                {selectedObject.position.x.toFixed(2)}, 
-                                {selectedObject.position.y.toFixed(2)}, 
+                                <strong>Position:</strong> ({selectedObject.position.x.toFixed(2)},
+                                {selectedObject.position.y.toFixed(2)},
                                 {selectedObject.position.z.toFixed(2)})
                             </div>
                         )}
-                        
+
                         {selectedObject.rotation && (
                             <div>
                                 <strong>Rotation:</strong> (
-                                {(selectedObject.rotation.x * 180 / Math.PI).toFixed(1)}°, 
-                                {(selectedObject.rotation.y * 180 / Math.PI).toFixed(1)}°, 
-                                {(selectedObject.rotation.z * 180 / Math.PI).toFixed(1)}°)
+                                {((selectedObject.rotation.x * 180) / Math.PI).toFixed(1)}°,
+                                {((selectedObject.rotation.y * 180) / Math.PI).toFixed(1)}°,
+                                {((selectedObject.rotation.z * 180) / Math.PI).toFixed(1)}°)
                             </div>
                         )}
-                        
+
                         {selectedObject.scale && (
                             <div>
-                                <strong>Scale:</strong> (
-                                {selectedObject.scale.x.toFixed(2)}, 
-                                {selectedObject.scale.y.toFixed(2)}, 
+                                <strong>Scale:</strong> ({selectedObject.scale.x.toFixed(2)},
+                                {selectedObject.scale.y.toFixed(2)},
                                 {selectedObject.scale.z.toFixed(2)})
                             </div>
                         )}
 
                         {selectedObject.boundingSphere && (
                             <div>
-                                <strong>Bounding Radius:</strong> {selectedObject.boundingSphere.radius.toFixed(2)}
+                                <strong>Bounding Radius:</strong>{" "}
+                                {selectedObject.boundingSphere.radius.toFixed(2)}
                             </div>
                         )}
                     </div>
@@ -377,12 +423,14 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
             )}
 
             {/* Help Text */}
-            <div style={{ 
-                padding: "8px 16px",
-                borderTop: "1px solid rgba(255, 255, 255, 0.1)",
-                fontSize: "0.7em",
-                color: "#999"
-            }}>
+            <div
+                style={{
+                    padding: "8px 16px",
+                    borderTop: "1px solid rgba(255, 255, 255, 0.1)",
+                    fontSize: "0.7em",
+                    color: "#999",
+                }}
+            >
                 Click: Select | Double-click: Zoom | 👁️: Toggle visibility
             </div>
         </>

@@ -23,7 +23,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
     const [currentView, setCurrentView] = useState<string>("perspective");
 
     // Camera & Navigation States
-    const [cameraType, setCameraTypeState] = useState<"perspective" | "orthographic">("perspective");
+    const [cameraType, setCameraTypeState] = useState<"perspective" | "orthographic">(
+        "perspective"
+    );
     const [controlsType, setControlsTypeState] = useState<"orbit" | "fly">("orbit");
     const [flySpeed, setFlySpeed] = useState<number>(1.0);
 
@@ -66,7 +68,7 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
 
             try {
                 setCurrentView(view);
-                
+
                 // For top view, use the dedicated method
                 if (view === "top") {
                     await viewerController.fitCameraToSceneFromTop();
@@ -77,12 +79,12 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                     if (scene && loadedModels.length > 0) {
                         const model = loadedModels[0];
                         const boundingSphere = model.boundingSphere || model.worldBoundingSphere;
-                        
+
                         if (boundingSphere) {
                             const center = boundingSphere.center;
                             const radius = boundingSphere.radius;
                             const distance = radius * 2.5;
-                            
+
                             // Calculate camera position based on view
                             let cameraPos;
                             switch (view) {
@@ -93,19 +95,23 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                                     cameraPos = center.clone().add({ x: distance, y: 0, z: 0 });
                                     break;
                                 case "isometric":
-                                    cameraPos = center.clone().add({ x: distance * 0.7, y: distance * 0.7, z: distance * 0.7 });
+                                    cameraPos = center.clone().add({
+                                        x: distance * 0.7,
+                                        y: distance * 0.7,
+                                        z: distance * 0.7,
+                                    });
                                     break;
                                 default:
                                     return;
                             }
-                            
+
                             await viewerController.positionAndRotateCamera(cameraPos, center);
                         }
                     }
                 }
 
                 console.log(`Camera set to ${view} view`);
-                
+
                 // Reset highlight after animation
                 setTimeout(() => setCurrentView("perspective"), 1000);
             } catch (error) {
@@ -268,7 +274,7 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
         try {
             const newShape = pointShape === "circle" ? "square" : "circle";
             setPointShape(newShape);
-            
+
             // Apply the point shape change
             // Note: The shape enum values should be "CIRCLE" or "SQUARE"
             viewerController.setModelVisuals({
@@ -276,7 +282,7 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                     pointShape: newShape === "circle" ? "CIRCLE" : "SQUARE",
                 },
             });
-            
+
             console.log(`Point shape set to ${newShape}`);
         } catch (error) {
             console.error("Error toggling point shape:", error);
@@ -375,7 +381,7 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
             setEdlEnabled(true);
             setNavCubeVisible(true);
             setBoundingBoxVisible(false);
-            setPointSize(1);  // Default point size is 1
+            setPointSize(1); // Default point size is 1
             setPointBudget(1000000);
             setPointShape("circle");
             setHighDefinition(true);
@@ -394,7 +400,7 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
             viewerController.setNavCubeVisibility(true);
             viewerController.setCameraType("PERSPECTIVE");
             viewerController.setControls("ORBIT");
-            
+
             viewerController.setModelVisuals({
                 boundingBoxVisibility: false,
                 brightness: 0,
@@ -403,7 +409,7 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                 opacity: 1,
                 gradient: "NONE",
                 pointCloudOptions: {
-                    pointSize: 1,  // Default point size is 1
+                    pointSize: 1, // Default point size is 1
                     pointBudget: 1000000,
                     pointShape: "CIRCLE",
                     highDefinition: true,
@@ -441,7 +447,7 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
         try {
             const newState = !isFrozen;
             setIsFrozen(newState);
-            
+
             if (newState) {
                 viewerController.freeze();
             } else {
@@ -455,11 +461,11 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
     const toggleModelVisibility = useCallback(
         (index: number) => {
             if (index >= loadedModels.length) return;
-            
+
             try {
                 const model = loadedModels[index];
                 const newVisibility = !modelVisibility[index];
-                
+
                 model.visible = newVisibility;
                 setModelVisibility((prev) => ({
                     ...prev,
@@ -482,37 +488,40 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
     // Keyboard Shortcuts
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
-            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+            if (
+                event.target instanceof HTMLInputElement ||
+                event.target instanceof HTMLTextAreaElement
+            ) {
                 return;
             }
 
             switch (event.key.toLowerCase()) {
-                case 't':
+                case "t":
                     setCameraView("top");
                     break;
-                case 'f':
+                case "f":
                     fitToScene();
                     break;
-                case 'p':
+                case "p":
                     toggleCameraType();
                     break;
-                case 'b':
+                case "b":
                     cycleBackground();
                     break;
-                case 'e':
+                case "e":
                     toggleEDL();
                     break;
-                case 'a':
+                case "a":
                     setAdvancedMode((prev) => !prev);
                     break;
-                case 'escape':
+                case "escape":
                     if (onClose) onClose();
                     break;
             }
         };
 
-        window.addEventListener('keydown', handleKeyPress);
-        return () => window.removeEventListener('keydown', handleKeyPress);
+        window.addEventListener("keydown", handleKeyPress);
+        return () => window.removeEventListener("keydown", handleKeyPress);
     }, [setCameraView, fitToScene, toggleCameraType, cycleBackground, toggleEDL, onClose]);
 
     if (!viewerController || loadedModels.length === 0) {
@@ -520,9 +529,21 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
     }
 
     const gradientOptions = [
-        "NONE", "RAINBOW", "INVERTED_RAINBOW", "GRAYSCALE", "INFERNO", 
-        "PLASMA", "VIRIDIS", "TURBO", "SPECTRAL", "BLUES", 
-        "CONTOUR", "BLUEPRINT", "SAFETY_VEST", "YELLOW_GREEN", "DEBUG"
+        "NONE",
+        "RAINBOW",
+        "INVERTED_RAINBOW",
+        "GRAYSCALE",
+        "INFERNO",
+        "PLASMA",
+        "VIRIDIS",
+        "TURBO",
+        "SPECTRAL",
+        "BLUES",
+        "CONTOUR",
+        "BLUEPRINT",
+        "SAFETY_VEST",
+        "YELLOW_GREEN",
+        "DEBUG",
     ];
 
     return (
@@ -560,9 +581,7 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             onClick={() => setCameraView(view)}
                             style={{
                                 background:
-                                    currentView === view
-                                        ? "#4CAF50"
-                                        : "rgba(255, 255, 255, 0.1)",
+                                    currentView === view ? "#4CAF50" : "rgba(255, 255, 255, 0.1)",
                                 border: "1px solid rgba(255, 255, 255, 0.2)",
                                 color: "white",
                                 padding: "6px 8px",
@@ -644,7 +663,8 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             key={bg}
                             onClick={() => changeBackground(bg)}
                             style={{
-                                background: background === bg ? "#4CAF50" : "rgba(255, 255, 255, 0.1)",
+                                background:
+                                    background === bg ? "#4CAF50" : "rgba(255, 255, 255, 0.1)",
                                 border: "1px solid rgba(255, 255, 255, 0.2)",
                                 color: "white",
                                 padding: "6px 4px",
@@ -678,7 +698,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                     </label>
                     {advancedMode && (
                         <>
-                            <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
+                            <label
+                                style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
+                            >
                                 <input
                                     type="checkbox"
                                     checked={navCubeVisible}
@@ -687,7 +709,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                                 />
                                 Navigation Cube
                             </label>
-                            <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
+                            <label
+                                style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
+                            >
                                 <input
                                     type="checkbox"
                                     checked={boundingBoxVisible}
@@ -723,7 +747,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                 {advancedMode && (
                     <>
                         <div style={{ marginBottom: "8px" }}>
-                            <label style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}>
+                            <label
+                                style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}
+                            >
                                 Point Budget: {(pointBudget / 1000000).toFixed(1)}M
                             </label>
                             <input
@@ -737,7 +763,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             />
                         </div>
                         <div style={{ marginBottom: "8px" }}>
-                            <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
+                            <label
+                                style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
+                            >
                                 <input
                                     type="checkbox"
                                     checked={pointShape === "square"}
@@ -748,7 +776,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             </label>
                         </div>
                         <div style={{ marginBottom: "8px" }}>
-                            <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
+                            <label
+                                style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
+                            >
                                 <input
                                     type="checkbox"
                                     checked={highDefinition}
@@ -759,7 +789,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             </label>
                         </div>
                         <div style={{ marginBottom: "8px" }}>
-                            <label style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}>
+                            <label
+                                style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}
+                            >
                                 Color Gradient
                             </label>
                             <select
@@ -776,7 +808,11 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                                 }}
                             >
                                 {gradientOptions.map((opt) => (
-                                    <option key={opt} value={opt} style={{ backgroundColor: "#333" }}>
+                                    <option
+                                        key={opt}
+                                        value={opt}
+                                        style={{ backgroundColor: "#333" }}
+                                    >
                                         {opt.replace(/_/g, " ")}
                                     </option>
                                 ))}
@@ -826,7 +862,13 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             </button>
                             {controlsType === "fly" && (
                                 <div>
-                                    <label style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}>
+                                    <label
+                                        style={{
+                                            display: "block",
+                                            marginBottom: "4px",
+                                            fontSize: "0.8em",
+                                        }}
+                                    >
                                         Fly Speed: {flySpeed.toFixed(1)}
                                     </label>
                                     <input
@@ -849,7 +891,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             Visual Adjustments
                         </h5>
                         <div style={{ marginBottom: "8px" }}>
-                            <label style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}>
+                            <label
+                                style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}
+                            >
                                 Brightness: {brightness.toFixed(2)}
                             </label>
                             <input
@@ -863,7 +907,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             />
                         </div>
                         <div style={{ marginBottom: "8px" }}>
-                            <label style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}>
+                            <label
+                                style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}
+                            >
                                 Contrast: {contrast.toFixed(2)}
                             </label>
                             <input
@@ -877,7 +923,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             />
                         </div>
                         <div style={{ marginBottom: "8px" }}>
-                            <label style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}>
+                            <label
+                                style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}
+                            >
                                 Gamma: {gamma.toFixed(2)}
                             </label>
                             <input
@@ -891,7 +939,9 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             />
                         </div>
                         <div style={{ marginBottom: "8px" }}>
-                            <label style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}>
+                            <label
+                                style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}
+                            >
                                 Opacity: {opacity.toFixed(2)}
                             </label>
                             <input
@@ -905,15 +955,12 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
                             />
                         </div>
                     </div>
-
                 </>
             )}
 
             {/* Action Buttons */}
             <div style={{ marginBottom: "16px" }}>
-                <h5 style={{ margin: "0 0 8px 0", fontSize: "0.9em", color: "#ccc" }}>
-                    Actions
-                </h5>
+                <h5 style={{ margin: "0 0 8px 0", fontSize: "0.9em", color: "#ccc" }}>Actions</h5>
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                     <button
                         onClick={resetScene}
@@ -949,7 +996,15 @@ const VeerumControls: React.FC<VeerumControlsProps> = ({
             </div>
 
             {/* Keyboard Shortcuts Help */}
-            <div style={{ fontSize: "0.75em", color: "#999", marginTop: "16px", paddingTop: "12px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+            <div
+                style={{
+                    fontSize: "0.75em",
+                    color: "#999",
+                    marginTop: "16px",
+                    paddingTop: "12px",
+                    borderTop: "1px solid rgba(255,255,255,0.1)",
+                }}
+            >
                 <div style={{ fontWeight: "bold", marginBottom: "4px" }}>Keyboard Shortcuts:</div>
                 <div>T: Top view | F: Fit scene</div>
                 <div>P: Toggle camera | E: Toggle EDL</div>

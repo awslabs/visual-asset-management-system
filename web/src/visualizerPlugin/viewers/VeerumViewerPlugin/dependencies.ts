@@ -49,17 +49,17 @@ export class VeerumDependencyManager {
             // Load VEERUM viewer dependencies from public folder
             await this.loadVeerumFromAssets();
 
-        // Get the viewer module from window object (exposed by UMD bundle)
-        const veerumModule = (window as any).VeerumViewerModule;
+            // Get the viewer module from window object (exposed by UMD bundle)
+            const veerumModule = (window as any).VeerumViewerModule;
 
-        if (!veerumModule) {
-            throw new Error(
-                "VEERUM viewer module not found on window object after loading bundle"
-            );
-        }
+            if (!veerumModule) {
+                throw new Error(
+                    "VEERUM viewer module not found on window object after loading bundle"
+                );
+            }
 
-        // Store the entire module (contains VeerumViewer, ViewerController, etc.)
-        this.veerumInstance = veerumModule;
+            // Store the entire module (contains VeerumViewer, ViewerController, etc.)
+            this.veerumInstance = veerumModule;
 
             console.log(`[${this.PLUGIN_ID}] VEERUM viewer loaded successfully from bundle`);
 
@@ -84,51 +84,51 @@ export class VeerumDependencyManager {
      */
     private static async loadVeerumFromAssets(): Promise<void> {
         // Ensure React and ReactDOM are available globally
-        if (typeof window !== 'undefined') {
-            const React = await import('react');
-            const ReactDOM = await import('react-dom');
-            
+        if (typeof window !== "undefined") {
+            const React = await import("react");
+            const ReactDOM = await import("react-dom");
+
             (window as any).React = React;
             (window as any).ReactDOM = ReactDOM;
-            
+
             // The Veerum bundle needs access to React's jsx-runtime
             // We need to expose it in a way that matches the webpack externals configuration
             // The bundle expects to find it at React['jsx-runtime'] based on our externals config
-            if (React && typeof React === 'object') {
+            if (React && typeof React === "object") {
                 // Create a jsx-runtime object that the bundle can access
                 const jsxRuntime = {
                     jsx: (React as any).createElement,
                     jsxs: (React as any).createElement,
-                    Fragment: (React as any).Fragment
+                    Fragment: (React as any).Fragment,
                 };
-                
+
                 // Expose it on the React object where the bundle will look for it
-                (React as any)['jsx-runtime'] = jsxRuntime;
+                (React as any)["jsx-runtime"] = jsxRuntime;
             }
-            
+
             // The Veerum viewer internally uses React 18's createRoot API
             // Since the host app uses React 17, we need to provide a polyfill
             // The bundle looks for it at ReactDOM.client.createRoot based on our webpack externals config
-            const createRootPolyfill = function(container: HTMLElement) {
+            const createRootPolyfill = function (container: HTMLElement) {
                 return {
                     render: (element: any) => {
                         (ReactDOM as any).render(element, container);
                     },
                     unmount: () => {
                         (ReactDOM as any).unmountComponentAtNode(container);
-                    }
+                    },
                 };
             };
-            
+
             // Add createRoot to both ReactDOM and ReactDOM.client for compatibility
             if (ReactDOM) {
-                console.log('[veerum-viewer] Creating React 18 createRoot polyfill for React 17');
-                
+                console.log("[veerum-viewer] Creating React 18 createRoot polyfill for React 17");
+
                 // Add to base ReactDOM
                 if (!(ReactDOM as any).createRoot) {
                     (ReactDOM as any).createRoot = createRootPolyfill;
                 }
-                
+
                 // Add to ReactDOM.client (where the bundle will look for it based on externals config)
                 if (!(ReactDOM as any).client) {
                     (ReactDOM as any).client = {};
@@ -136,8 +136,10 @@ export class VeerumDependencyManager {
                 (ReactDOM as any).client.createRoot = createRootPolyfill;
                 (ReactDOM as any).client.hydrateRoot = createRootPolyfill; // Also add hydrateRoot for completeness
             }
-            
-            console.log('[veerum-viewer] React, ReactDOM (with createRoot polyfill on ReactDOM.client), and jsx-runtime loaded and exposed globally');
+
+            console.log(
+                "[veerum-viewer] React, ReactDOM (with createRoot polyfill on ReactDOM.client), and jsx-runtime loaded and exposed globally"
+            );
         }
 
         // Load the bundled JavaScript

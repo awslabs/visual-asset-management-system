@@ -341,6 +341,8 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
             CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            PRESIGNED_URL_TIMEOUT_SECONDS:
+                config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
         },
     });
     storageResources.s3.assetAuxiliaryBucket.grantRead(fun);
@@ -505,6 +507,8 @@ export function buildStreamAssetFunction(
             CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            PRESIGNED_URL_TIMEOUT_SECONDS:
+                config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
         },
     });
 

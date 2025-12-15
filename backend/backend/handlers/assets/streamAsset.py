@@ -16,8 +16,12 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from common.s3 import validateS3AssetExtensionsAndContentType
+from common.s3 import validateUnallowedFileExtensionAndContentType
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+
+# Set environment variable for S3 client configuration
+# 'regional' set to add region descriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
+os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional"
 
 # Standardized retry configuration merged with existing S3 config
 s3_config = Config(
@@ -36,6 +40,7 @@ logger = safeLogger(service_name="StreamAsset")
 try:
     s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -128,9 +133,10 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset streaming APIs"""
     global claims_and_roles
-    claims_and_roles = request_to_claims(event)
 
     try:
+        claims_and_roles = request_to_claims(event)
+        
         # Get the request headers from the API Gateway event
         try:
             request_headers = event['headers']
@@ -252,19 +258,6 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Resolve the full S3 key
             object_key = resolve_asset_file_path(asset_base_key, object_key)
 
-            # Validate file extension and content type (same as downloadAsset.py)
-            if not validateS3AssetExtensionsAndContentType(asset_bucket, object_key):
-                message = "Unallowed file extension or content type in asset file"
-                logger.error(message)
-                # Create custom headers for streaming response
-                streaming_headers = {
-                    'Access-Control-Allow-Headers': 'Range',
-                    'Access-Control-Allow-Origin': '*',
-                }
-                error_response = validation_error(body={"message": message})
-                error_response['headers'].update(streaming_headers)
-                return error_response
-
             # Prepare the S3 GetObject request parameters
             s3_params = {
                 'Bucket': asset_bucket,
@@ -276,28 +269,56 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 s3_params['Range'] = range_header
 
             try:
-                # Fetch the file from S3
+                # Fetch the file metadata from S3 first
                 s3_response = s3_client.get_object(**s3_params)
                 logger.info(s3_response)
 
-                # Extract the file data
-                file_data = s3_response['Body'].read()
-
-                # Get the size of the file data in bytes and return error if larger than ~5.9MB (accounting for header space)
-                file_size = sys.getsizeof(file_data)
-                if file_size > 5.9 * 1024 * 1024:
-                    # NOTE: 6MB is a hard limit for Lambda functions. API Gateway has a 10MB hard limit.
-                    message = "Error: Asset File Size Chunk is Larger than ~5.9MB, a AWS service limit. Use a smaller header file Range for asset streaming retrieval."
+                # Validate file extension and content type using the ContentType from S3 response
+                content_type = s3_response.get('ContentType', 'application/octet-stream')
+                if not validateUnallowedFileExtensionAndContentType(object_key, content_type):
+                    message = "Unallowed file extension or content type in asset file"
                     logger.error(message)
                     # Create custom headers for streaming response
                     streaming_headers = {
                         'Access-Control-Allow-Headers': 'Range',
                         'Access-Control-Allow-Origin': '*',
-                        'Cache-Control': 'no-cache, no-store',
                     }
                     error_response = validation_error(body={"message": message})
                     error_response['headers'].update(streaming_headers)
                     return error_response
+
+                # Get the content length from S3 metadata
+                content_length = s3_response.get('ContentLength', 0)
+                
+                # Set conservative limit for streaming (4.4MB raw = ~5.87MB base64 encoded, safely under 6MB Lambda limit)
+                MAX_STREAMING_SIZE = int(4.4 * 1024 * 1024)  # 4.4MB
+                
+                # If file is larger than 4.4MB, generate presigned URL and redirect
+                if content_length > MAX_STREAMING_SIZE:
+                    logger.info(f"File size ({content_length / (1024*1024):.2f}MB) exceeds streaming limit. Generating presigned URL.")
+                    
+                    # Generate presigned URL
+                    presigned_url = s3_client.generate_presigned_url(
+                        'get_object',
+                        Params=s3_params,
+                        ExpiresIn=int(token_timeout)
+                    )
+                    
+                    # Return 307 redirect to presigned URL
+                    return {
+                        'statusCode': 307,
+                        'headers': {
+                            'Location': presigned_url,
+                            'Access-Control-Allow-Headers': 'Range',
+                            'Access-Control-Allow-Origin': '*',
+                            'Cache-Control': 'no-cache, no-store',
+                        },
+                        'body': ''
+                    }
+
+                # For files 4MB and under, stream with base64 encoding
+                # Extract the file data
+                file_data = s3_response['Body'].read()
 
                 # Prepare the API Gateway response
                 api_gateway_response = {

@@ -261,7 +261,7 @@
         {
             "id": "veerum-viewer",
             "name": "VEERUM 3D Viewer",
-            "description": "View Potree-converted point cloud files (.e57, .las, .laz, .ply) and 3D tilesets (.json) using VEERUM's advanced 3D viewer",
+            "description": "View Potree-converted point cloud files (.e57, .las, .laz, .ply) and 3D tilesets (.json) using VEERUM's advanced 3D viewer (LICENSED VIEWER)",
             "componentPath": "./viewers/VeerumViewerPlugin/VeerumViewerComponent",
             "dependencyManager": "./viewers/VeerumViewerPlugin/dependencies",
             "dependencyManagerClass": "VeerumDependencyManager",

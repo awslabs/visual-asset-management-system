@@ -66,14 +66,8 @@ const copyBundledFiles = async () => {
         }
 
         // Copy assets and textures from the source package if they exist
-        const assetsSource = path.join(
-            npmRepoSourceDestDir,
-            "@veerum/viewer/dist/lib/assets"
-        );
-        const texturesSource = path.join(
-            npmRepoSourceDestDir,
-            "@veerum/viewer/dist/lib/textures"
-        );
+        const assetsSource = path.join(npmRepoSourceDestDir, "@veerum/viewer/dist/lib/assets");
+        const texturesSource = path.join(npmRepoSourceDestDir, "@veerum/viewer/dist/lib/textures");
 
         if (await fs.pathExists(assetsSource)) {
             const assetsDest = path.join(destinationDir, "assets");
