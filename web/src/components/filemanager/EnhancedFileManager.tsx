@@ -76,6 +76,8 @@ export function EnhancedFileManager({
     // Track if we're currently loading to prevent duplicate loads
     const loadingRef = useRef(false);
     const hasInitializedRef = useRef(false);
+    // Track if we've already navigated to the filePathToNavigate
+    const hasNavigatedRef = useRef(false);
 
     // Update the tree name when assetName prop changes
     useEffect(() => {
@@ -99,6 +101,73 @@ export function EnhancedFileManager({
             dispatch({ type: "FETCH_SUCCESS", payload: updatedTree });
         }
     }, [assetName]);
+
+    // Handle filePathToNavigate after basic data loading is complete
+    useEffect(() => {
+        // Only proceed if:
+        // 1. We have a filePathToNavigate prop
+        // 2. We haven't already navigated to it
+        // 3. Basic loading is complete (basic-complete or complete phase)
+        // 4. We're not in legacy mode (assetFiles is empty)
+        if (
+            filePathToNavigate &&
+            !hasNavigatedRef.current &&
+            (state.loadingPhase === "basic-complete" || state.loadingPhase === "complete") &&
+            (!assetFiles || assetFiles.length === 0)
+        ) {
+            console.log("🎯 Attempting to navigate to:", filePathToNavigate);
+
+            // Find the file in the tree by path
+            const targetFile = getRootByPath(state.fileTree, filePathToNavigate);
+
+            if (targetFile) {
+                console.log("✅ Found target file, selecting:", targetFile.relativePath);
+                // Select the file
+                dispatch({ type: "SELECT_ITEM", payload: { item: targetFile } });
+                // Mark as navigated
+                hasNavigatedRef.current = true;
+            } else {
+                console.log("❌ Target file not found:", filePathToNavigate);
+                // File not found - show non-blocking error
+                dispatch({
+                    type: "SET_ERROR",
+                    payload: `File path "${filePathToNavigate}" does not exist in this asset.`,
+                });
+
+                // Clear error after 5 seconds
+                setTimeout(() => {
+                    dispatch({ type: "CLEAR_ERROR", payload: null });
+                }, 5000);
+
+                // Still select root so user can browse
+                dispatch({ type: "SELECT_ITEM", payload: { item: state.fileTree } });
+                // Mark as navigated to prevent retrying
+                hasNavigatedRef.current = true;
+            }
+        }
+    }, [filePathToNavigate, state.loadingPhase, state.fileTree, assetFiles]);
+
+    // Reset navigation flag when filePathToNavigate changes
+    useEffect(() => {
+        hasNavigatedRef.current = false;
+    }, [filePathToNavigate]);
+
+    // Handle assetId changes - reset and reload data for new asset
+    useEffect(() => {
+        // Only trigger refresh if we've already initialized (not on first mount)
+        // This prevents double-loading on initial render
+        if (hasInitializedRef.current && assetId) {
+            console.log("🔄 Asset ID changed to:", assetId, "- resetting and reloading...");
+
+            // Reset all tracking flags
+            hasInitializedRef.current = false;
+            loadingRef.current = false;
+            hasNavigatedRef.current = false;
+
+            // Trigger refresh to reload data for new asset
+            dispatch({ type: "REFRESH_FILES", payload: null });
+        }
+    }, [assetId]);
 
     // Function to load files with streaming pagination
     const loadFilesStreaming = useCallback(

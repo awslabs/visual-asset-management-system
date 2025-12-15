@@ -157,6 +157,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Create custom headers for streaming response
             streaming_headers = {
                 'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Origin': '*',
                 'Cache-Control': 'no-cache, no-store',
             }
             error_response = validation_error(body={'message': message})
@@ -197,6 +198,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Create custom headers for streaming response
             streaming_headers = {
                 'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Origin': '*',
             }
             error_response = general_error(body={"message": message}, status_code=404)
             error_response['headers'].update(streaming_headers)
@@ -209,6 +211,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Create custom headers for streaming response
             streaming_headers = {
                 'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Origin': '*',
             }
             error_response = authorization_error(body={"message": message})
             error_response['headers'].update(streaming_headers)
@@ -235,6 +238,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # Create custom headers for streaming response
                 streaming_headers = {
                     'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
                 }
                 error_response = general_error(body={"message": message}, status_code=404)
                 error_response['headers'].update(streaming_headers)
@@ -255,6 +259,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # Create custom headers for streaming response
                 streaming_headers = {
                     'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
                 }
                 error_response = validation_error(body={"message": message})
                 error_response['headers'].update(streaming_headers)
@@ -287,6 +292,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     # Create custom headers for streaming response
                     streaming_headers = {
                         'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
                         'Cache-Control': 'no-cache, no-store',
                     }
                     error_response = validation_error(body={"message": message})
@@ -299,6 +305,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     'body': '',
                     'headers': {
                             'Access-Control-Allow-Headers': 'Range',
+                            'Access-Control-Allow-Origin': '*',
                             'Cache-Control': 'no-cache, no-store',
                             'Accept-Ranges': s3_response['ResponseMetadata']['HTTPHeaders']['accept-ranges'],
                             'Content-Type': s3_response['ResponseMetadata']['HTTPHeaders']['content-type'],
@@ -341,6 +348,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # Create custom headers for streaming response
                 streaming_headers = {
                     'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
                     'Cache-Control': 'no-cache, no-store',
                 }
                 error_response = general_error(body={"message": message})

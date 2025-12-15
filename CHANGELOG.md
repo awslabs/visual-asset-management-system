@@ -13,6 +13,8 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 ### Features
 
 -   (Breaking Change) Reactored permission constraints dynamoDB table, Casbin logic for lookup, and authConstraints API to be more performant and follow the new refactor patterns for dynamoDB tables. This should increase performance of the solution for repeat data actions.
+-   **Web** Added the Veerum 3D Model licened viewer to the viewer plugin system for `e57, las, laz, ply, and .json (3D Tile)` files. Head to [veerum.com](https://www.veerum.com/) for license purchasing and then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
+    -   Note: this viewer uses the Potree Auto-Processing pipeline and must be turned on to support the loading of PointCloud files.
 -   **Web** Added API and UI on Asset and File search for Unarchive Asset. Additionally cleaned up UI logic for archived asset elements.
 -   **Web** Added a Rename File operation on the asset details file manager when singly selecting files. This uses the existing file move API.
 -   Added new CDK deployment configuration support for disabling both Cloudfront and ALB static website deployment options to allow for API-only deployments of VAMS

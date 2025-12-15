@@ -138,6 +138,7 @@ def lambda_handler(event, context):
             'body': json.dumps({"message": message}),
             'headers': {
                 'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Origin': '*',
             }
         }
         logger.error(error_response)
@@ -212,6 +213,7 @@ def lambda_handler(event, context):
                     'body': json.dumps({"message": message}),
                     'headers': {
                         'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
                     }
                 }
                 logger.error(error_response)
@@ -226,6 +228,7 @@ def lambda_handler(event, context):
                 'body': '',
                 'headers': {
                         'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
                         'Accept-Ranges': response['ResponseMetadata']['HTTPHeaders']['accept-ranges'],
                         'Content-Type': response['ResponseMetadata']['HTTPHeaders']['content-type'],
                         'Content-Length': response['ResponseMetadata']['HTTPHeaders']['content-length'],
@@ -262,6 +265,7 @@ def lambda_handler(event, context):
                     'body': json.dumps({"message": message}),
                     'headers': {
                         'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
                     }
                 }
                 logger.error(error_response)
@@ -286,6 +290,7 @@ def lambda_handler(event, context):
                 'body': json.dumps({"message": message}),
                 'headers': {
                     'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
                 }
             }
             logger.exception(error_response)
@@ -298,6 +303,7 @@ def lambda_handler(event, context):
                 'body': json.dumps({"message": message}),
                 'headers': {
                     'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
                 }
             }
             logger.exception(error_response)

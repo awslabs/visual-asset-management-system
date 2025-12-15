@@ -231,7 +231,18 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Enabled**: false (disabled by default)
 -   **Note**: ⚠️ **VNTANA is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VNTANA license. To enable this viewer and obtain licensing information, visit [https://www.vntana.com](https://www.vntana.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` in the viewer configuration.
 
-### 14. PreviewViewerPlugin
+### 14. VeerumViewerPlugin
+
+-   **Extensions**: `.e57`, `.las`, `.laz`, `.ply`, `.json`
+-   **Features**: Advanced 3D visualization for point clouds and 3D tilesets using VEERUM's viewer
+-   **Multi-file**: Yes (can load multiple point clouds and/or tilesets simultaneously)
+-   **Dependencies**: `@veerum/viewer`
+-   **Priority**: 2
+-   **Category**: 3d
+-   **Enabled**: true
+-   **Note**: ⚠️ **VEERUM is a paid commercial viewer service**. This viewer requires your organization to purchase a VEERUM license. To obtain licensing information, visit [https://veerum.com](https://veerum.com). See `web/customInstalls/veerum/README.md` for detailed installation instructions.
+
+### 15. PreviewViewerPlugin
 
 -   **Extensions**: `*` (all file types)
 -   **Features**: View generated preview images for any file type
