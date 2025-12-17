@@ -82,7 +82,7 @@ export default function CreateUpdateWorkflow(props) {
                 const currentItem = items.find(({ workflowId }) => workflowId === workflowIdNew);
                 setWorkflowIDNew(currentItem.workflowId);
                 setWorkflowDescription(currentItem.description);
-                
+
                 // Load auto-trigger settings
                 const autoTriggerValue = currentItem.autoTriggerOnFileExtensionsUpload || "";
                 if (autoTriggerValue && autoTriggerValue.trim() !== "") {
@@ -92,7 +92,7 @@ export default function CreateUpdateWorkflow(props) {
                     setAutoTriggerEnabled(false);
                     setAutoTriggerExtensions("");
                 }
-                
+
                 const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
                     return {
                         value: item.name,
@@ -139,33 +139,33 @@ export default function CreateUpdateWorkflow(props) {
         if (!extensions || extensions.trim() === "") {
             return false;
         }
-        
+
         const trimmedValue = extensions.trim().toLowerCase();
-        
+
         // Check for special "all" case
-        if (trimmedValue === '.all' || trimmedValue === 'all') {
+        if (trimmedValue === ".all" || trimmedValue === "all") {
             return true;
         }
-        
+
         // Split by comma and validate each extension
-        const extArray = extensions.split(',');
+        const extArray = extensions.split(",");
         for (let ext of extArray) {
             ext = ext.trim();
-            
+
             // Skip empty strings
             if (ext === "") {
                 continue;
             }
-            
+
             // Remove leading dot if present
-            ext = ext.replace(/^\.+/, '');
-            
+            ext = ext.replace(/^\.+/, "");
+
             // Check if extension contains only alphanumeric, dash, and underscore
             if (!/^[a-zA-Z0-9_-]+$/.test(ext)) {
                 return false;
             }
         }
-        
+
         return true;
     };
 
@@ -225,7 +225,9 @@ export default function CreateUpdateWorkflow(props) {
                     databaseId: databaseId,
                     description: workflowDescription,
                     specifiedPipelines: { functions: functions },
-                    autoTriggerOnFileExtensionsUpload: autoTriggerEnabled ? autoTriggerExtensions.trim() : "",
+                    autoTriggerOnFileExtensionsUpload: autoTriggerEnabled
+                        ? autoTriggerExtensions.trim()
+                        : "",
                 },
             };
             const result = await saveWorkflow({ config: config });
@@ -418,7 +420,8 @@ export default function CreateUpdateWorkflow(props) {
                                                                         )
                                                                     }
                                                                 >
-                                                                    Enable auto-trigger on file upload
+                                                                    Enable auto-trigger on file
+                                                                    upload
                                                                 </Toggle>
                                                             </FormField>
                                                             {autoTriggerEnabled && (
@@ -427,12 +430,16 @@ export default function CreateUpdateWorkflow(props) {
                                                                     constraintText={
                                                                         "Comma-delimited extensions to trigger on. Use '.all' for all files."
                                                                     }
-                                                                    errorText={autoTriggerExtensionsError}
+                                                                    errorText={
+                                                                        autoTriggerExtensionsError
+                                                                    }
                                                                 >
                                                                     <Input
                                                                         placeholder="e.g., jpg,png,pdf or .all"
                                                                         name="autoTriggerExtensions"
-                                                                        value={autoTriggerExtensions}
+                                                                        value={
+                                                                            autoTriggerExtensions
+                                                                        }
                                                                         onChange={(event) =>
                                                                             setAutoTriggerExtensions(
                                                                                 event.detail.value

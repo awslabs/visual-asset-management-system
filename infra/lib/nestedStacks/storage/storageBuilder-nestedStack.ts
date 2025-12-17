@@ -713,18 +713,22 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    const assetFileMetadataStorageTable = new dynamodb.Table(scope, "AssetFileMetadataStorageTable", {
-        ...dynamodbDefaultProps,
-        partitionKey: {
-            name: "assetFileMetadataId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "databaseId:assetId:filePath",
-            type: dynamodb.AttributeType.STRING,
-        },
-        stream: dynamodb.StreamViewType.NEW_IMAGE,
-    });
+    const assetFileMetadataStorageTable = new dynamodb.Table(
+        scope,
+        "AssetFileMetadataStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "assetFileMetadataId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "databaseId:assetId:filePath",
+                type: dynamodb.AttributeType.STRING,
+            },
+            stream: dynamodb.StreamViewType.NEW_IMAGE,
+        }
+    );
 
     // GSI for querying by database/asset/file
     assetFileMetadataStorageTable.addGlobalSecondaryIndex({

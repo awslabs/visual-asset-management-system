@@ -487,7 +487,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     workflowId: "rapid-pipeline-to-glb",
                     workflowDescription:
                         "Automated workflow for GLTF to GLB optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: ""
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -512,7 +512,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     workflowId: "rapid-pipeline-obj-to-gltf",
                     workflowDescription:
                         "Automated workflow for X to GLTF optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: ""
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -537,7 +537,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     workflowId: "rapid-pipeline-to-glb",
                     workflowDescription:
                         "Automated workflow for X to GLB optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: ""
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -563,7 +563,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     workflowId: "rapid-pipeline-to-gltf",
                     workflowDescription:
                         "Automated workflow for X to GLTF optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: ""
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 

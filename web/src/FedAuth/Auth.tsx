@@ -570,7 +570,9 @@ const Auth: React.FC<AuthProps> = (props) => {
         // If access token not valid but refresh token exists, attempt to refresh the token
         if (refreshTokenValid) {
             try {
-                const oauth2TokenResponse = await oauth2Client.refreshToken(getExternalOAuth2Token());
+                const oauth2TokenResponse = await oauth2Client.refreshToken(
+                    getExternalOAuth2Token()
+                );
                 setExternalOauthLoginAndRefreshTimer(oauth2TokenResponse); // Set when previous line is successful
                 setTriggerExternalOAuth(true); // Access token is now valid, continue login process
                 return;

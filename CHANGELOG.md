@@ -27,9 +27,9 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   **CLI** Added --auto-paginate params (and adjusted other associated pagination parameers) to listing of databases, buckets, assets, and lists
 -   **CLI** Updated CLI profile/auth/setup to pull in and display across various commands more of the environment configurations pulled from the API
 -   Workflow execution restrictions have been loosened to now allow for multiple running executions of the same workflow on an asset as long as the files being run against are different (previously didn't factor in inputted files and was only allowing 1 running execution per workflow per asset)
--   **Web** New workflow/pipelines auto-triggering execution system for file uploads. Workflows have a new property on them that can be set in the workflow editor and some have default configurations in the deployed CDK use-cases pipeline to auto-set this (`autoRegisterAutoTriggerOnFileUpload`). Parts of this system will be refactored again in an upcoming pipeline overhaul initiative. 
-    -   The trigger for this is setting which file extensions should kick of the pipeline for each file uploaded to an asset (new or modified). This is a comma-deliminated list of extensions. If ".all" is provided, then it will execute on all file extensions uploaded. 
-    -   Feature is implemented with the new indexing SNS where this is a new SQS queue subscribing to that system for file uploads to check on executions per file. This allows for high scalability for files being uploaded. 
+-   **Web** New workflow/pipelines auto-triggering execution system for file uploads. Workflows have a new property on them that can be set in the workflow editor and some have default configurations in the deployed CDK use-cases pipeline to auto-set this (`autoRegisterAutoTriggerOnFileUpload`). Parts of this system will be refactored again in an upcoming pipeline overhaul initiative.
+    -   The trigger for this is setting which file extensions should kick of the pipeline for each file uploaded to an asset (new or modified). This is a comma-deliminated list of extensions. If ".all" is provided, then it will execute on all file extensions uploaded.
+    -   Feature is implemented with the new indexing SNS where this is a new SQS queue subscribing to that system for file uploads to check on executions per file. This allows for high scalability for files being uploaded.
     -   PotreePipeline now has it's default set to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, previously bypassing the Workflow system
 
 ### Bug Fixes
@@ -59,10 +59,10 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   Updated ./listFiles API to default maxitems to 10000 and max page size to be 1500 for basic mode and 100 for non-basic.
 -   API for `/secureConfig` now returns the website deployed URL (if a website is deployed)
 -   File streaming APIs now support HEAD requests to allow for checking if a file exists before streaming its contents with a GET
--   **Web** Consolidated auth token functions to a utility function, out of Auth.tsx. 
--   Updated logic of when fileIndexerSNS queue is published to from a S3 object change to reduce calls for objects generally that should be skipped (i.e. folder objects, `init` files/folders, special exclusion folder prefixes and their objects). These will still get processed by the sqsBucketSync queue/lambda but will not be further re-published. This should lessen processing downstream where usually these objects are ignored anyway. 
--   **CLI** Removed API version check on all API commands to save on CLI API calls and increase performance a small amount. Only auth and setup commands will now check CLI version against API version. 
--   Updated all lambdas memory to 5308 from 3003 which increases the vCPU from 2 to 4, increasing API response performance. 
+-   **Web** Consolidated auth token functions to a utility function, out of Auth.tsx.
+-   Updated logic of when fileIndexerSNS queue is published to from a S3 object change to reduce calls for objects generally that should be skipped (i.e. folder objects, `init` files/folders, special exclusion folder prefixes and their objects). These will still get processed by the sqsBucketSync queue/lambda but will not be further re-published. This should lessen processing downstream where usually these objects are ignored anyway.
+-   **CLI** Removed API version check on all API commands to save on CLI API calls and increase performance a small amount. Only auth and setup commands will now check CLI version against API version.
+-   Updated all lambdas memory to 5308 from 3003 which increases the vCPU from 2 to 4, increasing API response performance.
 
 ### Known Outstanding Issues
 

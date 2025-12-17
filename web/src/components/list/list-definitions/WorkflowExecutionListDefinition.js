@@ -71,12 +71,12 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
 
                 // If this is an execution (has parentId), show the file key
                 if (item.parentId) {
-                    const fileKey = item.inputAssetFileKey || '';
-                    
+                    const fileKey = item.inputAssetFileKey || "";
+
                     if (!fileKey) {
                         return <></>;
                     }
-                    
+
                     // If file key is longer than MAX_LENGTH, truncate and add tooltip
                     if (fileKey.length > MAX_LENGTH) {
                         const truncated = fileKey.substring(0, MAX_LENGTH) + "...";
@@ -92,7 +92,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                             </Popover>
                         );
                     }
-                    
+
                     return <>{fileKey}</>;
                 }
 

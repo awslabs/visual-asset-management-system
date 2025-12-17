@@ -223,7 +223,9 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                                 // Check for successful response (2xx) or redirect (3xx)
                                 if (!response.ok && response.status >= 400) {
                                     throw new Error(
-                                        `HTTP ${response.status}: ${response.statusText || "Request failed"}`
+                                        `HTTP ${response.status}: ${
+                                            response.statusText || "Request failed"
+                                        }`
                                     );
                                 }
 
@@ -233,7 +235,9 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             } catch (fetchError: any) {
                                 // Handle all fetch errors: CORS, network failures, HTTP errors
                                 const errorDetail =
-                                    fetchError?.message || fetchError?.toString() || "Unknown error";
+                                    fetchError?.message ||
+                                    fetchError?.toString() ||
+                                    "Unknown error";
                                 const errorMsg = `Auxiliary Preview Files (potree) are not currently available for this point cloud. Run the Potree Pipeline to generate: ${errorDetail}`;
 
                                 console.error(
@@ -438,8 +442,11 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             marginBottom: "8px",
                         }}
                     >
-                        ⚠️ {loadedModels.length === 0 ? "All files failed to load" : "Some files failed to load"} ({fileErrors.length}/
-                        {multiFileKeys?.length || 1})
+                        ⚠️{" "}
+                        {loadedModels.length === 0
+                            ? "All files failed to load"
+                            : "Some files failed to load"}{" "}
+                        ({fileErrors.length}/{multiFileKeys?.length || 1})
                     </div>
                     {fileErrors.map((err, idx) => (
                         <div

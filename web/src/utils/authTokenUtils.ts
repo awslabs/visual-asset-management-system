@@ -56,7 +56,7 @@ export function externalTokenValidation(): [boolean, boolean] {
     let accessTokenValid: boolean = false;
     let refreshTokenValid: boolean = false;
     const oauth2Token = getExternalOAuth2Token();
-    
+
     // If access token exists and not expired, deem it as still valid
     if (
         oauth2Token.accessToken &&
@@ -70,7 +70,7 @@ export function externalTokenValidation(): [boolean, boolean] {
     else if (oauth2Token.refreshToken) {
         refreshTokenValid = true;
     }
-    
+
     return [accessTokenValid, refreshTokenValid];
 }
 
@@ -118,7 +118,7 @@ export function setExternalOauth2Token(oauth2Token: OAuth2Token): void {
  * Gets a valid, fresh access token for API calls (Works with both Cognito and OAuth2)
  * Handles both Cognito and OAuth2 modes
  * Automatically refreshes expired tokens when possible
- * 
+ *
  * @returns Promise<string> - A valid access token
  * @throws Error if unable to get or refresh token
  */
@@ -126,12 +126,12 @@ export async function getDualValidAccessToken(): Promise<string> {
     if (window.DISABLE_COGNITO) {
         // OAuth2 Mode
         const [accessTokenValid, refreshTokenValid] = externalTokenValidation();
-        
+
         if (accessTokenValid) {
             // Access token is still valid, return it
             return getExternalOAuth2Token().accessToken;
         }
-        
+
         if (refreshTokenValid) {
             // Access token expired but refresh token exists, attempt to refresh
             try {
@@ -146,7 +146,7 @@ export async function getDualValidAccessToken(): Promise<string> {
                 throw new Error("Failed to refresh OAuth2 token. Please log in again.");
             }
         }
-        
+
         throw new Error("No valid OAuth2 token available. Please log in again.");
     } else {
         // Cognito Mode
@@ -163,7 +163,7 @@ export async function getDualValidAccessToken(): Promise<string> {
 /**
  * Gets a valid access token for use in Authorization headers (Works with both Cognito and OAuth2)
  * Convenience wrapper around getDualValidAccessToken()
- * 
+ *
  * @returns Promise<string> - Bearer token string ready for Authorization header
  */
 export async function getDualAuthorizationHeader(): Promise<string> {

@@ -461,7 +461,11 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                     workflowId: "genai-metadata-3d-labeling-obj-glb-fbx-ply-stl-usd",
                     workflowDescription:
                         "GenAI 3D Metadata Labeling Pipeline (Asset-level metadata generation from file) - 3D Mesh files using Blender Image Extraction. Supported Input Formats: OBJ, GLB/GLTF, FBX, ABC, DAE, PLY, STL, USD",
-                    autoTriggerOnFileExtensionsUpload: props.config.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload === true? ".stl,.obj,.ply,.glb,.usd,.dae,.abc,.fbx" : ""
+                    autoTriggerOnFileExtensionsUpload:
+                        props.config.app.pipelines.useGenAiMetadata3dLabeling
+                            .autoRegisterAutoTriggerOnFileUpload === true
+                            ? ".stl,.obj,.ply,.glb,.usd,.dae,.abc,.fbx"
+                            : "",
                 },
             });
 

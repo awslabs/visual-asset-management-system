@@ -156,7 +156,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                             newParentRowChild.parentId = workflowKey;
                             newParentRowChild.name = newParentRowChild.executionId;
                             // Preserve the inputAssetFileKey from the execution data
-                            newParentRowChild.inputAssetFileKey = execution.inputAssetFileKey || '';
+                            newParentRowChild.inputAssetFileKey = execution.inputAssetFileKey || "";
 
                             if (newParentRowChild.stopDate === "") {
                                 newParentRowChild.stopDate = "N/A";
