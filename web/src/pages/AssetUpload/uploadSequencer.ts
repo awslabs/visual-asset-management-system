@@ -11,7 +11,7 @@ import {
     MAX_PART_SIZE,
     MAX_PART_SIZE_LARGE,
     MAX_FILE_SIZE_SMALL_CHUNKS,
-} from "../constants/uploadLimits";
+} from "../../constants/uploadLimits";
 
 /**
  * Information about a file to be uploaded

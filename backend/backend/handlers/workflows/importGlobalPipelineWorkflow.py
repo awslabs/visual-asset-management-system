@@ -881,7 +881,8 @@ def create_workflow(workflow_data: Dict[str, Any], pipeline_data: Dict[str, Any]
                 'databaseId': workflow_data['databaseId'],
                 'workflowId': workflow_data['workflowId'],
                 'description': workflow_data['workflowDescription'],
-                'specifiedPipelines': specified_pipelines
+                'specifiedPipelines': specified_pipelines,
+                'autoTriggerOnFileExtensionsUpload': workflow_data.get('autoTriggerOnFileExtensionsUpload', '')
             },
             'requestContext': {
                 'http': {

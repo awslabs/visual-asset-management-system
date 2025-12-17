@@ -94,12 +94,12 @@ def requires_setup_and_auth(func):
                 # Don't fail if logging fails
                 pass
             
-            api_gateway_url = config.get('api_gateway_url')
-            
-            if api_gateway_url:
-                api_client = APIClient(api_gateway_url, profile_manager)
+            #Commented out to save on performance
+            #api_gateway_url = config.get('api_gateway_url')
+            #if api_gateway_url:
+                #api_client = APIClient(api_gateway_url, profile_manager)
                 # This will raise APIUnavailableError if there are issues
-                api_client.check_api_availability()
+                #api_client.check_api_availability()
         except APIUnavailableError:
             # Re-raise API unavailable errors as global infrastructure errors
             raise

@@ -890,6 +890,113 @@ def verify_asset_exists(database_id, asset_id):
         logger.exception(f"Error verifying asset: {e}")
         raise Exception(f"Error verifying asset.")
 
+def build_filtered_event(original_event, successful_s3_records):
+    """
+    Build a filtered event that preserves the original structure
+    but only includes successfully processed S3 records.
+    
+    Args:
+        original_event: The original event (SQS, SNS, or direct S3)
+        successful_s3_records: List of S3 records that were successfully processed
+        
+    Returns:
+        dict: Filtered event with same structure as original, or None if no records
+    """
+    if not successful_s3_records:
+        return None
+    
+    try:
+        # Check if this is a direct S3 event
+        if 'Records' in original_event and original_event['Records'] and 'eventSource' in original_event['Records'][0] and original_event['Records'][0]['eventSource'] == 'aws:s3':
+            logger.info("Building filtered direct S3 event")
+            return {
+                'Records': successful_s3_records
+            }
+        
+        # Check if this is an SQS event
+        if 'Records' in original_event and original_event['Records'] and 'eventSource' in original_event['Records'][0] and original_event['Records'][0]['eventSource'] == 'aws:sqs':
+            logger.info("Building filtered SQS event")
+            filtered_sqs_records = []
+            
+            for sqs_record in original_event['Records']:
+                if not sqs_record.get('body'):
+                    continue
+                
+                try:
+                    parsed_body = json.loads(sqs_record['body'])
+                    
+                    # Check if this is an SNS message
+                    if 'Message' in parsed_body:
+                        try:
+                            message = json.loads(parsed_body['Message'])
+                            if 'Records' in message:
+                                # Filter S3 records in the SNS message
+                                filtered_s3_records = [r for r in message['Records'] if r in successful_s3_records]
+                                if filtered_s3_records:
+                                    message['Records'] = filtered_s3_records
+                                    parsed_body['Message'] = json.dumps(message)
+                                    sqs_record_copy = sqs_record.copy()
+                                    sqs_record_copy['body'] = json.dumps(parsed_body)
+                                    filtered_sqs_records.append(sqs_record_copy)
+                        except json.JSONDecodeError:
+                            # If Message is not valid JSON, keep original if any successful records
+                            if successful_s3_records:
+                                filtered_sqs_records.append(sqs_record)
+                    elif 'Records' in parsed_body:
+                        # Direct S3 event in SQS body
+                        filtered_s3_records = [r for r in parsed_body['Records'] if r in successful_s3_records]
+                        if filtered_s3_records:
+                            parsed_body['Records'] = filtered_s3_records
+                            sqs_record_copy = sqs_record.copy()
+                            sqs_record_copy['body'] = json.dumps(parsed_body)
+                            filtered_sqs_records.append(sqs_record_copy)
+                except json.JSONDecodeError:
+                    logger.warning("Could not parse SQS body, skipping record")
+                    continue
+            
+            if filtered_sqs_records:
+                return {
+                    'Records': filtered_sqs_records
+                }
+            return None
+        
+        # Check if this is an SNS event
+        if 'Records' in original_event and original_event['Records'] and 'EventSource' in original_event['Records'][0] and original_event['Records'][0]['EventSource'] == 'aws:sns':
+            logger.info("Building filtered SNS event")
+            filtered_sns_records = []
+            
+            for sns_record in original_event['Records']:
+                if not sns_record.get('Sns') or not sns_record['Sns'].get('Message'):
+                    continue
+                
+                try:
+                    message = json.loads(sns_record['Sns']['Message'])
+                    if 'Records' in message:
+                        # Filter S3 records in the SNS message
+                        filtered_s3_records = [r for r in message['Records'] if r in successful_s3_records]
+                        if filtered_s3_records:
+                            message['Records'] = filtered_s3_records
+                            sns_record_copy = sns_record.copy()
+                            sns_record_copy['Sns'] = sns_record['Sns'].copy()
+                            sns_record_copy['Sns']['Message'] = json.dumps(message)
+                            filtered_sns_records.append(sns_record_copy)
+                except json.JSONDecodeError:
+                    logger.warning("Could not parse SNS message, skipping record")
+                    continue
+            
+            if filtered_sns_records:
+                return {
+                    'Records': filtered_sns_records
+                }
+            return None
+        
+        # If we can't determine the event type, return None
+        logger.warning("Could not determine event type for filtering, returning None")
+        return None
+    except Exception as e:
+        logger.exception(f"Error building filtered event: {e}")
+        return None
+
 def publish_to_file_indexer_sns(event):
     """
     Publish S3 event to file indexer SNS topic for downstream processing.
@@ -920,30 +1027,33 @@ def publish_to_file_indexer_sns(event):
         logger.exception(f"Error publishing to file indexer SNS topic: {e}")
         # We don't re-raise the exception here to avoid stopping the process
 
-def process_s3_record(record: Dict) -> Tuple[bool, str]:
+def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
     """
     Process a single S3 record
     
     This function implements the core business logic for processing S3 events:
-    1. Validates bucket and prefix against environment variables
-    2. Checks if bucket and prefix have a record in S3 asset buckets table
-    3. Skips special folders (temp-uploads, preview, pipeline, etc.)
-    4. Validates asset ID format
-    5. Looks up or creates assets/databases as needed
-    6. Handles "init" files by deleting them
-    7. Updates S3 metadata with database and asset IDs
+    *. Validates bucket and prefix against environment variables
+    *. Checks if bucket and prefix have a record in S3 asset buckets table
+    *. Skips special folders (temp-uploads, preview, pipeline, etc.)
+    *. Validates asset ID format
+    *. Looks up or creates assets/databases as needed
+    *. Handles "init" files by deleting them
+    *. Updates S3 metadata with database and asset IDs
+    *. Detects folder markers (keys ending with '/') and skips indexing
     
     Args:
         record: The S3 record to process
         
     Returns:
-        tuple: (success, message) where success is a boolean indicating if the
-               processing was successful, and message is a string with details
+        tuple: (processing_success, should_index, message) where:
+            - processing_success: boolean indicating if processing was successful
+            - should_index: boolean indicating if record should be sent to indexer
+            - message: string with details about the processing result
     """
     try:
         # Validate record has S3 information
         if not record.get('s3'):
-            return False, "Record does not contain S3 information"
+            return False, False, "Record does not contain S3 information"
 
         # Extract bucket name and object key
         bucket_name = record['s3']['bucket']['name']
@@ -961,12 +1071,12 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
         # 1.a. Check if record bucket and base prefix matches the environment variables
         if asset_bucket_name and bucket_name != asset_bucket_name:
             logger.info(f"Bucket {bucket_name} does not match configured bucket {asset_bucket_name}, skipping")
-            return False, f"Bucket {bucket_name} does not match configured bucket"
+            return False, False, f"Bucket {bucket_name} does not match configured bucket"
         
         #Note: if '/' given, treat this as no prefix
         if prefix and prefix != '/' and not object_key.startswith(prefix):
             logger.info(f"Object key {object_key} does not start with configured prefix {prefix}, skipping")
-            return False, f"Object key does not start with configured prefix"
+            return False, False, f"Object key does not start with configured prefix"
         
         # Use the configured prefix or empty string
         prefix = prefix or ""
@@ -976,23 +1086,23 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
         bucket_id = get_bucket_id(bucket_name, prefix)
         if not bucket_id:
             logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping")
-            return False, f"No bucket ID found for {bucket_name} with prefix {prefix}"
+            return False, False, f"No bucket ID found for {bucket_name} with prefix {prefix}"
         
         # Extract asset ID from the object key
         asset_id = extract_asset_id_from_key(object_key, prefix)
         if not asset_id:
             logger.info(f"Could not extract asset ID from {object_key}, skipping")
-            return False, f"Could not extract asset ID from {object_key}"
+            return False, False, f"Could not extract asset ID from {object_key}"
         
         # 1.c Check if asset ID is a special folder to skip
         if asset_id in reservedPrefixFolders:
             logger.info(f"Asset ID {asset_id} is a special folder, skipping")
-            return False, f"Asset ID {asset_id} is a special folder"
+            return False, False, f"Asset ID {asset_id} is a special folder"
         
         # 1.d Validate asset ID
         if not validate_asset_id(asset_id):
             logger.info(f"Asset ID {asset_id} is not valid, skipping")
-            return False, f"Asset ID {asset_id} is not valid"
+            return False, False, f"Asset ID {asset_id} is not valid"
         
         # 2.a. Lookup asset in assets dynamoDB table
         # Use cache to prevent excessive lookups (TTL: 60 seconds)
@@ -1007,23 +1117,23 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             archived_asset = lookup_archived_asset(bucket_id, asset_id)
             if archived_asset:
                 logger.info(f"Asset {asset_id} is archived, skipping processing")
-                return True, f"Skipped archived asset {asset_id}"
+                return True, True, f"Skipped archived asset {asset_id}"  # Return true for both - indexing may care about these events
             
             # Get or create database for this bucket/prefix
             database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
             
             if not database_id_to_use:
                 logger.error(f"Could not get or create database for bucket {bucket_id} (may be archived)")
-                return False, f"Could not get or create database for bucket {bucket_id}"
+                return False, False, f"Could not get or create database for bucket {bucket_id}"
             
             # Create the asset
             logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
             created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
             if not created_asset_id:
                 logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
-                return False, f"Failed to create asset {asset_id} in database {database_id_to_use}"
+                return False, False, f"Failed to create asset {asset_id} in database {database_id_to_use}"
         
-        # 4. Check if the object key ends with "init" - If so delete and skip rest of steps
+        # 3. Check if the object key ends with "init" - If so delete and skip indexing
         if object_key.endswith('init') or object_key.endswith('init/'):
             # Check if versioning is enabled
             versioning_enabled = is_versioning_enabled(bucket_id)
@@ -1033,25 +1143,31 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             delete_result = delete_s3_object(bucket_name, object_key, versioning_enabled)
             if not delete_result:
                 logger.error(f"Failed to delete init object {object_key}")
-                return False, f"Failed to delete init object {object_key}"
+                return False, False, f"Failed to delete init object {object_key}"
             
-            return True, f"Deleted init object {object_key}"
+            # Processed successfully but skip indexing
+            return True, False, f"Deleted init object {object_key}"
         
-        # 5. Check if file has S3 metadata attributes that match databaseid and assetid
+        # 4. Check if file has S3 metadata attributes that match databaseid and assetid
         update_result = update_s3_metadata(bucket_name, object_key, database_id_to_use, asset_id)
         if not update_result:
             logger.error(f"Failed to update metadata for {object_key}")
-            return False, f"Failed to update metadata for {object_key}"
+            return False, False, f"Failed to update metadata for {object_key}"
         
-        # 6. Update asset type based on all files in the bucket
+        # 5. Update asset type based on all files in the bucket
         # Construct the asset base key (prefix + assetId + /)
         asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
         update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+
+        # 6. Check if object key ends with '/' (folder marker) - process but skip indexing
+        if object_key.endswith('/'):
+            logger.info(f"Folder marker detected: {object_key}, processing but skipping indexing")
+            return True, False, f"Processed folder marker {object_key}"
         
-        return True, f"Successfully processed {object_key}"
+        return True, True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
-        return False, f"Error processing S3 record."
+        return False, False, f"Error processing S3 record."
 
 def on_storage_event_created(event):
     """
@@ -1070,13 +1186,16 @@ def on_storage_event_created(event):
         event: The S3 event containing records to process
         
     Returns:
-        bool: True if processing completed without hard errors, False otherwise
+        tuple: (success_status, successful_records) where success_status is a boolean
+               indicating if processing completed without hard errors, and successful_records
+               is a list of records that were successfully processed
     """
     logger.info(f"Processing storage event: {json.dumps(event)}")
     
     success_count = 0
     error_count = 0
     skip_count = 0
+    successful_records = []
     
     # Process each record in the event
     for record in event.get('Records', []):
@@ -1088,13 +1207,18 @@ def on_storage_event_created(event):
             
         # Handle records with S3 information
         try:
-            # Process the S3 record
-            success, message = process_s3_record(record)
+            # Process the S3 record - now returns (success, should_index, message)
+            success, should_index, message = process_s3_record(record)
             
             # Track success/failure counts
             if success:
                 success_count += 1
-                logger.info(f"Successfully processed record: {message}")
+                # Only add to successful_records if should_index is True
+                if should_index:
+                    successful_records.append(record)
+                    logger.info(f"Successfully processed record for indexing: {message}")
+                else:
+                    logger.info(f"Successfully processed record but skipping indexing: {message}")
             else:
                 if "skipping" in message.lower():
                     skip_count += 1
@@ -1110,8 +1234,8 @@ def on_storage_event_created(event):
     # Log summary of processing results
     logger.info(f"Processed {len(event.get('Records', []))} records: {success_count} successful, {error_count} errors, {skip_count} skipped")
     
-    # Return True if there were no errors or some are successful
-    return (error_count == 0 or success_count > 0)
+    # Return success status and list of successful records
+    return (error_count == 0 or success_count > 0), successful_records
 
 def parse_event(event):
     """
@@ -1229,7 +1353,7 @@ def lambda_handler_created(event, context):
     This function is the main entry point for processing file creation events.
     It parses the event from different sources (SQS, SNS, direct S3),
     processes the storage event, and runs the OpenSearch indexing lambda
-    if there were no hard errors.
+    if there were no hard errors and only for successfully processed records.
     
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
@@ -1246,22 +1370,29 @@ def lambda_handler_created(event, context):
         
         # Process the storage event if it contains records
         if parsed_event.get('Records'):
-            # Process the storage event and get success status
-            success = on_storage_event_created(parsed_event)
+            # Process the storage event and get success status and successful records
+            success, successful_records = on_storage_event_created(parsed_event)
             
-            # Only publish to SNS if there were no hard errors
-            if success:
-                # Publish to file indexer SNS topic
-                logger.info("No hard errors encountered, publishing to file indexer SNS")
-                publish_to_file_indexer_sns(event)
+            # Only publish to SNS if there were no hard errors and we have successful records
+            if success and successful_records:
+                # Build filtered event preserving original structure
+                filtered_event = build_filtered_event(event, successful_records)
+                
+                if filtered_event:
+                    logger.info(f"Publishing {len(successful_records)} successful records to file indexer SNS")
+                    publish_to_file_indexer_sns(filtered_event)
+                else:
+                    logger.info("All records filtered out, skipping file indexer SNS publish")
             else:
-                logger.warning("Hard errors encountered, skipping file indexer SNS publish")
+                if not success:
+                    logger.warning("Hard errors encountered, skipping file indexer SNS publish")
+                else:
+                    logger.info("No successful records to publish, skipping file indexer SNS publish")
         else:
             logger.warning("No records found in parsed event, nothing to process")
     except Exception as e:
         logger.exception(f"Unhandled error in lambda_handler_created: {e}")
         # We don't run the indexing lambda on unhandled exceptions to avoid potential data corruption
-        # This is a change from the previous behavior where we would still run the indexing lambda
 
 def lambda_handler_deleted(event, context):
     """
@@ -1270,6 +1401,7 @@ def lambda_handler_deleted(event, context):
     This function is the entry point for processing file deletion events.
     For deletions, we update the asset type if the file is not a folder marker,
     then run the OpenSearch indexing lambda to update the search index.
+    Only successfully processed records are forwarded to the indexer.
     
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
@@ -1286,7 +1418,8 @@ def lambda_handler_deleted(event, context):
         
         # Process records if present
         if parsed_event.get('Records'):
-
+            successful_records = []
+            
             try:
                 # Check each record for files that are not folder markers
                 for record in parsed_event.get('Records', []):
@@ -1298,6 +1431,11 @@ def lambda_handler_deleted(event, context):
                     # Extract bucket name and object key
                     bucket_name = record['s3']['bucket']['name']
                     object_key = record['s3']['object']['key']
+                    
+                    # Skip init files entirely (both processing and indexing)
+                    if object_key.endswith('init') or object_key.endswith('init/'):
+                        logger.info(f"Skipping init file: {object_key}")
+                        continue
                     
                     # Skip folder markers (objects ending with '/')
                     if object_key.endswith('/'):
@@ -1342,12 +1480,25 @@ def lambda_handler_deleted(event, context):
                     # Update asset type based on remaining files
                     logger.info(f"Updating asset type for {asset_id} after file deletion")
                     update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+                    
+                    # Track successfully processed record
+                    successful_records.append(record)
+                    logger.info(f"Successfully processed deletion for {object_key}")
             except Exception as e:
-                logger.exception(f"Error processing deletion event.. continueing with index: {e}")
+                logger.exception(f"Error processing deletion event: {e}")
             
-            # Publish to file indexer SNS topic
-            logger.info("Publishing deletion event to file indexer SNS")
-            publish_to_file_indexer_sns(event)
+            # Only publish to SNS if we have successfully processed records
+            if successful_records:
+                # Build filtered event preserving original structure
+                filtered_event = build_filtered_event(event, successful_records)
+                
+                if filtered_event:
+                    logger.info(f"Publishing {len(successful_records)} successful deletion records to file indexer SNS")
+                    publish_to_file_indexer_sns(filtered_event)
+                else:
+                    logger.info("All deletion records filtered out, skipping file indexer SNS publish")
+            else:
+                logger.info("No successful deletion records to publish, skipping file indexer SNS publish")
         else:
             logger.warning("No records found in parsed deletion event, nothing to process")
     except Exception as e:

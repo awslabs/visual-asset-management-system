@@ -1774,6 +1774,304 @@ paths:
                       example: "bytes=200-1023"
             security:
                 - DefaultCognitoAuthorizer: []
+        head:
+            summary: "Check asset file availability and permissions without downloading content."
+            description: "Check if an asset file exists and retrieve metadata headers without downloading file content. Uses S3 head_object for efficient metadata retrieval. Returns the same headers as GET but with empty body. Does not check file size thresholds or generate redirects. Requires asset to be distributable."
+            responses:
+                "200":
+                    description: File exists and user has permission to access it.
+                    headers:
+                        Accept-Ranges:
+                            description: "Indicates that the server supports range requests"
+                            schema:
+                                type: string
+                                example: "bytes"
+                        Content-Type:
+                            description: "MIME type of the file"
+                            schema:
+                                type: string
+                        Content-Length:
+                            description: "Size of the content in bytes"
+                            schema:
+                                type: string
+                        Last-Modified:
+                            description: "Last modification date"
+                            schema:
+                                type: string
+                                format: date-time
+                        ETag:
+                            description: "Entity tag for cache validation"
+                            schema:
+                                type: string
+                        x-amz-version-id:
+                            description: "S3 version ID if versioned"
+                            schema:
+                                type: string
+                        x-amz-storage-class:
+                            description: "S3 storage class"
+                            schema:
+                                type: string
+                        Cache-Control:
+                            description: "Cache control directive"
+                            schema:
+                                type: string
+                                example: "no-cache, no-store"
+                "400":
+                    description: Invalid parameters or unallowed file type.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to access this asset or asset not distributable.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, asset, or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: "path"
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "assetId"
+                  in: "path"
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "proxy+"
+                  in: "path"
+                  description: "File path within the asset to check. Can include subdirectories and filename."
+                  required: true
+                  schema:
+                    type: "string"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}:
+        get:
+            summary: "Stream auxiliary preview asset files with HTTP range support."
+            description: "Stream auxiliary preview asset files (e.g., converted formats, thumbnails) directly with HTTP range support. These are preview files stored in the auxiliary bucket. Supports partial content requests via Range headers for efficient streaming of large files."
+            responses:
+                "200":
+                    description: Auxiliary preview file content streamed successfully.
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                        text/plain:
+                            schema:
+                                type: string
+                        image/*:
+                            schema:
+                                type: string
+                                format: binary
+                        video/*:
+                            schema:
+                                type: string
+                                format: binary
+                        audio/*:
+                            schema:
+                                type: string
+                                format: binary
+                    headers:
+                        Accept-Ranges:
+                            description: "Indicates that the server supports range requests"
+                            schema:
+                                type: string
+                                example: "bytes"
+                        Content-Type:
+                            description: "MIME type of the file"
+                            schema:
+                                type: string
+                        Content-Length:
+                            description: "Size of the content in bytes"
+                            schema:
+                                type: string
+                        Content-Range:
+                            description: "Range of bytes being returned (for partial content)"
+                            schema:
+                                type: string
+                                example: "bytes 200-1023/2048"
+                        Content-Encoding:
+                            description: "Content encoding if applicable"
+                            schema:
+                                type: string
+                "206":
+                    description: Partial content returned (when Range header is used).
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                    headers:
+                        Content-Range:
+                            description: "Range of bytes being returned"
+                            schema:
+                                type: string
+                                example: "bytes 200-1023/2048"
+                        Content-Type:
+                            description: "MIME type of the file"
+                            schema:
+                                type: string
+                        Content-Length:
+                            description: "Size of the partial content in bytes"
+                            schema:
+                                type: string
+                "400":
+                    description: Invalid parameters, file too large for streaming, or unallowed file type.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to stream this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, asset, or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: "path"
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "assetId"
+                  in: "path"
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "proxy+"
+                  in: "path"
+                  description: "File path within the auxiliary preview bucket to stream. Can include subdirectories and filename."
+                  required: true
+                  schema:
+                    type: "string"
+                - name: "Range"
+                  in: "header"
+                  description: "HTTP Range header for partial content requests (e.g., 'bytes=200-1023')."
+                  required: false
+                  schema:
+                      type: string
+                      pattern: ^bytes=\d+-\d*$
+                      example: "bytes=200-1023"
+            security:
+                - DefaultCognitoAuthorizer: []
+        head:
+            summary: "Check auxiliary preview file availability and permissions without downloading content."
+            description: "Check if an auxiliary preview file exists and retrieve metadata headers without downloading file content. Uses S3 head_object for efficient metadata retrieval. Returns the same headers as GET but with empty body. Does not check file size thresholds or generate redirects."
+            responses:
+                "200":
+                    description: File exists and user has permission to access it.
+                    headers:
+                        Accept-Ranges:
+                            description: "Indicates that the server supports range requests"
+                            schema:
+                                type: string
+                                example: "bytes"
+                        Content-Type:
+                            description: "MIME type of the file"
+                            schema:
+                                type: string
+                        Content-Length:
+                            description: "Size of the content in bytes"
+                            schema:
+                                type: string
+                        Last-Modified:
+                            description: "Last modification date"
+                            schema:
+                                type: string
+                                format: date-time
+                        ETag:
+                            description: "Entity tag for cache validation"
+                            schema:
+                                type: string
+                        x-amz-version-id:
+                            description: "S3 version ID if versioned"
+                            schema:
+                                type: string
+                        x-amz-storage-class:
+                            description: "S3 storage class"
+                            schema:
+                                type: string
+                        Cache-Control:
+                            description: "Cache control directive"
+                            schema:
+                                type: string
+                                example: "no-cache, no-store"
+                "400":
+                    description: Invalid parameters or unallowed file type.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to access this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, asset, or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: "path"
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "assetId"
+                  in: "path"
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "proxy+"
+                  in: "path"
+                  description: "File path within the auxiliary preview bucket to check. Can include subdirectories and filename."
+                  required: true
+                  schema:
+                    type: "string"
+            security:
+                - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/listFiles:
         get:
             summary: "List files in an asset."

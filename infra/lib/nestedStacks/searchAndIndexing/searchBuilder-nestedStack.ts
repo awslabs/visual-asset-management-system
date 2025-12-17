@@ -163,7 +163,7 @@ export function searchBuilder(
                     eventSourceArn: fileIndexerSqsQueue.queueArn,
                     target: fileIndexingFunction,
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(5),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 }
             );
             const cfnEsmFileIndexer = esmFileIndexer.node
@@ -173,7 +173,7 @@ export function searchBuilder(
             fileIndexingFunction.addEventSource(
                 new eventsources.SqsEventSource(fileIndexerSqsQueue, {
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(5),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 })
             );
         }
@@ -206,7 +206,7 @@ export function searchBuilder(
                     eventSourceArn: assetIndexerSqsQueue.queueArn,
                     target: assetIndexingFunction,
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(10),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 }
             );
             const cfnEsmAssetIndexer = esmAssetIndexer.node
@@ -216,7 +216,7 @@ export function searchBuilder(
             assetIndexingFunction.addEventSource(
                 new eventsources.SqsEventSource(assetIndexerSqsQueue, {
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(5),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 })
             );
         }
@@ -324,7 +324,7 @@ export function searchBuilder(
                     eventSourceArn: fileIndexerSqsQueue.queueArn,
                     target: fileIndexingFunction,
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(5),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 }
             );
             const cfnEsmFileIndexer = esmFileIndexer.node
@@ -334,7 +334,7 @@ export function searchBuilder(
             fileIndexingFunction.addEventSource(
                 new eventsources.SqsEventSource(fileIndexerSqsQueue, {
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(5),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 })
             );
         }
@@ -367,7 +367,7 @@ export function searchBuilder(
                     eventSourceArn: assetIndexerSqsQueue.queueArn,
                     target: assetIndexingFunction,
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(5),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 }
             );
             const cfnEsmAssetIndexer = esmAssetIndexer.node
@@ -377,7 +377,7 @@ export function searchBuilder(
             assetIndexingFunction.addEventSource(
                 new eventsources.SqsEventSource(assetIndexerSqsQueue, {
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(5),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 })
             );
         }

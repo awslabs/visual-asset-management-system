@@ -9,7 +9,7 @@ import AssetUploadService, {
     UploadPartResult,
 } from "../../../services/AssetUploadService";
 import { FileUploadTableItem } from "../FileUploadTable";
-import { UploadSequence, calculateFileParts } from "../../../utils/uploadSequencer";
+import { UploadSequence, calculateFileParts } from "../uploadSequencer";
 import { safeGetFile } from "../../../utils/fileHandleCompat";
 import {
     retryWithBackoff,
@@ -17,7 +17,7 @@ import {
     extractStatusCode,
     is503Error,
     formatRetryMessage,
-} from "../../../utils/uploadRetry";
+} from "../uploadRetry";
 
 interface FilePart {
     fileIndex: number;

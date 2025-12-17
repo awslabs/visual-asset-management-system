@@ -19,7 +19,7 @@ export const VAMS_VERSION = "2.4.0";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
-export const LAMBDA_MEMORY_SIZE = 3003;
+export const LAMBDA_MEMORY_SIZE = 5308;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
 
 export const STACK_WAF_DESCRIPTION =
@@ -726,10 +726,12 @@ export interface ConfigPublic {
             useConversionCadMeshMetadataExtraction: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
             };
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
                 sqsAutoRunOnAssetModified: boolean;
             };
             useSplatToolbox: {
@@ -741,6 +743,7 @@ export interface ConfigPublic {
                 enabled: boolean;
                 bedrockModelId: string;
                 autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
             };
             useRapidPipeline: {
                 enabled: boolean;

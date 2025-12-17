@@ -38,11 +38,13 @@ def lambda_handler(event, context):
                 taskToken=event['externalSfnTaskToken'],
                 output=json.dumps({'status': 'Pipeline Success'})
             )
+            logger.info("Sent external task token: success")
         else:
             sfn.send_task_failure(
                 taskToken=event['externalSfnTaskToken'],
                 error='Pipeline Failure: ' + event["error"]["Error"],
                 cause='See AWS cloudwatch logs for error cause.'
             )
+            logger.info("Sent external task token: error")
 
     return event

@@ -74,17 +74,20 @@
             },
             "useConversionCadMeshMetadataExtraction": {
                 "enabled": false,
-                "autoRegisterWithVAMS": true
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
-                "autoRegisterWithVAMS": false,
-                "sqsAutoRunOnAssetModified": true
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "sqsAutoRunOnAssetModified": false
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,
                 "bedrockModelId": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                "autoRegisterWithVAMS": true
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
             },
             "useSplatToolbox": {
                 "enabled": false,

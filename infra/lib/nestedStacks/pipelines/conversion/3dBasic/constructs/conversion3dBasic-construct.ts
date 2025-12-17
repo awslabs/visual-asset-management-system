@@ -106,6 +106,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
                     workflowId: "conversion-3d-basic-to-obj",
                     workflowDescription:
                         "Automated workflow for X to OBJ conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                    autoTriggerOnFileExtensionsUpload: ""
                 },
             });
 
@@ -129,6 +130,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
                     workflowId: "conversion-3d-basic-to-stl",
                     workflowDescription:
                         "Automated workflow for  X to STL conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                    autoTriggerOnFileExtensionsUpload: ""
                 },
             });
 
@@ -152,6 +154,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
                     workflowId: "conversion-3d-basic-to-gltf",
                     workflowDescription:
                         "Automated workflow for X to GLTF conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                    autoTriggerOnFileExtensionsUpload: ""
                 },
             });
 
@@ -175,6 +178,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
                     workflowId: "conversion-3d-basic-to-glb",
                     workflowDescription:
                         "Automated workflow for X to GLB conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                    autoTriggerOnFileExtensionsUpload: ""
                 },
             });
 

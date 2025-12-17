@@ -26,6 +26,11 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   **Web** Updated asset files manager to implement a lazy loading approach to loading files with the API calls to make page loads quicker to getting to file information (helps when an asset has a lot of files)
 -   **CLI** Added --auto-paginate params (and adjusted other associated pagination parameers) to listing of databases, buckets, assets, and lists
 -   **CLI** Updated CLI profile/auth/setup to pull in and display across various commands more of the environment configurations pulled from the API
+-   Workflow execution restrictions have been loosened to now allow for multiple running executions of the same workflow on an asset as long as the files being run against are different (previously didn't factor in inputted files and was only allowing 1 running execution per workflow per asset)
+-   **Web** New workflow/pipelines auto-triggering execution system for file uploads. Workflows have a new property on them that can be set in the workflow editor and some have default configurations in the deployed CDK use-cases pipeline to auto-set this (`autoRegisterAutoTriggerOnFileUpload`). Parts of this system will be refactored again in an upcoming pipeline overhaul initiative. 
+    -   The trigger for this is setting which file extensions should kick of the pipeline for each file uploaded to an asset (new or modified). This is a comma-deliminated list of extensions. If ".all" is provided, then it will execute on all file extensions uploaded. 
+    -   Feature is implemented with the new indexing SNS where this is a new SQS queue subscribing to that system for file uploads to check on executions per file. This allows for high scalability for files being uploaded. 
+    -   PotreePipeline now has it's default set to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, previously bypassing the Workflow system
 
 ### Bug Fixes
 
@@ -33,7 +38,7 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   Fixed bug where archived assets were not being properly reindexed in OpenSearch as archived
 -   Fixed bug where archiving an asset caused the asset (or a default database) to be re-created in some scenarios as part of the S3 file re-indexing process
 -   S3 Bucket sync processes to create assets from S3 objects will now still operate, even when OpenSearch functionality is disabled (part of the indexing flow re-factor)
--   Fixed Casbin cache logic to truely be 30 seconds for updating constraints, roles, and users in roles in a lambda for authorization logic
+-   Fixed Casbin cache logic to truely be 60 seconds for updating constraints, roles, and users in roles in a lambda for authorization logic
 -   Fixed bug with move file API command not allowing allowing a move (or rename) due to issues with the destination check logic
 -   **Web** File previews, if provided as a `.previewFile.`. will now display correctly in the Asset/File search.
 -   **Web** File operations in the asset details file manager appropriately refresh the details panel during certain operations
@@ -41,6 +46,9 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   Fixed various API pagination issues with listing database, assets, and files
 -   **CLI** Fix to ensure when the `--json-output` flag is set to make sure all errors coming back are also in proper JSON format
 -   Fixed the assets and auxiliary assets streaming APIs to properly check for payload sizes to be under 6mb while also now returning presigned S3 URL redirects for larger payloads. This fixes issues with both Potree and 3D Tile viewers where the client may choose to fetch larger range sizes for tiled subsets.
+-   **Web** Added tracking of asset file input for workflow execution history and displaying that on the view asset page
+-   **Web** Updated logic for file viewers (Potree viewer) that require fetching/passing of JWT tokens for API header passing to now both fetch/refresh the token as needed without needing to refresh the page and properly work with external OAUTH2 tokens (non-cognito)
+-   **CLI** Fixed assets download command to properly download an entire assets worth of files at once from the root or from different file folders on down
 
 ### Chores
 
@@ -50,6 +58,11 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   Further adjusted upload thresholds for throttling and file/part/sequence splitting across the backend API, web, and CLI to tune for not only large files but many files for upload
 -   Updated ./listFiles API to default maxitems to 10000 and max page size to be 1500 for basic mode and 100 for non-basic.
 -   API for `/secureConfig` now returns the website deployed URL (if a website is deployed)
+-   File streaming APIs now support HEAD requests to allow for checking if a file exists before streaming its contents with a GET
+-   **Web** Consolidated auth token functions to a utility function, out of Auth.tsx. 
+-   Updated logic of when fileIndexerSNS queue is published to from a S3 object change to reduce calls for objects generally that should be skipped (i.e. folder objects, `init` files/folders, special exclusion folder prefixes and their objects). These will still get processed by the sqsBucketSync queue/lambda but will not be further re-published. This should lessen processing downstream where usually these objects are ignored anyway. 
+-   **CLI** Removed API version check on all API commands to save on CLI API calls and increase performance a small amount. Only auth and setup commands will now check CLI version against API version. 
+-   Updated all lambdas memory to 5308 from 3003 which increases the vCPU from 2 to 4, increasing API response performance. 
 
 ### Known Outstanding Issues
 

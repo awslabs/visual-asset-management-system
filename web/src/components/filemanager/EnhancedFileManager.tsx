@@ -218,23 +218,25 @@ export function EnhancedFileManager({
 
                 // Update phase to complete
                 const nextPhase = basic ? "basic-complete" : "complete";
+                console.log(`📊 Dispatching SET_LOADING_PHASE: ${nextPhase}`);
                 dispatch({
                     type: "SET_LOADING_PHASE",
                     payload: {
                         phase: nextPhase,
                     },
                 });
-
-                // Reset loading ref when detailed loading is complete
-                if (nextPhase === "complete") {
-                    loadingRef.current = false;
-                }
             } catch (error) {
                 console.error(`Error in ${phase}:`, error);
                 dispatch({
                     type: "SET_ERROR",
                     payload: `Failed to load files: ${error}`,
                 });
+            } finally {
+                // CRITICAL: Always reset loadingRef when detailed loading completes
+                // This ensures the flag is reset even if there are errors or state changes during tab switching
+                if (!basic) {
+                    loadingRef.current = false;
+                }
             }
         },
         [databaseId, assetId]
@@ -243,7 +245,10 @@ export function EnhancedFileManager({
     // Initial load of files with streaming
     useEffect(() => {
         // Prevent duplicate loads
-        if (loadingRef.current) return;
+        if (loadingRef.current) {
+            console.log("⚠️ Skipping load - already loading (loadingRef.current = true)");
+            return;
+        }
         if (!databaseId || !assetId) return;
 
         // If assetFiles prop is provided (legacy mode), use it
@@ -335,16 +340,13 @@ export function EnhancedFileManager({
 
         // Only run once on mount
         if (!hasInitializedRef.current) {
-            loadFiles();
+            loadFiles().catch((error) => {
+                console.error("Error in initial load:", error);
+                loadingRef.current = false;
+                hasInitializedRef.current = false;
+            });
         }
-    }, [
-        databaseId,
-        assetId,
-        assetFiles,
-        filePathToNavigate,
-        loadFilesStreaming,
-        state.showArchived,
-    ]);
+    }, [databaseId, assetId]);
 
     // Handle refreshing files when refreshTrigger changes
     useEffect(() => {
@@ -395,14 +397,7 @@ export function EnhancedFileManager({
         };
 
         refreshFiles();
-    }, [
-        state.refreshTrigger,
-        state.assetId,
-        state.databaseId,
-        state.showArchived,
-        loadFilesStreaming,
-        assetName,
-    ]);
+    }, [state.refreshTrigger, state.assetId, state.databaseId, state.showArchived, assetName]);
 
     // State for the preview modal
     const [showPreviewModal, setShowPreviewModal] = useState(false);

@@ -527,6 +527,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     workflowId: "preview-pc-potree-viewer-las-laz-e57-ply",
                     workflowDescription:
                         "Automated workflow for LAZ, LAS, E57, and PLY point cloud preview generation using PotreeViewer Pipeline",
+                    autoTriggerOnFileExtensionsUpload: props.config.app.pipelines.usePreviewPcPotreeViewer.autoRegisterAutoTriggerOnFileUpload === true? ".laz,.las,.e57,.ply" : ""
                 },
             });
 

@@ -25,11 +25,11 @@ import {
     createUploadSequences,
     needsMultiSequenceUpload,
     getUploadSummary,
-} from "../../utils/uploadSequencer";
+} from "./uploadSequencer";
 import { useMultiSequenceUpload } from "./hooks/useMultiSequenceUpload";
 import { useFilePartsUpload } from "./hooks/useFilePartsUpload";
 import { useAssetOperations } from "./hooks/useAssetOperations";
-import { formatRetryMessage } from "../../utils/uploadRetry";
+import { formatRetryMessage } from "./uploadRetry";
 
 interface UploadManagerProps {
     assetDetail: AssetDetail;

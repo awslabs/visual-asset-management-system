@@ -130,6 +130,142 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
+def handle_head_request(event, claims_and_roles):
+    """Handle HEAD requests to check file availability and permissions
+    
+    Returns metadata headers without file content, following HTTP best practices.
+    HEAD requests do not check file size thresholds or generate redirects.
+    """
+    path_parameters = event.get('pathParameters', {})
+    
+    # Get the object key which comes after the base path of the API Call
+    assetId = path_parameters.get('assetId', "") 
+    databaseId = path_parameters.get('databaseId', "") 
+    object_key = path_parameters.get('proxy', "")
+    
+    # Error if no object key in path
+    if not object_key or object_key == None or object_key == "":
+        message = "No Asset File Object Key Provided in Path"
+        logger.error(message)
+        return validation_error(body={'message': message})
+    
+    # If object_key doesn't start with a /, add it
+    if not object_key.startswith('/'):
+        object_key = '/' + object_key
+    
+    logger.info("Validating parameters for HEAD request")
+    (valid, message) = validate({
+        'databaseId': {
+            'value': databaseId,
+            'validator': 'ID'
+        },
+        'assetId': {
+            'value': assetId,
+            'validator': 'ASSET_ID'
+        },
+        'assetFilePathKey': {
+            'value': object_key,
+            'validator': 'RELATIVE_FILE_PATH'
+        },
+    })
+    if not valid:
+        logger.error(message)
+        return validation_error(body={'message': message})
+    
+    # Get asset details and check if it exists
+    asset_object = get_asset_details(databaseId, assetId)
+    if not asset_object:
+        message = f"Asset not found in database"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=404)
+    
+    # Check if asset is distributable
+    if not asset_object.get('isDistributable', False):
+        message = "Asset not distributable"
+        logger.error(message)
+        return authorization_error(body={'message': message})
+    
+    asset_object.update({"object__type": "asset"})
+    
+    # Check authorization
+    operation_allowed_on_asset = False
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforceAPI(event, "GET"):
+            if casbin_enforcer.enforce(asset_object, "GET"):
+                operation_allowed_on_asset = True
+    
+    if not operation_allowed_on_asset:
+        return authorization_error()
+    
+    # Get asset location
+    asset_location = asset_object.get('assetLocation')
+    if not asset_location:
+        message = "Asset location not found"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=404)
+    
+    # Get bucket details from bucketId
+    bucketDetails = get_default_bucket_details(asset_object.get('bucketId'))
+    asset_bucket = bucketDetails['bucketName']
+    asset_base_key = asset_location.get('Key')
+    
+    # Resolve the full S3 key
+    object_key = resolve_asset_file_path(asset_base_key, object_key)
+    
+    try:
+        # Use head_object to get metadata without downloading file content
+        head_response = s3_client.head_object(
+            Bucket=asset_bucket,
+            Key=object_key
+        )
+        
+        # Validate file extension and content type
+        content_type = head_response.get('ContentType', 'application/octet-stream')
+        if not validateUnallowedFileExtensionAndContentType(object_key, content_type):
+            message = "Unallowed file extension or content type in asset file"
+            logger.error(message)
+            return validation_error(body={'message': message})
+        
+        # Build response headers following HTTP best practices
+        response_headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Range',
+            'Cache-Control': 'no-cache, no-store',
+            'Content-Type': content_type,
+            'Content-Length': str(head_response.get('ContentLength', 0)),
+            'Accept-Ranges': 'bytes',
+        }
+        
+        # Add optional headers if available
+        if 'LastModified' in head_response:
+            response_headers['Last-Modified'] = head_response['LastModified'].strftime('%a, %d %b %Y %H:%M:%S GMT')
+        
+        if 'ETag' in head_response:
+            response_headers['ETag'] = head_response['ETag']
+        
+        if 'VersionId' in head_response:
+            response_headers['x-amz-version-id'] = head_response['VersionId']
+        
+        if 'StorageClass' in head_response:
+            response_headers['x-amz-storage-class'] = head_response['StorageClass']
+        
+        logger.info(f"HEAD request successful for {object_key}")
+        return {
+            'statusCode': 200,
+            'headers': response_headers,
+            'body': ''  # Always empty for HEAD requests
+        }
+        
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == '404' or error_code == 'NoSuchKey':
+            logger.error(f"File not found: {object_key}")
+            return general_error(body={'message': 'File not found'}, status_code=404)
+        else:
+            logger.exception(f"S3 ClientError during HEAD request: {e}")
+            return internal_error()
+
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset streaming APIs"""
     global claims_and_roles
@@ -137,6 +273,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     try:
         claims_and_roles = request_to_claims(event)
         
+        # Detect HTTP method
+        http_method = event['requestContext']['http']['method']
+        
+        # Handle HEAD requests
+        if http_method == 'HEAD':
+            logger.info("Processing HEAD request")
+            return handle_head_request(event, claims_and_roles)
+        
+        # Handle GET requests (existing logic)
         # Get the request headers from the API Gateway event
         try:
             request_headers = event['headers']
@@ -193,7 +338,6 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             logger.error(message)
             return validation_error(body={'message': message})
 
-        http_method = "GET"
         operation_allowed_on_asset = False
 
         # Get asset details and check if it exists

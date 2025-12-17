@@ -284,6 +284,7 @@ export function generateContentSecurityPolicy(
 
     let scriptSrc = [
         "'self'",
+        "'unsafe-hashes'",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
     ];
 

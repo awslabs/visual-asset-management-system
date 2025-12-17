@@ -1108,14 +1108,82 @@ class TestAssetDownloadCommand:
             mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf')
     
     @patch('vamscli.commands.assets.asyncio.run')
+    def test_download_root_folder_filters_folders(self, mock_asyncio_run, cli_runner, assets_command_mocks):
+        """Test downloading from root folder filters out folder objects."""
+        with assets_command_mocks as mocks:
+            # Mock file listing with root folder and files
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {'relativePath': '/', 'isFolder': True},  # Root folder - should be filtered
+                    {'relativePath': '/model.gltf', 'isFolder': False, 'size': 1024},
+                    {'relativePath': '/texture.jpg', 'isFolder': False, 'size': 2048},
+                    {'relativePath': '/subfolder/', 'isFolder': True}  # Subfolder - should be filtered
+                ]
+            }
+            
+            # Mock download URLs (only for files, not folders)
+            mocks['api_client'].download_asset_file.side_effect = [
+                {'downloadUrl': 'https://s3.amazonaws.com/bucket/model.gltf', 'expiresIn': 86400},
+                {'downloadUrl': 'https://s3.amazonaws.com/bucket/texture.jpg', 'expiresIn': 86400}
+            ]
+            
+            # Mock async download result
+            mock_asyncio_run.return_value = {
+                'overall_success': True,
+                'total_files': 2,  # Only 2 files, not 4
+                'successful_files': 2,
+                'failed_files': 0,
+                'total_size': 3072,
+                'total_size_formatted': '3.0 KB',
+                'download_duration': 1.5,
+                'average_speed': 2048,
+                'average_speed_formatted': '2.0 KB/s',
+                'successful_downloads': [
+                    {'relative_key': '/model.gltf', 'local_path': '/tmp/model.gltf', 'size': 1024},
+                    {'relative_key': '/texture.jpg', 'local_path': '/tmp/texture.jpg', 'size': 2048}
+                ],
+                'failed_downloads': []
+            }
+            
+            # Mock file existence verification
+            with patch('pathlib.Path.exists', return_value=True), \
+                 patch('pathlib.Path.stat') as mock_stat:
+                # Create a proper mock stat result
+                stat_result = Mock()
+                stat_result.st_size = 1024
+                stat_result.st_mode = 0o100644  # Regular file mode
+                mock_stat.return_value = stat_result
+                
+                result = cli_runner.invoke(cli, [
+                    'assets', 'download', '/tmp',
+                    '-d', 'test-database',
+                    '-a', 'test-asset',
+                    '--file-key', '/'
+                ])
+            
+            assert result.exit_code == 0
+            assert '✓ Download completed successfully!' in result.output
+            assert 'Total files: 2' in result.output
+            
+            # Verify only files were requested for download, not folders
+            assert mocks['api_client'].download_asset_file.call_count == 2
+            # Verify no attempt to download "/" or "/subfolder/"
+            for call in mocks['api_client'].download_asset_file.call_args_list:
+                file_key = call[0][2]  # Third argument is file_key
+                # Ensure we're not trying to download folder paths
+                assert file_key in ['/model.gltf', '/texture.jpg']
+    
+    @patch('vamscli.commands.assets.asyncio.run')
     def test_download_recursive_folder(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test downloading a folder recursively."""
         with assets_command_mocks as mocks:
-            # Mock file listing
+            # Mock file listing with folder objects that should be filtered
             mocks['api_client'].list_asset_files.return_value = {
                 'items': [
+                    {'relativePath': '/models/', 'isFolder': True},  # Folder - should be filtered
                     {'relativePath': '/models/model1.gltf', 'isFolder': False, 'size': 1024},
                     {'relativePath': '/models/model2.gltf', 'isFolder': False, 'size': 2048},
+                    {'relativePath': '/models/subfolder/', 'isFolder': True},  # Folder - should be filtered
                     {'relativePath': '/models/subfolder/model3.gltf', 'isFolder': False, 'size': 512}
                 ]
             }

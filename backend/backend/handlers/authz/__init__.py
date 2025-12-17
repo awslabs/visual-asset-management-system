@@ -18,7 +18,7 @@ from locked_dict import locked_dict
 
 # Duration to refresh cache for next invocation - this can be tweaked for performance/consistency needs
 #
-CASBIN_REFRESH_POLICY_SECONDS = 30
+CASBIN_REFRESH_POLICY_SECONDS = 60
 
 # Amount of attempts to retry fetching of policy from DynamoDB
 #
@@ -557,7 +557,12 @@ class CasbinEnforcerService:
             return False
 
         enhanced_object = PERMISSION_CONSTRAINT_FIELDS.copy()
-        enhanced_object.update(obj)
+        # Update with obj, but convert any None values to empty strings to prevent regex errors
+        for key, value in obj.items():
+            if value is None:
+                enhanced_object[key] = ""
+            else:
+                enhanced_object[key] = value
 
         try:
             return self._enforcer.enforce(sub, enhanced_object, act)

@@ -207,12 +207,10 @@ export function DirectoryTree({}: DirectoryTreeProps) {
     const { state, dispatch } = context;
 
     // Show loading progress for streaming phases
-    // Check both loadingPhase and state.loading to ensure spinner shows throughout entire load
+    // Only show spinner during active loading phases, not during transition phases
     const isStreaming =
         state.loading &&
-        (state.loadingPhase === "basic-loading" ||
-            state.loadingPhase === "detailed-loading" ||
-            state.loadingPhase === "basic-complete");
+        (state.loadingPhase === "basic-loading" || state.loadingPhase === "detailed-loading");
     const loadingMessage =
         state.loadingPhase === "basic-loading"
             ? "Loading files..."

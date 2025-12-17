@@ -4,10 +4,11 @@
  */
 
 import React, { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Auth, Cache } from "aws-amplify";
+import { Cache } from "aws-amplify";
 import { VeerumDependencyManager } from "./dependencies";
 import { VeerumViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 
 // Lazy load unified panel to avoid circular dependency issues
 const VeerumPanel = lazy(() => import("./VeerumPanel"));
@@ -78,10 +79,10 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                     throw new Error(errorMsg);
                 }
 
-                // Get authorization token and create Headers object
-                const authToken = Auth.Credentials.Auth.user.signInUserSession.idToken.jwtToken;
+                // Get a valid, fresh authorization header (automatically refreshes token if expired)
+                const authorizationHeader = await getDualAuthorizationHeader();
                 const headers = new Headers();
-                headers.append("Authorization", `Bearer ${authToken}`);
+                headers.append("Authorization", authorizationHeader);
 
                 setLoadingMessage("Creating viewer...");
 
@@ -209,6 +210,41 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             const potreeFileKey = fileKey + "/preview/PotreeViewer/metadata.json";
                             const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
 
+                            console.log(`VEERUM Viewer: Validating point cloud URL ${assetUrl}`);
+
+                            // Pre-flight validation: Check if the asset URL is accessible before creating model
+                            // This catches CORS errors, network failures, and HTTP errors that the viewer library doesn't expose
+                            try {
+                                const response = await fetch(assetUrl, {
+                                    method: "HEAD", // Use HEAD to avoid downloading the full file
+                                    headers: headers,
+                                });
+
+                                // Check for successful response (2xx) or redirect (3xx)
+                                if (!response.ok && response.status >= 400) {
+                                    throw new Error(
+                                        `HTTP ${response.status}: ${response.statusText || "Request failed"}`
+                                    );
+                                }
+
+                                console.log(
+                                    `VEERUM Viewer: Point cloud URL validation successful (${response.status})`
+                                );
+                            } catch (fetchError: any) {
+                                // Handle all fetch errors: CORS, network failures, HTTP errors
+                                const errorDetail =
+                                    fetchError?.message || fetchError?.toString() || "Unknown error";
+                                const errorMsg = `Auxiliary Preview Files (potree) are not currently available for this point cloud. Run the Potree Pipeline to generate: ${errorDetail}`;
+
+                                console.error(
+                                    `VEERUM Viewer: Point cloud URL validation failed for ${fileKey}:`,
+                                    fetchError
+                                );
+
+                                // Add to errors array for user display
+                                throw new Error(errorMsg);
+                            }
+
                             console.log(`VEERUM Viewer: Loading point cloud from ${assetUrl}`);
 
                             const pointCloudModel = new PointCloudModel(
@@ -264,7 +300,10 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 }
 
                 if (loadedModels.length === 0) {
-                    throw new Error("No files could be loaded successfully");
+                    // Don't throw an error - let the file errors display in the warning banner
+                    console.error("VEERUM Viewer: No files could be loaded successfully");
+                    setIsLoading(false);
+                    return; // Exit early without throwing
                 }
 
                 // Store loaded models in state
@@ -399,7 +438,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             marginBottom: "8px",
                         }}
                     >
-                        ⚠️ Some files failed to load ({fileErrors.length}/
+                        ⚠️ {loadedModels.length === 0 ? "All files failed to load" : "Some files failed to load"} ({fileErrors.length}/
                         {multiFileKeys?.length || 1})
                     </div>
                     {fileErrors.map((err, idx) => (

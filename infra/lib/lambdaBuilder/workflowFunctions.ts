@@ -307,6 +307,69 @@ export function buildExecuteWorkflowFunction(
     return fun;
 }
 
+export function buildSqsAutoExecuteWorkflowFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    executeWorkflowFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "sqsAutoExecuteWorkflow";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.workflows.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            EXECUTE_WORKFLOW_LAMBDA_FUNCTION_NAME: executeWorkflowFunction.functionName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+        },
+    });
+
+    // Grant DynamoDB permissions
+    storageResources.dynamo.workflowStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+
+    // Grant invoke permission to executeWorkflow Lambda
+    executeWorkflowFunction.grantInvoke(fun);
+
+    //grant asset bucket permissions
+    grantReadPermissionsToAllAssetBuckets(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return fun;
+}
+
 export function buildProcessWorkflowExecutionOutputFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,

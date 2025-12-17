@@ -2804,7 +2804,7 @@ export class CustomIndexerNestedStack extends NestedStack {
         customIndexerFunction.addEventSource(
             new eventsources.SqsEventSource(customIndexerQueue, {
                 batchSize: 10,
-                maxBatchingWindow: cdk.Duration.seconds(10),
+                maxBatchingWindow: cdk.Duration.seconds(3),
             })
         );
 
@@ -2914,7 +2914,7 @@ if (config.app.govCloud.enabled) {
         target: myLambdaFunction,
         eventSourceArn: myQueue.queueArn,
         batchSize: 10,
-        maxBatchingWindow: cdk.Duration.seconds(10),
+        maxBatchingWindow: cdk.Duration.seconds(3),
     });
     const cfnEsm = esm.node.defaultChild as lambda.CfnEventSourceMapping;
     cfnEsm.addPropertyDeletionOverride("Tags");
@@ -2922,7 +2922,7 @@ if (config.app.govCloud.enabled) {
     myLambdaFunction.addEventSource(
         new eventsources.SqsEventSource(myQueue, {
             batchSize: 10,
-            maxBatchingWindow: cdk.Duration.seconds(10),
+            maxBatchingWindow: cdk.Duration.seconds(3),
         })
     );
 }

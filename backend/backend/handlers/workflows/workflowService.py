@@ -64,6 +64,10 @@ def get_all_workflows(queryParams, showDeleted=False):
     for item in pageIterator['Items']:
         deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
 
+        # Ensure autoTriggerOnFileExtensionsUpload field exists (return empty string if missing)
+        if 'autoTriggerOnFileExtensionsUpload' not in deserialized_document:
+            deserialized_document['autoTriggerOnFileExtensionsUpload'] = ''
+
         # Add Casbin Enforcer to check if the current user has permissions to GET the workflow:
         deserialized_document.update({
             "object__type": "workflow"
@@ -106,6 +110,10 @@ def get_workflows(databaseId, query_params, showDeleted=False):
     }
 
     for item in page_iterator['Items']:
+        # Ensure autoTriggerOnFileExtensionsUpload field exists (return empty string if missing)
+        if 'autoTriggerOnFileExtensionsUpload' not in item:
+            item['autoTriggerOnFileExtensionsUpload'] = ''
+        
         # Add Casbin Enforcer to check if the current user has permissions to GET the workflow:
         item.update({
             "object__type": "workflow"
@@ -133,6 +141,10 @@ def get_workflow(databaseId, workflowId, showDeleted=False):
     allowed = False
 
     if workflow:
+        # Ensure autoTriggerOnFileExtensionsUpload field exists (return empty string if missing)
+        if 'autoTriggerOnFileExtensionsUpload' not in workflow:
+            workflow['autoTriggerOnFileExtensionsUpload'] = ''
+        
         # Add Casbin Enforcer to check if the current user has permissions to GET the workflow:
         workflow.update({
             "object__type": "workflow"

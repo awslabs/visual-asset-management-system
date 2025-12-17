@@ -1373,6 +1373,15 @@ vamscli assets download /local/path -d my-db -a my-asset --json-output
 }
 ```
 
+**Folder Filtering Behavior:**
+
+The download command automatically filters out folder objects and only downloads actual files:
+
+-   **Automatic Filtering**: Folder objects (items with `isFolder: true`) are never downloaded
+-   **Root Folder**: When using `--file-key "/"`, all files at the root level are downloaded (the "/" folder object itself is ignored)
+-   **Recursive Downloads**: When using `--recursive`, all files in the folder tree are downloaded (folder objects are ignored)
+-   **File Placement**: Files are placed at their relative path key (unless `--flatten-download-tree` is specified)
+
 **Download Scenarios:**
 
 1. **Individual File Download**
@@ -1386,12 +1395,14 @@ vamscli assets download /local/path -d my-db -a my-asset --json-output
     - Downloads all files under folder prefix
     - `--recursive` includes all subdirectories
     - `--flatten-download-tree` ignores folder structure
+    - **Folder objects are automatically filtered out**
 
 3. **Whole Asset Download**
 
     - Downloads all files from asset
     - Maintains asset folder structure
     - Skips archived files automatically
+    - **Folder objects are automatically filtered out**
 
 4. **Asset Preview Download**
 

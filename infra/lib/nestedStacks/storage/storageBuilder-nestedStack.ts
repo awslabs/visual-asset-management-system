@@ -62,8 +62,12 @@ export interface storageResources {
         commentStorageTable: dynamodb.Table;
         constraintsStorageTable: dynamodb.Table;
         databaseStorageTable: dynamodb.Table;
-        metadataSchemaStorageTable: dynamodb.Table;
-        metadataStorageTable: dynamodb.Table;
+        metadataSchemaStorageTable: dynamodb.Table; //OLD
+        metadataSchemaStorageTableV2: dynamodb.Table;
+        metadataStorageTable: dynamodb.Table; //OLD
+        databaseMetadataStorageTable: dynamodb.Table;
+        assetFileMetadataStorageTable: dynamodb.Table;
+        fileAttributeStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         rolesStorageTable: dynamodb.Table;
         s3AssetBucketsStorageTable: dynamodb.Table;
@@ -682,6 +686,87 @@ export function storageResourcesBuilder(
         stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
+    const databaseMetadataStorageTable = new dynamodb.Table(scope, "DatabaseMetadataStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseMetadataId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        stream: dynamodb.StreamViewType.NEW_IMAGE,
+    });
+
+    // GSI for querying by database
+    databaseMetadataStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseMetadataId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const assetFileMetadataStorageTable = new dynamodb.Table(scope, "AssetFileMetadataStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "assetFileMetadataId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId:assetId:filePath",
+            type: dynamodb.AttributeType.STRING,
+        },
+        stream: dynamodb.StreamViewType.NEW_IMAGE,
+    });
+
+    // GSI for querying by database/asset/file
+    assetFileMetadataStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdAssetIdFilePathIndex",
+        partitionKey: {
+            name: "databaseId:assetId:filePath",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetFileMetadataId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const fileAttributeStorageTable = new dynamodb.Table(scope, "FileAttributeStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "fileAttributeId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId:assetId:filePath",
+            type: dynamodb.AttributeType.STRING,
+        },
+        stream: dynamodb.StreamViewType.NEW_IMAGE,
+    });
+
+    // GSI for querying by database/asset/file
+    fileAttributeStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdAssetIdFilePathIndex",
+        partitionKey: {
+            name: "databaseId:assetId:filePath",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "fileAttributeId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const metadataSchemaStorageTable = new dynamodb.Table(scope, "MetadataSchemaStorageTable", {
         ...dynamodbDefaultProps,
 
@@ -693,6 +778,61 @@ export function storageResourcesBuilder(
             name: "field",
             type: dynamodb.AttributeType.STRING,
         },
+    });
+
+    const metadataSchemaStorageTableV2 = new dynamodb.Table(scope, "MetadataSchemaStorageTableV2", {
+        ...dynamodbDefaultProps,
+
+        partitionKey: {
+            name: "metadataSchemaId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId:metadataEntityType",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // GSI for querying by database/metadataEntityType
+    metadataSchemaStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdMetadataEntityTypeIndex",
+        partitionKey: {
+            name: "databaseId:metadataEntityType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "metadataSchemaId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for querying by metadataEntityType
+    metadataSchemaStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "MetadataEntityTypeIndex",
+        partitionKey: {
+            name: "metadataEntityType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "metadataSchemaId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for querying by database
+    metadataSchemaStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "metadataSchemaId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
     });
 
     const tagStorageTable = new dynamodb.Table(scope, "TagStorageTable", {
@@ -1004,8 +1144,12 @@ export function storageResourcesBuilder(
             workflowStorageTable: workflowStorageTable,
             workflowExecutionsStorageTable: workflowExecutionsStorageTable,
             metadataStorageTable: metadataStorageTable,
+            metadataSchemaStorageTable: metadataSchemaStorageTable, //OLD
+            metadataSchemaStorageTableV2: metadataSchemaStorageTableV2,
+            databaseMetadataStorageTable: databaseMetadataStorageTable,
+            assetFileMetadataStorageTable: assetFileMetadataStorageTable,
+            fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
-            metadataSchemaStorageTable: metadataSchemaStorageTable,
             tagStorageTable: tagStorageTable,
             tagTypeStorageTable: tagTypeStorageTable,
             s3AssetBucketsStorageTable: s3AssetBucketsStorageTable,
@@ -1244,7 +1388,7 @@ export function storageResourcesBuilder(
                     eventSourceArn: onS3ObjectCreatedQueue.queueArn,
                     target: sqsBucketSyncFunctionCreated,
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(10),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 }
             );
             const cfnEsm = esmCreated.node.defaultChild as lambda.CfnEventSourceMapping;
@@ -1257,7 +1401,7 @@ export function storageResourcesBuilder(
                     eventSourceArn: onS3ObjectCreatedQueue.queueArn,
                     target: sqsBucketSyncFunctionCreated,
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(10),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 }
             );
         }
@@ -1309,7 +1453,7 @@ export function storageResourcesBuilder(
                     eventSourceArn: onS3ObjectDeletedQueue.queueArn,
                     target: sqsBucketSyncFunctionRemoved,
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(10),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 }
             );
             const cfnEsm = esmDeleted.node.defaultChild as lambda.CfnEventSourceMapping;
@@ -1322,7 +1466,7 @@ export function storageResourcesBuilder(
                     eventSourceArn: onS3ObjectDeletedQueue.queueArn,
                     target: sqsBucketSyncFunctionRemoved,
                     batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(10),
+                    maxBatchingWindow: cdk.Duration.seconds(3),
                 }
             );
         }

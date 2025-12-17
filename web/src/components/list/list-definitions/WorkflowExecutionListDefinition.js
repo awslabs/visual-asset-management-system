@@ -64,11 +64,39 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
         }),
         new ColumnDefinition({
             id: "description",
-            header: "Description",
+            header: "Description / File",
             cellWrapper: (props) => {
                 const { item } = props;
                 const MAX_LENGTH = 100;
 
+                // If this is an execution (has parentId), show the file key
+                if (item.parentId) {
+                    const fileKey = item.inputAssetFileKey || '';
+                    
+                    if (!fileKey) {
+                        return <></>;
+                    }
+                    
+                    // If file key is longer than MAX_LENGTH, truncate and add tooltip
+                    if (fileKey.length > MAX_LENGTH) {
+                        const truncated = fileKey.substring(0, MAX_LENGTH) + "...";
+                        return (
+                            <Popover
+                                dismissButton={false}
+                                position="top"
+                                size="large"
+                                triggerType="text"
+                                content={fileKey}
+                            >
+                                {truncated}
+                            </Popover>
+                        );
+                    }
+                    
+                    return <>{fileKey}</>;
+                }
+
+                // If this is a workflow (no parentId), show the description
                 if (!item.description) {
                     if (!item.workflowId) {
                         if (
