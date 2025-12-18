@@ -16,7 +16,7 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   **Web** Added the Veerum 3D Model licened viewer to the viewer plugin system for `e57, las, laz, ply, and .json (3D Tile)` files. Head to [veerum.com](https://www.veerum.com/) for license purchasing and then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
     -   Note: this viewer uses the Potree Auto-Processing pipeline and must be turned on to support the loading of PointCloud files.
 -   Added a new Amazon EKS pipeline option for RapidPipeline use-case pipeline (to compliment existing Amazon ECS). This now provides a pattern example too for other use-case pipelines that would like to implement with Kubernetes (EKS) verses using the Elastic Container Service (ECS) implementation.
--   **Web** Added API and UI on Asset and File search for Unarchive Asset. Additionally cleaned up UI logic for archived asset elements.
+-   **Web** Added API (`/database/{databaseId}/assets/{assetId}/unarchiveAsset`) and UI on Asset and File search for Unarchive Asset. Additionally cleaned up UI logic for archived asset elements.
 -   **Web** Added a Rename File operation on the asset details file manager when singly selecting files. This uses the existing file move API.
 -   Added new CDK deployment configuration support for disabling both Cloudfront and ALB static website deployment options to allow for API-only deployments of VAMS
 -   Added new CDK deployment configuration support for Cloudfront static website custom domains and TLS certificate imports
