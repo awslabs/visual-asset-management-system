@@ -15,6 +15,7 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   (Breaking Change) Reactored permission constraints dynamoDB table, Casbin logic for lookup, and authConstraints API to be more performant and follow the new refactor patterns for dynamoDB tables. This should increase performance of the solution for repeat data actions.
 -   **Web** Added the Veerum 3D Model licened viewer to the viewer plugin system for `e57, las, laz, ply, and .json (3D Tile)` files. Head to [veerum.com](https://www.veerum.com/) for license purchasing and then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
     -   Note: this viewer uses the Potree Auto-Processing pipeline and must be turned on to support the loading of PointCloud files.
+-   Added a new Amazon EKS pipeline option for RapidPipeline use-case pipeline (to compliment existing Amazon ECS). This now provides a pattern example too for other use-case pipelines that would like to implement with Kubernetes (EKS) verses using the Elastic Container Service (ECS) implementation.
 -   **Web** Added API and UI on Asset and File search for Unarchive Asset. Additionally cleaned up UI logic for archived asset elements.
 -   **Web** Added a Rename File operation on the asset details file manager when singly selecting files. This uses the existing file move API.
 -   Added new CDK deployment configuration support for disabling both Cloudfront and ALB static website deployment options to allow for API-only deployments of VAMS
@@ -33,6 +34,7 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
     -   PotreePipeline now has it's default set to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, previously bypassing the Workflow system
 -   **Web** Workflow Executions on View Asset now lazy loads data in, no longer for now shows the search bar
 
+
 ### Bug Fixes
 
 -   Permanently deleting an asset now also deletes any associated asset link / asset link metadata in the database (caused inconsistencies with viewing asset links from the other related assets)
@@ -41,6 +43,7 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   S3 Bucket sync processes to create assets from S3 objects will now still operate, even when OpenSearch functionality is disabled (part of the indexing flow re-factor)
 -   Fixed Casbin cache logic to truely be 60 seconds for updating constraints, roles, and users in roles in a lambda for authorization logic
 -   Fixed bug with move file API command not allowing allowing a move (or rename) due to issues with the destination check logic
+-   Fixed bug in many use-case pipelines where early-on errors or validation issues were not properly triggering the external workflow for an error (this caused workflows to run to prescribed timeout instead of failing early)
 -   **Web** File previews, if provided as a `.previewFile.`. will now display correctly in the Asset/File search.
 -   **Web** File operations in the asset details file manager appropriately refresh the details panel during certain operations
 -   **Web** Fixed UI where some delete operations were not refreshing the page and/or not showing the correct record ID to be deleted (display issue only)

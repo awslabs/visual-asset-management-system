@@ -39,7 +39,7 @@ def download(bucket_name, object_key, file_path):
             s3_client.download_fileobj(bucket_name, object_key, data)
     except ClientError as e:
         logger.exception(e)
-        return None
+        raise Exception("Could not download input file from S3 bucket")
     return file_path
 
 
@@ -73,7 +73,7 @@ def upload(bucket_name, object_key, file_path):
                                    )
     except ClientError as e:
         logger.exception(e)
-        return None
+        raise Exception("Could not upload output file to S3 bucket")
     return object_key
 
 
@@ -96,12 +96,7 @@ def extract_metadata(input_path_asset_base, input_path, output_path):
 
     # Folder check
     if input_key.endswith("/"):
-        return {
-            'statusCode': 400,
-            'body': {
-                "message": "Input S3 URI cannot be a folder"
-            }
-        }
+        raise ValueError("Input S3 URI cannot be a folder")
 
     # Get file extension
     _, file_extension = os.path.splitext(input_key)
@@ -110,12 +105,7 @@ def extract_metadata(input_path_asset_base, input_path, output_path):
     # Check if format is supported
     handler_type = get_handler_for_format(input_key)
     if not handler_type:
-        return {
-            'statusCode': 400,
-            'body': {
-                "message": f"Unsupported file format: {file_extension}"
-            }
-        }
+        raise ValueError(f"Unsupported file format: {file_extension}")
     
     # Download input file from S3
     temp_file = f'/tmp/input{file_extension}'
@@ -157,12 +147,7 @@ def extract_metadata(input_path_asset_base, input_path, output_path):
     
     except Exception as e:
         logger.exception(f"Error extracting metadata: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': {
-                'message': f'Metadata extraction failed.'
-            }
-        }
+        raise Exception(f"Metadata extraction failed: {str(e)}")
 
 
 def lambda_handler(event, context):
@@ -189,10 +174,8 @@ def lambda_handler(event, context):
     # Parse request body
     if not event.get('body'):
         message = 'Request body is required'
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        logger.error(response)
-        return response
+        logger.error(message)
+        raise ValueError(message)
     
     if isinstance(event['body'], str):
         data = json.loads(event['body'])

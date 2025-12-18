@@ -173,6 +173,14 @@ export function buildOpenPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    const stateTaskPolicy = new iam.PolicyStatement({
+        actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+        resources: [
+            `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${config.env.account}:*`,
+        ],
+    });
+    fun.addToRolePolicy(stateTaskPolicy);
+
     return fun;
 }
 

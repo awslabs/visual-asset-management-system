@@ -202,56 +202,6 @@ export class RapidPipelineEKSNestedStack extends NestedStack {
             `Pipeline Lambda function: ${this.pipelineVamsLambdaFunctionName || "pending"}`
         );
 
-        // Create custom resource to automatically register pipeline with VAMS
-        if (props.config.app.pipelines.useRapidPipeline.useEks.autoRegisterWithVAMS === true) {
-            const region = cdk.Stack.of(this).region;
-            const account = cdk.Stack.of(this).account;
-
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:aws:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-
-            // Register X to GLB optimization pipeline and workflow using EKS
-            const customResource = new cdk.CustomResource(this, "RapidPipelineEKSToGlbPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "rapid-pipeline-eks-to-glb",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor (EKS) - X to GLB optimization and conversion using DGG RapidPipeline on EKS",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all", // Accepts any input format
-                    outputType: ".glb", // Outputs GLB format
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: this.pipelineVamsLambdaFunctionName,
-                    taskTimeout: "14400", // 4 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    workflowId: "rapid-pipeline-eks-to-glb",
-                    workflowDescription:
-                        "Automated workflow for X to GLB optimization using RapidPipeline 3D Processor on EKS",
-                },
-            });
-
-            // Add Nag suppression for the import provider
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
-                    },
-                ],
-                true
-            );
-
-            console.log("Custom resource for pipeline registration created");
-        }
+    
     }
 }

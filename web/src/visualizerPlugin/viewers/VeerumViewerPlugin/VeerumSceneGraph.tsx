@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
+import VeerumTransformControls from "./VeerumTransformControls";
 
 interface SceneNode {
     id: string;
@@ -22,6 +23,18 @@ interface VeerumSceneGraphProps {
     onClose?: () => void;
 }
 
+interface TransformState {
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number };
+    scale: { x: number; y: number; z: number };
+}
+
+interface UndoState {
+    objectId: string;
+    transform: TransformState;
+    timestamp: number;
+}
+
 const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
     viewerController,
     loadedModels,
@@ -31,7 +44,123 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
     const [sceneTree, setSceneTree] = useState<SceneNode[]>([]);
     const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
     const [selectedObject, setSelectedObject] = useState<any>(null);
+    const [selectedCount, setSelectedCount] = useState<number>(0);
     const [hoveredObject, setHoveredObject] = useState<string | null>(null);
+    const [undoStack, setUndoStack] = useState<UndoState[]>([]);
+    const [originalTransforms, setOriginalTransforms] = useState<Map<string, TransformState>>(
+        new Map()
+    );
+    const [highlightedObjects, setHighlightedObjects] = useState<Set<string>>(new Set());
+    const originalMaterialsRef = useRef<Map<string, any>>(new Map());
+    const maxUndoStackSize = 20;
+
+    // Store original materials for highlighting
+    const storeOriginalMaterial = useCallback((object: any) => {
+        if (object.material && !originalMaterialsRef.current.has(object.uuid)) {
+            originalMaterialsRef.current.set(object.uuid, object.material);
+        }
+    }, []);
+
+    // Highlight object in 3D viewer
+    const highlightObject = useCallback(
+        (object: any) => {
+            if (!object) return;
+
+            try {
+                // Store original material if not already stored
+                storeOriginalMaterial(object);
+
+                // Apply highlight effect
+                if (object.material) {
+                    const THREE = (window as any).THREE;
+                    if (!THREE) return;
+
+                    const highlightMaterial = object.material.clone();
+                    highlightMaterial.emissive = new THREE.Color(0x4caf50);
+                    highlightMaterial.emissiveIntensity = 0.5;
+                    object.material = highlightMaterial;
+                }
+
+                setHighlightedObjects((prev) => new Set(prev).add(object.uuid));
+            } catch (error) {
+                console.error("Error highlighting object:", error);
+            }
+        },
+        [storeOriginalMaterial]
+    );
+
+    // Unhighlight object in 3D viewer
+    const unhighlightObject = useCallback((object: any) => {
+        if (!object) return;
+
+        try {
+            // Restore original material
+            const originalMaterial = originalMaterialsRef.current.get(object.uuid);
+            if (originalMaterial) {
+                object.material = originalMaterial;
+            }
+
+            setHighlightedObjects((prev) => {
+                const newSet = new Set(prev);
+                newSet.delete(object.uuid);
+                return newSet;
+            });
+        } catch (error) {
+            console.error("Error unhighlighting object:", error);
+        }
+    }, []);
+
+    // Unhighlight all objects
+    const unhighlightAll = useCallback(() => {
+        highlightedObjects.forEach((uuid) => {
+            const scene = viewerController?.getScene();
+            if (!scene) return;
+
+            scene.traverse((obj: any) => {
+                if (obj.uuid === uuid) {
+                    unhighlightObject(obj);
+                }
+            });
+        });
+    }, [highlightedObjects, viewerController, unhighlightObject]);
+
+    // Collect all descendants of an object
+    const collectDescendants = useCallback((object: any): any[] => {
+        const descendants: any[] = [object];
+        object.traverse((child: any) => {
+            if (child !== object) {
+                descendants.push(child);
+            }
+        });
+        return descendants;
+    }, []);
+
+    // Store original transform state
+    const storeOriginalTransform = useCallback(
+        (object: any) => {
+            if (!originalTransforms.has(object.uuid)) {
+                const transform: TransformState = {
+                    position: {
+                        x: object.position.x,
+                        y: object.position.y,
+                        z: object.position.z,
+                    },
+                    rotation: {
+                        x: object.rotation.x,
+                        y: object.rotation.y,
+                        z: object.rotation.z,
+                    },
+                    scale: {
+                        x: object.scale.x,
+                        y: object.scale.y,
+                        z: object.scale.z,
+                    },
+                };
+                setOriginalTransforms((prev) => new Map(prev).set(object.uuid, transform));
+            }
+        },
+        [originalTransforms]
+    );
 
     // Build scene tree from Three.js scene
     const buildSceneTree = useCallback(() => {
@@ -106,13 +235,52 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
     }, []);
 
     // Handle object selection (single click - highlight)
-    const handleObjectClick = useCallback((node: SceneNode) => {
-        setSelectedObject(node.object);
-        console.log("Selected object:", node.name, node.object);
+    const handleObjectClick = useCallback(
+        (node: SceneNode) => {
+            // Toggle selection if clicking same object
+            if (selectedObject?.uuid === node.object.uuid) {
+                // Deselect
+                unhighlightAll();
+                setSelectedObject(null);
+                setSelectedCount(0);
+                setUndoStack([]);
+                console.log("Deselected object:", node.name);
+                return;
+            }
 
-        // TODO: Highlight object in scene if Veerum supports it
-        // This might require adding an outline or changing material
-    }, []);
+            // Unhighlight previous selection
+            unhighlightAll();
+
+            // Select new object with all descendants
+            const descendants = collectDescendants(node.object);
+            setSelectedObject(node.object);
+            setSelectedCount(descendants.length);
+
+            // Store original transform
+            storeOriginalTransform(node.object);
+
+            // Highlight all descendants
+            descendants.forEach((obj) => highlightObject(obj));
+
+            // Clear undo stack for new selection
+            setUndoStack([]);
+
+            console.log(
+                "Selected object:",
+                node.name,
+                "with",
+                descendants.length - 1,
+                "children"
+            );
+        },
+        [
+            selectedObject,
+            unhighlightAll,
+            collectDescendants,
+            storeOriginalTransform,
+            highlightObject,
+        ]
+    );
 
     // Handle object double-click (zoom to object)
     const handleObjectDoubleClick = useCallback(
@@ -165,6 +333,121 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
         },
         [viewerController, buildSceneTree]
     );
+
+    // Handle transform change (live preview)
+    const handleTransformChange = useCallback(
+        (object: any, transform: TransformState) => {
+            if (!object) return;
+
+            try {
+                // Save current state to undo stack before applying changes
+                const currentState: UndoState = {
+                    objectId: object.uuid,
+                    transform: {
+                        position: {
+                            x: object.position.x,
+                            y: object.position.y,
+                            z: object.position.z,
+                        },
+                        rotation: {
+                            x: object.rotation.x,
+                            y: object.rotation.y,
+                            z: object.rotation.z,
+                        },
+                        scale: {
+                            x: object.scale.x,
+                            y: object.scale.y,
+                            z: object.scale.z,
+                        },
+                    },
+                    timestamp: Date.now(),
+                };
+
+                // Add to undo stack (limit size)
+                setUndoStack((prev) => {
+                    const newStack = [...prev, currentState];
+                    return newStack.slice(-maxUndoStackSize);
+                });
+
+                // Apply transform
+                object.position.set(transform.position.x, transform.position.y, transform.position.z);
+                object.rotation.set(
+                    (transform.rotation.x * Math.PI) / 180,
+                    (transform.rotation.y * Math.PI) / 180,
+                    (transform.rotation.z * Math.PI) / 180
+                );
+                object.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
+
+                // Update matrices
+                object.updateMatrix();
+                object.updateMatrixWorld(true);
+
+                console.log("Transform applied:", transform);
+            } catch (error) {
+                console.error("Error applying transform:", error);
+            }
+        },
+        []
+    );
+
+    // Handle undo
+    const handleUndo = useCallback(() => {
+        if (undoStack.length === 0 || !selectedObject) return;
+
+        try {
+            // Pop last state from stack
+            const lastState = undoStack[undoStack.length - 1];
+            setUndoStack((prev) => prev.slice(0, -1));
+
+            // Apply the previous transform
+            const t = lastState.transform;
+            selectedObject.position.set(t.position.x, t.position.y, t.position.z);
+            selectedObject.rotation.set(t.rotation.x, t.rotation.y, t.rotation.z);
+            selectedObject.scale.set(t.scale.x, t.scale.y, t.scale.z);
+
+            // Update matrices
+            selectedObject.updateMatrix();
+            selectedObject.updateMatrixWorld(true);
+
+            console.log("Undo applied");
+        } catch (error) {
+            console.error("Error undoing transform:", error);
+        }
+    }, [undoStack, selectedObject]);
+
+    // Handle reset
+    const handleReset = useCallback(() => {
+        if (!selectedObject) return;
+
+        try {
+            const original = originalTransforms.get(selectedObject.uuid);
+            if (!original) return;
+
+            // Reset to original transform
+            selectedObject.position.set(
+                original.position.x,
+                original.position.y,
+                original.position.z
+            );
+            selectedObject.rotation.set(
+                original.rotation.x,
+                original.rotation.y,
+                original.rotation.z
+            );
+            selectedObject.scale.set(original.scale.x, original.scale.y, original.scale.z);
+
+            // Update matrices
+            selectedObject.updateMatrix();
+            selectedObject.updateMatrixWorld(true);
+
+            // Clear undo stack
+            setUndoStack([]);
+
+            console.log("Transform reset to original");
+        } catch (error) {
+            console.error("Error resetting transform:", error);
+        }
+    }, [selectedObject, originalTransforms]);
 
     // Render tree node recursively
     const renderNode = (node: SceneNode, depth: number = 0): React.ReactNode => {
@@ -343,6 +626,18 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
                     </div>
                 )}
             </div>
+
+            {/* Transform Controls (when object selected) */}
+            {selectedObject && (
+                <VeerumTransformControls
+                    selectedObject={selectedObject}
+                    selectedCount={selectedCount}
+                    onTransformChange={handleTransformChange}
+                    onUndo={handleUndo}
+                    onReset={handleReset}
+                    canUndo={undoStack.length > 0}
+                />
+            )}
 
             {/* Object Details Panel */}
             {selectedObject && (

@@ -227,6 +227,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("SQS").Principal,
             Service("SNS").Principal,
             Service("ECS").Principal,
+            Service("EKS").Principal,
             Service("ECS_TASKS").Principal,
             Service("LOGS").Principal,
             Service("LAMBDA").Principal,

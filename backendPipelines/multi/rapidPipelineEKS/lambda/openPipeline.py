@@ -19,15 +19,13 @@ sfn = boto3.client(
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 
-external_sfn_task_token = ""
-
-def abort_external_workflow(error, context_info=None):
+def abort_external_workflow(error, task_token, context_info=None):
     """
     Abort external workflow with enhanced error reporting and retry logic
     """
     try:
-        if external_sfn_task_token and external_sfn_task_token.strip():
-            logger.info(f"Aborting external workflow with task token: {external_sfn_task_token[:20]}...")
+        if task_token and task_token.strip():
+            logger.info(f"Aborting external workflow with task token: {task_token[:20]}...")
 
             # Enhanced error message with context
             error_message = f'Pipeline Failure: {error}'
@@ -41,7 +39,7 @@ def abort_external_workflow(error, context_info=None):
             for attempt in range(max_retries):
                 try:
                     sfn.send_task_failure(
-                        taskToken=external_sfn_task_token,
+                        taskToken=task_token,
                         error=error_message,
                         cause=cause_message
                     )
@@ -119,9 +117,11 @@ def lambda_handler(event, context):
     logger.info(f"Function name: {context.function_name if context else 'unknown'}")
     logger.info(f"Remaining time: {context.get_remaining_time_in_millis() if context else 'unknown'}ms")
 
-    # Global variable for external task token (for abort_external_workflow)
-    global external_sfn_task_token
+    # Variable for external task token (for abort_external_workflow)
     external_sfn_task_token = ""
+
+    if event:
+        external_sfn_task_token = event.get('sfnExternalTaskToken', '')
 
     try:
         # Enhanced event logging
@@ -146,7 +146,7 @@ def lambda_handler(event, context):
         if not event:
             error_msg = "Event is null or empty"
             logger.error(error_msg)
-            abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "event_validation"})
+            abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "event_validation"})
             return {
                 'statusCode': 400,
                 'body': {
@@ -169,7 +169,7 @@ def lambda_handler(event, context):
         if not is_valid:
             error_msg = f"Parameter validation failed: {error_message}"
             logger.error(error_msg)
-            abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "parameter_validation"})
+            abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "parameter_validation"})
             return {
                 'statusCode': 400,
                 'body': {
@@ -201,7 +201,7 @@ def lambda_handler(event, context):
         except KeyError as e:
             error_msg = f"Missing required parameter: {str(e)}"
             logger.error(error_msg)
-            abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "parameter_extraction"})
+            abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "parameter_extraction"})
             return {
                 'statusCode': 400,
                 'body': {
@@ -224,7 +224,7 @@ def lambda_handler(event, context):
             is_valid, error_message = validate_s3_uri(uri, param_name)
             if not is_valid:
                 logger.error(error_message)
-                abort_external_workflow(error_message, {"function": "openPipeline", "stage": "s3_validation"})
+                abort_external_workflow(error_message, external_sfn_task_token, {"function": "openPipeline", "stage": "s3_validation"})
                 return {
                     'statusCode': 400,
                     'body': {
@@ -243,7 +243,7 @@ def lambda_handler(event, context):
             if not extension or extension == '':
                 error_msg = f"Input file has no extension: {input_s3_asset_files_uri}"
                 logger.error(error_msg)
-                abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "extension_validation"})
+                abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "extension_validation"})
                 return {
                     'statusCode': 400,
                     'body': {
@@ -258,7 +258,7 @@ def lambda_handler(event, context):
             if extension.lower() not in allowed_extensions:
                 error_msg = f"Unsupported file extension '{extension}'. Allowed extensions: {', '.join(allowed_extensions)}"
                 logger.error(error_msg)
-                abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "extension_validation"})
+                abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "extension_validation"})
                 return {
                     'statusCode': 400,
                     'body': {
@@ -272,7 +272,7 @@ def lambda_handler(event, context):
         except Exception as e:
             error_msg = f"Error processing file extension: {str(e)}"
             logger.exception(error_msg)
-            abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "extension_processing"})
+            abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "extension_processing"})
             return {
                 'statusCode': 500,
                 'body': {
@@ -291,7 +291,7 @@ def lambda_handler(event, context):
         except Exception as e:
             error_msg = f"Error generating job name: {str(e)}"
             logger.exception(error_msg)
-            abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "job_name_generation"})
+            abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "job_name_generation"})
             return {
                 'statusCode': 500,
                 'body': {
@@ -306,7 +306,7 @@ def lambda_handler(event, context):
             if not STATE_MACHINE_ARN:
                 error_msg = "STATE_MACHINE_ARN not configured"
                 logger.error(error_msg)
-                abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "environment_validation"})
+                abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "environment_validation"})
                 return {
                     'statusCode': 500,
                     'body': {
@@ -321,7 +321,7 @@ def lambda_handler(event, context):
         except Exception as e:
             error_msg = f"Error validating environment: {str(e)}"
             logger.exception(error_msg)
-            abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "environment_validation"})
+            abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "environment_validation"})
             return {
                 'statusCode': 500,
                 'body': {
@@ -355,7 +355,7 @@ def lambda_handler(event, context):
             if sfn_input_size > 256 * 1024:
                 error_msg = f"SFN input size ({sfn_input_size} bytes) exceeds 256KB limit"
                 logger.error(error_msg)
-                abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "sfn_input_validation"})
+                abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "sfn_input_validation"})
                 return {
                     'statusCode': 400,
                     'body': {
@@ -368,7 +368,7 @@ def lambda_handler(event, context):
         except Exception as e:
             error_msg = f"Error creating SFN input: {str(e)}"
             logger.exception(error_msg)
-            abort_external_workflow(error_msg, {"function": "openPipeline", "stage": "sfn_input_creation"})
+            abort_external_workflow(error_msg, external_sfn_task_token, {"function": "openPipeline", "stage": "sfn_input_creation"})
             return {
                 'statusCode': 500,
                 'body': {
@@ -446,7 +446,7 @@ def lambda_handler(event, context):
                 "input_file": input_s3_asset_files_uri
             }
 
-            abort_external_workflow(error_msg, error_context)
+            abort_external_workflow(error_msg, external_sfn_task_token, error_context)
 
             return {
                 'statusCode': 500,
@@ -474,7 +474,7 @@ def lambda_handler(event, context):
             "error_type": type(e).__name__
         }
 
-        abort_external_workflow(f"Unexpected error: {str(e)}", error_context)
+        abort_external_workflow(f"Unexpected error: {str(e)}", external_sfn_task_token, error_context)
 
         return {
             'statusCode': 500,
