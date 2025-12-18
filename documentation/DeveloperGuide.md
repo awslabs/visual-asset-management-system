@@ -2034,6 +2034,24 @@ NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback 
 | :-------------------------------------------------- | :------------------------ |
 | GLTF, GLB, USD, OBJ, FBX, VRM, STL, PLY (3D Meshes) | vamsExecuteRapidPipeline  |
 
+### Standard Type - RapidPipeline EKS Asset Optimization & Conversion Pipeline (Asynchronous)
+
+RapidPipeline EKS provides a Kubernetes-based implementation of the RapidPipeline 3D Processor for high-volume asset processing with auto-scaling capabilities. This pipeline uses Amazon EKS to orchestrate containerized RapidPipeline jobs, offering a Kubernetes approach compared to the ECS-based implementation for organizations seeking more fine-grained control.
+
+The pipeline creates a dedicated EKS cluster with auto-scaling node groups (1-10 nodes) and uses Step Functions to manage job lifecycle, providing comprehensive error handling, monitoring, and observability through EKS control plane logging and CloudWatch Container Insights. Jobs typically complete in 5-30 minutes with automatic retries and cleanup.
+
+The implementation includes three Lambda functions (vamsExecute, openPipeline, consolidated handler) that manage the workflow, and automatically registers a pre-made pipeline for the following input formats: GLTF, GLB, USD, OBJ, FBX, VRM, STL, PLY (3D Meshes). The pipeline properly handles callbacks to parent VAMS workflows for seamless integration.
+
+The pipeline uses a third-party tool from Darmstadt Graphics Group (DGG), RapidPipeline 3D Processor, and requires an active subscription to their [AWS Marketplace Listing](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi?sr=0-1&ref_=beagle&applicationId=AWSMPContessa).
+
+Configuration is managed through `config.app.pipelines.useRapidPipeline.useEks` in `config.json`. For detailed architecture, deployment information, and troubleshooting, see the [EKS Pipeline Documentation](../backendPipelines/multi/rapidPipelineEKS/EKS-pipeline-Executive-Overview.md).
+
+NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
+
+| Input File Types Supported                                                  | Base Lambda Function Name            |
+| :-------------------------------------------------------------------------- | :----------------------------------- |
+| GLB, GLTF, FBX, OBJ, STL, PLY, USD, USDZ, DAE, ABC (3D Meshes and formats) | vamsExecuteRapidPipelineEKS          |
+
 ### Standard Type - ModelOps Asset Optimization & Conversion Pipeline (Asynchronous)
 
 ModelOps 3D Task Handler is used to convert between various 3D mesh file types, optimize mesh files, and more.
