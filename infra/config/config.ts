@@ -156,8 +156,12 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
     }
 
-    if (config.app.pipelines.useRapidPipeline.enabled == undefined) {
-        config.app.pipelines.useRapidPipeline.enabled = false;
+    if (config.app.pipelines.useRapidPipeline.useEcs.enabled == undefined) {
+        config.app.pipelines.useRapidPipeline.useEcs.enabled = false;
+    }
+
+    if (config.app.pipelines.useRapidPipeline.useEks.enabled == undefined) {
+        config.app.pipelines.useRapidPipeline.useEks.enabled = false;
     }
 
     if (config.app.pipelines.useModelOps.enabled == undefined) {
@@ -286,7 +290,8 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
         config.app.pipelines.useSplatToolbox.enabled ||
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
-        config.app.pipelines.useRapidPipeline.enabled ||
+        config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+        config.app.pipelines.useRapidPipeline.useEks.enabled ||
         config.app.pipelines.useModelOps.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
@@ -387,7 +392,8 @@ export function getConfig(app: cdk.App): Config {
         config.app.useGlobalVpc.optionalExternalVpcId != ""
     ) {
         if (
-            config.app.pipelines.useRapidPipeline.enabled ||
+            config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+            config.app.pipelines.useRapidPipeline.useEks.enabled ||
             config.app.pipelines.useModelOps.enabled
         ) {
             if (
@@ -404,7 +410,8 @@ export function getConfig(app: cdk.App): Config {
 
     if (
         ((config.app.useAlb.enabled && config.app.useAlb.usePublicSubnet) ||
-            config.app.pipelines.useRapidPipeline.enabled ||
+            config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+            config.app.pipelines.useRapidPipeline.useEks.enabled ||
             config.app.pipelines.useModelOps.enabled) &&
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
@@ -670,9 +677,30 @@ export interface ConfigPublic {
                 autoRegisterWithVAMS: boolean;
             };
             useRapidPipeline: {
-                enabled: boolean;
-                ecrContainerImageURI: string;
-                autoRegisterWithVAMS: boolean;
+                useEcs: {
+                    enabled: boolean;
+                    ecrContainerImageURI: string;
+                    autoRegisterWithVAMS: boolean;
+                };
+                useEks: {
+                    enabled: boolean;
+                    ecrContainerImageURI: string;
+                    autoRegisterWithVAMS: boolean;
+                    eksClusterVersion: string;
+                    nodeInstanceType: string;
+                    minNodes: number;
+                    maxNodes: number;
+                    desiredNodes: number;
+                    jobTimeout: number;
+                    jobMemory: string;
+                    jobCpu: string;
+                    jobBackoffLimit: number;
+                    jobTTLSecondsAfterFinished: number;
+                    observability: {
+                        enableControlPlaneLogs: boolean;
+                        enableContainerInsights: boolean;
+                    };
+                };
             };
             useModelOps: {
                 enabled: boolean;
