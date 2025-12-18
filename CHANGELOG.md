@@ -31,6 +31,7 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
     -   The trigger for this is setting which file extensions should kick of the pipeline for each file uploaded to an asset (new or modified). This is a comma-deliminated list of extensions. If ".all" is provided, then it will execute on all file extensions uploaded.
     -   Feature is implemented with the new indexing SNS where this is a new SQS queue subscribing to that system for file uploads to check on executions per file. This allows for high scalability for files being uploaded.
     -   PotreePipeline now has it's default set to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, previously bypassing the Workflow system
+-   **Web** Workflow Executions on View Asset now lazy loads data in, no longer for now shows the search bar
 
 ### Bug Fixes
 
@@ -49,6 +50,7 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   **Web** Added tracking of asset file input for workflow execution history and displaying that on the view asset page
 -   **Web** Updated logic for file viewers (Potree viewer) that require fetching/passing of JWT tokens for API header passing to now both fetch/refresh the token as needed without needing to refresh the page and properly work with external OAUTH2 tokens (non-cognito)
 -   **CLI** Fixed assets download command to properly download an entire assets worth of files at once from the root or from different file folders on down
+-   **Web** Fixed Workflow Execution on View Asset not auto-refreshing the data when executing a new workflow, shows proper execution counts now
 
 ### Chores
 

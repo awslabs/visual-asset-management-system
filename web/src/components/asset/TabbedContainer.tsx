@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useState, useCallback } from "react";
+import React, { Suspense, useState, useCallback, useEffect } from "react";
 import { Container, Header, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
@@ -21,6 +21,7 @@ interface TabbedContainerProps {
     databaseId: string;
     onExecuteWorkflow: () => void;
     onWorkflowExecuted?: () => void; // Callback when workflow execution is complete
+    workflowExecutedTrigger?: number; // Trigger value that changes when workflow is executed
     filePathToNavigate?: string; // Optional file path to navigate to in File Manager
 }
 
@@ -30,19 +31,20 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     databaseId,
     onExecuteWorkflow,
     onWorkflowExecuted,
+    workflowExecutedTrigger,
     filePathToNavigate,
 }) => {
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
     const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
 
-    // Function to refresh the workflow tab
-    const refreshWorkflowTab = useCallback(() => {
-        setWorkflowRefreshTrigger((prev) => prev + 1);
-        if (onWorkflowExecuted) {
-            onWorkflowExecuted();
+    // Watch for changes in the parent's trigger value
+    useEffect(() => {
+        if (workflowExecutedTrigger !== undefined && workflowExecutedTrigger > 0) {
+            console.log("TabbedContainer: workflowExecutedTrigger changed to", workflowExecutedTrigger, "- incrementing local trigger");
+            setWorkflowRefreshTrigger((prev) => prev + 1);
         }
-    }, [onWorkflowExecuted]);
+    }, [workflowExecutedTrigger]);
 
     return (
         <ErrorBoundary componentName="Tabbed Container">

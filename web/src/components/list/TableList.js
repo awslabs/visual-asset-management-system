@@ -399,7 +399,6 @@ export default function TableList(props) {
                                         pluralName !== "tag types" &&
                                         pluralName !== "tags" &&
                                         pluralName !== "Subscriptions" &&
-                                        pluralName !== "Roles" &&
                                         pluralName !== "User Roles"
                                     )
                                         return (

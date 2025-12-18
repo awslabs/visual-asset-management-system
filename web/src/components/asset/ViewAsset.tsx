@@ -171,11 +171,13 @@ export default function ViewAsset() {
         setWorkflowOpen(true);
     };
 
-    // State to trigger workflow tab refresh
+    // State to trigger workflow tab refresh - this will be managed by TabbedContainer
     const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
 
-    // Function to refresh the workflow tab
+    // Function to refresh the workflow tab - this will be called by WorkflowSelectorWithModal
+    // and will trigger TabbedContainer's callback
     const refreshWorkflowTab = useCallback(() => {
+        console.log("ViewAsset: refreshWorkflowTab called, incrementing trigger");
         setWorkflowRefreshTrigger((prev) => prev + 1);
     }, []);
 
@@ -237,6 +239,7 @@ export default function ViewAsset() {
                                     databaseId={databaseId || ""}
                                     onExecuteWorkflow={handleExecuteWorkflow}
                                     onWorkflowExecuted={refreshWorkflowTab}
+                                    workflowExecutedTrigger={workflowRefreshTrigger}
                                     filePathToNavigate={filePathToNavigate}
                                 />
 

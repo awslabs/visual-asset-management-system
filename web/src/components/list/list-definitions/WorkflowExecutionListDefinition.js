@@ -14,8 +14,11 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
     pluralNameTitleCase: "Workflow Executions",
     visibleColumns: [
         "name",
+        "displayName",
+        "executionId",
         "databaseId",
         "description",
+        "inputAssetFileKey",
         "pipelines",
         "startDate",
         "stopDate",

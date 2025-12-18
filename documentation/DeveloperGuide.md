@@ -33,6 +33,10 @@ VAMS Frontend is a single page ReactJS application. It can be deployed via Cloud
 
 ![Web App Network ALB](./diagrams/web_app_network_alb.jpeg)
 
+### Queue Systems
+
+![Data Queue Flows](./diagrams/dataQueues_MainFlow.png)
+
 ### Security
 
 VAMS API and frontend are authorized through AWS Cognito user accounts by default. Additional options include external IDP use.

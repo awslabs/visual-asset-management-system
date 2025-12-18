@@ -12,7 +12,7 @@ import { Box } from "@cloudscape-design/components";
 import CreateRole from "./CreateRoles";
 import { useState } from "react";
 
-export const SubscriptionListDefinition = new ListDefinition({
+export const RoleListDefinition = new ListDefinition({
     pluralName: "Roles",
     pluralNameTitleCase: "Roles",
     singularNameTitleCase: "Role",
@@ -114,7 +114,7 @@ export default function Roles() {
                 singularNameTitleCase={"Role"}
                 pluralName={"Roles"}
                 pluralNameTitleCase={"Roles"}
-                listDefinition={SubscriptionListDefinition}
+                listDefinition={RoleListDefinition}
                 CreateNewElement={CreateRole}
                 editEnabled={true}
                 fetchElements={fetchRoles}
