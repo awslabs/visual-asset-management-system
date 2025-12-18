@@ -13,7 +13,7 @@
             "externalAssetBuckets": null
         },
         "adminUserId": "administrator",
-        "adminEmailAddress": "adminEmail@example.com",
+        "adminEmailAddress": "admin@example.com",
         "useFips": false,
         "useWaf": true,
         "addStackCloudTrailLogs": true,
@@ -82,9 +82,30 @@
                 "autoRegisterWithVAMS": true
             },
             "useRapidPipeline": {
-                "enabled": false,
-                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
-                "autoRegisterWithVAMS": true
+                "useEcs": {
+                    "enabled": false,
+                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                    "autoRegisterWithVAMS": true
+                },
+                "useEks": {
+                    "enabled": false,
+                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                    "autoRegisterWithVAMS": true,
+                    "eksClusterVersion": "1.31",
+                    "nodeInstanceType": "m5.2xlarge",
+                    "minNodes": 1,
+                    "maxNodes": 10,
+                    "desiredNodes": 2,
+                    "jobTimeout": 7200,
+                    "jobMemory": "16Gi",
+                    "jobCpu": "2000m",
+                    "jobBackoffLimit": 2,
+                    "jobTTLSecondsAfterFinished": 600,
+                    "observability": {
+                        "enableControlPlaneLogs": false,
+                        "enableContainerInsights": false
+                    }
+                }
             },
             "useModelOps": {
                 "enabled": false,
