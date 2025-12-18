@@ -57,9 +57,7 @@ const VeerumTransformControls: React.FC<VeerumTransformControlsProps> = ({
                 z: parseFloat(selectedObject.position.z.toFixed(2)),
             });
         } else {
-            const worldPos = selectedObject.getWorldPosition(
-                new (window as any).THREE.Vector3()
-            );
+            const worldPos = selectedObject.getWorldPosition(new (window as any).THREE.Vector3());
             setPosition({
                 x: parseFloat(worldPos.x.toFixed(2)),
                 y: parseFloat(worldPos.y.toFixed(2)),
@@ -100,26 +98,20 @@ const VeerumTransformControls: React.FC<VeerumTransformControlsProps> = ({
     }, [selectedObject, position, rotation, scale, onTransformChange]);
 
     // Update position
-    const updatePosition = useCallback(
-        (axis: "x" | "y" | "z", value: number) => {
-            setPosition((prev) => {
-                const newPos = { ...prev, [axis]: value };
-                return newPos;
-            });
-        },
-        []
-    );
+    const updatePosition = useCallback((axis: "x" | "y" | "z", value: number) => {
+        setPosition((prev) => {
+            const newPos = { ...prev, [axis]: value };
+            return newPos;
+        });
+    }, []);
 
     // Update rotation
-    const updateRotation = useCallback(
-        (axis: "x" | "y" | "z", value: number) => {
-            setRotation((prev) => {
-                const newRot = { ...prev, [axis]: value };
-                return newRot;
-            });
-        },
-        []
-    );
+    const updateRotation = useCallback((axis: "x" | "y" | "z", value: number) => {
+        setRotation((prev) => {
+            const newRot = { ...prev, [axis]: value };
+            return newRot;
+        });
+    }, []);
 
     // Update scale
     const updateScale = useCallback(
@@ -237,9 +229,7 @@ const VeerumTransformControls: React.FC<VeerumTransformControlsProps> = ({
                         <input
                             type="number"
                             value={position[axis]}
-                            onChange={(e) =>
-                                updatePosition(axis, parseFloat(e.target.value) || 0)
-                            }
+                            onChange={(e) => updatePosition(axis, parseFloat(e.target.value) || 0)}
                             step="0.1"
                             style={{
                                 flex: 1,
@@ -320,9 +310,7 @@ const VeerumTransformControls: React.FC<VeerumTransformControlsProps> = ({
                         <input
                             type="number"
                             value={rotation[axis]}
-                            onChange={(e) =>
-                                updateRotation(axis, parseFloat(e.target.value) || 0)
-                            }
+                            onChange={(e) => updateRotation(axis, parseFloat(e.target.value) || 0)}
                             step="5"
                             style={{
                                 flex: 1,

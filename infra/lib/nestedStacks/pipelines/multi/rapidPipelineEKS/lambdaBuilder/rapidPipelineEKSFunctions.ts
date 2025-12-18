@@ -55,7 +55,10 @@ export function buildVamsExecuteRapidPipelineEKSFunction(
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`)
+            path.join(
+                __dirname,
+                `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`
+            )
         ),
         handler: `vamsExecuteRapidPipelineEKS.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -129,7 +132,10 @@ export function buildOpenPipelineEKSFunction(
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`)
+            path.join(
+                __dirname,
+                `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`
+            )
         ),
         handler: `openPipeline.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -215,7 +221,10 @@ export function buildConsolidatedHandlerFunction(
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`)
+            path.join(
+                __dirname,
+                `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`
+            )
         ),
         handler: `consolidated_handler.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -286,8 +295,12 @@ export function buildConsolidatedHandlerFunction(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
             resources: [
-                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${config.env.account}:stateMachine:vams-*`,
-                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${config.env.account}:stateMachine:rapid-pipeline-*`,
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:stateMachine:vams-*`,
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:stateMachine:rapid-pipeline-*`,
             ],
         })
     );

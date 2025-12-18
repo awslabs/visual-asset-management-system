@@ -2048,9 +2048,9 @@ Configuration is managed through `config.app.pipelines.useRapidPipeline.useEks` 
 
 NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
 
-| Input File Types Supported                                                  | Base Lambda Function Name            |
-| :-------------------------------------------------------------------------- | :----------------------------------- |
-| GLB, GLTF, FBX, OBJ, STL, PLY, USD, USDZ, DAE, ABC (3D Meshes and formats) | vamsExecuteRapidPipelineEKS          |
+| Input File Types Supported                                                 | Base Lambda Function Name   |
+| :------------------------------------------------------------------------- | :-------------------------- |
+| GLB, GLTF, FBX, OBJ, STL, PLY, USD, USDZ, DAE, ABC (3D Meshes and formats) | vamsExecuteRapidPipelineEKS |
 
 ### Standard Type - ModelOps Asset Optimization & Conversion Pipeline (Asynchronous)
 

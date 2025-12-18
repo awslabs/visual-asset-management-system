@@ -174,7 +174,9 @@ export default function RelatedTableList(props) {
                         counter={
                             countOverride !== undefined
                                 ? items.length !== countOverride
-                                    ? `(${items.filter((item) => item.parentId).length}/${countOverride})`
+                                    ? `(${
+                                          items.filter((item) => item.parentId).length
+                                      }/${countOverride})`
                                     : `(${countOverride})`
                                 : items.length !== allItems.length
                                 ? `(${items.length}/${allItems.length})`
@@ -299,7 +301,9 @@ export default function RelatedTableList(props) {
                                             ].concat(
                                                 [
                                                     ...new Set(
-                                                        allItems.map((row) => row[filterColumn.name])
+                                                        allItems.map(
+                                                            (row) => row[filterColumn.name]
+                                                        )
                                                     ),
                                                 ].map((cellValue) => {
                                                     return { label: cellValue, value: cellValue };

@@ -34,7 +34,6 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
     -   PotreePipeline now has it's default set to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, previously bypassing the Workflow system
 -   **Web** Workflow Executions on View Asset now lazy loads data in, no longer for now shows the search bar
 
-
 ### Bug Fixes
 
 -   Permanently deleting an asset now also deletes any associated asset link / asset link metadata in the database (caused inconsistencies with viewing asset links from the other related assets)

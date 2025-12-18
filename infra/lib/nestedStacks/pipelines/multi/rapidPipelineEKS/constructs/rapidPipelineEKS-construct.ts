@@ -84,7 +84,8 @@ export class RapidPipelineEKSConstruct extends Construct {
             kubectlLayer: props.kubectlLayer, // Use our multi-runtime kubectl layer
             securityGroup: eksClusterSecurityGroup,
             // Observability configuration (configurable via config.json)
-            clusterLogging: props.config.app.pipelines.useRapidPipeline.useEks.observability.enableControlPlaneLogs
+            clusterLogging: props.config.app.pipelines.useRapidPipeline.useEks.observability
+                .enableControlPlaneLogs
                 ? [
                       eks.ClusterLoggingTypes.API,
                       eks.ClusterLoggingTypes.AUDIT,
@@ -96,7 +97,9 @@ export class RapidPipelineEKSConstruct extends Construct {
         });
 
         // Enable CloudWatch Container Insights if configured
-        if (props.config.app.pipelines.useRapidPipeline.useEks.observability.enableContainerInsights) {
+        if (
+            props.config.app.pipelines.useRapidPipeline.useEks.observability.enableContainerInsights
+        ) {
             // Create namespace for CloudWatch
             const cloudwatchNamespace = cluster.addManifest("CloudWatchNamespace", {
                 apiVersion: "v1",
@@ -110,11 +113,15 @@ export class RapidPipelineEKSConstruct extends Construct {
             });
 
             // Create ServiceAccount with IRSA for CloudWatch agent
-            const cloudwatchServiceAccount = new eks.ServiceAccount(this, "CloudWatchServiceAccount", {
-                cluster: cluster,
-                name: "cloudwatch-agent",
-                namespace: "amazon-cloudwatch",
-            });
+            const cloudwatchServiceAccount = new eks.ServiceAccount(
+                this,
+                "CloudWatchServiceAccount",
+                {
+                    cluster: cluster,
+                    name: "cloudwatch-agent",
+                    namespace: "amazon-cloudwatch",
+                }
+            );
 
             // Get the IAM role created by the ServiceAccount
             const cloudwatchAgentRole = cloudwatchServiceAccount.role;
@@ -383,7 +390,8 @@ export class RapidPipelineEKSConstruct extends Construct {
             capacityType: eks.CapacityType.ON_DEMAND,
             labels: {
                 role: "pipeline-worker",
-                "node.kubernetes.io/instance-type": props.config.app.pipelines.useRapidPipeline.useEks.nodeInstanceType,
+                "node.kubernetes.io/instance-type":
+                    props.config.app.pipelines.useRapidPipeline.useEks.nodeInstanceType,
             },
             tags: {
                 Name: `rapid-pipeline-eks-nodegroup-${stackIdentifier}`,
@@ -457,7 +465,6 @@ export class RapidPipelineEKSConstruct extends Construct {
                 groups: ["system:masters"],
                 username: "pipeline-lambda",
             });
-
 
         // 6. Create CloudWatch Log Group for State Machine
         const stateMachineLogGroup = new logs.LogGroup(this, "StateMachineLogGroup", {
@@ -541,7 +548,7 @@ export class RapidPipelineEKSConstruct extends Construct {
 
         // End state: success
         const successState = new sfn.Succeed(this, "Success");
-        
+
         // End state: failure
         const failState = new sfn.Fail(this, "Failure", {
             cause: sfn.JsonPath.stringAt("$.error.Cause || 'Unknown error'"),
@@ -857,27 +864,31 @@ export class RapidPipelineEKSConstruct extends Construct {
             });
 
             // Register X to GLB optimization pipeline and workflow using EKS
-            const customResource = new cdk.CustomResource(this, "RapidPipelineEKSToGlbPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "rapid-pipeline-eks-to-glb",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor (EKS) - X to GLB optimization and conversion using DGG RapidPipeline on EKS",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all", // Accepts any input format
-                    outputType: ".glb", // Outputs GLB format
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: this.pipelineVamsLambdaFunctionName,
-                    taskTimeout: "14400", // 4 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    workflowId: "rapid-pipeline-eks-to-glb",
-                    workflowDescription:
-                        "Automated workflow for X to GLB optimization using RapidPipeline 3D Processor on EKS",
-                    autoTriggerOnFileExtensionsUpload: ""
-                },
-            });
+            const customResource = new cdk.CustomResource(
+                this,
+                "RapidPipelineEKSToGlbPipelineWorkflow",
+                {
+                    serviceToken: importProvider.serviceToken,
+                    properties: {
+                        pipelineId: "rapid-pipeline-eks-to-glb",
+                        pipelineDescription:
+                            "RapidPipeline 3D Processor (EKS) - X to GLB optimization and conversion using DGG RapidPipeline on EKS",
+                        pipelineType: "standardFile",
+                        pipelineExecutionType: "Lambda",
+                        assetType: ".all", // Accepts any input format
+                        outputType: ".glb", // Outputs GLB format
+                        waitForCallback: "Enabled", // Asynchronous pipeline
+                        lambdaName: this.pipelineVamsLambdaFunctionName,
+                        taskTimeout: "14400", // 4 hours
+                        taskHeartbeatTimeout: "",
+                        inputParameters: "",
+                        workflowId: "rapid-pipeline-eks-to-glb",
+                        workflowDescription:
+                            "Automated workflow for X to GLB optimization using RapidPipeline 3D Processor on EKS",
+                        autoTriggerOnFileExtensionsUpload: "",
+                    },
+                }
+            );
 
             // Add Nag suppression for the import provider
             NagSuppressions.addResourceSuppressions(

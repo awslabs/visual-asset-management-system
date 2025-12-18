@@ -265,13 +265,7 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
             // Clear undo stack for new selection
             setUndoStack([]);
 
-            console.log(
-                "Selected object:",
-                node.name,
-                "with",
-                descendants.length - 1,
-                "children"
-            );
+            console.log("Selected object:", node.name, "with", descendants.length - 1, "children");
         },
         [
             selectedObject,
@@ -335,60 +329,57 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
     );
 
     // Handle transform change (live preview)
-    const handleTransformChange = useCallback(
-        (object: any, transform: TransformState) => {
-            if (!object) return;
+    const handleTransformChange = useCallback((object: any, transform: TransformState) => {
+        if (!object) return;
 
-            try {
-                // Save current state to undo stack before applying changes
-                const currentState: UndoState = {
-                    objectId: object.uuid,
-                    transform: {
-                        position: {
-                            x: object.position.x,
-                            y: object.position.y,
-                            z: object.position.z,
-                        },
-                        rotation: {
-                            x: object.rotation.x,
-                            y: object.rotation.y,
-                            z: object.rotation.z,
-                        },
-                        scale: {
-                            x: object.scale.x,
-                            y: object.scale.y,
-                            z: object.scale.z,
-                        },
+        try {
+            // Save current state to undo stack before applying changes
+            const currentState: UndoState = {
+                objectId: object.uuid,
+                transform: {
+                    position: {
+                        x: object.position.x,
+                        y: object.position.y,
+                        z: object.position.z,
                     },
-                    timestamp: Date.now(),
-                };
+                    rotation: {
+                        x: object.rotation.x,
+                        y: object.rotation.y,
+                        z: object.rotation.z,
+                    },
+                    scale: {
+                        x: object.scale.x,
+                        y: object.scale.y,
+                        z: object.scale.z,
+                    },
+                },
+                timestamp: Date.now(),
+            };
 
-                // Add to undo stack (limit size)
-                setUndoStack((prev) => {
-                    const newStack = [...prev, currentState];
-                    return newStack.slice(-maxUndoStackSize);
-                });
+            // Add to undo stack (limit size)
+            setUndoStack((prev) => {
+                const newStack = [...prev, currentState];
+                return newStack.slice(-maxUndoStackSize);
+            });
 
-                // Apply transform
-                object.position.set(transform.position.x, transform.position.y, transform.position.z);
-                object.rotation.set(
-                    (transform.rotation.x * Math.PI) / 180,
-                    (transform.rotation.y * Math.PI) / 180,
-                    (transform.rotation.z * Math.PI) / 180
-                );
-                object.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
+            // Apply transform
+            object.position.set(transform.position.x, transform.position.y, transform.position.z);
+            object.rotation.set(
+                (transform.rotation.x * Math.PI) / 180,
+                (transform.rotation.y * Math.PI) / 180,
+                (transform.rotation.z * Math.PI) / 180
+            );
+            object.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
 
-                // Update matrices
-                object.updateMatrix();
-                object.updateMatrixWorld(true);
+            // Update matrices
+            object.updateMatrix();
+            object.updateMatrixWorld(true);
 
-                console.log("Transform applied:", transform);
-            } catch (error) {
-                console.error("Error applying transform:", error);
-            }
-        },
-        []
-    );
+            console.log("Transform applied:", transform);
+        } catch (error) {
+            console.error("Error applying transform:", error);
+        }
+    }, []);
 
     // Handle undo
     const handleUndo = useCallback(() => {

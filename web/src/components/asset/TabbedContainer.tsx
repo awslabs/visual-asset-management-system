@@ -41,7 +41,11 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     // Watch for changes in the parent's trigger value
     useEffect(() => {
         if (workflowExecutedTrigger !== undefined && workflowExecutedTrigger > 0) {
-            console.log("TabbedContainer: workflowExecutedTrigger changed to", workflowExecutedTrigger, "- incrementing local trigger");
+            console.log(
+                "TabbedContainer: workflowExecutedTrigger changed to",
+                workflowExecutedTrigger,
+                "- incrementing local trigger"
+            );
             setWorkflowRefreshTrigger((prev) => prev + 1);
         }
     }, [workflowExecutedTrigger]);

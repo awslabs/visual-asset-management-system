@@ -57,7 +57,10 @@ export class RapidPipelineEKSNestedStack extends NestedStack {
         const kubectlLayerConstruct = new KubectlLayerConstruct(this, "KubectlLayer");
         const kubectlLayer = kubectlLayerConstruct.layer;
 
-        const kubernetesLayerConstruct = new KubernetesLambdaLayerConstruct(this, "KubernetesLambdaLayer");
+        const kubernetesLayerConstruct = new KubernetesLambdaLayerConstruct(
+            this,
+            "KubernetesLambdaLayer"
+        );
         const kubernetesLayer = kubernetesLayerConstruct.layer;
 
         // 2. Create the EKS construct with all pipeline resources
@@ -201,7 +204,5 @@ export class RapidPipelineEKSNestedStack extends NestedStack {
         console.log(
             `Pipeline Lambda function: ${this.pipelineVamsLambdaFunctionName || "pending"}`
         );
-
-    
     }
 }

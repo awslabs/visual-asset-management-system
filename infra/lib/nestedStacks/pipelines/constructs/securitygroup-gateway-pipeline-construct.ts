@@ -51,16 +51,12 @@ export class SecurityGroupGatewayPipelineConstruct extends Construct {
         props = { ...defaultProps, ...props };
 
         this.vpc = props.vpc;
-        
+
         this.privateSubnets = {
-            pipeline: props.privateSubnets != undefined 
-                ? props.privateSubnets
-                : [],
+            pipeline: props.privateSubnets != undefined ? props.privateSubnets : [],
         };
         this.isolatedSubnets = {
-            pipeline: props.isolatedSubnets != undefined 
-                ? props.isolatedSubnets
-                : [],
+            pipeline: props.isolatedSubnets != undefined ? props.isolatedSubnets : [],
         };
 
         this.securityGroups = {
