@@ -33,6 +33,8 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
     -   Feature is implemented with the new indexing SNS where this is a new SQS queue subscribing to that system for file uploads to check on executions per file. This allows for high scalability for files being uploaded.
     -   PotreePipeline now has it's default set to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, previously bypassing the Workflow system
 -   **Web** Workflow Executions on View Asset now lazy loads data in, no longer for now shows the search bar
+-   **CLI** Added new command grouping (`workflow`) and commands for workflow listing, asset workflow execution listing, and executing new workflows on assets
+    -   Note: Backend API hasn't been upgraded to new request/response model pattern yet, expected as part of pipeline/workflow overhaul development task
 
 ### Bug Fixes
 
@@ -53,6 +55,8 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   **Web** Updated logic for file viewers (Potree viewer) that require fetching/passing of JWT tokens for API header passing to now both fetch/refresh the token as needed without needing to refresh the page and properly work with external OAUTH2 tokens (non-cognito)
 -   **CLI** Fixed assets download command to properly download an entire assets worth of files at once from the root or from different file folders on down
 -   **Web** Fixed Workflow Execution on View Asset not auto-refreshing the data when executing a new workflow, shows proper execution counts now
+-   **Web** Fixed error when building/installing Potree Viewer and Pipeline on some OS build versions (like Linux)
+-   **Web** Fixed bug in "Execute Workflow" modal that didn't allow a user to select the entire asset as an input (had to select an individual file)
 
 ### Chores
 

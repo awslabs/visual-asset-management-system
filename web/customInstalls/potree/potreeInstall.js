@@ -38,7 +38,7 @@ const gitActions = async () => {
         const git = simpleGit({ baseDir: gitRepoSourceDestDir });
         await git.checkout(gitRepoCommitHash);
         console.log("Potree Build Git Checkout Specific Commit complete");
-        await git.applyPatch(patchFilePath, "--whitespace=fix");
+        await git.applyPatch(patchFilePath, ["--ignore-whitespace", "--whitespace=fix"]);
         console.log("Potree Build Git Patch Apply complete");
         console.log("Potree Build Git complete");
     } catch (err) {

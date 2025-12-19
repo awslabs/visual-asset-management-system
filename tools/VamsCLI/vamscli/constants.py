@@ -74,6 +74,12 @@ API_SEARCH = "/search"
 API_SEARCH_SIMPLE = "/search/simple"
 API_SEARCH_MAPPING = "/search"
 
+# Workflow API Endpoints
+API_WORKFLOWS = "/workflows"
+API_DATABASE_WORKFLOWS = "/database/{databaseId}/workflows"
+API_WORKFLOW_EXECUTIONS = "/database/{databaseId}/assets/{assetId}/workflows/executions"
+API_EXECUTE_WORKFLOW = "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}"
+
 # Upload Configuration
 DEFAULT_CHUNK_SIZE_SMALL = 150 * 1024 * 1024  # 150MB
 DEFAULT_CHUNK_SIZE_LARGE = 1024 * 1024 * 1024  # 1GB

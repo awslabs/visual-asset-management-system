@@ -95,10 +95,7 @@ export default function WorkflowSelectorWithModal(props) {
 
             setFilteredFiles(onlyFiles);
 
-            // Only set the selected file key if there are files available
-            if (onlyFiles.length > 0) {
-                setSelectedFileKey(onlyFiles[0].key);
-            }
+            // Don't auto-select any file - leave it as null (no file selected by default)
         }
     }, [assetFiles]);
 
@@ -121,7 +118,7 @@ export default function WorkflowSelectorWithModal(props) {
                 databaseId: databaseId,
                 assetId: assetId,
                 workflowId: selectedWorkflow.workflowId,
-                fileKey: selectedFileKey, // Pass the selected file key
+                ...(selectedFileKey && { fileKey: selectedFileKey }), // Only include fileKey if a file is selected
                 isGlobalWorkflow: isGlobalWorkflow,
             });
 
@@ -201,13 +198,20 @@ export default function WorkflowSelectorWithModal(props) {
                     <FormField label="Select File to Process (Optional)">
                         <Select
                             onChange={handleFileSelection}
-                            options={filteredFiles.map((file) => {
-                                return {
-                                    label: file.relativePath || file.fileName,
-                                    value: file.key,
+                            options={[
+                                {
+                                    label: "-- No file (process entire asset) --",
+                                    value: null,
                                     description: "",
-                                };
-                            })}
+                                },
+                                ...filteredFiles.map((file) => {
+                                    return {
+                                        label: file.relativePath || file.fileName,
+                                        value: file.key,
+                                        description: "",
+                                    };
+                                }),
+                            ]}
                             selectedOption={
                                 selectedFileKey
                                     ? {
@@ -219,7 +223,10 @@ export default function WorkflowSelectorWithModal(props) {
                                                   ?.fileName ||
                                               selectedFileKey,
                                       }
-                                    : null
+                                    : {
+                                          label: "-- No file (process entire asset) --",
+                                          value: null,
+                                      }
                             }
                             filteringType="auto"
                             selectedAriaLabel="Selected"

@@ -55,7 +55,12 @@ from .exceptions import (
     SearchUnavailableError,
     InvalidSearchParametersError,
     SearchQueryError,
-    SearchMappingError
+    SearchMappingError,
+    WorkflowError,
+    WorkflowNotFoundError,
+    WorkflowExecutionError,
+    WorkflowAlreadyRunningError,
+    InvalidWorkflowDataError
 )
 from .glb_combiner import (
     combine_glb_files,
@@ -121,6 +126,11 @@ __all__ = [
     'InvalidSearchParametersError',
     'SearchQueryError',
     'SearchMappingError',
+    'WorkflowError',
+    'WorkflowNotFoundError',
+    'WorkflowExecutionError',
+    'WorkflowAlreadyRunningError',
+    'InvalidWorkflowDataError',
     'combine_glb_files',
     'combine_multiple_glbs',
     'build_transform_matrix_from_metadata',
