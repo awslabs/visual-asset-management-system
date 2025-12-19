@@ -52,19 +52,11 @@ export class SecurityGroupGatewayPipelineConstruct extends Construct {
 
         this.vpc = props.vpc;
 
-        // EKS requires all private subnets across multiple AZs (minimum 2)
-        // Other pipelines (ECS, Batch) only need 1 subnet
-        const useMultipleAZsForPrivate = props.config.app.pipelines.useRapidPipeline.useEks.enabled;
-        
         this.privateSubnets = {
-            pipeline: props.privateSubnets != undefined 
-                ? (useMultipleAZsForPrivate ? props.privateSubnets : [props.privateSubnets[0]]) 
-                : [],
+            pipeline: props.privateSubnets != undefined ? props.privateSubnets : [],
         };
         this.isolatedSubnets = {
-            pipeline: props.isolatedSubnets != undefined 
-                ? [props.isolatedSubnets[0]]
-                : [],
+            pipeline: props.isolatedSubnets != undefined ? props.isolatedSubnets : [],
         };
 
         this.securityGroups = {

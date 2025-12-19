@@ -72,6 +72,7 @@ export function buildMetadataFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -81,6 +82,7 @@ export function buildMetadataFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

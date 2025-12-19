@@ -28,10 +28,10 @@ COPY ./PotreeConverter-Fork_af4666fa.patch /PotreeConverter/vams-potree-build.pa
 
 # Potree Converter Commit Hash Reset && Apply the git patch 
 WORKDIR /PotreeConverter
-RUN git apply --whitespace=fix vams-potree-build.patch
+RUN git apply --whitespace=fix --ignore-whitespace vams-potree-build.patch
 WORKDIR /PotreeConverterBuild
 
-RUN cmake /PotreeConverter 
+RUN cmake /PotreeConverter -DCMAKE_POLICY_VERSION_MINIMUM=3.16 
 RUN make && \
     apk del git cmake make gcc g++ && \
     rm -rf /PotreeConverter

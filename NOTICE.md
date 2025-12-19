@@ -134,6 +134,7 @@ This software includes third party software subject to the following copyrights:
 | Package                | Version                                                              | License           |
 | :--------------------- | :------------------------------------------------------------------- | :---------------- |
 | VNTANA 3D Model Viewer | [@vntana/viewer@2.2.0](https://www.npmjs.com/package/@vntana/viewer) | PAID - Commercial |
+| Veerum 3D Model Viewer | [@veerum/viewer@2.0.12](https://veerum.github.io/veerum-viewer/)     | PAID - Commercial |
 
 ---
 

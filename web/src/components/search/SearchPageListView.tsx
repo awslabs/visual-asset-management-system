@@ -18,6 +18,7 @@ import {
 } from "@cloudscape-design/components";
 import { SearchExplanation } from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
+import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
 import FilePreviewThumbnailCell from "./SearchPreviewThumbnail/FilePreviewThumbnailCell";
 import AssetPreviewModal from "../filemanager/modals/AssetPreviewModal";
@@ -168,7 +169,11 @@ const extractMetadata = (item: any): Array<{ name: string; type: string; value: 
 };
 
 function columnRender(e: any, name: string, value: any, navigate?: any, isFileMode?: boolean) {
+    // Check if item is archived
+    const isArchived = e.bool_archived === true || e.status === "archived";
+
     if (name === "str_databaseid") {
+        // Database link always remains clickable
         return (
             <Box>
                 <Link href={`#/databases/${e["str_databaseid"]}/assets/`}>{value}</Link>
@@ -176,22 +181,39 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
         );
     }
     if (name === "str_assetname") {
-        return (
-            <Box>
-                <SpaceBetween direction="horizontal" size="xs">
-                    <Link href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}>
+        // Remove hyperlink for archived assets
+        if (isArchived) {
+            return (
+                <Box>
+                    <SpaceBetween direction="horizontal" size="xs">
                         {value}
-                    </Link>
-                    {/* Only show explanation in asset mode, not file mode */}
-                    {e.explanation && !isFileMode && (
-                        <ExplanationPopover explanation={e.explanation} />
-                    )}
-                </SpaceBetween>
-            </Box>
-        );
+                        {/* Only show explanation in asset mode, not file mode */}
+                        {e.explanation && !isFileMode && (
+                            <ExplanationPopover explanation={e.explanation} />
+                        )}
+                    </SpaceBetween>
+                </Box>
+            );
+        } else {
+            return (
+                <Box>
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Link
+                            href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}
+                        >
+                            {value}
+                        </Link>
+                        {/* Only show explanation in asset mode, not file mode */}
+                        {e.explanation && !isFileMode && (
+                            <ExplanationPopover explanation={e.explanation} />
+                        )}
+                    </SpaceBetween>
+                </Box>
+            );
+        }
     } else if (name === "str_key") {
-        // File path - clickable in file mode to navigate to asset with file selected
-        if (isFileMode && navigate) {
+        // File path - remove hyperlink for archived files
+        if (isFileMode && navigate && !isArchived) {
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
@@ -215,11 +237,15 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
                 </Box>
             );
         } else {
-            // Non-file mode - just show as text without explanation (explanation shown on asset name)
+            // Non-file mode or archived - just show as text
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
                         <span>{value}</span>
+                        {/* Show explanation for archived files in file mode */}
+                        {e.explanation && isFileMode && (
+                            <ExplanationPopover explanation={e.explanation} />
+                        )}
                     </SpaceBetween>
                 </Box>
             );
@@ -266,10 +292,11 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
     }
 }
 
-function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
+function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProps) {
     // identify all the names of columns from state.result.hits.hits
     // create a column definition for each column
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showUnarchiveModal, setShowUnarchiveModal] = useState(false);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
     const [previewAsset, setPreviewAsset] = useState<{
         url?: string;
@@ -334,6 +361,17 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
 
     // Determine if we're in file mode
     const isFileMode = state.filters._rectype.value === "file";
+
+    // Determine if unarchive button should be shown (single archived asset selected)
+    const showUnarchiveButton =
+        state?.selectedItems?.length === 1 &&
+        (state?.selectedItems[0]?.bool_archived === true ||
+            state?.selectedItems[0]?.status === "archived");
+
+    // Determine if any archived assets are selected (for delete modal)
+    const hasArchivedAssetSelected = state?.selectedItems?.some(
+        (item: any) => item.bool_archived === true || item.status === "archived"
+    );
 
     // Filter out undefined/null column names and add preview column if showPreviewThumbnails is enabled
     let enhancedColumnDefinitions = orderedColumnNames
@@ -522,6 +560,8 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         sortingDescending: state?.tableSort?.sortingDescending,
         selectedItems: state?.selectedItems,
         selectedCount: state?.selectedItems?.length,
+        showUnarchiveButton,
+        hasArchivedAssetSelected,
     });
 
     return (
@@ -655,6 +695,15 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                         >
                                             Delete Selected
                                         </Button>
+                                        {showUnarchiveButton && (
+                                            <Button
+                                                onClick={() => {
+                                                    setShowUnarchiveModal(true);
+                                                }}
+                                            >
+                                                Unarchive Selected
+                                            </Button>
+                                        )}
                                         <Button
                                             onClick={(e) => {
                                                 navigate("/upload");
@@ -675,8 +724,52 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                 onDismiss={() => setShowDeleteModal(false)}
                 mode="asset"
                 selectedAssets={state?.selectedItems || []}
+                forceDeleteMode={hasArchivedAssetSelected}
                 onSuccess={(operation) => {
                     setShowDeleteModal(false);
+
+                    // Clear selection
+                    dispatch({
+                        type: "set-selected-items",
+                        selectedItems: [],
+                    });
+
+                    // Show toast notification
+                    if (onShowToast) {
+                        const operationName =
+                            operation === "archive" ? "archived" : "permanently deleted";
+                        onShowToast(
+                            `Asset ${operationName} successfully`,
+                            "Changes may take a few minutes to propagate throughout the system, including search results."
+                        );
+                    }
+
+                    // Refresh the search results
+                    search({}, { state, dispatch });
+                }}
+            />
+
+            <AssetUnarchiveModal
+                visible={showUnarchiveModal}
+                onDismiss={() => setShowUnarchiveModal(false)}
+                selectedAsset={state?.selectedItems?.[0]}
+                onSuccess={() => {
+                    setShowUnarchiveModal(false);
+
+                    // Clear selection
+                    dispatch({
+                        type: "set-selected-items",
+                        selectedItems: [],
+                    });
+
+                    // Show toast notification
+                    if (onShowToast) {
+                        onShowToast(
+                            "Asset unarchived successfully",
+                            "Changes may take a few minutes to propagate throughout the system, including search results."
+                        );
+                    }
+
                     // Refresh the search results
                     search({}, { state, dispatch });
                 }}

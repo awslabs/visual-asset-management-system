@@ -18,8 +18,8 @@ class AssetExportRequestModel(BaseModel):
     includeParentRelationships: bool = Field(default=False, description="Include parent relationships in the relationship data")
     includeArchivedFiles: bool = Field(default=False, description="Include archived files in export")
     fileExtensions: Optional[List[str]] = Field(default=None, description="Filter files to only provided extensions")
-    maxAssets: int = Field(default=100, description="Maximum assets per page", ge=1, le=1000)
-    nextToken: Optional[str] = Field(default=None, description="Pagination token for subsequent requests")
+    maxAssets: int = Field(default=100, description="Maximum assets per page", ge=1)
+    startingToken: Optional[str] = Field(default=None, description="Pagination token for subsequent requests")
 
 
 class AssetExportMetadataItemModel(BaseModel):
@@ -92,6 +92,6 @@ class AssetExportResponseModel(BaseModel):
     """Response model for asset export"""
     assets: List[AssetExportAssetModel]
     relationships: Optional[List[AssetExportRelationshipModel]] = None
-    nextToken: Optional[str] = None
+    NextToken: Optional[str] = None
     totalAssetsInTree: int
     assetsInThisPage: int

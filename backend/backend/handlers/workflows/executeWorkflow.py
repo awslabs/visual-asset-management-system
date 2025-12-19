@@ -269,6 +269,7 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
             'workflowDatabaseId': workflow_database_id,
             'workflow_arn': workflow_arn,
             'execution_arn': response['executionArn'],
+            'inputAssetFileKey': inputAssetFileKey,
             'startDate': "",
             'stopDate': "",
             'executionStatus': "NEW"
@@ -316,8 +317,10 @@ def validate_pipelines(workflow):
 
     return (True, '')
 
-def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId):
+def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId, file_key=None):
         logger.info("Getting current executions")
+        if file_key:
+            logger.info(f"Filtering executions by file key: {file_key}")
 
         paginator = dynamodb.meta.client.get_paginator('query')
 
@@ -364,6 +367,13 @@ def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId)
         logger.info(items)
         for item in items:
             try:
+                # If file_key is provided, filter by it
+                if file_key:
+                    item_file_key = item.get('inputAssetFileKey', '')
+                    if item_file_key != file_key:
+                        #logger.info(f"Skipping execution {item.get('executionId')} - file key mismatch: {item_file_key} != {file_key}")
+                        continue
+                
                 workflow_arn = item['workflow_arn']
                 execution_arn = workflow_arn.replace("stateMachine", "execution")
                 execution_arn = execution_arn + ":" + item['executionId']
@@ -518,14 +528,6 @@ def lambda_handler(event, context):
                             else:
                                 logger.info("All pipelines are enabled. Continuing to run workflow")
 
-                            #Get current executions for workflow on asset. If currently one running, error.
-                            executionResults = get_workflow_executions(pathParams['databaseId'], pathParams['assetId'], request_body.get('workflowDatabaseId'), pathParams['workflowId'], )
-                            if len(executionResults['Items']) > 0:
-                                logger.error("Workflow has a currently running execution on the asset")
-                                response['statusCode'] = 400
-                                response['body'] = json.dumps({'message': 'Workflow has a currently running execution on the asset'})
-                                return response
-
                             ##Formulate pipeline input metadata for VAMS
                             #TODO: Implement additional user input fields on execute (from a new UX popup?)
                             
@@ -546,6 +548,14 @@ def lambda_handler(event, context):
                                 logger.info(f"Using file key from request: {file_key}, relative path: {relative_file_path}")
                             else:
                                 logger.info(f"Using asset's base prefix key (no particular file): {file_key}")
+                            
+                            #Get current executions for workflow on asset with file key filter. If currently one running, error.
+                            executionResults = get_workflow_executions(pathParams['databaseId'], pathParams['assetId'], request_body.get('workflowDatabaseId'), pathParams['workflowId'], file_key)
+                            if len(executionResults['Items']) > 0:
+                                logger.error(f"Workflow has a currently running execution on the file: {file_key}")
+                                response['statusCode'] = 400
+                                response['body'] = json.dumps({'message': f'Workflow has a currently running execution on this file'})
+                                return response
                             
                             # Get separate metadata (base asset + file-specific separately)
                             metadata_result = get_separate_metadata(pathParams['databaseId'], pathParams['assetId'], relative_file_path, event)

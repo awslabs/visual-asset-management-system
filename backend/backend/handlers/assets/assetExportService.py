@@ -847,7 +847,7 @@ def export_assets(
 ) -> Dict:
     """Main export function with pagination support"""
     
-    is_first_page = request_model.nextToken is None
+    is_first_page = request_model.startingToken is None
     
     # SINGLE ASSET MODE: Skip relationship fetching entirely
     if not request_model.fetchAssetRelationships:
@@ -866,7 +866,7 @@ def export_assets(
         return {
             'assets': assets,
             'relationships': None,
-            'nextToken': None,
+            'NextToken': None,
             'totalAssetsInTree': 1,
             'assetsInThisPage': len(assets)
         }
@@ -937,7 +937,7 @@ def export_assets(
     else:
         # SUBSEQUENT PAGE: Use stored tree from token
         logger.info("Subsequent page request - using stored tree")
-        token_data = parse_pagination_token(request_model.nextToken)
+        token_data = parse_pagination_token(request_model.startingToken)
         asset_tree = token_data['assetTree']
         start_idx = token_data['lastAssetIndex'] + 1
         end_idx = min(start_idx + request_model.maxAssets, len(asset_tree))
@@ -963,7 +963,7 @@ def export_assets(
         response['relationships'] = relationships
     
     if next_token:
-        response['nextToken'] = next_token
+        response['NextToken'] = next_token
     
     return response
 

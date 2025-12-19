@@ -42,7 +42,7 @@ export function buildCreatePipelineFunction(
     );
     const newPipelineSubnetIds = buildPipelineLambdaSubnetIds(scope, subnets, config);
     const newPipelineLambdaSecurityGroup = buildPipelineLambdaSecurityGroup(scope, vpc, config);
-    const createPipelineFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.pipelines.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -67,6 +67,7 @@ export function buildCreatePipelineFunction(
                 "sample_lambda_pipeline/lambda_pipeline_deployment_package.zip",
             ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE: newPipelineLambdaRole.roleArn,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             LAMBDA_PYTHON_VERSION: LAMBDA_PYTHON_RUNTIME.name,
             SUBNET_IDS: newPipelineSubnetIds, //Determines if we put the pipeline lambdas in a VPC or not
@@ -77,20 +78,18 @@ export function buildCreatePipelineFunction(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
     });
-    enablePipelineFunction.grantInvoke(createPipelineFunction);
-    storageResources.s3.artefactsBucket.grantRead(createPipelineFunction);
-    storageResources.dynamo.databaseStorageTable.grantReadData(createPipelineFunction);
-    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(createPipelineFunction);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(createPipelineFunction);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(createPipelineFunction);
-    storageResources.dynamo.rolesStorageTable.grantReadData(createPipelineFunction);
-    storageResources.dynamo.workflowStorageTable.grantReadWriteData(createPipelineFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        createPipelineFunction,
-        storageResources.encryption.kmsKey
-    );
-    globalLambdaEnvironmentsAndPermissions(createPipelineFunction, config);
-    createPipelineFunction.addToRolePolicy(
+    enablePipelineFunction.grantInvoke(fun);
+    storageResources.s3.artefactsBucket.grantRead(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
@@ -98,7 +97,7 @@ export function buildCreatePipelineFunction(
         })
     );
 
-    createPipelineFunction.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"],
@@ -106,7 +105,7 @@ export function buildCreatePipelineFunction(
         })
     );
 
-    createPipelineFunction.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["ec2:DescribeSecurityGroups", "ec2:DescribeSubnets", "ec2:DescribeVpcs"],
@@ -115,7 +114,7 @@ export function buildCreatePipelineFunction(
         })
     );
 
-    createPipelineFunction.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: [
@@ -127,7 +126,7 @@ export function buildCreatePipelineFunction(
         })
     );
 
-    createPipelineFunction.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
@@ -135,8 +134,8 @@ export function buildCreatePipelineFunction(
         })
     );
 
-    suppressCdkNagErrorsByGrantReadWrite(createPipelineFunction);
-    return createPipelineFunction;
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+    return fun;
 }
 
 function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey) {
@@ -191,7 +190,7 @@ export function buildPipelineService(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "pipelineService";
-    const pipelineService = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.pipelines.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -211,28 +210,30 @@ export function buildPipelineService(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    storageResources.dynamo.databaseStorageTable.grantReadData(pipelineService);
-    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(pipelineService);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(pipelineService);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(pipelineService);
-    storageResources.dynamo.rolesStorageTable.grantReadData(pipelineService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(pipelineService, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(pipelineService, config);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
     const deletePipelineResources = [IAMArn("*" + config.name + "*").lambda];
 
-    pipelineService.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["lambda:DeleteFunction"],
             resources: deletePipelineResources,
         })
     );
-    return pipelineService;
+    return fun;
 }
 
 export function buildEnablePipelineFunction(
@@ -244,7 +245,7 @@ export function buildEnablePipelineFunction(
     subnets: ec2.ISubnet[]
 ) {
     const name = "enablePipeline";
-    const enablePipelineFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.pipelines.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -262,20 +263,19 @@ export function buildEnablePipelineFunction(
         environment: {
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(enablePipelineFunction);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(enablePipelineFunction);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(enablePipelineFunction);
-    storageResources.dynamo.rolesStorageTable.grantReadData(enablePipelineFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        enablePipelineFunction,
-        storageResources.encryption.kmsKey
-    );
-    globalLambdaEnvironmentsAndPermissions(enablePipelineFunction, config);
-    return enablePipelineFunction;
+    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildPipelineLambdaSecurityGroup(

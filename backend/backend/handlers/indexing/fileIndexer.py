@@ -52,9 +52,6 @@ try:
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -1176,7 +1173,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     results.append(result)
                     
                 elif event_source == 'aws:sqs':
-                    # SQS message (may contain SNS message with S3 event)
+                    # SQS message (may contain SNS message with S3 event or DynamoDB stream)
                     try:
                         # Parse SQS message body
                         body = record.get('body', '')
@@ -1190,18 +1187,62 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                             if isinstance(sns_message, str):
                                 sns_message = json.loads(sns_message)
                             
-                            # Check if SNS message contains S3 records
-                            if 'Records' in sns_message:
-                                for s3_record in sns_message['Records']:
-                                    if s3_record.get('eventSource') == 'aws:s3':
-                                        # Pass bucket info to the S3 record for permanent delete lookups
+                            # First check if SNS message is a direct DynamoDB stream record (from SNS queuing Lambda)
+                            # This is the direct SNS→SQS path
+                            if sns_message.get('eventSource') == 'aws:dynamodb' or \
+                               sns_message.get('eventName') in ['INSERT', 'MODIFY', 'REMOVE']:
+                                # Direct DynamoDB stream record from SNS queuing Lambda
+                                result = handle_metadata_stream(sns_message)
+                                results.append(result)
+                            
+                            # Check if SNS message contains Records array (nested structure from sqsBucketSync)
+                            elif 'Records' in sns_message:
+                                for inner_record in sns_message['Records']:
+                                    inner_event_source = inner_record.get('eventSource', '')
+                                    
+                                    if inner_event_source == 'aws:s3':
+                                        # Direct S3 record in SNS message
                                         if asset_bucket_name:
-                                            s3_record['ASSET_BUCKET_NAME'] = asset_bucket_name
-                                            s3_record['ASSET_BUCKET_PREFIX'] = asset_bucket_prefix
-                                        result = handle_s3_notification(s3_record)
+                                            inner_record['ASSET_BUCKET_NAME'] = asset_bucket_name
+                                            inner_record['ASSET_BUCKET_PREFIX'] = asset_bucket_prefix
+                                        result = handle_s3_notification(inner_record)
                                         results.append(result)
+                                    
+                                    elif inner_event_source == 'aws:sqs':
+                                        # Nested SQS record (from sqsBucketSync) - parse further
+                                        try:
+                                            inner_body = inner_record.get('body', '')
+                                            if isinstance(inner_body, str):
+                                                inner_body = json.loads(inner_body)
+                                            
+                                            # Check if this inner SQS message contains SNS notification
+                                            if inner_body.get('Type') == 'Notification' and inner_body.get('Message'):
+                                                inner_sns_message = inner_body.get('Message')
+                                                if isinstance(inner_sns_message, str):
+                                                    inner_sns_message = json.loads(inner_sns_message)
+                                                
+                                                # Now check for S3 records in the inner SNS message
+                                                if 'Records' in inner_sns_message:
+                                                    for s3_record in inner_sns_message['Records']:
+                                                        if s3_record.get('eventSource') == 'aws:s3':
+                                                            # Extract bucket info from the nested structure
+                                                            nested_bucket_name = inner_sns_message.get('ASSET_BUCKET_NAME', asset_bucket_name)
+                                                            nested_bucket_prefix = inner_sns_message.get('ASSET_BUCKET_PREFIX', asset_bucket_prefix)
+                                                            
+                                                            if nested_bucket_name:
+                                                                s3_record['ASSET_BUCKET_NAME'] = nested_bucket_name
+                                                                s3_record['ASSET_BUCKET_PREFIX'] = nested_bucket_prefix
+                                                            
+                                                            result = handle_s3_notification(s3_record)
+                                                            results.append(result)
+                                        except json.JSONDecodeError as inner_e:
+                                            logger.exception(f"Error parsing nested SQS/SNS message: {inner_e}")
+                                    
+                                    else:
+                                        logger.warning(f"Unknown record event source in SNS message: {inner_event_source}")
+                            
                             else:
-                                logger.warning("SNS message does not contain S3 records")
+                                logger.warning(f"SNS message does not contain recognized event format: {sns_message.keys()}")
                         else:
                             logger.warning("SQS message is not an SNS notification")
                     except json.JSONDecodeError as e:

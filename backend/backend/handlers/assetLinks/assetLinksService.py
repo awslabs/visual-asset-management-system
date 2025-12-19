@@ -50,9 +50,6 @@ try:
     asset_links_table_v2_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
     asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e

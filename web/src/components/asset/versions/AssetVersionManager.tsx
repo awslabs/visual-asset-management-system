@@ -21,7 +21,7 @@ import {
     ColumnLayout,
 } from "@cloudscape-design/components";
 import { useParams } from "react-router";
-import { fetchAssetVersions, fetchAssetS3Files } from "../../../services/AssetVersionService";
+import { fetchAssetS3Files } from "../../../services/APIService";
 import { AssetVersionList } from "./components/AssetVersionList";
 import { FileVersionsList } from "./components/FileVersionsList";
 import { CreateAssetVersionModal } from "./components/CreateAssetVersionModal";
@@ -411,6 +411,7 @@ export const AssetVersionManager: React.FC = () => {
                 databaseId,
                 assetId,
                 includeArchived: false,
+                basic: false,
             });
 
             if (success && files) {

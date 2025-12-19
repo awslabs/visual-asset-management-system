@@ -94,6 +94,11 @@ vamscli assets create -d my-database --name "My Asset" --description "Asset desc
 # Upload files to an asset
 vamscli file upload -d my-database -a my-asset /path/to/file.gltf
 
+# Execute workflows on assets
+vamscli workflow list -d my-database
+vamscli workflow execute -d my-database -a my-asset -w workflow-123 --workflow-database-id global
+vamscli workflow list-executions -d my-database -a my-asset
+
 # Download files from an asset
 vamscli assets download /local/path -d my-database -a my-asset
 
@@ -174,7 +179,7 @@ vamscli industry engineering plm --help
 
 ## Available Commands
 
-VamsCLI provides fifteen main command groups:
+VamsCLI provides sixteen main command groups:
 
 -   **`vamscli setup`** - Configure CLI with API Gateway URL
 -   **`vamscli auth`** - Authentication and session management
@@ -185,6 +190,7 @@ VamsCLI provides fifteen main command groups:
 -   **`vamscli asset-links`** - Asset relationship management and linking
 -   **`vamscli asset-links-metadata`** - Metadata management for asset links
 -   **`vamscli file`** - File upload and management operations
+-   **`vamscli workflow`** - Workflow execution and monitoring
 -   **`vamscli metadata`** - Metadata management for assets and files
 -   **`vamscli metadata-schema`** - Metadata schema management and validation rules
 -   **`vamscli database`** - Database creation and management
@@ -234,6 +240,7 @@ VamsCLI provides comprehensive documentation organized by functional area:
 -   **[Search Operations](docs/commands/search-operations.md)** - Search assets and files using OpenSearch
 -   **[Asset Management](docs/commands/asset-management.md)** - Asset operations, versioning, and relationships
 -   **[File Operations](docs/commands/file-operations.md)** - File upload, organization, and management
+-   **[Workflow Management](docs/commands/workflow-management.md)** - Workflow execution and monitoring
 -   **[Metadata Management](docs/commands/metadata-management.md)** - Metadata operations for assets and files
 -   **[Database Administration](docs/commands/database-admin.md)** - Database and bucket management
 -   **[Tag Management](docs/commands/tag-management.md)** - Tag and tag type operations

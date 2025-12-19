@@ -153,6 +153,7 @@ Below are the web routes possible as part of a `GET` method type. Requests for t
 -   `/databases/:databaseId/assets`
 -   `/databases/:databaseId/assets/:assetId`
 -   `/databases/:databaseId/assets/:assetId/file`
+-   `/databases/:databaseId/assets/:assetId/file/*`
 -   `/databases/:databaseId/assets/:assetId/uploads`
 -   `/databases/:databaseId/assets/:assetId/download`
 -   `/databases/:databaseId/pipelines`
@@ -228,10 +229,10 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
 -   `/database/{databaseId}/assets/{assetId}/asset-links` - GET
 -   -   `Asset` (assetId, assetName, databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` - GET
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` - GET
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` - GET/HEAD
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET/HEAD)
+-   `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` - GET/HEAD
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET/HEAD)
 -   `/database/{databaseId}/assets/{assetId}/createFolder` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/listFiles` - GET
@@ -256,6 +257,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets/{assetId}/deleteAsset` - DELETE
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/unarchiveAsset` - PUT
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
 -   `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/setPrimaryFile` - PUT

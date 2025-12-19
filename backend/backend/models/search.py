@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 from typing import Dict, List, Optional, Literal, Union, Any
-from pydantic import Field, Extra
+from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -14,7 +14,7 @@ logger = safeLogger(service_name="SearchModels")
 
 ######################## Search Request Models ##########################
 
-class SimpleSearchRequestModel(BaseModel, extra=Extra.ignore):
+class SimpleSearchRequestModel(BaseModel, extra='ignore'):
     """Simple search request model for easy API calls without complex query construction"""
     
     # General search
@@ -45,7 +45,7 @@ class SimpleSearchRequestModel(BaseModel, extra=Extra.ignore):
     
     # Pagination
     from_: Optional[int] = Field(None, alias="from", ge=0, le=10000, description="Starting offset")
-    size: Optional[int] = Field(None, ge=1, le=1000, description="Number of results to return")
+    size: Optional[int] = Field(None, ge=1, le=2000, description="Number of results to return")
     
     @root_validator
     def validate_simple_search_request(cls, values):
@@ -107,23 +107,23 @@ class SimpleSearchRequestModel(BaseModel, extra=Extra.ignore):
         
         return values
 
-class SearchTokenModel(BaseModel, extra=Extra.ignore):
+class SearchTokenModel(BaseModel, extra='ignore'):
     """Model for individual search tokens"""
     operation: Literal["AND", "OR"] = "AND"
     operator: Literal["=", ":", "!=", "!:"] = "="
     propertyKey: Optional[str] = None  # None or "all" for multi-field search
     value: str = Field(min_length=1, strip_whitespace=True)
 
-class SearchFilterModel(BaseModel, extra=Extra.ignore):
+class SearchFilterModel(BaseModel, extra='ignore'):
     """Model for search filters using query_string syntax"""
     query_string: Dict[str, str] = Field(..., description="OpenSearch query_string filter")
 
-class SearchSortModel(BaseModel, extra=Extra.ignore):
+class SearchSortModel(BaseModel, extra='ignore'):
     """Model for search sorting configuration"""
     field: str = Field(min_length=1, strip_whitespace=True)
     order: Literal["asc", "desc"] = "asc"
 
-class SearchPaginationModel(BaseModel, extra=Extra.ignore):
+class SearchPaginationModel(BaseModel, extra='ignore'):
     """Model for search pagination parameters"""
     from_: Optional[int] = Field(None, alias="from", ge=0, le=10000)  # OpenSearch limit
     size: Optional[int] = Field(None, ge=1, le=2000)  # Reasonable limit for performance
@@ -146,7 +146,7 @@ class SearchPaginationModel(BaseModel, extra=Extra.ignore):
             
         return values
 
-class SearchRequestModel(BaseModel, extra=Extra.ignore):
+class SearchRequestModel(BaseModel, extra='ignore'):
     """Request model for search operations"""
     query: Optional[str] = Field(None, max_length=5000, strip_whitespace=True)  # General text search
     tokens: Optional[List[SearchTokenModel]] = []  # Structured search tokens
@@ -207,7 +207,7 @@ class SearchRequestModel(BaseModel, extra=Extra.ignore):
 
 ######################## Search Response Models ##########################
 
-class SearchHitSourceModel(BaseModel, extra=Extra.allow):
+class SearchHitSourceModel(BaseModel, extra='allow'):
     """Model for search hit source data"""
     # Core fields that should always be present
     _rectype: str  # 'asset' or 'file'
@@ -228,7 +228,7 @@ class SearchHitSourceModel(BaseModel, extra=Extra.allow):
     str_s3_version_id: Optional[str] = None  # S3 version ID (if versioning enabled)
     str_asset_version_id: Optional[str] = None  # Current asset version ID
 
-class SearchHitExplanationModel(BaseModel, extra=Extra.ignore):
+class SearchHitExplanationModel(BaseModel, extra='ignore'):
     """Model for explaining why a result matched"""
     matched_fields: List[str] = []
     match_reasons: Dict[str, str] = {}
@@ -236,7 +236,7 @@ class SearchHitExplanationModel(BaseModel, extra=Extra.ignore):
     index_type: str
     score_breakdown: Optional[Dict[str, Union[int, float]]] = None
 
-class SearchHitModel(BaseModel, extra=Extra.allow):
+class SearchHitModel(BaseModel, extra='allow'):
     """Model for individual search hit"""
     _index: str
     _id: str
@@ -246,18 +246,18 @@ class SearchHitModel(BaseModel, extra=Extra.allow):
     explanation: Optional[SearchHitExplanationModel] = None  # Match explanation
     _index_type: Optional[str] = None  # Custom field we add for dual-index tracking
 
-class SearchHitsModel(BaseModel, extra=Extra.ignore):
+class SearchHitsModel(BaseModel, extra='ignore'):
     """Model for search hits container"""
     total: Dict[str, Union[int, str]]  # {"value": 100, "relation": "eq"}
     max_score: Optional[float] = None
     hits: List[SearchHitModel]
 
-class AggregationBucketModel(BaseModel, extra=Extra.ignore):
+class AggregationBucketModel(BaseModel, extra='ignore'):
     """Model for aggregation bucket"""
     key: Union[str, int, float]
     doc_count: int
 
-class AggregationModel(BaseModel, extra=Extra.ignore):
+class AggregationModel(BaseModel, extra='ignore'):
     """Model for search aggregations"""
     doc_count: Optional[int] = None
     buckets: Optional[List[AggregationBucketModel]] = None
@@ -268,7 +268,7 @@ class AggregationModel(BaseModel, extra=Extra.ignore):
     filtered_databaseid: Optional[Dict[str, Any]] = None
     filtered_tags: Optional[Dict[str, Any]] = None
 
-class SearchResponseModel(BaseModel, extra=Extra.ignore):
+class SearchResponseModel(BaseModel, extra='ignore'):
     """Response model for search operations"""
     took: int  # Time in milliseconds
     timed_out: bool
@@ -278,28 +278,28 @@ class SearchResponseModel(BaseModel, extra=Extra.ignore):
 
 ######################## Index Mapping Models ##########################
 
-class FieldMappingModel(BaseModel, extra=Extra.ignore):
+class FieldMappingModel(BaseModel, extra='ignore'):
     """Model for individual field mapping"""
     type: str
     fields: Optional[Dict[str, Any]] = None
     format: Optional[str] = None
 
-class IndexMappingPropertiesModel(BaseModel, extra=Extra.allow):
+class IndexMappingPropertiesModel(BaseModel, extra='allow'):
     """Model for index mapping properties"""
     # Allow dynamic properties since mappings can vary
 
-class IndexMappingModel(BaseModel, extra=Extra.ignore):
+class IndexMappingModel(BaseModel, extra='ignore'):
     """Model for index mappings"""
     dynamic_templates: Optional[List[Dict[str, Any]]] = None
     properties: Optional[Dict[str, Any]] = None
 
-class IndexMappingResponseModel(BaseModel, extra=Extra.ignore):
+class IndexMappingResponseModel(BaseModel, extra='ignore'):
     """Response model for index mapping requests"""
     mappings: IndexMappingModel
 
 ######################## Error Models ##########################
 
-class SearchErrorModel(BaseModel, extra=Extra.ignore):
+class SearchErrorModel(BaseModel, extra='ignore'):
     """Model for search error responses"""
     error: str
     details: Optional[str] = None

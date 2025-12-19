@@ -14,7 +14,7 @@ export class KubectlLayerConstruct extends Construct {
         super(scope, id);
 
         // Create the kubectl binary layer with bundling
-        // This layer needs to support both PROVIDED runtimes (for our custom usage) 
+        // This layer needs to support both PROVIDED runtimes (for our custom usage)
         // and Python runtimes (for CDK's EKS kubectl provider)
         // We use __dirname as the asset path since we only need bundling (no source files required)
         this.layer = new lambda.LayerVersion(this, "KubectlLayer", {
@@ -22,7 +22,9 @@ export class KubectlLayerConstruct extends Construct {
                 __dirname, // Use construct directory as dummy asset path
                 {
                     bundling: {
-                        image: cdk.DockerImage.fromRegistry("public.ecr.aws/amazonlinux/amazonlinux:2"),
+                        image: cdk.DockerImage.fromRegistry(
+                            "public.ecr.aws/amazonlinux/amazonlinux:2"
+                        ),
                         command: [
                             "bash",
                             "-c",
@@ -43,13 +45,14 @@ export class KubectlLayerConstruct extends Construct {
                 }
             ),
             compatibleRuntimes: [
-                lambda.Runtime.PROVIDED_AL2, 
+                lambda.Runtime.PROVIDED_AL2,
                 lambda.Runtime.PROVIDED_AL2023,
                 lambda.Runtime.PYTHON_3_11,
                 lambda.Runtime.PYTHON_3_12,
-                lambda.Runtime.PYTHON_3_13 // Add Python 3.13 support for EKS kubectl provider
+                lambda.Runtime.PYTHON_3_13, // Add Python 3.13 support for EKS kubectl provider
             ],
-            description: "kubectl binary for EKS cluster operations (supports both PROVIDED and Python runtimes)",
+            description:
+                "kubectl binary for EKS cluster operations (supports both PROVIDED and Python runtimes)",
         });
     }
 }

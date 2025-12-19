@@ -1534,21 +1534,278 @@ export const setPrimaryType = async (
 };
 
 /**
+ * Fetches all files in S3 for an asset (for version creation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {boolean} params.includeArchived - Whether to include archived files
+ * @param {boolean} params.basic - Whether to just basic file information or detailed information (basic is much faster)
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const fetchAssetS3Files = async (
+    { databaseId, assetId, includeArchived = false, basic = false },
+    api = API
+) => {
+    try {
+        if (!databaseId || !assetId) {
+            return [false, "Database ID and Asset ID are required"];
+        }
+
+        const queryParams = {
+            includeArchived: includeArchived.toString(),
+        };
+
+        if (basic) {
+            queryParams.basic = basic.toString();
+        }
+
+        const response = await api.get(
+            "api",
+            `database/${databaseId}/assets/${assetId}/listFiles`,
+            {
+                queryStringParameters: queryParams,
+            }
+        );
+
+        console.log("fetchAssetS3Files raw response:", JSON.stringify(response, null, 2));
+
+        // Handle direct response format (new API format)
+        if (response && response.items) {
+            let items = response.items;
+
+            // Handle pagination if needed
+            let nextToken = response.NextToken;
+            while (nextToken) {
+                const nextResponse = await api.get(
+                    "api",
+                    `database/${databaseId}/assets/${assetId}/listFiles`,
+                    {
+                        queryStringParameters: {
+                            includeArchived: includeArchived.toString(),
+                            startingToken: nextToken,
+                        },
+                    }
+                );
+
+                if (nextResponse && nextResponse.items) {
+                    items = items.concat(nextResponse.items);
+                    nextToken = nextResponse.NextToken;
+                } else {
+                    break;
+                }
+            }
+            return [true, items];
+        }
+        // Handle legacy response format with message wrapper
+        else if (response.message) {
+            let items = [];
+            if (response.message.Items) {
+                items = response.message.Items;
+
+                // Handle pagination if needed
+                let nextToken = response.message.NextToken;
+                while (nextToken) {
+                    const nextResponse = await api.get(
+                        "api",
+                        `database/${databaseId}/assets/${assetId}/listFiles`,
+                        {
+                            queryStringParameters: {
+                                includeArchived: includeArchived.toString(),
+                                startingToken: nextToken,
+                            },
+                        }
+                    );
+
+                    if (nextResponse.message && nextResponse.message.Items) {
+                        items = items.concat(nextResponse.message.Items);
+                        nextToken = nextResponse.message.NextToken;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            return [true, items];
+        } else {
+            console.error("Unexpected response format:", response);
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.error("Error fetching asset S3 files:", error);
+        return [false, error?.message || "Failed to fetch asset files"];
+    }
+};
+
+/**
+ * Fetches a single page of files from S3 for an asset
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {boolean} params.includeArchived - Whether to include archived files
+ * @param {boolean} params.basic - Whether to use basic mode (faster, less data)
+ * @param {string|null} params.startingToken - Pagination token
+ * @param {number} params.pageSize - Page size (default: 1500 for basic, 100 for detailed)
+ * @returns {Promise<{success: boolean, items: Array, nextToken: string|null, error: string|null}>}
+ */
+export const fetchAssetS3FilesPage = async (
+    {
+        databaseId,
+        assetId,
+        includeArchived = false,
+        basic = false,
+        startingToken = null,
+        pageSize = null,
+    },
+    api = API
+) => {
+    try {
+        if (!databaseId || !assetId) {
+            return {
+                success: false,
+                items: [],
+                nextToken: null,
+                error: "Database ID and Asset ID are required",
+            };
+        }
+
+        // Set default page size based on mode
+        const defaultPageSize = basic ? 1500 : 100;
+        const actualPageSize = pageSize || defaultPageSize;
+
+        const queryParams = {
+            includeArchived: includeArchived.toString(),
+            basic: basic.toString(),
+            pageSize: actualPageSize.toString(),
+        };
+
+        if (startingToken) {
+            queryParams.startingToken = startingToken;
+        }
+
+        const response = await api.get(
+            "api",
+            `database/${databaseId}/assets/${assetId}/listFiles`,
+            {
+                queryStringParameters: queryParams,
+            }
+        );
+
+        console.log(
+            `fetchAssetS3FilesPage (basic=${basic}, page=${startingToken ? "next" : "first"}):`,
+            response?.items?.length || 0,
+            "items"
+        );
+
+        // Handle direct response format (new API format)
+        if (response && response.items) {
+            return {
+                success: true,
+                items: response.items,
+                nextToken: response.NextToken || null,
+                error: null,
+            };
+        }
+        // Handle legacy response format with message wrapper
+        else if (response.message) {
+            if (response.message.Items) {
+                return {
+                    success: true,
+                    items: response.message.Items,
+                    nextToken: response.message.NextToken || null,
+                    error: null,
+                };
+            }
+        }
+
+        return {
+            success: false,
+            items: [],
+            nextToken: null,
+            error: "Unexpected response format",
+        };
+    } catch (error) {
+        console.error("Error fetching asset S3 files page:", error);
+        return {
+            success: false,
+            items: [],
+            nextToken: null,
+            error: error?.message || "Failed to fetch asset files page",
+        };
+    }
+};
+
+/**
+ * Async generator that yields pages of files as they're fetched
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {boolean} params.includeArchived - Whether to include archived files
+ * @param {boolean} params.basic - Whether to use basic mode
+ * @param {number} [params.pageSize] - Page size (optional)
+ * @yields {Object} Page result with items and metadata
+ */
+export async function* fetchAssetS3FilesStreaming(
+    { databaseId, assetId, includeArchived = false, basic = false, pageSize },
+    api = API
+) {
+    let nextToken = null;
+    let pageNumber = 0;
+
+    do {
+        pageNumber++;
+        const result = await fetchAssetS3FilesPage(
+            { databaseId, assetId, includeArchived, basic, startingToken: nextToken, pageSize },
+            api
+        );
+
+        if (!result.success) {
+            yield {
+                success: false,
+                items: [],
+                nextToken: null,
+                error: result.error,
+                pageNumber,
+                isLastPage: true,
+            };
+            break;
+        }
+
+        nextToken = result.nextToken;
+        const isLastPage = !nextToken;
+
+        yield {
+            success: true,
+            items: result.items,
+            nextToken,
+            error: null,
+            pageNumber,
+            isLastPage,
+        };
+    } while (nextToken);
+}
+
+/**
  * Fetches file information for a specific file in an asset
  * @param {Object} params - Parameters object
  * @param {string} params.databaseId - Database ID
  * @param {string} params.assetId - Asset ID
  * @param {string} params.fileKey - File key/path
+ * @param {boolean} params.includeVersions - If to include file version data on the response
  * @returns {Promise<any>}
  */
-export const fetchFileInfo = async ({ databaseId, assetId, fileKey }, api = API) => {
+export const fetchFileInfo = async (
+    { databaseId, assetId, fileKey, includeVersions = false },
+    api = API
+) => {
     try {
         if (!databaseId || !assetId || !fileKey) {
             return [false, "Missing required parameters"];
         }
 
         const response = await api.get("api", `database/${databaseId}/assets/${assetId}/fileInfo`, {
-            queryStringParameters: { filePath: fileKey },
+            queryStringParameters: {
+                filePath: fileKey,
+                includeVersions: includeVersions ? "true" : "false",
+            },
         });
 
         // Handle different response formats

@@ -64,6 +64,11 @@ def list(json_output: bool):
                 if profile_info['has_config']:
                     lines.append(f"  API Gateway: {profile_info.get('api_gateway_url', 'Unknown')}")
                     lines.append(f"  CLI Version: {profile_info.get('cli_version', 'Unknown')}")
+                    
+                    # Show authType (backward compatible)
+                    auth_type = profile_info.get('auth_type')
+                    if auth_type:
+                        lines.append(f"  Auth Type: {auth_type}")
                 else:
                     lines.append("  Status: Not configured")
                 
@@ -72,12 +77,22 @@ def list(json_output: bool):
                     user_id = profile_info.get('user_id', 'Unknown')
                     token_type = profile_info.get('token_type', 'cognito')
                     lines.append(f"  User: {user_id}")
-                    lines.append(f"  Auth Type: {'Override Token' if token_type == 'override' else 'Cognito'}")
+                    lines.append(f"  Token Type: {'Override Token' if token_type == 'override' else 'Cognito'}")
                     
                     if profile_info.get('token_expired'):
                         lines.append("  Status: ✗ Token Expired")
                     else:
                         lines.append("  Status: ✓ Authenticated")
+                    
+                    # Show webDeployedUrl (backward compatible - only if present)
+                    web_url = profile_info.get('web_deployed_url')
+                    if web_url:
+                        lines.append(f"  Web URL: {web_url}")
+                    
+                    # Show locationServiceApiUrl (backward compatible - only if present)
+                    location_url = profile_info.get('location_service_api_url')
+                    if location_url:
+                        lines.append(f"  Location Service URL: {location_url}")
                 else:
                     lines.append("  Status: Not authenticated")
                 
@@ -339,6 +354,32 @@ def info(profile_name: str, json_output: bool):
             if info['has_config']:
                 lines.append(f"  API Gateway: {info.get('api_gateway_url', 'Unknown')}")
                 lines.append(f"  CLI Version: {info.get('cli_version', 'Unknown')}")
+                
+                # Amplify Configuration (backward compatible) - Show ALL fields
+                amplify_config = info.get('amplify_config', {})
+                if amplify_config:
+                    lines.append("")
+                    lines.append("  Amplify Configuration:")
+                    lines.append(f"    Region: {amplify_config.get('region', 'Unknown')}")
+                    lines.append(f"    API: {amplify_config.get('api', 'Unknown')}")
+                    lines.append(f"    Cognito User Pool ID: {amplify_config.get('cognitoUserPoolId', 'Not configured')}")
+                    lines.append(f"    Cognito App Client ID: {amplify_config.get('cognitoAppClientId', 'Not configured')}")
+                    lines.append(f"    Cognito Identity Pool ID: {amplify_config.get('cognitoIdentityPoolId', 'Not configured')}")
+                    lines.append(f"    External OAuth IDP URL: {amplify_config.get('externalOAuthIdpURL', 'Not configured')}")
+                    lines.append(f"    External OAuth IDP Client ID: {amplify_config.get('externalOAuthIdpClientId', 'Not configured')}")
+                    lines.append(f"    External OAuth IDP Scope: {amplify_config.get('externalOAuthIdpScope', 'Not configured')}")
+                    lines.append(f"    External OAuth IDP Scope MFA: {amplify_config.get('externalOAuthIdpScopeMfa', 'Not configured')}")
+                    lines.append(f"    External OAuth IDP Token Endpoint: {amplify_config.get('externalOAuthIdpTokenEndpoint', 'Not configured')}")
+                    lines.append(f"    External OAuth IDP Authorization Endpoint: {amplify_config.get('externalOAuthIdpAuthorizationEndpoint', 'Not configured')}")
+                    lines.append(f"    External OAuth IDP Discovery Endpoint: {amplify_config.get('externalOAuthIdpDiscoveryEndpoint', 'Not configured')}")
+                    lines.append(f"    Stack Name: {amplify_config.get('stackName', 'Unknown')}")
+                    lines.append(f"    Content Security Policy: {amplify_config.get('contentSecurityPolicy', 'Not set')}")
+                    lines.append(f"    Banner HTML Message: {amplify_config.get('bannerHtmlMessage', 'Not set')}")
+                
+                # Auth Type (backward compatible)
+                auth_type = info.get('auth_type')
+                if auth_type:
+                    lines.append(f"  Auth Type: {auth_type}")
             else:
                 lines.append("  Status: Not configured")
             lines.append("")
@@ -360,6 +401,16 @@ def info(profile_name: str, json_output: bool):
                     import datetime
                     expires_at = datetime.datetime.fromtimestamp(info['token_expires_at'])
                     lines.append(f"  Expires: {expires_at} UTC")
+                
+                # Show webDeployedUrl (backward compatible - only if present)
+                web_url = info.get('web_deployed_url')
+                if web_url:
+                    lines.append(f"  Web Deployed URL: {web_url}")
+                
+                # Show locationServiceApiUrl (backward compatible - only if present)
+                location_url = info.get('location_service_api_url')
+                if location_url:
+                    lines.append(f"  Location Service URL: {location_url}")
             else:
                 lines.append("  Status: Not authenticated")
             
@@ -423,11 +474,27 @@ def current(json_output: bool):
             
             if data['has_config']:
                 lines.append(f"API Gateway: {data['config'].get('api_gateway_url', 'Unknown')}")
+                
+                # Show authType (backward compatible)
+                amplify_config = data['config'].get('amplify_config', {})
+                cognito_user_pool_id = amplify_config.get('cognitoUserPoolId')
+                auth_type = 'Cognito' if (cognito_user_pool_id and cognito_user_pool_id not in ['undefined', 'null', '']) else 'External'
+                lines.append(f"Auth Type: {auth_type}")
             
             if data['has_auth']:
                 user_id = data['auth_profile'].get('user_id', 'Unknown')
                 token_type = data['auth_profile'].get('token_type', 'cognito')
                 lines.append(f"Authenticated as: {user_id} ({'Override' if token_type == 'override' else 'Cognito'})")
+                
+                # Show webDeployedUrl (backward compatible - only if present)
+                web_url = data['auth_profile'].get('web_deployed_url')
+                if web_url:
+                    lines.append(f"Web Deployed URL: {web_url}")
+                
+                # Show locationServiceApiUrl (backward compatible - only if present)
+                location_url = data['auth_profile'].get('location_service_api_url')
+                if location_url:
+                    lines.append(f"Location Service URL: {location_url}")
             else:
                 lines.append("Status: Not authenticated")
             

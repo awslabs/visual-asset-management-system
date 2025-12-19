@@ -149,6 +149,7 @@ def get_executions(database_id, asset_id, workflow_database_id, workflow_id, que
                             'executionStatus': executionStatus,
                             'startDate': startDate,
                             'stopDate': stopDate,
+                            'inputAssetFileKey': item.get('inputAssetFileKey', ''),
                         })
             except Exception as e:
                 logger.exception(e)

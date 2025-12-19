@@ -20,12 +20,14 @@ from .commands.metadata import metadata
 from .commands.metadata_schema import metadata_schema
 from .commands.features import features
 from .commands.search import search
+from .commands.workflow import workflow
 from .commands.industry import industry
 from .utils.profile import ProfileManager
 from .utils.exceptions import SetupRequiredError
 from .utils.global_exceptions import handle_global_exceptions
 from .constants import DEFAULT_PROFILE_NAME
 from .version import get_version
+from .utils.logging import initialize_logging, set_context
 
 
 def check_setup_required(ctx: click.Context, param: click.Parameter, value: Optional[str]) -> Optional[str]:
@@ -121,7 +123,6 @@ def cli(ctx: click.Context, version: bool, verbose: bool):
     """
     # Initialize logging system (wrapped in try/catch to prevent logging failures from breaking CLI)
     try:
-        from .utils.logging import initialize_logging, set_context
         initialize_logging(verbose)
         
         # Set profile context for logging
@@ -160,6 +161,7 @@ cli.add_command(metadata)
 cli.add_command(metadata_schema)
 cli.add_command(features)
 cli.add_command(search)
+cli.add_command(workflow)
 cli.add_command(industry)
 
 

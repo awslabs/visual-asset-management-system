@@ -2,13 +2,75 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### ⚠ BREAKING CHANGES
+
+The permission authorizations constraints has a new dynamoDB table that is no longer shared with authEntities to increase permission lookup performance. Old constraints added or updated will need to be migrated. VAMS default constructs will be re-added (Admin/RO).
+
+**Recommended Upgrade Path:** Run upgrade script for the new permission constraints table to migrate from the old table to the new if new constraints added or modified on top of the default that VAMS already adds: `infra\deploymentDataMigration\v2.3_to_v2.4\upgrade`
+
 ## [2.4.0] (2026-02-30)
 
 ### Features
 
+-   (Breaking Change) Reactored permission constraints dynamoDB table, Casbin logic for lookup, and authConstraints API to be more performant and follow the new refactor patterns for dynamoDB tables. This should increase performance of the solution for repeat data actions.
+-   **Web** Added the Veerum 3D Model licened viewer to the viewer plugin system for `e57, las, laz, ply, and .json (3D Tile)` files. Head to [veerum.com](https://www.veerum.com/) for license purchasing and then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
+    -   Note: this viewer uses the Potree Auto-Processing pipeline and must be turned on to support the loading of PointCloud files.
+-   Added a new Amazon EKS pipeline option for RapidPipeline use-case pipeline (to compliment existing Amazon ECS). This now provides a pattern example too for other use-case pipelines that would like to implement with Kubernetes (EKS) verses using the Elastic Container Service (ECS) implementation.
+-   **Web** Added API (`/database/{databaseId}/assets/{assetId}/unarchiveAsset`) and UI on Asset and File search for Unarchive Asset. Additionally cleaned up UI logic for archived asset elements.
+-   **Web** Added a Rename File operation on the asset details file manager when singly selecting files. This uses the existing file move API.
+-   Added new CDK deployment configuration support for disabling both Cloudfront and ALB static website deployment options to allow for API-only deployments of VAMS
+-   Added new CDK deployment configuration support for Cloudfront static website custom domains and TLS certificate imports
+-   Refactored backend data indexing flow to allow for both current open search indexing and easy expansion to indexing data and files with other solutions or partner integrations
+-   **Web** Refactor of the web upload workflow for files again to further parallelize uploads into batches, handles error and retries, and handle backend throttling
+-   Update the ./listFiles API to have an additional `basic` query parameter boolean (default: false) to do a quick file listing pull without additional archival, version, or preview file data (much quicker).
+    -   **CLI** File listing command now has auto-paginate and basic parameter flags
+-   **Web** Updated asset files manager to implement a lazy loading approach to loading files with the API calls to make page loads quicker to getting to file information (helps when an asset has a lot of files)
+-   **CLI** Added --auto-paginate params (and adjusted other associated pagination parameers) to listing of databases, buckets, assets, and lists
+-   **CLI** Updated CLI profile/auth/setup to pull in and display across various commands more of the environment configurations pulled from the API
+-   Workflow execution restrictions have been loosened to now allow for multiple running executions of the same workflow on an asset as long as the files being run against are different (previously didn't factor in inputted files and was only allowing 1 running execution per workflow per asset)
+-   **Web** New workflow/pipelines auto-triggering execution system for file uploads. Workflows have a new property on them that can be set in the workflow editor and some have default configurations in the deployed CDK use-cases pipeline to auto-set this (`autoRegisterAutoTriggerOnFileUpload`). Parts of this system will be refactored again in an upcoming pipeline overhaul initiative.
+    -   The trigger for this is setting which file extensions should kick of the pipeline for each file uploaded to an asset (new or modified). This is a comma-deliminated list of extensions. If ".all" is provided, then it will execute on all file extensions uploaded.
+    -   Feature is implemented with the new indexing SNS where this is a new SQS queue subscribing to that system for file uploads to check on executions per file. This allows for high scalability for files being uploaded.
+    -   PotreePipeline now has it's default set to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, previously bypassing the Workflow system
+-   **Web** Workflow Executions on View Asset now lazy loads data in, no longer for now shows the search bar
+-   **CLI** Added new command grouping (`workflow`) and commands for workflow listing, asset workflow execution listing, and executing new workflows on assets
+    -   Note: Backend API hasn't been upgraded to new request/response model pattern yet, expected as part of pipeline/workflow overhaul development task
+
 ### Bug Fixes
 
+-   Permanently deleting an asset now also deletes any associated asset link / asset link metadata in the database (caused inconsistencies with viewing asset links from the other related assets)
+-   Fixed bug where archived assets were not being properly reindexed in OpenSearch as archived
+-   Fixed bug where archiving an asset caused the asset (or a default database) to be re-created in some scenarios as part of the S3 file re-indexing process
+-   S3 Bucket sync processes to create assets from S3 objects will now still operate, even when OpenSearch functionality is disabled (part of the indexing flow re-factor)
+-   Fixed Casbin cache logic to truely be 60 seconds for updating constraints, roles, and users in roles in a lambda for authorization logic
+-   Fixed bug with move file API command not allowing allowing a move (or rename) due to issues with the destination check logic
+-   Fixed bug in many use-case pipelines where early-on errors or validation issues were not properly triggering the external workflow for an error (this caused workflows to run to prescribed timeout instead of failing early)
+-   **Web** File previews, if provided as a `.previewFile.`. will now display correctly in the Asset/File search.
+-   **Web** File operations in the asset details file manager appropriately refresh the details panel during certain operations
+-   **Web** Fixed UI where some delete operations were not refreshing the page and/or not showing the correct record ID to be deleted (display issue only)
+-   Fixed various API pagination issues with listing database, assets, and files
+-   **CLI** Fix to ensure when the `--json-output` flag is set to make sure all errors coming back are also in proper JSON format
+-   Fixed the assets and auxiliary assets streaming APIs to properly check for payload sizes to be under 6mb while also now returning presigned S3 URL redirects for larger payloads. This fixes issues with both Potree and 3D Tile viewers where the client may choose to fetch larger range sizes for tiled subsets.
+-   **Web** Added tracking of asset file input for workflow execution history and displaying that on the view asset page
+-   **Web** Updated logic for file viewers (Potree viewer) that require fetching/passing of JWT tokens for API header passing to now both fetch/refresh the token as needed without needing to refresh the page and properly work with external OAUTH2 tokens (non-cognito)
+-   **CLI** Fixed assets download command to properly download an entire assets worth of files at once from the root or from different file folders on down
+-   **Web** Fixed Workflow Execution on View Asset not auto-refreshing the data when executing a new workflow, shows proper execution counts now
+-   **Web** Fixed error when building/installing Potree Viewer and Pipeline on some OS build versions (like Linux)
+-   **Web** Fixed bug in "Execute Workflow" modal that didn't allow a user to select the entire asset as an input (had to select an individual file)
+
 ### Chores
+
+-   Refactored the tag, tagType, roles, userRoles, authConstraints, auxiliary asset stream API service backends to meet new API standard for error handling/checking, validation, and request/response models usage.
+-   Refactored some API request/response models to replace deprecated pdyantic v1 "extra" field and replaced with proper v2 pattern
+-   Refactored rest of CDK lambdabuilder functions to follow new naming pattern for table inputs and permissions
+-   Further adjusted upload thresholds for throttling and file/part/sequence splitting across the backend API, web, and CLI to tune for not only large files but many files for upload
+-   Updated ./listFiles API to default maxitems to 10000 and max page size to be 1500 for basic mode and 100 for non-basic.
+-   API for `/secureConfig` now returns the website deployed URL (if a website is deployed)
+-   File streaming APIs now support HEAD requests to allow for checking if a file exists before streaming its contents with a GET
+-   **Web** Consolidated auth token functions to a utility function, out of Auth.tsx.
+-   Updated logic of when fileIndexerSNS queue is published to from a S3 object change to reduce calls for objects generally that should be skipped (i.e. folder objects, `init` files/folders, special exclusion folder prefixes and their objects). These will still get processed by the sqsBucketSync queue/lambda but will not be further re-published. This should lessen processing downstream where usually these objects are ignored anyway.
+-   **CLI** Removed API version check on all API commands to save on CLI API calls and increase performance a small amount. Only auth and setup commands will now check CLI version against API version.
+-   Updated all lambdas memory to 5308 from 3003 which increases the vCPU from 2 to 4, increasing API response performance.
 
 ### Known Outstanding Issues
 

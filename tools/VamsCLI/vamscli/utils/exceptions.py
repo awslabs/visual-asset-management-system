@@ -403,3 +403,29 @@ class SearchMappingError(SearchError):
 class ProfileAlreadyExistsError(BusinessLogicError):
     """Raised when trying to create a profile that already exists"""
     pass
+
+
+# Workflow-related business logic exceptions
+class WorkflowError(BusinessLogicError):
+    """Base class for workflow-related errors."""
+    pass
+
+
+class WorkflowNotFoundError(WorkflowError):
+    """Raised when a workflow is not found."""
+    pass
+
+
+class WorkflowExecutionError(WorkflowError):
+    """Raised when workflow execution fails."""
+    pass
+
+
+class WorkflowAlreadyRunningError(WorkflowError):
+    """Raised when workflow is already running on the specified file."""
+    pass
+
+
+class InvalidWorkflowDataError(WorkflowError):
+    """Raised when workflow data is invalid."""
+    pass

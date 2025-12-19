@@ -259,6 +259,24 @@
             "enabled": false
         },
         {
+            "id": "veerum-viewer",
+            "name": "VEERUM 3D Viewer",
+            "description": "View Potree-converted point cloud files (.e57, .las, .laz, .ply) and 3D tilesets (.json) using VEERUM's advanced 3D viewer (LICENSED VIEWER)",
+            "componentPath": "./viewers/VeerumViewerPlugin/VeerumViewerComponent",
+            "dependencyManager": "./viewers/VeerumViewerPlugin/dependencies",
+            "dependencyManagerClass": "VeerumDependencyManager",
+            "dependencyManagerMethod": "loadVeerum",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".e57", ".las", ".laz", ".ply", ".json"],
+            "supportsMultiFile": true,
+            "canFullscreen": true,
+            "priority": 2,
+            "dependencies": ["@veerum/viewer"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "enabled": false
+        },
+        {
             "id": "preview-viewer",
             "name": "Preview Viewer",
             "description": "View generated preview images",

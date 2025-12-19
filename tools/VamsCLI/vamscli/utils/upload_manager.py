@@ -4,8 +4,9 @@ import asyncio
 import aiohttp
 import aiofiles
 import time
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from pathlib import Path
+from collections import defaultdict
 
 from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS
 from .exceptions import FileUploadError, PartUploadError
@@ -16,10 +17,11 @@ from .api_client import APIClient
 class PartUploadInfo:
     """Information about a part upload."""
     
-    def __init__(self, file_info: FileInfo, part_info: Dict[str, Any], upload_url: str):
+    def __init__(self, file_info: FileInfo, part_info: Dict[str, Any], upload_url: str, sequence_id: int):
         self.file_info = file_info
         self.part_info = part_info
         self.upload_url = upload_url
+        self.sequence_id = sequence_id  # Track which sequence this part belongs to
         self.part_number = part_info["part_number"]
         self.start_byte = part_info["start_byte"]
         self.end_byte = part_info["end_byte"]
@@ -62,6 +64,12 @@ class UploadProgress:
         self.failed_parts = 0
         self.active_uploads = 0
         self.start_time = time.time()
+        
+        # Sequence tracking
+        self.total_sequences = len(sequences)
+        self.initialized_sequences = 0
+        self.uploaded_sequences = 0  # Sequences with all parts uploaded
+        self.completed_sequences = 0  # Sequences with completion API finished
         
         # File-level progress
         self.file_progress = {}  # relative_key -> {"completed_parts": int, "total_parts": int, "completed_size": int, "total_size": int}
@@ -134,6 +142,18 @@ class UploadProgress:
         return 0.0
 
 
+class SequenceInitResult:
+    """Result of sequence initialization."""
+    
+    def __init__(self, sequence_id: int, upload_id: str, init_response: Dict[str, Any],
+                 sequence: UploadSequence, part_uploads: List[PartUploadInfo]):
+        self.sequence_id = sequence_id
+        self.upload_id = upload_id
+        self.init_response = init_response
+        self.sequence = sequence
+        self.part_uploads = part_uploads
+
+
 class UploadManager:
     """Manages file uploads with progress monitoring and retry logic."""
     
@@ -159,9 +179,9 @@ class UploadManager:
         if self.session:
             await self.session.close()
     
-    async def upload_sequence(self, sequence: UploadSequence, database_id: str, asset_id: str,
-                            upload_type: str, progress: UploadProgress) -> Dict[str, Any]:
-        """Upload a single sequence of files."""
+    async def _initialize_sequence(self, sequence: UploadSequence, database_id: str, 
+                                   asset_id: str, upload_type: str, progress: UploadProgress) -> SequenceInitResult:
+        """Initialize a single sequence (Stage 1)."""
         # Prepare files for API
         api_files = []
         for file_info in sequence.files:
@@ -172,9 +192,12 @@ class UploadManager:
                 "num_parts": len(parts)
             })
         
-        # Initialize upload
+        # Initialize upload (run synchronous API call in executor)
         try:
-            init_response = self.api_client.initialize_upload(
+            loop = asyncio.get_event_loop()
+            init_response = await loop.run_in_executor(
+                None,
+                self.api_client.initialize_upload,
                 database_id, asset_id, upload_type, api_files
             )
         except Exception as e:
@@ -191,15 +214,29 @@ class UploadManager:
             
             for i, part_url_info in enumerate(file_response["partUploadUrls"]):
                 part_info = parts[i]  # Parts are in order
-                part_upload = PartUploadInfo(file_info, part_info, part_url_info["UploadUrl"])
+                part_upload = PartUploadInfo(
+                    file_info, part_info, part_url_info["UploadUrl"], sequence.sequence_id
+                )
                 part_uploads.append(part_upload)
         
-        # Upload parts with concurrency control
-        semaphore = asyncio.Semaphore(self.max_parallel)
-        tasks = [self._upload_part_with_retry(part_upload, semaphore, progress) 
-                for part_upload in part_uploads]
+        # Update initialized count and notify
+        progress.initialized_sequences += 1
+        if self.progress_callback:
+            self.progress_callback(progress)
         
-        await asyncio.gather(*tasks, return_exceptions=True)
+        return SequenceInitResult(
+            sequence.sequence_id, upload_id, init_response, sequence, part_uploads
+        )
+    
+    async def _complete_sequence(self, init_result: SequenceInitResult, database_id: str,
+                                asset_id: str, upload_type: str, progress: UploadProgress) -> Dict[str, Any]:
+        """Complete a sequence upload (Stage 3).
+        
+        This is called after all parts for this sequence have been uploaded.
+        """
+        sequence = init_result.sequence
+        init_response = init_result.init_response
+        part_uploads = init_result.part_uploads
         
         # Prepare completion data
         completion_files = []
@@ -207,15 +244,12 @@ class UploadManager:
         failed_files = set()
         
         # Group parts by file
-        file_parts = {}
+        file_parts = defaultdict(list)
         for part_upload in part_uploads:
             file_key = part_upload.file_info.relative_key
-            if file_key not in file_parts:
-                file_parts[file_key] = []
             file_parts[file_key].append(part_upload)
         
         # Check which files completed successfully
-        # First, handle all files from the sequence (including zero-byte files with no parts)
         for file_info in sequence.files:
             file_key = file_info.relative_key
             parts = file_parts.get(file_key, [])
@@ -255,19 +289,27 @@ class UploadManager:
                 else:
                     failed_files.add(file_key)
         
-        # Complete upload if we have any successful files
+        # Complete upload if we have any successful files (run synchronous API call in executor)
         completion_result = None
         if completion_files:
             try:
-                completion_result = self.api_client.complete_upload(
-                    upload_id, database_id, asset_id, upload_type, completion_files
+                loop = asyncio.get_event_loop()
+                completion_result = await loop.run_in_executor(
+                    None,
+                    self.api_client.complete_upload,
+                    init_result.upload_id, database_id, asset_id, upload_type, completion_files
                 )
             except Exception as e:
                 raise FileUploadError(f"Failed to complete upload for sequence {sequence.sequence_id}: {e}")
         
+        # Update completed sequences count
+        progress.completed_sequences += 1
+        if self.progress_callback:
+            self.progress_callback(progress)
+        
         return {
             "sequence_id": sequence.sequence_id,
-            "upload_id": upload_id,
+            "upload_id": init_result.upload_id,
             "successful_files": list(successful_files),
             "failed_files": list(failed_files),
             "completion_result": completion_result,
@@ -275,6 +317,43 @@ class UploadManager:
             "successful_parts": sum(1 for p in part_uploads if p.status == "completed"),
             "failed_parts": sum(1 for p in part_uploads if p.status == "failed")
         }
+    
+    async def _process_sequence(self, sequence: UploadSequence, database_id: str, asset_id: str,
+                               upload_type: str, semaphore: asyncio.Semaphore, 
+                               progress: UploadProgress) -> Dict[str, Any]:
+        """Process a single sequence: initialize, upload parts, complete.
+        
+        This allows sequences to be processed independently - as soon as one is initialized,
+        its parts can start uploading while other sequences are still initializing.
+        """
+        try:
+            # Stage 1: Initialize this sequence
+            init_result = await self._initialize_sequence(sequence, database_id, asset_id, upload_type, progress)
+            
+            # Stage 2: Upload all parts for this sequence
+            upload_tasks = [
+                self._upload_part_with_retry(part, semaphore, progress)
+                for part in init_result.part_uploads
+            ]
+            
+            # Wait for all parts of THIS sequence to complete
+            await asyncio.gather(*upload_tasks, return_exceptions=True)
+            
+            # Update uploaded sequences count (all parts done)
+            progress.uploaded_sequences += 1
+            if self.progress_callback:
+                self.progress_callback(progress)
+            
+            # Stage 3: Complete this sequence (completion API call)
+            return await self._complete_sequence(init_result, database_id, asset_id, upload_type, progress)
+            
+        except Exception as e:
+            return {
+                "sequence_id": sequence.sequence_id,
+                "error": str(e),
+                "successful_files": [],
+                "failed_files": [f.relative_key for f in sequence.files]
+            }
     
     async def _upload_part_with_retry(self, part_upload: PartUploadInfo, 
                                     semaphore: asyncio.Semaphore, 
@@ -357,35 +436,84 @@ class UploadManager:
     
     async def upload_all_sequences(self, sequences: List[UploadSequence], database_id: str,
                                  asset_id: str, upload_type: str) -> Dict[str, Any]:
-        """Upload all sequences and return comprehensive results."""
+        """Upload all sequences using optimized parallel pipeline.
+        
+        This processes sequences independently:
+        - Each sequence initializes, uploads, and completes independently
+        - As soon as a sequence is initialized, its parts start uploading
+        - All sequences share the same part upload pool (respecting max_parallel)
+        - Preview sequences complete their API calls AFTER regular sequences
+        - Progress updates in real-time as sequences initialize and complete
+        """
         progress = UploadProgress(sequences)
         
         if self.progress_callback:
             self.progress_callback(progress)
         
-        sequence_results = []
-        overall_success = True
+        # Create a shared semaphore for all part uploads across all sequences
+        semaphore = asyncio.Semaphore(self.max_parallel)
         
-        for sequence in sequences:
-            try:
-                result = await self.upload_sequence(sequence, database_id, asset_id, upload_type, progress)
-                sequence_results.append(result)
-                
-                if result["failed_files"]:
-                    overall_success = False
-                    
-            except Exception as e:
-                sequence_results.append({
-                    "sequence_id": sequence.sequence_id,
-                    "error": str(e),
+        # Separate regular and preview sequences
+        regular_sequences = []
+        preview_sequences = []
+        
+        for seq in sequences:
+            # Check if sequence contains preview files
+            has_preview_files = any(f.is_preview_file for f in seq.files)
+            if has_preview_files:
+                preview_sequences.append(seq)
+            else:
+                regular_sequences.append(seq)
+        
+        # Process regular sequences first, then preview sequences
+        # This ensures preview completion APIs are called after regular ones
+        all_sequences_ordered = regular_sequences + preview_sequences
+        
+        # Process all sequences concurrently
+        # Each sequence will: initialize → upload parts → complete
+        # But preview sequences will wait for regular sequences to complete their APIs
+        sequence_tasks = [
+            self._process_sequence(seq, database_id, asset_id, upload_type, semaphore, progress)
+            for seq in all_sequences_ordered
+        ]
+        
+        # Wait for all sequences to complete
+        try:
+            sequence_results = await asyncio.gather(*sequence_tasks, return_exceptions=True)
+        except Exception as e:
+            sequence_results = [{
+                "sequence_id": seq.sequence_id,
+                "error": str(e),
+                "successful_files": [],
+                "failed_files": [f.relative_key for f in seq.files]
+            } for seq in all_sequences_ordered]
+        
+        # Handle any exceptions in results
+        final_results = []
+        for i, result in enumerate(sequence_results):
+            if isinstance(result, Exception):
+                final_results.append({
+                    "sequence_id": sequences[i].sequence_id,
+                    "error": str(result),
                     "successful_files": [],
-                    "failed_files": [f.relative_key for f in sequence.files]
+                    "failed_files": [f.relative_key for f in sequences[i].files]
                 })
-                overall_success = False
+            else:
+                final_results.append(result)
         
         # Calculate final statistics
-        total_successful_files = sum(len(r.get("successful_files", [])) for r in sequence_results)
-        total_failed_files = sum(len(r.get("failed_files", [])) for r in sequence_results)
+        overall_success = True
+        total_successful_files = 0
+        total_failed_files = 0
+        
+        for result in final_results:
+            successful = len(result.get("successful_files", []))
+            failed = len(result.get("failed_files", []))
+            total_successful_files += successful
+            total_failed_files += failed
+            
+            if failed > 0 or result.get("error"):
+                overall_success = False
         
         return {
             "overall_success": overall_success,
@@ -397,7 +525,7 @@ class UploadManager:
             "upload_duration": progress.elapsed_time,
             "average_speed": progress.upload_speed,
             "average_speed_formatted": format_file_size(int(progress.upload_speed)) + "/s",
-            "sequence_results": sequence_results,
+            "sequence_results": final_results,
             "progress": progress
         }
 

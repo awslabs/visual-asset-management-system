@@ -317,12 +317,16 @@ class FileTreeBuilder:
     
     @staticmethod
     def get_files_under_prefix(files: List[Dict[str, Any]], prefix: str, recursive: bool = False) -> List[Dict[str, Any]]:
-        """Get all files under a specific prefix."""
+        """Get all files under a specific prefix, excluding folder objects."""
         if not prefix.endswith('/'):
             prefix += '/'
         
         matching_files = []
         for file_item in files:
+            # Skip folder objects - only download actual files
+            if file_item.get('isFolder'):
+                continue
+                
             relative_path = file_item.get('relativePath', '')
             
             if relative_path.startswith(prefix):

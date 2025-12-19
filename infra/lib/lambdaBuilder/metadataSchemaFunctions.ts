@@ -27,7 +27,7 @@ export function buildMetadataSchemaService(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "schema";
-    const fn = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.metadataschema.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -47,17 +47,19 @@ export function buildMetadataSchemaService(
             METADATA_SCHEMA_STORAGE_TABLE_NAME:
                 storageResources.dynamo.metadataSchemaStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    storageResources.dynamo.databaseStorageTable.grantReadData(fn);
-    storageResources.dynamo.metadataSchemaStorageTable.grantReadWriteData(fn);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fn);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fn);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fn);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fn, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fn, config);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.dynamo.metadataSchemaStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
-    return fn;
+    return fun;
 }

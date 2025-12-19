@@ -18,7 +18,6 @@ import { Cache, API } from "aws-amplify";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
 import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";
-import { fetchAssetS3Files } from "../../services/AssetVersionService";
 import { StatusMessageProvider } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import AssetDetailsPane from "./AssetDetailsPane";
@@ -52,8 +51,6 @@ export default function ViewAsset() {
         Asset: [],
     } as AssetDetail);
     const [asset, setAsset] = useState<any>({});
-    const [assetFiles, setAssetFiles] = useState<any[]>([]);
-    const [loadingAssetFiles, setLoadingAssetFiles] = useState(false);
     const [assetLinks, setAssetLinks] = useState<any>({});
     const [openUpdateAsset, setOpenUpdateAsset] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -159,49 +156,6 @@ export default function ViewAsset() {
         fetchAssetData();
     }, [databaseId, assetId, asset?.assetId]);
 
-    // Fetch asset files
-    useEffect(() => {
-        const fetchFiles = async () => {
-            // Don't attempt to fetch files if we already have an API error or if asset ID is missing
-            if (!asset?.assetId || showApiError) return;
-
-            setLoadingAssetFiles(true);
-            try {
-                const [success, files] = await fetchAssetS3Files({
-                    databaseId: databaseId!,
-                    assetId: assetId!,
-                    includeArchived: false,
-                });
-                if (success && files && Array.isArray(files)) {
-                    // Sort files by relativePath in ascending order
-                    const sortedFiles = [...files].sort((a, b) =>
-                        a.relativePath.localeCompare(b.relativePath)
-                    );
-                    setAssetFiles(sortedFiles);
-                } else if (!success && typeof files === "string" && files.includes("not found")) {
-                    setApiError(
-                        "Asset files not found. The requested asset may have been deleted or you may not have permission to access it."
-                    );
-                    setShowApiError(true);
-                    setApiErrorType("error");
-                } else if (!success) {
-                    setApiError("Failed to load asset files. Please try again later.");
-                    setShowApiError(true);
-                    setApiErrorType("error");
-                }
-            } catch (error) {
-                console.error("Error fetching asset files:", error);
-                setApiError("Failed to load asset files. Please try again later.");
-                setShowApiError(true);
-                setApiErrorType("error");
-            } finally {
-                setLoadingAssetFiles(false);
-            }
-        };
-
-        fetchFiles();
-    }, [asset?.assetId, assetId, databaseId]);
-
     // Handle opening the update asset modal
     const handleOpenUpdateAsset = () => {
         setOpenUpdateAsset(true);
@@ -217,11 +171,13 @@ export default function ViewAsset() {
         setWorkflowOpen(true);
     };
 
-    // State to trigger workflow tab refresh
+    // State to trigger workflow tab refresh - this will be managed by TabbedContainer
     const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
 
-    // Function to refresh the workflow tab
+    // Function to refresh the workflow tab - this will be called by WorkflowSelectorWithModal
+    // and will trigger TabbedContainer's callback
     const refreshWorkflowTab = useCallback(() => {
+        console.log("ViewAsset: refreshWorkflowTab called, incrementing trigger");
         setWorkflowRefreshTrigger((prev) => prev + 1);
     }, []);
 
@@ -279,12 +235,11 @@ export default function ViewAsset() {
                                 {/* Tabbed Container */}
                                 <TabbedContainer
                                     assetName={asset?.assetName || ""}
-                                    assetFiles={assetFiles}
                                     assetId={assetId || ""}
                                     databaseId={databaseId || ""}
-                                    loadingFiles={loadingAssetFiles}
                                     onExecuteWorkflow={handleExecuteWorkflow}
                                     onWorkflowExecuted={refreshWorkflowTab}
+                                    workflowExecutedTrigger={workflowRefreshTrigger}
                                     filePathToNavigate={filePathToNavigate}
                                 />
 
@@ -320,7 +275,6 @@ export default function ViewAsset() {
                     databaseId={databaseId || ""}
                     open={workflowOpen}
                     setOpen={setWorkflowOpen}
-                    assetFiles={assetFiles}
                     onWorkflowExecuted={refreshWorkflowTab}
                 />
 

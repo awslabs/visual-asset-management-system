@@ -4,9 +4,8 @@
  */
 
 import React, { useEffect, useState, useRef } from "react";
-import { Button, Container, Header, SpaceBetween } from "@cloudscape-design/components";
+import { Button, Container, Header } from "@cloudscape-design/components";
 import ErrorBoundary from "../../common/ErrorBoundary";
-import { LoadingSpinner } from "../../common/LoadingSpinner";
 import { WorkflowExecutionListDefinition } from "../../list/list-definitions/WorkflowExecutionListDefinition";
 import { fetchDatabaseWorkflows, fetchWorkflowExecutions } from "../../../services/APIService";
 import { useNavigate } from "react-router";
@@ -30,12 +29,13 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
 }) => {
     const navigate = useNavigate();
     const { showMessage } = useStatusMessage();
-    const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [allItems, setAllItems] = useState<any[]>([]);
-    const [reload, setReload] = useState(true);
+    const [reload, setReload] = useState(false);
     const [backgroundRefresh, setBackgroundRefresh] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [hasIncompleteJobs, setHasIncompleteJobs] = useState(false);
+    const [initialLoadComplete, setInitialLoadComplete] = useState(false);
     const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
     const initialLoadDoneRef = useRef<boolean>(false);
 
@@ -50,7 +50,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                 }}
             >
                 <Button
-                    variant={"primary"}
+                    variant="primary"
                     onClick={() => {
                         // Call the parent's onExecuteWorkflow function to open the modal
                         // The refresh will be triggered by the refreshTrigger prop when the workflow completes
@@ -63,12 +63,20 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
         );
     };
 
-    // Trigger a refresh when refreshTrigger changes
+    // Trigger a refresh when refreshTrigger changes (after workflow execution)
     useEffect(() => {
-        if (refreshTrigger !== undefined) {
+        if (refreshTrigger !== undefined && refreshTrigger > 0) {
+            console.log("WorkflowTab: refreshTrigger changed to", refreshTrigger);
             setReload(true);
         }
     }, [refreshTrigger]);
+
+    // Trigger initial load when tab becomes active for the first time
+    useEffect(() => {
+        if (isActive && !initialLoadComplete) {
+            setReload(true);
+        }
+    }, [isActive, initialLoadComplete]);
 
     // Fetch workflows and executions when the tab is active or when reload is triggered
     useEffect(() => {
@@ -84,9 +92,9 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
         }
 
         const getData = async () => {
-            // Only show loading spinner for full reloads, not background refreshes
+            // Show refreshing state for manual and triggered reloads, not for background refreshes
             if (!backgroundRefresh) {
-                setLoading(true);
+                setRefreshing(true);
             }
             setError(null);
 
@@ -155,6 +163,8 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                             // Set the parentId to match with the workflow's unique key
                             newParentRowChild.parentId = workflowKey;
                             newParentRowChild.name = newParentRowChild.executionId;
+                            // Preserve the inputAssetFileKey from the execution data
+                            newParentRowChild.inputAssetFileKey = execution.inputAssetFileKey || "";
 
                             if (newParentRowChild.stopDate === "") {
                                 newParentRowChild.stopDate = "N/A";
@@ -221,9 +231,10 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                     }
 
                     setAllItems(newRows);
-                    setLoading(false);
+                    setRefreshing(false);
                     setReload(false);
                     setBackgroundRefresh(false);
+                    setInitialLoadComplete(true);
                 } else if (
                     typeof workflows === "string" &&
                     (workflows as string).indexOf("not found") !== -1
@@ -231,16 +242,18 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                     setError(
                         "Workflow data not found. The requested asset may have been deleted or you may not have permission to access it."
                     );
-                    setLoading(false);
+                    setRefreshing(false);
                     setReload(false);
                     setBackgroundRefresh(false);
+                    setInitialLoadComplete(true);
                 }
             } catch (error: any) {
                 console.error("Error fetching workflows:", error);
                 setError(`Failed to load workflow data: ${error.message || "Unknown error"}`);
-                setLoading(false);
+                setRefreshing(false);
                 setReload(false);
                 setBackgroundRefresh(false);
+                setInitialLoadComplete(true);
 
                 showMessage({
                     type: "error",
@@ -257,6 +270,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     useEffect(() => {
         if (!isActive) {
             initialLoadDoneRef.current = false;
+            setInitialLoadComplete(false);
         }
     }, [isActive]);
 
@@ -299,24 +313,25 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
         );
     }
 
+    // Calculate execution count (exclude parent workflow rows)
+    const executionCount = allItems.filter((item) => item.parentId).length;
+
     return (
         <ErrorBoundary componentName="Workflows">
-            {loading ? (
-                <LoadingSpinner text="Loading workflow executions..." />
-            ) : (
-                <RelatedTableList
-                    allItems={allItems}
-                    loading={loading}
-                    listDefinition={WorkflowExecutionListDefinition}
-                    databaseId={databaseId}
-                    setReload={setReload}
-                    parentId={"parentId"}
-                    defaultSortingColumn="startDate"
-                    defaultSortingDescending={true}
-                    //@ts-ignore
-                    HeaderControls={WorkflowHeaderControls}
-                />
-            )}
+            <RelatedTableList
+                allItems={allItems}
+                loading={refreshing}
+                listDefinition={WorkflowExecutionListDefinition}
+                databaseId={databaseId}
+                setReload={setReload}
+                parentId={"parentId"}
+                defaultSortingColumn="startDate"
+                defaultSortingDescending={true}
+                countOverride={executionCount}
+                hideSearch={true}
+                //@ts-ignore
+                HeaderControls={WorkflowHeaderControls}
+            />
         </ErrorBoundary>
     );
 };

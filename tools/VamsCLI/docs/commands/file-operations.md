@@ -112,33 +112,90 @@ vamscli file upload -d my-db -a my-asset --hide-progress --json-output file.gltf
 
 ### Upload Limits (Backend v2.2+)
 
--   **Files per request**: Maximum 1000 files per upload request
--   **Total parts per request**: Maximum 5000 parts across all files per request
--   **Parts per file**: Maximum 10000 parts per individual file
--   **Preview file size**: Maximum 5MB per preview file
--   **Rate limiting**: 10 upload initializations per user per minute
+**Per-Sequence Limits (automatically managed):**
+
+-   **Files per sequence**: Maximum 50 files per API request
+-   **Total parts per sequence**: Maximum 200 parts across all files per API request
+-   **Sequence size**: Maximum 3GB per upload sequence
+
+**Per-File Limits:**
+
+-   **Parts per file**: Maximum 200 parts per individual file
 -   **Part size**: Maximum 5GB per part (S3 limit)
+-   **Preview file size**: Maximum 5MB per preview file
+
+**Global Limits:**
+
+-   **Total files**: Unlimited (automatically batched into multiple sequences)
+-   **Rate limiting**: 20 upload initializations per user per minute
 -   **Zero-byte files**: Supported and handled automatically
--   **Sequence limit**: 3GB per upload sequence (automatically managed)
+
+**Important**: The limits above are **per-sequence**, not per-upload. VamsCLI automatically creates multiple sequences when needed, allowing you to upload unlimited files. For example:
+
+-   200 files with limit of 50 per sequence → 4 sequences created automatically
+-   All sequences are processed efficiently using parallel pipeline architecture
+
+### Multi-Sequence Upload Architecture
+
+VamsCLI uses an advanced **parallel pipeline architecture** for optimal upload performance:
+
+**3-Stage Pipeline:**
+
+1. **Initialization**: All sequences initialized in parallel (concurrent API calls)
+2. **Upload**: All parts from all sequences uploaded in parallel (shared pool respecting max_parallel limit)
+3. **Completion**: Sequences completed as their parts finish (can overlap with stage 2)
+
+**Benefits:**
+
+-   ✅ **Massive speedup** for multi-sequence uploads (4× faster for 4 sequences)
+-   ✅ **No idle time** between sequences
+-   ✅ **Overlapped I/O** - completions happen while uploads continue
+-   ✅ **Automatic batching** - unlimited files handled transparently
+
+**Example: Uploading 200 files**
+
+```bash
+# Single command uploads all 200 files
+vamscli file upload -d my-db -a my-asset /path/to/200/files/*.gltf
+
+# VamsCLI automatically:
+# 1. Creates 4 sequences (50 files each)
+# 2. Initializes all 4 sequences in parallel
+# 3. Uploads all parts from all sequences concurrently
+# 4. Completes sequences as they finish
+# Result: Much faster than sequential processing!
+```
 
 ### Large Upload Handling
 
-When your upload exceeds the backend limits, VamsCLI automatically:
+VamsCLI automatically handles large uploads by:
 
-1. **Validates constraints** before starting the upload
-2. **Provides helpful error messages** with guidance on how to split uploads
-3. **Splits uploads into multiple sequences** when possible
-4. **Shows progress** for multi-sequence uploads
-5. **Handles rate limiting** with automatic retries and backoff
+1. **Validates individual file constraints** (e.g., parts per file limit)
+2. **Creates multiple sequences** automatically when per-sequence limits are reached
+3. **Shows progress** for multi-sequence uploads with sequence count
+4. **Handles rate limiting** with automatic retries and backoff
+5. **Provides helpful error messages** only for unrecoverable errors (e.g., individual file too large)
 
-**Example constraint violation messages:**
+**Only individual file constraint violations will cause errors:**
 
 ```bash
-❌ Too many files: 1500 files provided, but maximum is 1000 files per upload.
+❌ File 'huge-file.bin' requires 250 parts, but maximum is 200 parts per file.
+   File size: 37.5GB
 
-💡 Tip: You can split your upload by using multiple commands:
-   vamscli file upload -d my-db -a my-asset file1.ext file2.ext ... (up to 1000 files)
-   vamscli file upload -d my-db -a my-asset file1001.ext ...
+💡 Tip: Individual files cannot exceed 200 parts. Consider compressing very large files before upload.
+```
+
+**Multi-sequence uploads are handled automatically:**
+
+```bash
+✅ Upload Summary:
+  Files: 200 (200 regular, 0 preview)
+  Total Size: 5.2GB
+  Sequences: 4
+  Parts: 156
+
+📋 Multi-sequence upload: Your files will be uploaded in 4 separate requests
+   This is handled automatically.
 ```
 
 ### Large File Asynchronous Processing
@@ -227,7 +284,7 @@ vamscli file create-folder --json-input '{"database_id": "my-db", "asset_id": "m
 
 ### `vamscli file list`
 
-List files in an asset with filtering and pagination support.
+List files in an asset with filtering, pagination, and performance optimization support.
 
 **Required Options:**
 
@@ -239,11 +296,24 @@ List files in an asset with filtering and pagination support.
 -   `--prefix`: Filter files by prefix
 -   `--include-archived`: Include archived files
 
+**Performance Options:**
+
+-   `--basic`: Skip expensive lookups for faster listing (skips version checks, preview file processing, and metadata lookups)
+
 **Pagination Options:**
 
--   `--max-items`: Maximum number of items to return (default: 1000)
--   `--page-size`: Number of items per page (default: 100)
--   `--starting-token`: Token for pagination
+Choose one pagination mode:
+
+**Manual Pagination:**
+
+-   `--page-size`: Number of items per page (passed to API, uses API defaults if not specified)
+-   `--starting-token`: Token for pagination (get next page)
+
+**Auto-Pagination:**
+
+-   `--auto-paginate`: Automatically fetch all items (default: up to 10,000 total)
+-   `--max-items`: Maximum total items to fetch (only with `--auto-paginate`, default: 10,000)
+-   `--page-size`: Number of items per page (optional, passed to API)
 
 **Input/Output Options:**
 
@@ -252,22 +322,132 @@ List files in an asset with filtering and pagination support.
 
 **Examples:**
 
+**Basic Listing:**
+
 ```bash
-# List all files
+# List all files (uses API defaults: 200 items in full mode, 1500 in basic mode)
 vamscli file list -d my-db -a my-asset
+
+# Fast listing with basic mode
+vamscli file list -d my-db -a my-asset --basic
 
 # List files with prefix filter
 vamscli file list -d my-db -a my-asset --prefix "models/"
 
 # Include archived files
 vamscli file list -d my-db -a my-asset --include-archived
-
-# List with pagination
-vamscli file list -d my-db -a my-asset --page-size 50 --starting-token "token123"
-
-# List with JSON input
-vamscli file list --json-input '{"database_id": "my-db", "asset_id": "my-asset", "prefix": "models/"}'
 ```
+
+**Auto-Pagination (Recommended for Complete Listings):**
+
+```bash
+# Automatically fetch all items (default: up to 10,000)
+vamscli file list -d my-db -a my-asset --auto-paginate
+
+# Auto-paginate with custom limit (fetch up to 5,000 items)
+vamscli file list -d my-db -a my-asset --auto-paginate --max-items 5000
+
+# Auto-paginate with custom page size (controls items per API request)
+vamscli file list -d my-db -a my-asset --auto-paginate --page-size 500
+
+# Auto-paginate with basic mode (fastest for large directories)
+vamscli file list -d my-db -a my-asset --auto-paginate --basic
+
+# Auto-paginate with filters
+vamscli file list -d my-db -a my-asset --auto-paginate --prefix "models/" --include-archived
+
+# Auto-paginate with JSON output
+vamscli file list -d my-db -a my-asset --auto-paginate --json-output
+```
+
+**Manual Pagination:**
+
+```bash
+# Get first page with custom page size
+vamscli file list -d my-db -a my-asset --page-size 200
+
+# Get next page using token from previous response
+vamscli file list -d my-db -a my-asset --starting-token "token123" --page-size 200
+
+# Manual pagination with filters
+vamscli file list -d my-db -a my-asset --page-size 100 --prefix "models/"
+```
+
+**JSON Input:**
+
+```bash
+# List with JSON input
+vamscli file list --json-input '{"database_id": "my-db", "asset_id": "my-asset", "prefix": "models/", "basic": true}'
+
+# Auto-paginate with JSON input
+vamscli file list --json-input '{"database_id": "my-db", "asset_id": "my-asset", "auto_paginate": true, "max_items": 5000}'
+```
+
+**Parameter Behavior:**
+
+| Parameter          | Auto-Paginate Mode               | Manual Mode                      | Passed to API? |
+| ------------------ | -------------------------------- | -------------------------------- | -------------- |
+| `--page-size`      | ✅ Optional (controls page size) | ✅ Optional (controls page size) | ✅ YES         |
+| `--max-items`      | ✅ Controls total limit          | ❌ Ignored (shows warning)       | ❌ NO          |
+| `--starting-token` | ❌ Not allowed                   | ✅ Optional (next page)          | ✅ YES         |
+| `--basic`          | ✅ Optional                      | ✅ Optional                      | ✅ YES         |
+
+**Performance Comparison:**
+
+| Mode                      | Speed        | Use Case                                                                    |
+| ------------------------- | ------------ | --------------------------------------------------------------------------- |
+| **Full mode**             | Standard     | When you need complete metadata (version IDs, preview files, primary types) |
+| **Basic mode**            | ~100x faster | Quick directory scans, file counting, existence checks                      |
+| **Auto-paginate**         | Automatic    | Get complete listings without manual token management                       |
+| **Auto-paginate + Basic** | Fastest      | Large directories (1000+ files) where metadata isn't needed                 |
+
+**When to Use Basic Mode:**
+
+✅ **Use `--basic` when:**
+
+-   Scanning large directories (1000+ files)
+-   Checking file existence
+-   Counting files
+-   Automated scripts that don't need full metadata
+-   Performance is critical
+
+❌ **Don't use `--basic` when:**
+
+-   You need version IDs
+-   You need to see preview files
+-   You need primary type metadata
+-   You need archive status verification
+-   You're working with small file sets (<100 files)
+
+**Pagination Modes:**
+
+| Mode              | Best For          | Max Items                       | Token Management |
+| ----------------- | ----------------- | ------------------------------- | ---------------- |
+| **Default**       | Quick checks      | API defaults (200 or 1500)      | None             |
+| **Manual**        | Controlled paging | API-determined per page         | Manual           |
+| **Auto-paginate** | Complete listings | CLI-controlled (default 10,000) | Automatic        |
+
+**Auto-Pagination Output:**
+
+```bash
+$ vamscli file list -d my-db -a my-asset --auto-paginate
+
+Auto-paginated: Retrieved 2,543 items in 3 page(s)
+
+Found 2,543 file(s):
+
+  📄 /model1.gltf (1024 bytes) [primary]
+  📄 /model2.gltf (2048 bytes)
+  📁 /textures/
+  ...
+```
+
+**Important Notes:**
+
+-   **`--max-items`** only works with `--auto-paginate` and controls the CLI-side aggregation limit (NOT passed to API)
+-   **`--page-size`** works in both modes and is passed to the API to control items per request
+-   Auto-pagination default limit is 10,000 items to prevent excessive API calls
+-   Use `--max-items` with `--auto-paginate` to customize the total item limit
 
 ### `vamscli file info`
 

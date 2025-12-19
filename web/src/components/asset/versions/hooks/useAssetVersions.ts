@@ -76,7 +76,7 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
                         else if (response.versions && Array.isArray(response.versions)) {
                             console.log("Response has versions array property");
                             versionsArray = response.versions;
-                            nextTokenValue = response.nextToken || null;
+                            nextTokenValue = response.NextToken || null;
                             totalCount = response.totalCount || response.versions.length;
                         }
                         // Case 3: Object with message property containing versions
@@ -91,7 +91,7 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
                             ) {
                                 console.log("Response.message has versions array property");
                                 versionsArray = response.message.versions;
-                                nextTokenValue = response.message.nextToken || null;
+                                nextTokenValue = response.message.NextToken || null;
                                 totalCount =
                                     response.message.totalCount || response.message.versions.length;
                             }

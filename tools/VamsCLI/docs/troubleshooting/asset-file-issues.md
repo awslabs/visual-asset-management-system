@@ -812,6 +812,33 @@ vamscli asset-version revert -d <database> -a <asset> -v <version> --comment "Re
 
 ## Asset Download Issues
 
+### Download Attempts to Download Folders
+
+**Problem:** Download command tries to download folder objects as files, or you see errors about downloading "/" or folder paths
+
+**Cause:** In older versions, folder objects in the asset file list were not being filtered properly
+
+**Solution:**
+
+-   Ensure you're using the latest version of VamsCLI (v2.2.0 or later)
+-   Folder objects are now automatically filtered - only actual files are downloaded
+-   When using `--file-key "/"`, all files at the root level are downloaded (the "/" folder object itself is ignored)
+-   When using `--recursive`, all files in the folder tree are downloaded (folder objects are ignored)
+-   If you still see errors about downloading folders, this indicates a bug that should be reported
+
+**Examples of correct behavior:**
+
+```bash
+# Download all files from root (filters out "/" folder object)
+vamscli assets download /local/path -d my-db -a my-asset --file-key "/"
+
+# Download all files from asset (filters out all folder objects)
+vamscli assets download /local/path -d my-db -a my-asset
+
+# Download folder recursively (filters out folder objects)
+vamscli assets download /local/path -d my-db -a my-asset --file-key "/models/" --recursive
+```
+
 ### Asset Not Distributable
 
 **Error:**

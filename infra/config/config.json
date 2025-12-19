@@ -58,6 +58,15 @@
             "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null
         },
+        "useCloudFront": {
+            "enabled": true,
+            "customDomain": {
+                "enabled": false,
+                "domainHost": "",
+                "certificateArn": "",
+                "optionalHostedZoneId": ""
+            }
+        },
         "pipelines": {
             "useConversion3dBasic": {
                 "enabled": true,
@@ -65,17 +74,20 @@
             },
             "useConversionCadMeshMetadataExtraction": {
                 "enabled": false,
-                "autoRegisterWithVAMS": true
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
-                "autoRegisterWithVAMS": false,
-                "sqsAutoRunOnAssetModified": true
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "sqsAutoRunOnAssetModified": false
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,
                 "bedrockModelId": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                "autoRegisterWithVAMS": true
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
             },
             "useSplatToolbox": {
                 "enabled": false,

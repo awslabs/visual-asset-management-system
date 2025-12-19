@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from typing import Dict, List, Optional, Any, Union
-from pydantic import Field, Extra
+from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from customLogging.logger import safeLogger
 
@@ -122,7 +122,7 @@ def _is_date_string(value: str) -> bool:
 
 ######################## File Index Models ##########################
 
-class FileDocumentModel(BaseModel, extra=Extra.allow):
+class FileDocumentModel(BaseModel, extra='allow'):
     """Model for file documents in the file index"""
     
     # Core identification fields
@@ -162,7 +162,7 @@ class FileDocumentModel(BaseModel, extra=Extra.allow):
                 metadata_field_name = f"MD_{opensearch_field}"
                 setattr(self, metadata_field_name, processed_value)
 
-class FileIndexRequest(BaseModel, extra=Extra.ignore):
+class FileIndexRequest(BaseModel, extra='ignore'):
     """Request model for file index operations"""
     
     # Primary identifiers
@@ -189,7 +189,7 @@ class FileIndexRequest(BaseModel, extra=Extra.ignore):
 
 ######################## Asset Index Models ##########################
 
-class AssetDocumentModel(BaseModel, extra=Extra.allow):
+class AssetDocumentModel(BaseModel, extra='allow'):
     """Model for asset documents in the asset index"""
     
     # Core identification fields
@@ -236,7 +236,7 @@ class AssetDocumentModel(BaseModel, extra=Extra.allow):
                 metadata_field_name = f"MD_{opensearch_field}"
                 setattr(self, metadata_field_name, processed_value)
 
-class AssetIndexRequest(BaseModel, extra=Extra.ignore):
+class AssetIndexRequest(BaseModel, extra='ignore'):
     """Request model for asset index operations"""
     
     # Primary identifiers
@@ -271,7 +271,7 @@ class AssetIndexRequest(BaseModel, extra=Extra.ignore):
 
 ######################## Common Response Models ##########################
 
-class IndexOperationResponse(BaseModel, extra=Extra.ignore):
+class IndexOperationResponse(BaseModel, extra='ignore'):
     """Response model for index operations"""
     success: bool = Field(..., description="Whether operation was successful")
     message: str = Field(..., description="Operation result message")
@@ -279,7 +279,7 @@ class IndexOperationResponse(BaseModel, extra=Extra.ignore):
     indexName: str = Field(..., description="Target index name")
     operation: str = Field(..., description="Operation performed")
 
-class DualIndexStats(BaseModel, extra=Extra.ignore):
+class DualIndexStats(BaseModel, extra='ignore'):
     """Statistics for dual index system"""
     fileIndexCount: int = Field(0, description="Number of documents in file index")
     assetIndexCount: int = Field(0, description="Number of documents in asset index")
@@ -287,7 +287,7 @@ class DualIndexStats(BaseModel, extra=Extra.ignore):
 
 ######################## Index Configuration Models ##########################
 
-class FileIndexMapping(BaseModel, extra=Extra.ignore):
+class FileIndexMapping(BaseModel, extra='ignore'):
     """OpenSearch mapping configuration for file index"""
     
     @staticmethod
@@ -344,7 +344,7 @@ class FileIndexMapping(BaseModel, extra=Extra.ignore):
             }
         }
 
-class AssetIndexMapping(BaseModel, extra=Extra.ignore):
+class AssetIndexMapping(BaseModel, extra='ignore'):
     """OpenSearch mapping configuration for asset index"""
     
     @staticmethod

@@ -8,6 +8,8 @@ import { Construct } from "constructs";
 import { Names } from "aws-cdk-lib";
 import * as apigateway from "aws-cdk-lib/aws-apigatewayv2";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
+import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 
 import { ApiGatewayV2LambdaConstruct } from "./constructs/apigatewayv2-lambda-construct";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -26,6 +28,7 @@ import {
     buildExecuteWorkflowFunction,
     buildProcessWorkflowExecutionOutputFunction,
     buildImportGlobalPipelineWorkflowFunction,
+    buildSqsAutoExecuteWorkflowFunction,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
     buildAssetService,
@@ -178,11 +181,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const commentService = buildCommentService(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.commentStorageTable,
-            storageResources.dynamo.assetStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.rolesStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,
@@ -212,11 +211,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const addCommentFunction = buildAddCommentLambdaFunction(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.commentStorageTable,
-            storageResources.dynamo.assetStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.rolesStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,
@@ -232,11 +227,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const editCommentFunction = buildEditCommentLambdaFunction(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.commentStorageTable,
-            storageResources.dynamo.assetStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.rolesStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,
@@ -253,9 +244,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const roleService = buildRoleService(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.rolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,
@@ -275,9 +264,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const createRoleFunction = buildCreateRoleFunction(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.rolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,
@@ -298,9 +285,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const userRolesService = buildUserRolesService(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.rolesStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,
@@ -409,12 +394,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const subscriptionService = buildSubscriptionService(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.subscriptionsStorageTable,
-            storageResources.dynamo.assetStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.userStorageTable,
-            storageResources.dynamo.rolesStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,
@@ -444,11 +424,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const unSubscribeService = buildUnSubscribeFunction(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.subscriptionsStorageTable,
-            storageResources.dynamo.assetStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.rolesStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,
@@ -463,11 +439,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const checkSubscriptionService = buildCheckSubscriptionFunction(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.subscriptionsStorageTable,
-            storageResources.dynamo.assetStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.rolesStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,
@@ -485,12 +457,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             this,
             lambdaCommonBaseLayer,
             config,
-            storageResources.dynamo.assetLinksStorageTableV2,
-            storageResources.dynamo.assetLinksMetadataStorageTable,
-            storageResources.dynamo.assetStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.rolesStorageTable,
+            storageResources,
             vpc,
             subnets,
             storageResources.encryption.kmsKey
@@ -506,12 +473,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             this,
             lambdaCommonBaseLayer,
             config,
-            storageResources.dynamo.assetLinksStorageTableV2,
-            storageResources.dynamo.assetLinksMetadataStorageTable,
-            storageResources.dynamo.assetStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.rolesStorageTable,
+            storageResources,
             vpc,
             subnets,
             storageResources.encryption.kmsKey
@@ -544,12 +506,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             this,
             lambdaCommonBaseLayer,
             config,
-            storageResources.dynamo.assetLinksStorageTableV2,
-            storageResources.dynamo.assetLinksMetadataStorageTable,
-            storageResources.dynamo.assetStorageTable,
-            storageResources.dynamo.userRolesStorageTable,
-            storageResources.dynamo.authEntitiesStorageTable,
-            storageResources.dynamo.rolesStorageTable,
+            storageResources,
             vpc,
             subnets,
             storageResources.encryption.kmsKey
@@ -609,6 +566,11 @@ export class ApiBuilderNestedStack extends NestedStack {
         });
         attachFunctionToApi(this, assetService, {
             routePath: "/database/{databaseId}/assets/{assetId}",
+            method: apigateway.HttpMethod.PUT,
+            api: api,
+        });
+        attachFunctionToApi(this, assetService, {
+            routePath: "/database/{databaseId}/assets/{assetId}/unarchiveAsset",
             method: apigateway.HttpMethod.PUT,
             api: api,
         });
@@ -801,6 +763,12 @@ export class ApiBuilderNestedStack extends NestedStack {
             method: apigateway.HttpMethod.GET,
             api: api,
         });
+        attachFunctionToApi(this, streamAuxiliaryPreviewAssetFunction, {
+            routePath:
+                "/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}",
+            method: apigateway.HttpMethod.HEAD,
+            api: api,
+        });
 
         const streamAssetFunction = buildStreamAssetFunction(
             this,
@@ -813,6 +781,11 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, streamAssetFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}",
             method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+        attachFunctionToApi(this, streamAssetFunction, {
+            routePath: "/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}",
+            method: apigateway.HttpMethod.HEAD,
             api: api,
         });
 
@@ -1081,6 +1054,64 @@ export class ApiBuilderNestedStack extends NestedStack {
             api: api,
         });
 
+        // Create SQS queue for workflow auto-execution
+        const workflowAutoExecuteQueue = new sqs.Queue(this, "WorkflowAutoExecuteQueue", {
+            queueName: `${config.name}-${config.env.coreStackName}-workflowAutoExecute`,
+            visibilityTimeout: cdk.Duration.minutes(15), // Match Lambda timeout
+            encryption: storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+
+        // Grant SNS permission to send messages to the queue
+        const { Service } = require("../../helper/service-helper");
+        workflowAutoExecuteQueue.grantSendMessages(Service("SNS").Principal);
+
+        // Subscribe the queue to the file indexer SNS topic
+        storageResources.sns.fileIndexerSnsTopic.addSubscription(
+            new SqsSubscription(workflowAutoExecuteQueue)
+        );
+
+        // Create the auto-execute workflow Lambda function
+        const sqsAutoExecuteWorkflowFunction = buildSqsAutoExecuteWorkflowFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            runWorkflowFunction,
+            config,
+            vpc,
+            subnets
+        );
+
+        // Grant SQS permissions to the Lambda
+        workflowAutoExecuteQueue.grantConsumeMessages(sqsAutoExecuteWorkflowFunction);
+
+        // Setup event source mapping with GovCloud support
+        if (config.app.govCloud.enabled) {
+            const esmWorkflowAutoExecute = new lambda.EventSourceMapping(
+                this,
+                "WorkflowAutoExecuteSqsEventSource",
+                {
+                    eventSourceArn: workflowAutoExecuteQueue.queueArn,
+                    target: sqsAutoExecuteWorkflowFunction,
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(3),
+                }
+            );
+            const cfnEsmWorkflowAutoExecute = esmWorkflowAutoExecute.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmWorkflowAutoExecute.addPropertyDeletionOverride("Tags");
+        } else {
+            sqsAutoExecuteWorkflowFunction.addEventSource(
+                new eventsources.SqsEventSource(workflowAutoExecuteQueue, {
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(3),
+                })
+            );
+        }
+
         // Create the import global pipeline workflow function with direct function references
         const importGlobalPipelineWorkflowFunction = buildImportGlobalPipelineWorkflowFunction(
             this,
@@ -1163,6 +1194,17 @@ export class ApiBuilderNestedStack extends NestedStack {
                 {
                     id: "AwsSolutions-SQS3",
                     reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-uploading files.",
+                },
+            ],
+            true
+        );
+
+        NagSuppressions.addResourceSuppressions(
+            this,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Not providing IAM wildcard permissions to constraint tables.",
                 },
             ],
             true

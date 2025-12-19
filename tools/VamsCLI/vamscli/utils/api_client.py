@@ -16,7 +16,8 @@ from ..constants import (
     API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION, API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION,
     API_ASSET_LINKS, API_ASSET_LINKS_SINGLE, API_ASSET_LINKS_UPDATE, API_ASSET_LINKS_DELETE, API_ASSET_LINKS_FOR_ASSET,
     API_ASSET_LINKS_METADATA, API_ASSET_LINKS_METADATA_KEY, API_METADATA, API_METADATA_SCHEMA,
-    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING
+    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING,
+    API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW
 )
 from ..version import get_version
 from .exceptions import (
@@ -413,8 +414,8 @@ class APIClient:
                 
                 # Try to fetch feature switches after successful re-authentication
                 try:
-                    feature_switches_result = self.get_feature_switches()
-                    self.profile_manager.save_feature_switches(feature_switches_result)
+                    secure_config_result = self.get_secure_config()
+                    self.profile_manager.save_feature_switches(secure_config_result)
                     
                     log_auth_diagnostic(
                         auth_type="reauth_saved_creds",
@@ -422,10 +423,10 @@ class APIClient:
                         details={
                             'user_id': saved_credentials['username'],
                             'profile_name': self.profile_manager.profile_name,
-                            'feature_switches': feature_switches_result
+                            'secure_config': secure_config_result
                         }
                     )
-                except Exception as fs_error:
+                except Exception as sc_error:
                     # Feature switches fetch failure is non-blocking
                     log_auth_diagnostic(
                         auth_type="reauth_saved_creds",
@@ -433,7 +434,7 @@ class APIClient:
                         details={
                             'user_id': saved_credentials['username'],
                             'profile_name': self.profile_manager.profile_name,
-                            'feature_switches_error': str(fs_error)
+                            'secure_config_error': str(sc_error)
                         }
                     )
                     
@@ -617,9 +618,9 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to call login profile API: {e}")
     
-    def get_feature_switches(self) -> Dict[str, Any]:
+    def get_secure_config(self) -> Dict[str, Any]:
         """
-        Fetch feature switches from secure-config API.
+        Fetch fsecure config from secure-config API.
         
         Returns:
             API response data with featuresEnabled string
@@ -805,7 +806,11 @@ class APIClient:
             raise APIError(f"Failed to initialize upload: {e}")
 
     def complete_upload(self, upload_id: str, database_id: str, asset_id: str, upload_type: str, files: list) -> dict:
-        """Complete a multipart upload."""
+        """Complete a multipart upload.
+        
+        Note: 503 Service Unavailable responses are treated as successful asynchronous operations.
+        The backend will process the upload completion asynchronously when it returns 503.
+        """
         from ..constants import API_UPLOADS_COMPLETE
         
         endpoint = API_UPLOADS_COMPLETE.format(uploadId=upload_id)
@@ -821,7 +826,18 @@ class APIClient:
             return response.json()
             
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 400:
+            if e.response.status_code == 503:
+                # 503 Service Unavailable means backend will process asynchronously
+                # This is considered a success - return a synthetic success response
+                return {
+                    "message": "Upload completion accepted for asynchronous processing",
+                    "overallSuccess": True,
+                    "asynchronousProcessing": True,
+                    "uploadId": upload_id,
+                    "note": "Processing times are undergoing expected throttling. Your upload will be processed asynchronously."
+                }
+                
+            elif e.response.status_code == 400:
                 error_data = e.response.json() if e.response.content else {}
                 error_message = error_data.get('message', str(e))
                 raise InvalidAssetDataError(f"Invalid completion data: {error_message}")
@@ -2752,7 +2768,7 @@ class APIClient:
                 - includeArchivedFiles: Include archived files
                 - fileExtensions: Filter by file extensions
                 - maxAssets: Max assets per page (1-1000)
-                - nextToken: Pagination token
+                - startingToken: Pagination token
         
         Returns:
             API response with assets, relationships, and pagination info
@@ -2791,6 +2807,202 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to export asset: {e}")
+
+    # Workflow API Methods
+
+    def list_workflows(self, database_id: Optional[str] = None, show_deleted: bool = False, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        List workflows using GET /workflows or GET /database/{databaseId}/workflows endpoint.
+        
+        Args:
+            database_id: Optional database ID to filter workflows
+            show_deleted: Whether to include deleted workflows
+            params: Optional pagination parameters (maxItems, pageSize, startingToken)
+        
+        Returns:
+            API response data with workflows list
+        
+        Raises:
+            DatabaseNotFoundError: When database doesn't exist
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        try:
+            # Determine endpoint based on database_id
+            if database_id:
+                endpoint = API_DATABASE_WORKFLOWS.format(databaseId=database_id)
+            else:
+                endpoint = API_WORKFLOWS
+            
+            query_params = params or {}
+            if show_deleted:
+                query_params['showDeleted'] = 'true'
+                
+            response = self.get(endpoint, include_auth=True, params=query_params)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if database_id and 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                else:
+                    raise APIError(f"Workflows not found: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list workflows: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to list workflows: {e}")
+
+    def list_workflow_executions(self, database_id: str, asset_id: str, workflow_database_id: Optional[str] = None, 
+                                 workflow_id: Optional[str] = None, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        List workflow executions for an asset using GET /database/{databaseId}/assets/{assetId}/workflows/executions endpoint.
+        
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            workflow_database_id: Optional workflow's database ID (for filtering)
+            workflow_id: Optional workflow ID (for filtering)
+            params: Optional pagination parameters (maxItems, pageSize, startingToken)
+                    Note: pageSize is limited to 50 due to Step Functions API throttling
+        
+        Returns:
+            API response data with workflow executions list
+        
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        try:
+            # Build endpoint - workflow_id is optional in path
+            if workflow_id:
+                endpoint = API_WORKFLOW_EXECUTIONS + f"/{workflow_id}"
+            else:
+                endpoint = API_WORKFLOW_EXECUTIONS
+            
+            endpoint = endpoint.format(databaseId=database_id, assetId=asset_id)
+            
+            # Prepare query parameters
+            query_params = params or {}
+            
+            # Prepare request body for workflowDatabaseId if provided
+            request_body = {}
+            if workflow_database_id:
+                request_body['workflowDatabaseId'] = workflow_database_id
+            
+            # Make request with body if needed
+            if request_body:
+                response = self.post(endpoint, data=request_body, include_auth=True, params=query_params)
+            else:
+                response = self.get(endpoint, include_auth=True, params=query_params)
+            
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'asset' in error_message.lower():
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+                else:
+                    raise APIError(f"Workflow executions not found: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list workflow executions: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to list workflow executions: {e}")
+
+    def execute_workflow(self, database_id: str, asset_id: str, workflow_id: str, 
+                        workflow_database_id: str, file_key: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Execute a workflow on an asset using POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId} endpoint.
+        
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            workflow_id: Workflow ID to execute
+            workflow_database_id: Workflow's database ID (required)
+            file_key: Optional specific file key to run workflow on
+        
+        Returns:
+            API response data with execution ID
+        
+        Raises:
+            AssetNotFoundError: When asset is not found
+            WorkflowNotFoundError: When workflow is not found
+            WorkflowAlreadyRunningError: When workflow is already running on the file
+            WorkflowExecutionError: When workflow execution fails
+            DatabaseNotFoundError: When database doesn't exist
+            InvalidWorkflowDataError: When workflow data is invalid
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import WorkflowNotFoundError, WorkflowAlreadyRunningError, WorkflowExecutionError, InvalidWorkflowDataError
+        
+        try:
+            endpoint = API_EXECUTE_WORKFLOW.format(
+                databaseId=database_id,
+                assetId=asset_id,
+                workflowId=workflow_id
+            )
+            
+            # Prepare request body
+            request_body = {
+                'workflowDatabaseId': workflow_database_id
+            }
+            
+            if file_key:
+                request_body['fileKey'] = file_key
+            
+            response = self.post(endpoint, data=request_body, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'already running' in error_message.lower() or 'currently running' in error_message.lower():
+                    raise WorkflowAlreadyRunningError(f"Workflow already running: {error_message}")
+                elif 'pipeline' in error_message.lower() and ('disabled' in error_message.lower() or 'not enabled' in error_message.lower()):
+                    raise WorkflowExecutionError(f"Pipeline not enabled: {error_message}")
+                else:
+                    raise InvalidWorkflowDataError(f"Invalid workflow execution request: {error_message}")
+                    
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'workflow' in error_message.lower():
+                    raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
+                elif 'asset' in error_message.lower():
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+                else:
+                    raise APIError(f"Resource not found: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise WorkflowExecutionError(f"Workflow execution failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to execute workflow: {e}")
 
     # Search API Methods
 

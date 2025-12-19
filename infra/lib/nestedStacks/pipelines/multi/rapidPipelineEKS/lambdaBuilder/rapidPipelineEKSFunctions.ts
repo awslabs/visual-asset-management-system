@@ -55,18 +55,24 @@ export function buildVamsExecuteRapidPipelineEKSFunction(
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`)
+            path.join(
+                __dirname,
+                `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`
+            )
         ),
         handler: `vamsExecuteRapidPipelineEKS.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(5),
-        memorySize: 256,
-
-        // VPC Configuration
-        vpc: vpc,
-        vpcSubnets: { subnets: subnets },
-        securityGroups: securityGroups,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
 
         environment: {
             // Reference to open pipeline function
@@ -126,18 +132,24 @@ export function buildOpenPipelineEKSFunction(
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`)
+            path.join(
+                __dirname,
+                `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`
+            )
         ),
         handler: `openPipeline.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(5),
-        memorySize: 256,
-
-        // VPC Configuration
-        vpc: vpc,
-        vpcSubnets: { subnets: subnets },
-        securityGroups: securityGroups,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
 
         environment: {
             // Full state machine ARN with correct partition (provided by CDK)
@@ -165,6 +177,14 @@ export function buildOpenPipelineEKSFunction(
 
     // CDK Nag Suppressions
     suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    const stateTaskPolicy = new iam.PolicyStatement({
+        actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+        resources: [
+            `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${config.env.account}:*`,
+        ],
+    });
+    fun.addToRolePolicy(stateTaskPolicy);
 
     return fun;
 }
@@ -201,16 +221,17 @@ export function buildConsolidatedHandlerFunction(
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`)
+            path.join(
+                __dirname,
+                `../../../../../../../backendPipelines/multi/rapidPipelineEKS/lambda`
+            )
         ),
         handler: `consolidated_handler.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [kubernetesLayer, lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 1024,
-
-        // VPC Configuration - Required for EKS cluster access
-        vpc: vpc,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc: vpc, //Required to be behind VPC / Subnets to communicate with EKS
         vpcSubnets: { subnets: subnets },
         securityGroups: securityGroups,
 
@@ -274,8 +295,12 @@ export function buildConsolidatedHandlerFunction(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
             resources: [
-                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${config.env.account}:stateMachine:vams-*`,
-                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${config.env.account}:stateMachine:rapid-pipeline-*`,
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:stateMachine:vams-*`,
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:stateMachine:rapid-pipeline-*`,
             ],
         })
     );

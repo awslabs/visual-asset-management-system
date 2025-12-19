@@ -52,9 +52,6 @@ try:
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e

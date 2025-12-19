@@ -34,13 +34,13 @@ Automatically fetches all pages and combines results into a single response. **T
 
 Fetch one page at a time using pagination tokens for incremental processing. Use `--no-auto-paginate` to enable manual pagination.
 
-| Option                 | Description                                     |
-| ---------------------- | ----------------------------------------------- |
-| `--no-auto-paginate`   | Disable automatic pagination for manual control |
-| `--max-assets INTEGER` | Maximum assets per page (1-1000). Default: 100  |
-| `--next-token TEXT`    | Pagination token from previous response         |
+| Option                  | Description                                     |
+| ----------------------- | ----------------------------------------------- |
+| `--no-auto-paginate`    | Disable automatic pagination for manual control |
+| `--max-assets INTEGER`  | Maximum assets per page (1-1000). Default: 100  |
+| `--starting-token TEXT` | Pagination token from previous response         |
 
-**Note:** Auto-pagination and `--next-token` are mutually exclusive.
+**Note:** Auto-pagination and `--starting-token` are mutually exclusive.
 
 ## Relationship Fetching Options
 
@@ -179,7 +179,7 @@ vamscli assets export -d my-database -a my-asset --no-auto-paginate --max-assets
 
 # Subsequent pages using returned token
 vamscli assets export -d my-database -a my-asset --no-auto-paginate \
-  --next-token "eyJsYXN0QXNzZXRJbmRleCI6OTksImFzc2V0VHJlZSI6W..."
+  --starting-token "eyJsYXN0QXNzZXRJbmRleCI6OTksImFzc2V0VHJlZSI6W..."
 ```
 
 ### JSON Output for Downstream Processing
@@ -296,7 +296,7 @@ Assets in this page: 500
 Total assets in tree: 1,234
 Relationships: 499
 
-More data available. Use the nextToken below for the next page:
+More data available. Use the NextToken below for the next page:
 eyJsYXN0QXNzZXRJbmRleCI6NDk5LCJhc3NldFRyZWUiOlt...
 
 Or use --auto-paginate to fetch all pages automatically.
@@ -388,7 +388,7 @@ Or use --auto-paginate to fetch all pages automatically.
 {
   "assets": [...],
   "relationships": [...],
-  "nextToken": "eyJsYXN0QXNzZXRJbmRleCI6NDk5...",
+  "NextToken": "eyJsYXN0QXNzZXRJbmRleCI6NDk5...",
   "totalAssetsInTree": 1234,
   "assetsInThisPage": 500
 }
@@ -402,7 +402,7 @@ Or use --auto-paginate to fetch all pages automatically.
 | ------------------- | ------- | -------------------------------------------------------------------- |
 | `assets`            | Array   | Array of asset objects (may include unauthorized asset placeholders) |
 | `relationships`     | Array   | Array of asset link relationships (first page only)                  |
-| `nextToken`         | String  | Pagination token for next page (manual pagination)                   |
+| `NextToken`         | String  | Pagination token for next page (manual pagination)                   |
 | `totalAssetsInTree` | Integer | Total number of assets in the tree                                   |
 | `assetsInThisPage`  | Integer | Number of assets in current page (manual pagination)                 |
 | `assetsRetrieved`   | Integer | Total assets retrieved (auto-pagination only)                        |
@@ -576,10 +576,10 @@ Process large exports incrementally:
 vamscli assets export -d my-db -a my-asset --max-assets 100 \
   --json-output > page-1.json
 
-# Extract nextToken from page-1.json and process next batch
-NEXT_TOKEN=$(jq -r '.nextToken' page-1.json)
+# Extract N from page-1.json and process next batch
+STARTING_TOKEN=$(jq -r '.NextToken' page-1.json)
 vamscli assets export -d my-db -a my-asset \
-  --next-token "$NEXT_TOKEN" --json-output > page-2.json
+  --starting-token "$STARTING_TOKEN" --json-output > page-2.json
 ```
 
 ## Performance Considerations
@@ -686,8 +686,8 @@ Check your export parameters and try again. Use --help for parameter details.
 #### Mutually Exclusive Options
 
 ```
-Error: Options --auto-paginate and --next-token cannot be used together.
-Use --auto-paginate for automatic pagination or --next-token for manual pagination.
+Error: Options --auto-paginate and --starting-token cannot be used together.
+Use --auto-paginate for automatic pagination or --starting-token for manual pagination.
 ```
 
 **Solution:** Choose either auto-pagination or manual pagination, not both.

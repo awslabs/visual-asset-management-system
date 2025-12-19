@@ -4,6 +4,7 @@
  */
 
 import { API } from "aws-amplify";
+import { fetchAssetS3Files } from "./APIService";
 
 /**
  * Fetches all asset versions for a given asset
@@ -59,7 +60,7 @@ export const fetchAssetVersions = async (
                     true,
                     {
                         versions: response.message,
-                        nextToken: response.nextToken || null,
+                        nextToken: response.NextToken || null,
                     },
                 ];
             } else if (typeof response.message === "object" && response.message.versions) {
@@ -74,7 +75,7 @@ export const fetchAssetVersions = async (
                     true,
                     {
                         versions: [response.message],
-                        nextToken: response.nextToken || null,
+                        nextToken: response.NextToken || null,
                     },
                 ];
             } else {
@@ -271,101 +272,6 @@ export const revertAssetVersion = async (
 };
 
 /**
- * Fetches all files in S3 for an asset (for version creation)
- * @param {Object} params - Parameters object
- * @param {string} params.databaseId - Database ID
- * @param {string} params.assetId - Asset ID
- * @param {boolean} params.includeArchived - Whether to include archived files
- * @returns {Promise<boolean|{message}|any>}
- */
-export const fetchAssetS3Files = async (
-    { databaseId, assetId, includeArchived = false },
-    api = API
-) => {
-    try {
-        if (!databaseId || !assetId) {
-            return [false, "Database ID and Asset ID are required"];
-        }
-
-        const response = await api.get(
-            "api",
-            `database/${databaseId}/assets/${assetId}/listFiles`,
-            {
-                queryStringParameters: {
-                    includeArchived: includeArchived.toString(),
-                },
-            }
-        );
-
-        console.log("fetchAssetS3Files raw response:", JSON.stringify(response, null, 2));
-
-        // Handle direct response format (new API format)
-        if (response && response.items) {
-            let items = response.items;
-
-            // Handle pagination if needed
-            let nextToken = response.nextToken;
-            while (nextToken) {
-                const nextResponse = await api.get(
-                    "api",
-                    `database/${databaseId}/assets/${assetId}/listFiles`,
-                    {
-                        queryStringParameters: {
-                            includeArchived: includeArchived.toString(),
-                            startingToken: nextToken,
-                        },
-                    }
-                );
-
-                if (nextResponse && nextResponse.items) {
-                    items = items.concat(nextResponse.items);
-                    nextToken = nextResponse.nextToken;
-                } else {
-                    break;
-                }
-            }
-            return [true, items];
-        }
-        // Handle legacy response format with message wrapper
-        else if (response.message) {
-            let items = [];
-            if (response.message.Items) {
-                items = response.message.Items;
-
-                // Handle pagination if needed
-                let nextToken = response.message.NextToken;
-                while (nextToken) {
-                    const nextResponse = await api.get(
-                        "api",
-                        `database/${databaseId}/assets/${assetId}/listFiles`,
-                        {
-                            queryStringParameters: {
-                                includeArchived: includeArchived.toString(),
-                                startingToken: nextToken,
-                            },
-                        }
-                    );
-
-                    if (nextResponse.message && nextResponse.message.Items) {
-                        items = items.concat(nextResponse.message.Items);
-                        nextToken = nextResponse.message.NextToken;
-                    } else {
-                        break;
-                    }
-                }
-            }
-            return [true, items];
-        } else {
-            console.error("Unexpected response format:", response);
-            return [false, "No response received"];
-        }
-    } catch (error) {
-        console.error("Error fetching asset S3 files:", error);
-        return [false, error?.message || "Failed to fetch asset files"];
-    }
-};
-
-/**
  * Compares two asset versions or an asset version with current files
  * @param {Object} params - Parameters object
  * @param {string} params.databaseId - Database ID
@@ -407,6 +313,7 @@ export const compareAssetVersions = async (
                     databaseId,
                     assetId,
                     includeArchived: false,
+                    basic: false,
                 },
                 api
             );

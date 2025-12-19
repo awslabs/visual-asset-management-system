@@ -71,6 +71,9 @@ const createMockConfig = (): Config.Config => {
                 certificateArn: "",
                 optionalHostedZoneId: "",
             },
+            useCloudfront: {
+                enabled: true,
+            },
             pipelines: {
                 useConversion3dBasic: {
                     enabled: false,
