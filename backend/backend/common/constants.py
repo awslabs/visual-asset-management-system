@@ -38,31 +38,21 @@ ALLOWED_ROLE_SOURCES = ['INTERNAL_SYSTEM']
 #Unallowed file extension list
 UNALLOWED_FILE_EXTENSION_LIST = [
     ".jar",
-    ".py",
     ".java",
     ".com",
-    ".sh",
     ".php",
     ".reg",
-    ".ini",
-    ".inf",
-    ".reg",
-    ".sql",
     ".pif",
     ".bak",
-    ".py",
     ".java",
     ".dll",
     ".exe",
-    ".docx",
     ".nat",
     ".cmd",
     ".exe",
     ".lnk",
     ".docm",
-    ".js",
     ".vbs",
-    ".ps1",
     ".bat"
 ] 
 

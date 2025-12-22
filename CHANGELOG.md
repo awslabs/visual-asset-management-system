@@ -35,6 +35,9 @@ The permission authorizations constraints has a new dynamoDB table that is no lo
 -   **Web** Workflow Executions on View Asset now lazy loads data in, no longer for now shows the search bar
 -   **CLI** Added new command grouping (`workflow`) and commands for workflow listing, asset workflow execution listing, and executing new workflows on assets
     -   Note: Backend API hasn't been upgraded to new request/response model pattern yet, expected as part of pipeline/workflow overhaul development task
+-   **Web** Web text viewer now additionally supports viewing of files of types" `".inf",".cfg",".md",".sh",".csv",".py",".log",".js",".ts",".sql",".ps1"`
+-   File type uploads restrictions no longer restrict file types of `".ps1",".sh",".py",".ini",".inf",".sql",".js",".docx"`
+
 
 ### Bug Fixes
 
