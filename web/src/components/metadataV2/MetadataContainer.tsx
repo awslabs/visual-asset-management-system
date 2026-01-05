@@ -41,9 +41,9 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     const [editMode, setEditMode] = useState<EditMode>("normal");
     const [error, setError] = useState<string | null>(null);
     const [refreshing, setRefreshing] = useState(false);
-    // Initialize activeFileType immediately to prevent extra refetch
+    // Initialize activeFileType to always show attributes tab first for file entities
     const [activeFileType, setActiveFileType] = useState<FileMetadataType | null>(
-        entityType === "file" ? fileType || "attribute" : null
+        entityType === "file" ? "attribute" : null
     );
     const [dismissedFetchError, setDismissedFetchError] = useState(false);
     const hasInitializedTab = useRef(false);
