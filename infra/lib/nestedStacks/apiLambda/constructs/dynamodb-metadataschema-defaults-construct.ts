@@ -31,7 +31,7 @@ export interface DynamoDbMetadataSchemaDefaultsConstructProps extends cdk.StackP
 function createField(
     metadataFieldKeyName: string,
     metadataFieldValueType: string,
-    required: boolean = false,
+    required = false,
     dependsOnFieldKeyName: string[] | null = null,
     defaultMetadataFieldValue: string | null = null,
     sequence: number | null = null,
