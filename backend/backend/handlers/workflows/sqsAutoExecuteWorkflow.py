@@ -468,16 +468,64 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         if isinstance(body, str):
                             body = json.loads(body)
                         
-                        # Check if this is an SNS message
-                        if body.get('Type') == 'Notification' and body.get('Message'):
+                        # Extract bucket info at top level (passed from sqsBucketSync in new direct path)
+                        asset_bucket_name = body.get('ASSET_BUCKET_NAME')
+                        asset_bucket_prefix = body.get('ASSET_BUCKET_PREFIX')
+                        
+                        # NEW PATH: Check if body directly contains Records array (direct from sqsBucketSync)
+                        if 'Records' in body and not body.get('Type'):
+                            logger.info("Processing direct SQS message from sqsBucketSync")
+                            for inner_record in body['Records']:
+                                # Check if this is a nested SQS message (from bucketSync)
+                                if inner_record.get('eventSource') == 'aws:sqs':
+                                    # Parse the nested SQS message body
+                                    try:
+                                        inner_body = inner_record.get('body', '')
+                                        if isinstance(inner_body, str):
+                                            inner_body = json.loads(inner_body)
+                                        
+                                        # Check if this nested message is an SNS message
+                                        if inner_body.get('Type') == 'Notification' and inner_body.get('Message'):
+                                            inner_sns_message = inner_body.get('Message')
+                                            if isinstance(inner_sns_message, str):
+                                                inner_sns_message = json.loads(inner_sns_message)
+                                            
+                                            # Now check for S3 records in the inner SNS message
+                                            if 'Records' in inner_sns_message:
+                                                for s3_record in inner_sns_message['Records']:
+                                                    if s3_record.get('eventSource') == 'aws:s3':
+                                                        result = handle_s3_notification(
+                                                            s3_record,
+                                                            asset_bucket_name,
+                                                            asset_bucket_prefix
+                                                        )
+                                                        results.append(result)
+                                    except json.JSONDecodeError as inner_e:
+                                        logger.exception(f"Error parsing nested SQS/SNS message: {inner_e}")
+                                        results.append({'error': f'Error parsing nested message: {str(inner_e)}'})
+                                
+                                # Also check if this is a direct S3 record
+                                elif inner_record.get('eventSource') == 'aws:s3':
+                                    result = handle_s3_notification(
+                                        inner_record,
+                                        asset_bucket_name,
+                                        asset_bucket_prefix
+                                    )
+                                    results.append(result)
+                        
+                        # OLD PATH: Check if this is an SNS message (for backward compatibility with preview events)
+                        elif body.get('Type') == 'Notification' and body.get('Message'):
+                            logger.info("Processing SNS message (legacy path)")
                             # Parse SNS message
                             sns_message = body.get('Message')
                             if isinstance(sns_message, str):
                                 sns_message = json.loads(sns_message)
                             
-                            # Extract bucket info from SNS message (passed from sqsBucketSync)
-                            asset_bucket_name = sns_message.get('ASSET_BUCKET_NAME')
-                            asset_bucket_prefix = sns_message.get('ASSET_BUCKET_PREFIX')
+                            # Extract bucket info from SNS message (may override top-level values)
+                            if sns_message.get('ASSET_BUCKET_NAME'):
+                                asset_bucket_name = sns_message.get('ASSET_BUCKET_NAME')
+                            if sns_message.get('ASSET_BUCKET_PREFIX'):
+                                asset_bucket_prefix = sns_message.get('ASSET_BUCKET_PREFIX')
                             
                             # Check if SNS message contains Records array
                             if 'Records' in sns_message:

@@ -5,21 +5,15 @@ the business logic below manages mapping the Amazon S3 information to VAMS asset
 """
 import json
 import os
-import re
 import boto3
 import time
 import hashlib
-from botocore.config import Config
-from datetime import datetime
-from handlers.metadata import to_update_expr
 from customLogging.logger import safeLogger
 from handlers.assets.createAsset import create_asset
 from models.assetsV3 import CreateAssetRequestModel
 from handlers.databases.createDatabase import create_database
 from models.databases import CreateDatabaseRequestModel
-from aws_lambda_powertools.utilities.typing import LambdaContext
-from aws_lambda_powertools.utilities.parser import parse, ValidationError
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
@@ -27,6 +21,7 @@ from common.validators import validate
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
 sns_client = boto3.client('sns')
+sqs_client = boto3.client('sqs')
 s3_client = boto3.client('s3')
 s3_resource = boto3.resource('s3')
 lambda_client = boto3.client('lambda')
@@ -44,12 +39,19 @@ try:
     db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     database_id = os.environ.get('DEFAULT_DATABASE_ID')  
     file_indexer_sns_topic_arn = os.environ.get("FILE_INDEXER_SNS_TOPIC_ARN", "")
+    workflow_auto_execute_sqs_url = os.environ.get("WORKFLOW_AUTO_EXECUTE_SQS_URL", "")
+    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
+    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
 
 if not database_id:
     raise Exception('databaseId not configured')
+
+# Initialize metadata tables
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
+file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribute_table_name else None
 
 # Cache implementation
 class SimpleCache:
@@ -865,6 +867,128 @@ def extract_asset_id_from_key(object_key: str, prefix: str) -> Optional[str]:
                 return parts[0]
     return None
 
+
+def extract_relative_file_path(object_key: str, prefix: str, asset_id: str) -> str:
+    """
+    Extract the relative file path from S3 object key
+    
+    This removes the prefix and asset_id to get the file path relative to the asset base.
+    
+    Args:
+        object_key: The S3 object key (e.g., "prefix/assetId/folder/file.txt")
+        prefix: The base prefix (e.g., "prefix/")
+        asset_id: The asset ID (e.g., "assetId")
+        
+    Returns:
+        str: Relative file path (e.g., "folder/file.txt")
+    """
+    # Normalize prefix
+    if prefix and prefix != '/' and prefix != '':
+        if not prefix.endswith('/'):
+            prefix = prefix + '/'
+    else:
+        prefix = ''
+    
+    # Remove prefix from object key
+    if prefix and object_key.startswith(prefix):
+        path_after_prefix = object_key[len(prefix):]
+    else:
+        path_after_prefix = object_key
+    
+    # Remove asset_id and the following slash
+    asset_prefix = f"{asset_id}/"
+    if path_after_prefix.startswith(asset_prefix):
+        relative_path = path_after_prefix[len(asset_prefix):]
+        return relative_path
+    
+    # If we can't extract properly, return the path after prefix
+    return path_after_prefix
+
+
+def delete_file_metadata_on_s3_delete(database_id: str, asset_id: str, relative_file_path: str):
+    """Delete metadata and attributes when file is deleted directly in S3
+    
+    Args:
+        database_id: The database ID
+        asset_id: The asset ID
+        relative_file_path: The relative file path (without asset base prefix)
+    """
+    try:
+        # Skip if this is a folder (ends with /)
+        if relative_file_path.endswith('/'):
+            logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
+            return
+        
+        # Skip if relative path is empty
+        if not relative_file_path:
+            logger.info("Skipping metadata deletion for empty relative path")
+            return
+        
+        # Construct the composite key for new metadata tables
+        # Format: {databaseId}:{assetId}:{relative_file_path}
+        composite_key = f"{database_id}:{asset_id}:{relative_file_path}"
+        
+        deleted_metadata_count = 0
+        deleted_attribute_count = 0
+        
+        # Delete from asset_file_metadata_table (file metadata)
+        if asset_file_metadata_table:
+            try:
+                # Query all metadata for this file using GSI
+                response = asset_file_metadata_table.query(
+                    IndexName='DatabaseIdAssetIdFilePathIndex',
+                    KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+                )
+                
+                # Delete all metadata items
+                for item in response.get('Items', []):
+                    asset_file_metadata_table.delete_item(
+                        Key={
+                            'metadataKey': item['metadataKey'],
+                            'databaseId:assetId:filePath': composite_key
+                        }
+                    )
+                    deleted_metadata_count += 1
+                
+                if deleted_metadata_count > 0:
+                    logger.info(f"Deleted {deleted_metadata_count} metadata items for file {composite_key}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file metadata: {e}")
+        
+        # Delete from file_attribute_table (file attributes)
+        if file_attribute_table:
+            try:
+                # Query all attributes for this file using GSI
+                response = file_attribute_table.query(
+                    IndexName='DatabaseIdAssetIdFilePathIndex',
+                    KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+                )
+                
+                # Delete all attribute items
+                for item in response.get('Items', []):
+                    file_attribute_table.delete_item(
+                        Key={
+                            'attributeKey': item['attributeKey'],
+                            'databaseId:assetId:filePath': composite_key
+                        }
+                    )
+                    deleted_attribute_count += 1
+                
+                if deleted_attribute_count > 0:
+                    logger.info(f"Deleted {deleted_attribute_count} attribute items for file {composite_key}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file attributes: {e}")
+        
+        if deleted_metadata_count == 0 and deleted_attribute_count == 0:
+            logger.info(f"No metadata or attributes found for file {composite_key}")
+        
+    except Exception as e:
+        logger.exception(f"Error deleting metadata for file on S3 delete: {e}")
+        # Don't fail the whole operation if metadata deletion fails
+        pass
+
 def verify_database_exists(database_id):
     """Check if a database exists"""
     table = dynamodb.Table(db_table_name)
@@ -1025,6 +1149,36 @@ def publish_to_file_indexer_sns(event):
         logger.info(f"Successfully published to file indexer SNS topic: {response['MessageId']}")
     except Exception as e:
         logger.exception(f"Error publishing to file indexer SNS topic: {e}")
+        # We don't re-raise the exception here to avoid stopping the process
+
+def publish_to_workflow_execution_sqs(event):
+    """
+    Publish S3 event directly to workflow auto-execute SQS queue.
+    This triggers automatic workflow execution based on file uploads.
+    
+    Args:
+        event: The S3 event to publish
+    """
+    try:
+        if not workflow_auto_execute_sqs_url:
+            logger.warning("WORKFLOW_AUTO_EXECUTE_SQS_URL not configured, skipping SQS publish")
+            return
+        
+        # Prepare payload with bucket information
+        event.update({
+            "ASSET_BUCKET_NAME": asset_bucket_name,
+            "ASSET_BUCKET_PREFIX": asset_bucket_prefix
+        })
+        
+        # Publish to SQS queue
+        response = sqs_client.send_message(
+            QueueUrl=workflow_auto_execute_sqs_url,
+            MessageBody=json.dumps(event, default=str)
+        )
+        
+        logger.info(f"Successfully published to workflow auto-execute SQS queue: {response['MessageId']}")
+    except Exception as e:
+        logger.exception(f"Error publishing to workflow auto-execute SQS queue: {e}")
         # We don't re-raise the exception here to avoid stopping the process
 
 def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
@@ -1373,7 +1527,7 @@ def lambda_handler_created(event, context):
             # Process the storage event and get success status and successful records
             success, successful_records = on_storage_event_created(parsed_event)
             
-            # Only publish to SNS if there were no hard errors and we have successful records
+            # Only publish to SNS and SQS if there were no hard errors and we have successful records
             if success and successful_records:
                 # Build filtered event preserving original structure
                 filtered_event = build_filtered_event(event, successful_records)
@@ -1381,13 +1535,17 @@ def lambda_handler_created(event, context):
                 if filtered_event:
                     logger.info(f"Publishing {len(successful_records)} successful records to file indexer SNS")
                     publish_to_file_indexer_sns(filtered_event)
+                    
+                    # Also publish to workflow auto-execute SQS for created events only
+                    logger.info(f"Publishing {len(successful_records)} successful records to workflow auto-execute SQS")
+                    publish_to_workflow_execution_sqs(filtered_event)
                 else:
-                    logger.info("All records filtered out, skipping file indexer SNS publish")
+                    logger.info("All records filtered out, skipping file indexer SNS and workflow SQS publish")
             else:
                 if not success:
-                    logger.warning("Hard errors encountered, skipping file indexer SNS publish")
+                    logger.warning("Hard errors encountered, skipping file indexer SNS and workflow SQS publish")
                 else:
-                    logger.info("No successful records to publish, skipping file indexer SNS publish")
+                    logger.info("No successful records to publish, skipping file indexer SNS and workflow SQS publish")
         else:
             logger.warning("No records found in parsed event, nothing to process")
     except Exception as e:
@@ -1476,6 +1634,18 @@ def lambda_handler_deleted(event, context):
                     
                     # Construct the asset base key (prefix + assetId + /)
                     asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
+                    
+                    # Get asset data to retrieve database_id for metadata deletion
+                    asset_data = lookup_asset(bucket_id, asset_id)
+                    if asset_data:
+                        database_id_for_asset = asset_data.get('databaseId')
+                        
+                        # Extract relative file path for metadata deletion
+                        relative_file_path = extract_relative_file_path(object_key, prefix, asset_id)
+                        
+                        # Delete metadata and attributes for this file
+                        logger.info(f"Deleting metadata/attributes for file: {relative_file_path}")
+                        delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
                     
                     # Update asset type based on remaining files
                     logger.info(f"Updating asset type for {asset_id} after file deletion")

@@ -300,6 +300,7 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
     const onAssetLinksChange = props.onAssetLinksChange!;
     const initialData = props.initialData;
     const databaseId = props.databaseId || "temp-upload-db"; // Use real database ID if provided, fallback to temp
+    const restrictMetadataOutsideSchemas = props.restrictMetadataOutsideSchemas || false;
 
     // Local asset links data for upload mode
     const [localAssetLinks, setLocalAssetLinks] = useState<NewAssetLinksData>({
@@ -571,6 +572,7 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
         searchTerm: "",
         searchResults: [],
         isSearching: false,
+        restrictMetadataOutsideSchemas: restrictMetadataOutsideSchemas,
         // Add metadata change handler to the state so it can be accessed by child components
         onAssetLinkMetadataChange: handleAssetLinkMetadataChange,
     };

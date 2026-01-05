@@ -446,6 +446,12 @@ class TestFileUploadCommand:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+                
                 # Mock asyncio.run to return success result
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.return_value = {
@@ -502,6 +508,12 @@ class TestFileUploadCommand:
             (Path(tmp_dir) / "file2.jpg").write_text("content2")
             
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
@@ -557,6 +569,9 @@ class TestFileUploadCommand:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.side_effect = AuthenticationError("Authentication failed")
                     
@@ -582,6 +597,12 @@ class TestFileUploadCommand:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     # Mock result with large file async handling
                     mock_run.return_value = {
@@ -630,6 +651,12 @@ class TestFileUploadCommand:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     # Mock result without large file async handling
                     mock_run.return_value = {
@@ -686,6 +713,12 @@ class TestFileUploadCommandJSONHandling:
             }
             
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
@@ -731,6 +764,12 @@ class TestFileUploadCommandJSONHandling:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
@@ -780,6 +819,12 @@ class TestFileUploadCommandJSONHandling:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     expected_result = {
                         "overall_success": True,
@@ -823,6 +868,9 @@ class TestFileUploadCommandEdgeCases:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.return_value = {
                         "overall_success": False,
@@ -865,6 +913,9 @@ class TestFileUploadCommandEdgeCases:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.return_value = {
                         "overall_success": False,
@@ -929,6 +980,9 @@ class TestFileUploadCommandEdgeCases:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.side_effect = APIError("API request failed")
                     
@@ -1092,6 +1146,9 @@ class TestFileUploadCommandNewRestrictions:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
@@ -1131,6 +1188,9 @@ class TestFileUploadCommandNewRestrictions:
                 files.append(str(file_path))
             
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
                 # Mock the validation to raise an error
                 with patch('vamscli.commands.file.create_upload_sequences') as mock_sequences:
                     mock_sequences.side_effect = UploadSequenceError("Too many files: 3 files provided, but maximum is 2 files per upload.")
@@ -1172,6 +1232,9 @@ class TestFileUploadCommandIntegration:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
@@ -1213,6 +1276,9 @@ class TestRateLimitingCompatibility:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
                 # Mock the upload manager to simulate rate limiting during upload
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     # Simulate rate limiting being handled by the API client
@@ -1250,6 +1316,9 @@ class TestRateLimitingCompatibility:
         try:
             with file_command_mocks as mocks:
                 from vamscli.utils.exceptions import RetryExhaustedError
+                
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
                 with patch('vamscli.commands.file.asyncio.run') as mock_run:
                     mock_run.side_effect = RetryExhaustedError(
@@ -1368,6 +1437,9 @@ class TestZeroByteFileSupport:
         
         try:
             with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
                 # Mock file collection to return zero-byte file
                 with patch('vamscli.commands.file.collect_files_from_list') as mock_collect:
                     mock_collect.return_value = [FileInfo(tmp_path, "empty.txt", 0)]
@@ -1399,6 +1471,338 @@ class TestZeroByteFileSupport:
         finally:
             Path(tmp_path).unlink()
     
+
+
+class TestFileExtensionValidation:
+    """Test file extension validation for database restrictions."""
+    
+    def test_validate_extensions_no_restrictions(self):
+        """Test validation with no restrictions."""
+        files = [
+            FileInfo("/tmp/file.glb", "file.glb", 1024),
+            FileInfo("/tmp/file.txt", "file.txt", 1024),
+        ]
+        
+        # Should not raise with empty restrictions
+        from vamscli.utils.file_processor import validate_file_extensions
+        validate_file_extensions(files, "")
+        validate_file_extensions(files, None)
+    
+    def test_validate_extensions_all_wildcard(self):
+        """Test validation with .all wildcard."""
+        files = [
+            FileInfo("/tmp/file.glb", "file.glb", 1024),
+            FileInfo("/tmp/file.txt", "file.txt", 1024),
+        ]
+        
+        from vamscli.utils.file_processor import validate_file_extensions
+        
+        # Should not raise with .all wildcard
+        validate_file_extensions(files, ".all")
+        validate_file_extensions(files, ".glb,.all,.txt")
+    
+    def test_validate_extensions_allowed(self):
+        """Test validation with allowed extensions."""
+        files = [
+            FileInfo("/tmp/file.glb", "file.glb", 1024),
+            FileInfo("/tmp/file.gltf", "file.gltf", 1024),
+        ]
+        
+        from vamscli.utils.file_processor import validate_file_extensions
+        
+        # Should not raise for allowed extensions
+        validate_file_extensions(files, ".glb,.gltf")
+    
+    def test_validate_extensions_disallowed(self):
+        """Test validation with disallowed extensions."""
+        files = [
+            FileInfo("/tmp/file.txt", "file.txt", 1024),
+        ]
+        
+        from vamscli.utils.file_processor import validate_file_extensions
+        
+        # Should raise for disallowed extension
+        with pytest.raises(InvalidFileError, match="do not meet the restriction"):
+            validate_file_extensions(files, ".glb,.gltf")
+    
+    def test_validate_extensions_multiple_violations(self):
+        """Test validation with multiple disallowed files."""
+        files = [
+            FileInfo("/tmp/file.txt", "file.txt", 1024),
+            FileInfo("/tmp/file.pdf", "file.pdf", 1024),
+            FileInfo("/tmp/file.glb", "file.glb", 1024),  # This one is allowed
+        ]
+        
+        from vamscli.utils.file_processor import validate_file_extensions
+        
+        # Should raise with detailed error message
+        with pytest.raises(InvalidFileError) as exc_info:
+            validate_file_extensions(files, ".glb,.gltf")
+        
+        error_message = str(exc_info.value)
+        assert "Database has file extension restrictions: .glb,.gltf" in error_message
+        assert "The following files do not meet the restriction:" in error_message
+        assert "file.txt (extension: .txt)" in error_message
+        assert "file.pdf (extension: .pdf)" in error_message
+        # file.glb should NOT be in the error message
+        assert "file.glb" not in error_message
+    
+    def test_validate_extensions_skip_preview_files(self):
+        """Test that preview files are skipped."""
+        files = [
+            FileInfo("/tmp/preview.txt", "file.previewFile.txt", 1024),
+            FileInfo("/tmp/file.glb", "file.glb", 1024),
+        ]
+        
+        from vamscli.utils.file_processor import validate_file_extensions
+        
+        # Should not raise - preview file is skipped
+        validate_file_extensions(files, ".glb")
+    
+    def test_validate_extensions_case_insensitive(self):
+        """Test case-insensitive extension matching."""
+        files = [
+            FileInfo("/tmp/file.GLB", "file.GLB", 1024),
+        ]
+        
+        from vamscli.utils.file_processor import validate_file_extensions
+        
+        # Should not raise - case insensitive
+        validate_file_extensions(files, ".glb")
+    
+    def test_validate_extensions_with_spaces(self):
+        """Test validation with spaces in extension list."""
+        files = [
+            FileInfo("/tmp/file.glb", "file.glb", 1024),
+            FileInfo("/tmp/file.gltf", "file.gltf", 1024),
+        ]
+        
+        from vamscli.utils.file_processor import validate_file_extensions
+        
+        # Should handle spaces in extension list
+        validate_file_extensions(files, ".glb, .gltf, .obj")
+    
+    def test_upload_with_extension_restrictions(self, cli_runner, file_command_mocks):
+        """Test upload command with database extension restrictions."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.glb') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                # Mock database config (no restrictions)
+                mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                
+                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                    # Mock database config with restrictions
+                    mocks['api_client'].get_database.return_value = {
+                        'databaseId': 'test-db',
+                        'restrictFileUploadsToExtensions': '.glb'
+                    }
+                    mock_run.return_value = {
+                        "overall_success": True,
+                        "total_files": 1,
+                        "successful_files": 1,
+                        "failed_files": 0,
+                        "total_size": 12,
+                        "total_size_formatted": "12B",
+                        "upload_duration": 1.0,
+                        "average_speed": 12.0,
+                        "average_speed_formatted": "12B/s",
+                        "sequence_results": []
+                    }
+                    
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        tmp_path
+                    ])
+                    
+                    assert result.exit_code == 0
+                    assert '✅ Upload completed successfully!' in result.output
+                    
+                    # Verify get_database was called
+                    mocks['api_client'].get_database.assert_called_once_with('test-db')
+        finally:
+            Path(tmp_path).unlink()
+    
+    def test_upload_with_extension_violation(self, cli_runner, file_command_mocks):
+        """Test upload command with extension violation."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                # Mock database config with restrictions
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': '.glb'
+                }
+                
+                result = cli_runner.invoke(cli, [
+                    'file', 'upload',
+                    '-d', 'test-db',
+                    '-a', 'test-asset',
+                    tmp_path
+                ])
+                
+                assert result.exit_code == 1
+                assert 'Database has file extension restrictions: .glb' in result.output
+                assert 'not meet the restriction' in result.output
+                assert '.txt' in result.output
+        finally:
+            Path(tmp_path).unlink()
+    
+    def test_upload_with_multiple_extension_violations(self, cli_runner, file_command_mocks):
+        """Test upload command with multiple extension violations."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Create files with different extensions
+            file1 = Path(tmp_dir) / "file1.txt"
+            file2 = Path(tmp_dir) / "file2.pdf"
+            file3 = Path(tmp_dir) / "file3.glb"  # This one is allowed
+            
+            file1.write_text("content1")
+            file2.write_text("content2")
+            file3.write_text("content3")
+            
+            with file_command_mocks as mocks:
+                # Mock database config with restrictions
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': '.glb,.gltf'
+                }
+                
+                result = cli_runner.invoke(cli, [
+                    'file', 'upload',
+                    '-d', 'test-db',
+                    '-a', 'test-asset',
+                    str(file1), str(file2), str(file3)
+                ])
+                
+                assert result.exit_code == 1
+                assert 'Database has file extension restrictions: .glb,.gltf' in result.output
+                assert 'file1.txt (extension: .txt)' in result.output
+                assert 'file2.pdf (extension: .pdf)' in result.output
+                # file3.glb should NOT be in error message
+                assert 'file3.glb' not in result.output or 'file3.glb (extension:' not in result.output
+    
+    def test_upload_with_no_restrictions(self, cli_runner, file_command_mocks):
+        """Test upload command with no database restrictions."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                # Mock database config without restrictions
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+                
+                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                    mock_run.return_value = {
+                        "overall_success": True,
+                        "total_files": 1,
+                        "successful_files": 1,
+                        "failed_files": 0,
+                        "total_size": 12,
+                        "total_size_formatted": "12B",
+                        "upload_duration": 1.0,
+                        "average_speed": 12.0,
+                        "average_speed_formatted": "12B/s",
+                        "sequence_results": []
+                    }
+                    
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        tmp_path
+                    ])
+                    
+                    assert result.exit_code == 0
+                    assert '✅ Upload completed successfully!' in result.output
+        finally:
+            Path(tmp_path).unlink()
+    
+    def test_upload_preview_skips_extension_validation(self, cli_runner, file_command_mocks):
+        """Test that asset preview uploads skip extension validation."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                # Mock database config with restrictions that don't include .jpg
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': '.glb'
+                }
+                
+                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                    mock_run.return_value = {
+                        "overall_success": True,
+                        "total_files": 1,
+                        "successful_files": 1,
+                        "failed_files": 0,
+                        "total_size": 12,
+                        "total_size_formatted": "12B",
+                        "upload_duration": 1.0,
+                        "average_speed": 12.0,
+                        "average_speed_formatted": "12B/s",
+                        "sequence_results": []
+                    }
+                    
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        '--asset-preview',
+                        tmp_path
+                    ])
+                    
+                    # Should succeed - preview files skip extension validation
+                    assert result.exit_code == 0
+                    assert '✅ Upload completed successfully!' in result.output
+        finally:
+            Path(tmp_path).unlink()
+    
+    def test_upload_extension_validation_json_output(self, cli_runner, file_command_mocks):
+        """Test extension validation error with JSON output."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                # Mock database config with restrictions
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': '.glb'
+                }
+                
+                result = cli_runner.invoke(cli, [
+                    'file', 'upload',
+                    '-d', 'test-db',
+                    '-a', 'test-asset',
+                    '--json-output',
+                    tmp_path
+                ])
+                
+                assert result.exit_code == 1
+                # Should output JSON error format
+                try:
+                    output_json = json.loads(result.output.strip())
+                    assert 'error' in output_json
+                    assert 'Database has file extension restrictions' in output_json['error']
+                except json.JSONDecodeError:
+                    # If not JSON, at least check error message is present
+                    assert 'Database has file extension restrictions' in result.output
+        finally:
+            Path(tmp_path).unlink()
 
 
 if __name__ == '__main__':

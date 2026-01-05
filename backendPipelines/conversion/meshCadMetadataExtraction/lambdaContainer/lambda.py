@@ -77,6 +77,38 @@ def upload(bucket_name, object_key, file_path):
     return object_key
 
 
+def transform_to_attribute_format(metadata_dict):
+    """
+    Transform extracted metadata to new attribute format.
+    
+    Args:
+        metadata_dict: Dictionary of extracted metadata
+        
+    Returns:
+        Dictionary with type, updateType, and metadata array
+    """
+    metadata_array = []
+    
+    for key, value in metadata_dict.items():
+        # Convert value to string if not already
+        if isinstance(value, dict) or isinstance(value, list):
+            value_str = json.dumps(value)
+        else:
+            value_str = str(value)
+        
+        metadata_array.append({
+            "metadataKey": key,
+            "metadataValue": value_str,
+            "metadataValueType": "string"
+        })
+    
+    return {
+        "type": "attribute",
+        "updateType": "update",
+        "metadata": metadata_array
+    }
+
+
 def extract_metadata(input_path_asset_base, input_path, output_path):
     """
     Extract metadata from a CAD or mesh file.
@@ -120,34 +152,37 @@ def extract_metadata(input_path_asset_base, input_path, output_path):
         else:
             raise ValueError(f"Unknown handler type: {handler_type}")
         
-        # Save metadata to JSON file
+        # Transform to new attribute format
+        attribute_data = transform_to_attribute_format(metadata)
+        
+        # Save attribute data to JSON file
         metadata_file = '/tmp/metadata.json'
         with open(metadata_file, 'w') as f:
-            json.dump(metadata, f, indent=2)
+            json.dump(attribute_data, f, indent=2)
         
-        # Upload metadata to S3 as file-level metadata
-        # Extract the relative path from input_key and create file-level metadata filename
-        input_filename_full_key_metadata = input_key + '_metadata.json'
+        # Upload attributes to S3 as file-level attributes
+        # Extract the relative path from input_key and create file-level attribute filename
+        input_filename_full_key_attribute = input_key + '.attribute.json'
 
-        #Trim input_path_asset_base from the beginning of the full key
-        input_filename_key_metadata = input_filename_full_key_metadata.replace(input_path_asset_base, "")
+        # Trim input_path_asset_base from the beginning of the full key
+        input_filename_key_attribute = input_filename_full_key_attribute.replace(input_path_asset_base, "")
 
-        output_relative_key = os.path.join(output_key, input_filename_key_metadata)
+        output_relative_key = os.path.join(output_key, input_filename_key_attribute)
         upload(output_bucket, output_relative_key, metadata_file)
         
-        logger.info("Metadata extraction complete")
+        logger.info("Attribute extraction complete")
         
         return {
             'statusCode': 200,
             'body': {
-                'message': 'Metadata extraction successful',
+                'message': 'Attribute extraction successful',
                 'metadata_location': f"s3://{output_bucket}/{output_key}"
             }
         }
     
     except Exception as e:
-        logger.exception(f"Error extracting metadata: {str(e)}")
-        raise Exception(f"Metadata extraction failed: {str(e)}")
+        logger.exception(f"Error extracting attributes: {str(e)}")
+        raise Exception(f"Attribute extraction failed: {str(e)}")
 
 
 def lambda_handler(event, context):

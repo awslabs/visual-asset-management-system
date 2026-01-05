@@ -314,7 +314,7 @@ export const fetchAsset = async ({ databaseId, assetId, showArchived = false }, 
     }
 };
 /**
- * Returns the asset that the current user can access for the given databaseId & assetId, or false if error.
+ * Returns the database that the current user can access for the given databaseId, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchDatabase = async ({ databaseId }, api = API) => {
@@ -322,7 +322,11 @@ export const fetchDatabase = async ({ databaseId }, api = API) => {
         let response;
         if (databaseId) {
             response = await api.get("api", `database/${databaseId}`, {});
-            if (response.message) return response.message;
+            // Return response.message if it exists (legacy format), otherwise return response directly (new format)
+            if (response.message) {
+                return response.message;
+            }
+            return response;
         } else {
             return false;
         }
@@ -1272,15 +1276,28 @@ export const fetchBuckets = async (api = API) => {
  * @param {string} params.databaseId - Database ID
  * @param {string} params.description - Database description
  * @param {string} params.defaultBucketId - Default bucket ID
+ * @param {boolean} params.restrictMetadataOutsideSchemas - Restrict metadata to schemas only
+ * @param {string} params.restrictFileUploadsToExtensions - Comma-delimited file extensions
  * @returns {Promise<boolean|{message}|any>}
  */
-export const createDatabase = async ({ databaseId, description, defaultBucketId }, api = API) => {
+export const createDatabase = async (
+    {
+        databaseId,
+        description,
+        defaultBucketId,
+        restrictMetadataOutsideSchemas = false,
+        restrictFileUploadsToExtensions = "",
+    },
+    api = API
+) => {
     try {
         const response = await api.post("api", "database", {
             body: {
                 databaseId,
                 description,
                 defaultBucketId,
+                restrictMetadataOutsideSchemas,
+                restrictFileUploadsToExtensions,
             },
         });
 
@@ -1292,6 +1309,56 @@ export const createDatabase = async ({ databaseId, description, defaultBucketId 
         }
     } catch (error) {
         console.log("create database error", error);
+        return [false, error?.message];
+    }
+};
+
+/**
+ * Updates an existing database
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.description - Database description
+ * @param {string} params.defaultBucketId - Default bucket ID
+ * @param {boolean} params.restrictMetadataOutsideSchemas - Restrict metadata to schemas only
+ * @param {string} params.restrictFileUploadsToExtensions - Comma-delimited file extensions
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const updateDatabase = async (
+    {
+        databaseId,
+        description,
+        defaultBucketId,
+        restrictMetadataOutsideSchemas,
+        restrictFileUploadsToExtensions,
+    },
+    api = API
+) => {
+    try {
+        const response = await api.put("api", `database/${databaseId}`, {
+            body: {
+                description,
+                defaultBucketId,
+                restrictMetadataOutsideSchemas,
+                restrictFileUploadsToExtensions,
+            },
+        });
+
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log("update database error:", response.message);
+                return [false, response.message];
+            } else {
+                console.log("update database", response);
+                return [true, response.message];
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log("update database error", error);
         return [false, error?.message];
     }
 };
@@ -1827,6 +1894,413 @@ export const fetchFileInfo = async (
     } catch (error) {
         console.log("Error fetching file info:", error);
         return [false, error?.message || "Failed to fetch file information"];
+    }
+};
+
+//=============================================================================
+// METADATA V2 API FUNCTIONS - Bulk Operations for All Entity Types
+//=============================================================================
+
+/**
+ * Fetches metadata for an asset (bulk operation with schema enrichment)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @returns {Promise<any>}
+ */
+export const fetchAssetMetadata = async ({ databaseId, assetId }, api = API) => {
+    try {
+        if (!databaseId || !assetId) {
+            return { metadata: [], message: "Missing required parameters" };
+        }
+
+        const response = await api.get(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata`,
+            {}
+        );
+        console.log("fetchAssetMetadata raw response:", response);
+
+        // Handle different response formats
+        if (response && typeof response === "object") {
+            if (Array.isArray(response.metadata)) {
+                return response;
+            } else if (
+                response.message &&
+                typeof response.message === "object" &&
+                Array.isArray(response.message.metadata)
+            ) {
+                return response.message;
+            } else if (response.message && typeof response.message === "string") {
+                return { metadata: [], message: response.message };
+            }
+        } else if (typeof response === "string") {
+            return { metadata: [], message: response };
+        }
+
+        return { metadata: [], message: "Unknown response format" };
+    } catch (error) {
+        console.log("Error fetching asset metadata:", error);
+        return { metadata: [], message: error?.message || "Error fetching metadata" };
+    }
+};
+
+/**
+ * Creates metadata for an asset (bulk operation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {Array} params.metadata - Array of metadata items {metadataKey, metadataValue, metadataValueType}
+ * @returns {Promise<any>}
+ */
+export const createAssetMetadata = async ({ databaseId, assetId, metadata }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !metadata) {
+            return { success: false, message: "Missing required parameters" };
+        }
+
+        const response = await api.post(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata`,
+            {
+                body: { metadata },
+            }
+        );
+
+        console.log("createAssetMetadata response:", response);
+        return response;
+    } catch (error) {
+        console.log("Error creating asset metadata:", error);
+        throw error;
+    }
+};
+
+/**
+ * Updates metadata for an asset (bulk operation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {Array} params.metadata - Array of metadata items
+ * @param {string} params.updateType - 'update' or 'replace_all'
+ * @returns {Promise<any>}
+ */
+export const updateAssetMetadata = async (
+    { databaseId, assetId, metadata, updateType = "update" },
+    api = API
+) => {
+    try {
+        if (!databaseId || !assetId || !metadata) {
+            return { success: false, message: "Missing required parameters" };
+        }
+
+        const response = await api.put("api", `database/${databaseId}/assets/${assetId}/metadata`, {
+            body: { metadata, updateType },
+        });
+
+        console.log("updateAssetMetadata response:", response);
+        return response;
+    } catch (error) {
+        console.log("Error updating asset metadata:", error);
+        throw error;
+    }
+};
+
+/**
+ * Deletes metadata for an asset (bulk operation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {Array} params.metadataKeys - Array of metadata keys to delete
+ * @returns {Promise<any>}
+ */
+export const deleteAssetMetadata = async ({ databaseId, assetId, metadataKeys }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !metadataKeys) {
+            return { success: false, message: "Missing required parameters" };
+        }
+
+        const response = await api.del("api", `database/${databaseId}/assets/${assetId}/metadata`, {
+            body: { metadataKeys },
+        });
+
+        console.log("deleteAssetMetadata response:", response);
+        return response;
+    } catch (error) {
+        console.log("Error deleting asset metadata:", error);
+        throw error;
+    }
+};
+
+/**
+ * Fetches metadata for a file (bulk operation with schema enrichment)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.filePath - File path
+ * @param {string} params.type - 'metadata' or 'attribute'
+ * @returns {Promise<any>}
+ */
+export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !filePath || !type) {
+            return { metadata: [], message: "Missing required parameters" };
+        }
+
+        const response = await api.get(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata/file`,
+            {
+                queryStringParameters: { filePath, type },
+            }
+        );
+
+        console.log("fetchFileMetadata raw response:", response);
+
+        // Handle different response formats
+        if (response && typeof response === "object") {
+            if (Array.isArray(response.metadata)) {
+                return response;
+            } else if (
+                response.message &&
+                typeof response.message === "object" &&
+                Array.isArray(response.message.metadata)
+            ) {
+                return response.message;
+            } else if (response.message && typeof response.message === "string") {
+                return { metadata: [], message: response.message };
+            }
+        } else if (typeof response === "string") {
+            return { metadata: [], message: response };
+        }
+
+        return { metadata: [], message: "Unknown response format" };
+    } catch (error) {
+        console.log("Error fetching file metadata:", error);
+        return { metadata: [], message: error?.message || "Error fetching metadata" };
+    }
+};
+
+/**
+ * Creates metadata for a file (bulk operation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.filePath - File path
+ * @param {string} params.type - 'metadata' or 'attribute'
+ * @param {Array} params.metadata - Array of metadata items
+ * @returns {Promise<any>}
+ */
+export const createFileMetadata = async (
+    { databaseId, assetId, filePath, type, metadata },
+    api = API
+) => {
+    try {
+        if (!databaseId || !assetId || !filePath || !type || !metadata) {
+            return { success: false, message: "Missing required parameters" };
+        }
+
+        const response = await api.post(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata/file`,
+            {
+                body: { filePath, type, metadata },
+            }
+        );
+
+        console.log("createFileMetadata response:", response);
+        return response;
+    } catch (error) {
+        console.log("Error creating file metadata:", error);
+        throw error;
+    }
+};
+
+/**
+ * Updates metadata for a file (bulk operation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.filePath - File path
+ * @param {string} params.type - 'metadata' or 'attribute'
+ * @param {Array} params.metadata - Array of metadata items
+ * @param {string} params.updateType - 'update' or 'replace_all'
+ * @returns {Promise<any>}
+ */
+export const updateFileMetadata = async (
+    { databaseId, assetId, filePath, type, metadata, updateType = "update" },
+    api = API
+) => {
+    try {
+        if (!databaseId || !assetId || !filePath || !type || !metadata) {
+            return { success: false, message: "Missing required parameters" };
+        }
+
+        const response = await api.put(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata/file`,
+            {
+                body: { filePath, type, metadata, updateType },
+            }
+        );
+
+        console.log("updateFileMetadata response:", response);
+        return response;
+    } catch (error) {
+        console.log("Error updating file metadata:", error);
+        throw error;
+    }
+};
+
+/**
+ * Deletes metadata for a file (bulk operation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.filePath - File path
+ * @param {string} params.type - 'metadata' or 'attribute'
+ * @param {Array} params.metadataKeys - Array of metadata keys to delete
+ * @returns {Promise<any>}
+ */
+export const deleteFileMetadata = async (
+    { databaseId, assetId, filePath, type, metadataKeys },
+    api = API
+) => {
+    try {
+        if (!databaseId || !assetId || !filePath || !type || !metadataKeys) {
+            return { success: false, message: "Missing required parameters" };
+        }
+
+        const response = await api.del(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata/file`,
+            {
+                body: { filePath, type, metadataKeys },
+            }
+        );
+
+        console.log("deleteFileMetadata response:", response);
+        return response;
+    } catch (error) {
+        console.log("Error deleting file metadata:", error);
+        throw error;
+    }
+};
+
+/**
+ * Fetches metadata for a database (bulk operation with schema enrichment)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @returns {Promise<any>}
+ */
+export const fetchDatabaseMetadata = async ({ databaseId }, api = API) => {
+    try {
+        if (!databaseId) {
+            return { metadata: [], message: "Missing required parameters" };
+        }
+
+        const response = await api.get("api", `database/${databaseId}/metadata`, {});
+        console.log("fetchDatabaseMetadata raw response:", response);
+
+        // Handle different response formats
+        if (response && typeof response === "object") {
+            if (Array.isArray(response.metadata)) {
+                return response;
+            } else if (
+                response.message &&
+                typeof response.message === "object" &&
+                Array.isArray(response.message.metadata)
+            ) {
+                return response.message;
+            } else if (response.message && typeof response.message === "string") {
+                return { metadata: [], message: response.message };
+            }
+        } else if (typeof response === "string") {
+            return { metadata: [], message: response };
+        }
+
+        return { metadata: [], message: "Unknown response format" };
+    } catch (error) {
+        console.log("Error fetching database metadata:", error);
+        return { metadata: [], message: error?.message || "Error fetching metadata" };
+    }
+};
+
+/**
+ * Creates metadata for a database (bulk operation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {Array} params.metadata - Array of metadata items
+ * @returns {Promise<any>}
+ */
+export const createDatabaseMetadata = async ({ databaseId, metadata }, api = API) => {
+    try {
+        if (!databaseId || !metadata) {
+            return { success: false, message: "Missing required parameters" };
+        }
+
+        const response = await api.post("api", `database/${databaseId}/metadata`, {
+            body: { metadata },
+        });
+
+        console.log("createDatabaseMetadata response:", response);
+        return response;
+    } catch (error) {
+        console.log("Error creating database metadata:", error);
+        throw error;
+    }
+};
+
+/**
+ * Updates metadata for a database (bulk operation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {Array} params.metadata - Array of metadata items
+ * @param {string} params.updateType - 'update' or 'replace_all'
+ * @returns {Promise<any>}
+ */
+export const updateDatabaseMetadata = async (
+    { databaseId, metadata, updateType = "update" },
+    api = API
+) => {
+    try {
+        if (!databaseId || !metadata) {
+            return { success: false, message: "Missing required parameters" };
+        }
+
+        const response = await api.put("api", `database/${databaseId}/metadata`, {
+            body: { metadata, updateType },
+        });
+
+        console.log("updateDatabaseMetadata response:", response);
+        return response;
+    } catch (error) {
+        console.log("Error updating database metadata:", error);
+        throw error;
+    }
+};
+
+/**
+ * Deletes metadata for a database (bulk operation)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {Array} params.metadataKeys - Array of metadata keys to delete
+ * @returns {Promise<any>}
+ */
+export const deleteDatabaseMetadata = async ({ databaseId, metadataKeys }, api = API) => {
+    try {
+        if (!databaseId || !metadataKeys) {
+            return { success: false, message: "Missing required parameters" };
+        }
+
+        const response = await api.del("api", `database/${databaseId}/metadata`, {
+            body: { metadataKeys },
+        });
+
+        console.log("deleteDatabaseMetadata response:", response);
+        return response;
+    } catch (error) {
+        console.log("Error deleting database metadata:", error);
+        throw error;
     }
 };
 

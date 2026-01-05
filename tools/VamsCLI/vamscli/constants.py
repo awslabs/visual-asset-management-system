@@ -59,15 +59,23 @@ API_ASSET_LINKS_UPDATE = "/asset-links/{assetLinkId}"
 API_ASSET_LINKS_DELETE = "/asset-links/{relationId}"
 API_ASSET_LINKS_FOR_ASSET = "/database/{databaseId}/assets/{assetId}/asset-links"
 
-# Asset Links Metadata API Endpoints
+# Asset Links Metadata API Endpoints (New unified API)
+API_ASSET_LINK_METADATA = "/asset-links/{assetLinkId}/metadata"
+
+# Metadata API Endpoints (New unified API)
+API_ASSET_METADATA = "/database/{databaseId}/assets/{assetId}/metadata"
+API_FILE_METADATA = "/database/{databaseId}/assets/{assetId}/metadata/file"
+API_DATABASE_METADATA = "/database/{databaseId}/metadata"
+
+# Legacy Metadata API Endpoints (deprecated)
 API_ASSET_LINKS_METADATA = "/asset-links/{assetLinkId}/metadata"
 API_ASSET_LINKS_METADATA_KEY = "/asset-links/{assetLinkId}/metadata/{metadataKey}"
-
-# Metadata API Endpoints
 API_METADATA = "/database/{databaseId}/assets/{assetId}/metadata"
 
 # Metadata Schema API Endpoints
-API_METADATA_SCHEMA = "/metadataschema/{databaseId}"
+API_METADATA_SCHEMA = "/metadataschema/{databaseId}"  # Legacy endpoint
+API_METADATA_SCHEMA_LIST = "/metadataschema"  # GET with filters
+API_METADATA_SCHEMA_BY_ID = "/database/{databaseId}/metadataSchema/{metadataSchemaId}"  # GET single schema
 
 # Search API Endpoints
 API_SEARCH = "/search"

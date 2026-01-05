@@ -23,9 +23,15 @@ import FilePreviewThumbnailCell from "../SearchPreviewThumbnail/FilePreviewThumb
 import Synonyms from "../../../synonyms";
 import { formatFileSizeForDisplay } from "../../../common/utils/fileSize";
 
-// Helper function to extract and format metadata fields with type information
-const extractMetadata = (item: SearchResult): Array<{ name: string; type: string; value: any }> => {
+// Helper function to extract and format metadata and attribute fields with type information
+const extractMetadata = (
+    item: SearchResult
+): {
+    metadata: Array<{ name: string; type: string; value: any }>;
+    attributes: Array<{ name: string; type: string; value: any }>;
+} => {
     const metadata: Array<{ name: string; type: string; value: any }> = [];
+    const attributes: Array<{ name: string; type: string; value: any }> = [];
     const source = item._source;
 
     // Type mapping for display
@@ -39,19 +45,37 @@ const extractMetadata = (item: SearchResult): Array<{ name: string; type: string
         gs: "Geo Shape",
     };
 
-    // Find all MD_ fields
+    // Find all MD_ and AB_ fields (case-insensitive)
     Object.keys(source).forEach((key) => {
-        if (key.startsWith("MD_")) {
-            // Format: MD_<type>_<fieldname>
+        const keyUpper = key.toUpperCase();
+
+        if (keyUpper.startsWith("MD_")) {
+            // Format: MD_<type>_<fieldname> or md_<fieldname>
             const parts = key.split("_");
             if (parts.length >= 3) {
-                // parts[0] = 'MD', parts[1] = type, parts[2+] = field name
-                const fieldType = parts[1];
+                // parts[0] = 'MD'/'md', parts[1] = type, parts[2+] = field name
+                const fieldType = parts[1].toLowerCase();
                 const fieldName = parts.slice(2).join("_");
                 metadata.push({
                     name: fieldName,
                     type: typeLabels[fieldType] || fieldType,
                     value: source[key],
+                });
+            } else if (parts.length === 2) {
+                // Format: md_<fieldname> (no type specified)
+                const fieldName = parts[1];
+                // Try to infer type from value
+                const value = source[key];
+                let inferredType = "String";
+                if (typeof value === "number") {
+                    inferredType = "Number";
+                } else if (typeof value === "boolean") {
+                    inferredType = "Boolean";
+                }
+                metadata.push({
+                    name: fieldName,
+                    type: inferredType,
+                    value: value,
                 });
             } else {
                 // Fallback: just remove MD_ prefix
@@ -61,17 +85,55 @@ const extractMetadata = (item: SearchResult): Array<{ name: string; type: string
                     value: source[key],
                 });
             }
+        } else if (keyUpper.startsWith("AB_")) {
+            // Format: AB_<type>_<fieldname> or ab_<fieldname>
+            const parts = key.split("_");
+            if (parts.length >= 3) {
+                // parts[0] = 'AB'/'ab', parts[1] = type, parts[2+] = field name
+                const fieldType = parts[1].toLowerCase();
+                const fieldName = parts.slice(2).join("_");
+                attributes.push({
+                    name: fieldName,
+                    type: typeLabels[fieldType] || fieldType,
+                    value: source[key],
+                });
+            } else if (parts.length === 2) {
+                // Format: ab_<fieldname> (no type specified)
+                const fieldName = parts[1];
+                // Try to infer type from value
+                const value = source[key];
+                let inferredType = "String";
+                if (typeof value === "number") {
+                    inferredType = "Number";
+                } else if (typeof value === "boolean") {
+                    inferredType = "Boolean";
+                }
+                attributes.push({
+                    name: fieldName,
+                    type: inferredType,
+                    value: value,
+                });
+            } else {
+                // Fallback: just remove AB_ prefix
+                attributes.push({
+                    name: key.substring(3),
+                    type: "Unknown",
+                    value: source[key],
+                });
+            }
         }
     });
 
-    return metadata;
+    return { metadata, attributes };
 };
 
-// Helper component to render metadata popover
+// Helper component to render metadata and attributes popover
 const MetadataPopover: React.FC<{
     metadata: Array<{ name: string; type: string; value: any }>;
-}> = ({ metadata }) => {
-    if (metadata.length === 0) {
+    attributes: Array<{ name: string; type: string; value: any }>;
+}> = ({ metadata, attributes }) => {
+    // Don't show popover if both arrays are empty
+    if (metadata.length === 0 && attributes.length === 0) {
         return null;
     }
 
@@ -88,19 +150,43 @@ const MetadataPopover: React.FC<{
                     dismissButton={false}
                     content={
                         <SpaceBetween size="s">
-                            <Box variant="h4">Metadata Fields ({metadata.length})</Box>
-                            <Box>
-                                <ul style={{ margin: 0, paddingLeft: "20px" }}>
-                                    {metadata.map((field, idx) => (
-                                        <li key={idx}>
-                                            <strong>
-                                                {field.name} ({field.type}):
-                                            </strong>{" "}
-                                            {String(field.value)}
-                                        </li>
-                                    ))}
-                                </ul>
-                            </Box>
+                            {/* Metadata Fields Section - only show if there are metadata fields */}
+                            {metadata.length > 0 && (
+                                <>
+                                    <Box variant="h4">Metadata Fields ({metadata.length})</Box>
+                                    <Box>
+                                        <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                                            {metadata.map((field, idx) => (
+                                                <li key={idx}>
+                                                    <strong>
+                                                        {field.name} ({field.type}):
+                                                    </strong>{" "}
+                                                    {String(field.value)}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </Box>
+                                </>
+                            )}
+
+                            {/* Attribute Fields Section - only show if there are attribute fields */}
+                            {attributes.length > 0 && (
+                                <>
+                                    <Box variant="h4">Attribute Fields ({attributes.length})</Box>
+                                    <Box>
+                                        <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                                            {attributes.map((field, idx) => (
+                                                <li key={idx}>
+                                                    <strong>
+                                                        {field.name} ({field.type}):
+                                                    </strong>{" "}
+                                                    {String(field.value)}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </Box>
+                                </>
+                            )}
                         </SpaceBetween>
                     }
                 >
@@ -380,7 +466,10 @@ const CardView: React.FC<CardViewProps> = ({
                         )}
 
                     {/* Metadata Info */}
-                    <MetadataPopover metadata={extractMetadata(item)} />
+                    {(() => {
+                        const { metadata, attributes } = extractMetadata(item);
+                        return <MetadataPopover metadata={metadata} attributes={attributes} />;
+                    })()}
 
                     {/* Created Info */}
                     {(source.date_created || source.str_createdby) && (

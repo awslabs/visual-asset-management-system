@@ -60,7 +60,8 @@ try:
     asset_upload_table_name = os.environ.get("ASSET_UPLOAD_TABLE_NAME")
     asset_links_table_name = os.environ.get("ASSET_LINKS_STORAGE_TABLE_NAME")
     asset_links_metadata_table_name = os.environ.get("ASSET_LINKS_METADATA_STORAGE_TABLE_NAME")
-    metadata_table_name = os.environ.get("METADATA_STORAGE_TABLE_NAME")
+    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
+    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
     asset_versions_files_table_name = os.environ.get("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME")
     comment_table_name = os.environ.get("COMMENT_STORAGE_TABLE_NAME")
@@ -78,7 +79,8 @@ db_table = dynamodb.Table(db_database)
 asset_upload_table = dynamodb.Table(asset_upload_table_name) if asset_upload_table_name else None
 asset_links_table = dynamodb.Table(asset_links_table_name) if asset_links_table_name else None
 asset_links_metadata_table = dynamodb.Table(asset_links_metadata_table_name) if asset_links_metadata_table_name else None
-metadata_table = dynamodb.Table(metadata_table_name) if metadata_table_name else None
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
+file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribute_table_name else None
 versions_table = dynamodb.Table(asset_versions_table_name) if asset_versions_table_name else None
 comment_table = dynamodb.Table(comment_table_name) if comment_table_name else None
 asset_versions_files_table = dynamodb.Table(asset_versions_files_table_name) if asset_versions_files_table_name else None
@@ -167,7 +169,7 @@ def get_current_version_info(asset):
                 Comment=version_item.get('comment', ''),
                 description=version_item.get('description', ''),
                 specifiedPipelines=version_item.get('specifiedPipelines', []),
-                createdBy=version_item.get('createdBy', 'system')
+                createdBy=version_item.get('createdBy', 'SYSTEM_USER')
             )
     except Exception as e:
         logger.exception(f"Error fetching current version from versions table: {e}")
@@ -550,6 +552,137 @@ def delete_asset_link_metadata_for_permanent_deletion(asset_link_id: str):
         
     except Exception as e:
         logger.exception(f"Error deleting asset link metadata: {e}")
+        # Don't fail the whole operation if metadata deletion fails
+        pass
+
+
+def delete_asset_metadata_for_permanent_deletion(database_id: str, asset_id: str):
+    """Delete all metadata and file metadata/attributes for an asset during permanent deletion
+    
+    This deletes:
+    - Asset-level metadata (where filePath = '/')
+    - All file metadata for files in this asset
+    - All file attributes for files in this asset
+    
+    Args:
+        database_id: The database ID
+        asset_id: The asset ID
+    """
+    try:
+        # Construct the composite key prefix for querying
+        # This will match all metadata for the asset and its files
+        composite_key_prefix = f"{database_id}:{asset_id}:"
+        
+        deleted_metadata_count = 0
+        deleted_attribute_count = 0
+        
+        # Delete from asset_file_metadata_table (asset and file metadata)
+        if asset_file_metadata_table:
+            try:
+                # Use scan with filter to get ALL metadata items for this asset
+                # We must use scan because begins_with only works on sort keys, not partition keys
+                paginator = dynamodb_client.get_paginator('scan')
+                page_iterator = paginator.paginate(
+                    TableName=asset_file_metadata_table_name,
+                    FilterExpression='begins_with(#sk, :prefix)',
+                    ExpressionAttributeNames={
+                        '#sk': 'databaseId:assetId:filePath'
+                    },
+                    ExpressionAttributeValues={
+                        ':prefix': {'S': composite_key_prefix}
+                    }
+                ).build_full_result()
+                
+                # Delete all metadata items in batches
+                items_to_delete = []
+                deserializer = TypeDeserializer()
+                
+                for item in page_iterator.get('Items', []):
+                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                    items_to_delete.append({
+                        'DeleteRequest': {
+                            'Key': {
+                                'metadataKey': {'S': deserialized['metadataKey']},
+                                'databaseId:assetId:filePath': {'S': deserialized['databaseId:assetId:filePath']}
+                            }
+                        }
+                    })
+                
+                # Delete in batches of 25
+                for i in range(0, len(items_to_delete), 25):
+                    batch = items_to_delete[i:i+25]
+                    try:
+                        dynamodb_client.batch_write_item(
+                            RequestItems={
+                                asset_file_metadata_table_name: batch
+                            }
+                        )
+                        deleted_metadata_count += len(batch)
+                    except Exception as e:
+                        logger.warning(f"Error in batch delete for metadata: {e}")
+                
+                if deleted_metadata_count > 0:
+                    logger.info(f"Deleted {deleted_metadata_count} metadata items for asset {asset_id}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting asset/file metadata: {e}")
+        
+        # Delete from file_attribute_table (file attributes)
+        if file_attribute_table:
+            try:
+                # Use scan with filter to get ALL attribute items for this asset
+                # We must use scan because begins_with only works on sort keys, not partition keys
+                paginator = dynamodb_client.get_paginator('scan')
+                page_iterator = paginator.paginate(
+                    TableName=file_attribute_table_name,
+                    FilterExpression='begins_with(#sk, :prefix)',
+                    ExpressionAttributeNames={
+                        '#sk': 'databaseId:assetId:filePath'
+                    },
+                    ExpressionAttributeValues={
+                        ':prefix': {'S': composite_key_prefix}
+                    }
+                ).build_full_result()
+                
+                # Delete all attribute items in batches
+                items_to_delete = []
+                deserializer = TypeDeserializer()
+                
+                for item in page_iterator.get('Items', []):
+                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                    items_to_delete.append({
+                        'DeleteRequest': {
+                            'Key': {
+                                'attributeKey': {'S': deserialized['attributeKey']},
+                                'databaseId:assetId:filePath': {'S': deserialized['databaseId:assetId:filePath']}
+                            }
+                        }
+                    })
+                
+                # Delete in batches of 25
+                for i in range(0, len(items_to_delete), 25):
+                    batch = items_to_delete[i:i+25]
+                    try:
+                        dynamodb_client.batch_write_item(
+                            RequestItems={
+                                file_attribute_table_name: batch
+                            }
+                        )
+                        deleted_attribute_count += len(batch)
+                    except Exception as e:
+                        logger.warning(f"Error in batch delete for attributes: {e}")
+                
+                if deleted_attribute_count > 0:
+                    logger.info(f"Deleted {deleted_attribute_count} attribute items for asset {asset_id}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file attributes: {e}")
+        
+        if deleted_metadata_count == 0 and deleted_attribute_count == 0:
+            logger.info(f"No metadata or attributes found for asset {asset_id}")
+        
+    except Exception as e:
+        logger.exception(f"Error deleting asset metadata: {e}")
         # Don't fail the whole operation if metadata deletion fails
         pass
 
@@ -1090,10 +1223,12 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
         deleted_items["dynamodb_tables"].append(f"{asset_database} (databaseId={archived_db_id})")
         
-        # 3. Delete from metadata table if available
-        if metadata_table:
-            metadata_table.delete_item(Key={'databaseId': original_db_id, 'assetId': assetId})
-            deleted_items["dynamodb_tables"].append(f"{metadata_table_name} (databaseId={original_db_id})")
+        # 3. Delete from NEW metadata tables (asset metadata and all file metadata/attributes)
+        delete_asset_metadata_for_permanent_deletion(original_db_id, assetId)
+        if asset_file_metadata_table:
+            deleted_items["dynamodb_tables"].append(f"{asset_file_metadata_table_name} (asset and file metadata)")
+        if file_attribute_table:
+            deleted_items["dynamodb_tables"].append(f"{file_attribute_table_name} (file attributes)")
         
         # 4. Delete from asset links table if available
         if asset_links_table:

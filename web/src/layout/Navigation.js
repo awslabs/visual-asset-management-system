@@ -98,7 +98,7 @@ export function Navigation({
                 {
                     type: "link",
                     text: "Metadata Schema",
-                    href: "#/metadataschema/create/",
+                    href: "#/metadataschema/",
                 },
                 {
                     type: "link",

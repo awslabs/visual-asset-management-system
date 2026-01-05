@@ -13,7 +13,15 @@ export const DatabaseListDefinition = new ListDefinition({
     singularNameTitleCase: Synonyms.Database,
     pluralName: Synonyms.databases,
     pluralNameTitleCase: Synonyms.Databases,
-    visibleColumns: ["databaseId", "description", "bucketName", "baseAssetsPrefix", "assetCount"],
+    visibleColumns: [
+        "databaseId",
+        "description",
+        "bucketName",
+        "baseAssetsPrefix",
+        "assetCount",
+        "restrictMetadataOutsideSchemas",
+        "restrictFileUploadsToExtensions",
+    ],
     filterColumns: [
         { name: "databaseId", placeholder: "Name" },
         { name: "bucketName", placeholder: "Bucket Name" },
@@ -56,6 +64,24 @@ export const DatabaseListDefinition = new ListDefinition({
             header: `${Synonyms.Asset} Count`,
             cellWrapper: (props) => <>{props.children}</>,
             sortingField: "assetCount",
+        }),
+        new ColumnDefinition({
+            id: "restrictMetadataOutsideSchemas",
+            header: "Restrict Metadata Outside Schemas",
+            cellWrapper: (props) => {
+                const value = props.item?.restrictMetadataOutsideSchemas;
+                return <>{value ? "True" : "False"}</>;
+            },
+            sortingField: "restrictMetadataOutsideSchemas",
+        }),
+        new ColumnDefinition({
+            id: "restrictFileUploadsToExtensions",
+            header: "Restrict File Upload Extensions",
+            cellWrapper: (props) => {
+                const value = props.item?.restrictFileUploadsToExtensions;
+                return <>{value && value.trim() !== "" ? value : "No Restrictions"}</>;
+            },
+            sortingField: "restrictFileUploadsToExtensions",
         }),
     ],
 });

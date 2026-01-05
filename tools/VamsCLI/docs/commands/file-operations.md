@@ -250,6 +250,84 @@ vamscli file list -d my-db -a my-asset
 vamscli file info -d my-db -a my-asset -p "/large-model.gltf"
 ```
 
+### File Extension Restrictions
+
+Databases can be configured to restrict file uploads to specific extensions. When uploading files, VamsCLI automatically validates against these restrictions.
+
+**Restriction Behavior:**
+
+-   If `restrictFileUploadsToExtensions` is empty or not set: All file types allowed
+-   If `.all` is in the list: All file types allowed
+-   Otherwise: Only listed extensions are allowed (comma-delimited)
+
+**Excluded from Validation:**
+
+-   Asset preview uploads (`--asset-preview`)
+-   Preview auxiliary files (`.previewFile.` in filename)
+
+**Example Scenarios:**
+
+```bash
+# Database configured with: restrictFileUploadsToExtensions=".glb,.gltf"
+
+# ✅ Allowed - file has .glb extension
+vamscli file upload -d my-db -a my-asset model.glb
+
+# ✅ Allowed - file has .gltf extension
+vamscli file upload -d my-db -a my-asset model.gltf
+
+# ❌ Rejected - file has .pdf extension
+vamscli file upload -d my-db -a my-asset document.pdf
+# Error: Database has file extension restrictions: .glb,.gltf
+#
+# The following files do not meet the restriction:
+#   - /document.pdf (extension: .pdf)
+
+# ✅ Allowed - asset preview uploads skip extension validation
+vamscli file upload -d my-db -a my-asset --asset-preview thumbnail.jpg
+
+# ✅ Allowed - .previewFile. auxiliary files skip extension validation
+vamscli file upload -d my-db -a my-asset model.glb model.previewFile.jpg
+```
+
+**Multiple File Validation:**
+
+When uploading multiple files, VamsCLI validates all files and reports ALL violations:
+
+```bash
+# Upload multiple files with mixed extensions
+vamscli file upload -d my-db -a my-asset file1.txt file2.pdf file3.glb
+
+# Error output shows all violations:
+# ✗ File Extension Validation Error: Database has file extension restrictions: .glb,.gltf
+#
+# The following files do not meet the restriction:
+#   - /file1.txt (extension: .txt)
+#   - /file2.pdf (extension: .pdf)
+#
+# The database 'my-db' restricts uploads to specific file types.
+# Please check the allowed extensions and try again.
+```
+
+**Checking Database Restrictions:**
+
+```bash
+# View database configuration to see restrictions
+vamscli database get -d my-db
+
+# Output includes:
+# restrictFileUploadsToExtensions: .glb,.gltf
+```
+
+**Wildcard Support:**
+
+```bash
+# Database configured with: restrictFileUploadsToExtensions=".all"
+# All file types are allowed
+
+vamscli file upload -d my-db -a my-asset any-file.xyz  # ✅ Allowed
+```
+
 ### Supported Upload Types
 
 -   `assetFile`: Regular asset files (default)

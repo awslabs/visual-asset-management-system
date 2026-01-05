@@ -117,8 +117,8 @@ export function getConfig(app: cdk.App): Config {
     );
 
     //OpenSearch Variables - Dual Index Configuration
-    config.openSearchAssetIndexName = "vams-assets-v1";
-    config.openSearchFileIndexName = "vams-files-v1";
+    config.openSearchAssetIndexName = "vams-assets-v2";
+    config.openSearchFileIndexName = "vams-files-v2";
     config.openSearchAssetIndexNameSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "aos", "assetIndexName"].join("/");
     config.openSearchFileIndexNameSSMParam =
@@ -247,6 +247,16 @@ export function getConfig(app: cdk.App): Config {
             domainHost: "",
             certificateArn: "",
             optionalHostedZoneId: "",
+        };
+    }
+
+    // Initialize metadataSchema configuration if undefined (backward compatibility)
+    if (config.app.metadataSchema == undefined) {
+        config.app.metadataSchema = {
+            autoLoadDefaultAssetLinksSchema: true,
+            autoLoadDefaultDatabaseSchema: true,
+            autoLoadDefaultAssetSchema: true,
+            autoLoadDefaultAssetFileSchema: true,
         };
     }
 
@@ -816,6 +826,12 @@ export interface ConfigPublic {
         api: {
             globalRateLimit: number;
             globalBurstLimit: number;
+        };
+        metadataSchema: {
+            autoLoadDefaultAssetLinksSchema: boolean;
+            autoLoadDefaultDatabaseSchema: boolean;
+            autoLoadDefaultAssetSchema: boolean;
+            autoLoadDefaultAssetFileSchema: boolean;
         };
     };
 }

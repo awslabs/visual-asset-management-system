@@ -999,7 +999,7 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | AuthEntitiesStorageTable      | entityType             | sk                          |                                                                                                                                                                                                                    |
 | CommentStorageTable           | assetId                | assetVersionId:commentId    |                                                                                                                                                                                                                    |
 | ConstraintsStorageTable       | constraintId           | n/a                         | name, description, objectType, criteriaAnd (JSON), criteriaOr (JSON), groupPermissions (JSON), userPermissions (JSON), groupIds (StringSet), userIds (StringSet), dateCreated, dateModified, createdBy, modifiedBy |
-| DatabaseStorageTable          | databaseId             | n/a                         | assetCount, dateCreated, description                                                                                                                                                                               |
+| DatabaseStorageTable          | databaseId             | n/a                         | assetCount, dateCreated, description, defaultBucketId, restrictMetadataOutsideSchemas, restrictFileUploadsToExtensions                                                                                             |
 | MetadataStorageTable          | databaseId             | assetId                     | Varies with user provided attributes                                                                                                                                                                               |
 | MetadataSchemaStorageTable    | databaseId             | field                       |                                                                                                                                                                                                                    |
 | PipelineStorageTable          | databaseId             | pipelineId                  | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType, inputParameters                                                                                                     |
@@ -1048,14 +1048,7 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 
 ## DatabaseStorageTable
 
-| Field           | Data Type | Description                                                                         |
-| --------------- | --------- | ----------------------------------------------------------------------------------- |
-| assetCount      | String    | Number of assets in this database                                                   |
-| dateCreated     | String    | Creation date of this record                                                        |
-| description     | String    | User provided description                                                           |
-| defaultBucketId | String    | Default bucket ID to use for new assets that matches the S3AssetBucketsStorageTable |
-
-## WorkflowStorageTable
+| Field | Data Type | Description
 
 | Field              | Data Type              | Description                                                                            |
 | ------------------ | ---------------------- | -------------------------------------------------------------------------------------- |
@@ -1195,12 +1188,233 @@ See the [v2.3 to v2.4 Migration Guide](../infra/deploymentDataMigration/v2.3_to_
 | eventName           | String    | Name of the event to subscribe to |
 | entityName_entityId | String    | Combined entity name and ID       |
 
-## MetadataStorageTable
+## MetadataStorageTable (DEPRECATED - For Migration Only)
 
-| Field       | Data Type | Description                                  |
-| ----------- | --------- | -------------------------------------------- |
-| asset_id    | String    | Asset identifier for this workflow execution |
-| database_id | String    | Database to which the asset belongs          |
+**Status**: DEPRECATED in v2.3+ - Replaced by DatabaseMetadataStorageTableV2, AssetFileMetadataStorageTableV2, and FileAttributeStorageTableV2
+
+**Migration Note**: This table is kept for backward compatibility during migration from v2.2 to v2.3+. New deployments should use the V2 tables below.
+
+| Field      | Data Type | Description                                 |
+| ---------- | --------- | ------------------------------------------- |
+| databaseId | String    | (PK) Database identifier                    |
+| assetId    | String    | (SK) Asset identifier                       |
+| \*         | Varies    | User-provided metadata attributes (dynamic) |
+
+**Stream**: NEW_IMAGE enabled for indexing
+
+---
+
+## DatabaseMetadataStorageTableV2 (Current)
+
+**Purpose**: Stores metadata associated with databases. Introduced in v2.3 to support the new metadata architecture with rich data types and schema validation.
+
+| Field             | Data Type | Description                                                    |
+| ----------------- | --------- | -------------------------------------------------------------- |
+| metadataKey       | String    | (PK) The metadata field name/key                               |
+| databaseId        | String    | (SK) Database identifier                                       |
+| metadataValue     | String    | The metadata value (stored as string, type defined separately) |
+| metadataValueType | String    | Data type of the value (string, number, date, json, etc.)      |
+
+**Stream**: NEW_IMAGE enabled for indexing
+
+### Global Secondary Indexes
+
+| Index Name      | Partition Key | Sort Key    | Description                                       |
+| --------------- | ------------- | ----------- | ------------------------------------------------- |
+| DatabaseIdIndex | databaseId    | metadataKey | For querying all metadata for a specific database |
+
+**Use Cases**:
+
+-   Retrieve all metadata for a database
+-   List metadata keys for a database
+-   Support pagination of database metadata
+
+---
+
+## AssetFileMetadataStorageTableV2 (Current)
+
+**Purpose**: Stores metadata associated with assets and individual files within assets. Supports both asset-level metadata (filePath = "/") and file-level metadata. Introduced in v2.3 to support rich data types and hierarchical metadata.
+
+| Field                       | Data Type | Description                                                    |
+| --------------------------- | --------- | -------------------------------------------------------------- |
+| metadataKey                 | String    | (PK) The metadata field name/key                               |
+| databaseId:assetId:filePath | String    | (SK) Composite key: database, asset, and file path             |
+| databaseId:assetId          | String    | Composite key for asset-level queries (without file path)      |
+| metadataValue               | String    | The metadata value (stored as string, type defined separately) |
+| metadataValueType           | String    | Data type of the value (string, number, date, json, etc.)      |
+
+**Stream**: NEW_IMAGE enabled for indexing
+
+**Key Patterns**:
+
+-   Asset-level metadata: `databaseId:assetId:/` (filePath = "/")
+-   File-level metadata: `databaseId:assetId:/path/to/file.ext`
+
+### Global Secondary Indexes
+
+| Index Name                     | Partition Key               | Sort Key    | Description                                           |
+| ------------------------------ | --------------------------- | ----------- | ----------------------------------------------------- |
+| DatabaseIdAssetIdFilePathIndex | databaseId:assetId:filePath | metadataKey | For querying all metadata for a specific file         |
+| DatabaseIdAssetIdIndex         | databaseId:assetId          | metadataKey | For querying all metadata across an asset (all files) |
+
+**Use Cases**:
+
+-   Retrieve all metadata for a specific file
+-   Retrieve all metadata for an asset (including all files)
+-   Support pagination of file metadata
+-   Enable efficient metadata queries without scanning
+
+---
+
+## FileAttributeStorageTableV2 (Current)
+
+**Purpose**: Stores simple string-based attributes for files within assets. Attributes are optimized for fast filtering and search operations. Unlike metadata, attributes only support string values. Introduced in v2.3 alongside the metadata tables.
+
+| Field                       | Data Type | Description                                               |
+| --------------------------- | --------- | --------------------------------------------------------- |
+| attributeKey                | String    | (PK) The attribute field name/key                         |
+| databaseId:assetId:filePath | String    | (SK) Composite key: database, asset, and file path        |
+| databaseId:assetId          | String    | Composite key for asset-level queries (without file path) |
+| attributeValue              | String    | The attribute value (always string type)                  |
+| attributeValueType          | String    | Data type (always "string" for attributes)                |
+
+**Stream**: NEW_IMAGE enabled for indexing
+
+**Key Patterns**:
+
+-   Asset-level attributes: `databaseId:assetId:/` (filePath = "/")
+-   File-level attributes: `databaseId:assetId:/path/to/file.ext`
+
+### Global Secondary Indexes
+
+| Index Name                     | Partition Key               | Sort Key     | Description                                             |
+| ------------------------------ | --------------------------- | ------------ | ------------------------------------------------------- |
+| DatabaseIdAssetIdFilePathIndex | databaseId:assetId:filePath | attributeKey | For querying all attributes for a specific file         |
+| DatabaseIdAssetIdIndex         | databaseId:assetId          | attributeKey | For querying all attributes across an asset (all files) |
+
+**Use Cases**:
+
+-   Fast filtering by categorical values (color, material, status, etc.)
+-   Search optimization with simple string matching
+-   Tag-like metadata for files
+-   Efficient attribute queries without complex type handling
+
+**Metadata vs Attributes**:
+
+-   **Metadata**: Rich data types (number, date, json, xyz, geopoint, etc.) for complex data
+-   **Attributes**: String-only values for fast filtering and search
+
+---
+
+## AssetLinksMetadataStorageTable (Current)
+
+**Purpose**: Stores metadata associated with asset links (relationships between assets). Introduced in v2.3 to support metadata on asset relationships.
+
+| Field             | Data Type | Description                                                    |
+| ----------------- | --------- | -------------------------------------------------------------- |
+| assetLinkId       | String    | (PK) Unique identifier for the asset link                      |
+| metadataKey       | String    | (SK) The metadata field name/key                               |
+| metadataValue     | String    | The metadata value (stored as string, type defined separately) |
+| metadataValueType | String    | Data type of the value (string, number, date, json, etc.)      |
+
+**Stream**: NEW_IMAGE enabled for indexing
+
+**Use Cases**:
+
+-   Store relationship-specific metadata (e.g., relationship type, strength, confidence)
+-   Track when and why assets were linked
+-   Support rich metadata on asset relationships
+
+---
+
+## MetadataSchemaStorageTable (DEPRECATED - For Migration Only)
+
+**Status**: DEPRECATED in v2.3+ - Replaced by MetadataSchemaStorageTableV2
+
+**Migration Note**: This table is kept for backward compatibility during migration from v2.2 to v2.3+. New deployments should use MetadataSchemaStorageTableV2.
+
+| Field      | Data Type | Description              |
+| ---------- | --------- | ------------------------ |
+| databaseId | String    | (PK) Database identifier |
+| field      | String    | (SK) Metadata field name |
+| \*         | Varies    | Schema definition fields |
+
+---
+
+## MetadataSchemaStorageTableV2 (Current)
+
+**Purpose**: Stores metadata schema definitions that control validation, data types, and constraints for metadata across different entity types (databases, assets, files, asset links). Introduced in v2.3 to support comprehensive metadata validation and schema management.
+
+| Field                         | Data Type | Description                                                                                  |
+| ----------------------------- | --------- | -------------------------------------------------------------------------------------------- |
+| metadataSchemaId              | String    | (PK) Unique identifier for the schema (UUID)                                                 |
+| databaseId:metadataEntityType | String    | (SK) Composite key: database and entity type                                                 |
+| databaseId                    | String    | Database identifier (or "GLOBAL" for global schemas)                                         |
+| metadataSchemaEntityType      | String    | Entity type: databaseMetadata, assetMetadata, fileMetadata, fileAttribute, assetLinkMetadata |
+| schemaName                    | String    | Human-readable name for the schema                                                           |
+| fields                        | String    | JSON string containing field definitions (see Fields Schema below)                           |
+| enabled                       | Boolean   | Whether the schema is active                                                                 |
+| fileKeyTypeRestriction        | String    | Optional file extension filter (e.g., ".glb", ".obj") for file-level schemas                 |
+| dateCreated                   | String    | ISO timestamp when schema was created                                                        |
+| dateModified                  | String    | ISO timestamp when schema was last modified                                                  |
+| createdBy                     | String    | Username who created the schema                                                              |
+| modifiedBy                    | String    | Username who last modified the schema                                                        |
+
+### Global Secondary Indexes
+
+| Index Name                        | Partition Key                 | Sort Key         | Description                                              |
+| --------------------------------- | ----------------------------- | ---------------- | -------------------------------------------------------- |
+| DatabaseIdMetadataEntityTypeIndex | databaseId:metadataEntityType | metadataSchemaId | For querying schemas by database and entity type         |
+| MetadataEntityTypeIndex           | metadataEntityType            | metadataSchemaId | For querying schemas by entity type across all databases |
+| DatabaseIdIndex                   | databaseId                    | metadataSchemaId | For querying all schemas for a specific database         |
+
+**Use Cases**:
+
+-   Validate metadata against defined schemas
+-   Enforce required fields and data types
+-   Support controlled vocabularies and dependencies
+-   Enable file-type-specific metadata schemas
+-   Provide schema inheritance (database → GLOBAL)
+
+### Fields Schema (JSON Structure)
+
+The `fields` attribute contains a JSON string with the following structure:
+
+```json
+{
+  "fieldName": {
+    "fieldType": "string|number|date|json|xyz|geopoint|etc",
+    "required": true|false,
+    "defaultValue": "optional default value",
+    "dependsOn": ["field1", "field2"],
+    "multiFieldConflict": ["conflictingField1"],
+    "controlledList": ["option1", "option2", "option3"]
+  }
+}
+```
+
+**Field Definition Properties**:
+
+-   **fieldType**: Data type for validation (matches metadataValueType)
+-   **required**: Whether field must be present
+-   **defaultValue**: Default value if not provided
+-   **dependsOn**: Fields that must exist if this field is present
+-   **multiFieldConflict**: Fields that cannot coexist with this field
+-   **controlledList**: Allowed values for inline_controlled_list type
+
+**Entity Types**:
+
+-   `databaseMetadata`: Schemas for database-level metadata
+-   `assetMetadata`: Schemas for asset-level metadata (filePath = "/")
+-   `fileMetadata`: Schemas for file-level metadata
+-   `fileAttribute`: Schemas for file-level attributes (string-only)
+-   `assetLinkMetadata`: Schemas for asset link metadata
+
+**Schema Inheritance**:
+
+-   Database-specific schemas apply to that database only
+-   GLOBAL schemas (databaseId = "GLOBAL") apply across all databases
+-   Validation aggregates both database and GLOBAL schemas
 
 ## UserStorageTable
 
@@ -1730,112 +1944,299 @@ def lambda_handler(event, context):
     }
 ```
 
-## Outputting Metadata from Pipelines
+## Outputting Metadata and Attributes from Pipelines
 
-Pipelines can generate and output metadata that will be automatically added to VAMS assets. This is useful for pipelines that analyze assets and extract information such as labels, dimensions, quality metrics, or other computed properties.
+**As of VAMS v2.3+**, pipelines can generate and output both metadata and attributes that will be automatically added to VAMS assets and files. This is useful for pipelines that analyze assets and extract information such as labels, dimensions, quality metrics, or other computed properties.
 
 ### Metadata Output Location
 
-Metadata files should be written to the `outputS3AssetMetadataPath` provided in the pipeline event payload. This path is unique for each pipeline execution and is automatically processed after the pipeline completes.
+Metadata and attribute files should be written to the `outputS3AssetMetadataPath` provided in the pipeline event payload. This path is unique for each pipeline execution and is automatically processed after the pipeline completes.
 
-### Metadata File Format
+### File Naming Conventions
 
-Metadata files must be JSON files with the naming pattern `*_metadata.json`. VAMS supports two types of metadata files:
+VAMS v2.3+ uses a new file naming convention that distinguishes between metadata and attributes:
 
-#### 1. Root Asset Metadata (`asset_metadata.json`)
+#### Supported File Types:
 
-This file adds metadata to the root asset itself. Place a file named `asset_metadata.json` at the root of the metadata output path.
+1. **Asset Metadata**: `asset.metadata.json` - Adds metadata to the asset itself
+2. **File Metadata**: `{filename}.metadata.json` - Adds metadata to a specific file
+3. **File Attributes**: `{filename}.attribute.json` - Adds attributes to a specific file
 
-**Example:**
+**Key Differences:**
 
-```json
-{
-    "processingDate": "2024-01-15T10:30:00Z",
-    "pipelineVersion": "1.2.3",
-    "qualityScore": "95",
-    "dimensions": {
-        "width": 1024,
-        "height": 768,
-        "depth": 512
-    },
-    "tags": ["processed", "optimized", "validated"]
-}
-```
+-   **Metadata**: Rich data types (string, number, date, JSON, XYZ, GEOPOINT, etc.)
+-   **Attributes**: Simple string-only key-value pairs for fast filtering and search
 
-#### 2. File-Level Metadata (`{filename}_metadata.json`)
+### Request Model Structure
 
-These files add metadata to specific files within the asset. The metadata filename should match the target file with `_metadata.json` appended.
-
-**Example:** For a file at `/folder1/folder2/model.glb`, create `/folder1/folder2/model.glb_metadata.json`
+All metadata/attribute files must follow the VAMS request model structure:
 
 ```json
 {
-    "fileSize": "2048576",
-    "triangleCount": "15000",
-    "textureResolution": "2048x2048",
-    "materialCount": "3",
-    "processingTime": "45.2"
-}
-```
-
-### Metadata Field Processing
-
-VAMS processes metadata fields according to the following rules:
-
-1. **String Fields**: Added as-is to the metadata
-
-    ```json
-    {
-        "author": "John Doe",
-        "version": "1.0"
-    }
-    ```
-
-2. **List Fields**: If all elements are strings, joined with commas; otherwise converted to JSON string
-
-    ```json
-    {
-        "tags": ["tag1", "tag2", "tag3"], // Becomes: "tag1,tag2,tag3"
-        "coordinates": [1.5, 2.3, 4.1] // Becomes: "[1.5, 2.3, 4.1]"
-    }
-    ```
-
-3. **Dictionary Fields**: Converted to JSON string (supports any nesting level)
-
-    ```json
-    {
-        "dimensions": {
-            "width": 1024,
-            "height": 768,
-            "units": "pixels"
+    "type": "metadata", // Required: "metadata" or "attribute"
+    "updateType": "update", // Optional: "update" (default) or "replace_all"
+    "metadata": [
+        // Required: Array of metadata items
+        {
+            "metadataKey": "key1",
+            "metadataValue": "value1",
+            "metadataValueType": "string"
         }
-        // Becomes: "{\"width\": 1024, \"height\": 768, \"units\": \"pixels\"}"
-    }
+    ]
+}
+```
+
+#### Field Descriptions:
+
+-   **`type`** (required): Must be `"metadata"` or `"attribute"`
+
+    -   Auto-corrected if mismatch with filename
+    -   Logged as warning if correction needed
+
+-   **`updateType`** (optional): Controls update behavior
+
+    -   `"update"` (default): Upserts provided keys, leaves others unchanged
+    -   `"replace_all"`: Deletes ALL existing metadata/attributes, replaces with provided keys
+    -   Defaults to `"update"` if missing or invalid
+
+-   **`metadata`** (required): Array of metadata items
+    -   Each item must have `metadataKey`, `metadataValue`, and `metadataValueType`
+    -   Validated by Pydantic models
+    -   See "Supported Metadata Value Types" below
+
+### Supported Metadata Value Types
+
+For **metadata** files, the following value types are supported:
+
+| Type                     | Description               | Example Value                                              |
+| ------------------------ | ------------------------- | ---------------------------------------------------------- |
+| `string`                 | Simple text               | `"Hello World"`                                            |
+| `multiline_string`       | Multi-line text           | `"Line 1\nLine 2"`                                         |
+| `inline_controlled_list` | Controlled vocabulary     | `"option1"`                                                |
+| `number`                 | Numeric value             | `"123.45"`                                                 |
+| `boolean`                | True/false                | `"true"` or `"false"`                                      |
+| `date`                   | ISO date format           | `"2024-01-15T10:30:00Z"`                                   |
+| `json`                   | JSON object/array         | `"{\"key\": \"value\"}"`                                   |
+| `xyz`                    | 3D coordinates            | `"{\"x\": 1.0, \"y\": 2.0, \"z\": 3.0}"`                   |
+| `wxyz`                   | Quaternion                | `"{\"w\": 1.0, \"x\": 0.0, \"y\": 0.0, \"z\": 0.0}"`       |
+| `matrix4x4`              | 4x4 transformation matrix | `"[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]"`              |
+| `geopoint`               | GeoJSON Point             | `"{\"type\": \"Point\", \"coordinates\": [-122.4, 37.8]}"` |
+| `geojson`                | GeoJSON geometry          | `"{\"type\": \"Polygon\", \"coordinates\": [...]}"`        |
+| `lla`                    | Lat/Long/Alt              | `"{\"lat\": 37.8, \"long\": -122.4, \"alt\": 100}"`        |
+
+For **attribute** files, only `"string"` type is supported.
+
+### Example Files
+
+#### 1. Asset Metadata (asset.metadata.json)
+
+```json
+{
+    "type": "metadata",
+    "updateType": "update",
+    "metadata": [
+        {
+            "metadataKey": "processingDate",
+            "metadataValue": "2024-01-15T10:30:00Z",
+            "metadataValueType": "date"
+        },
+        {
+            "metadataKey": "pipelineVersion",
+            "metadataValue": "2.1.0",
+            "metadataValueType": "string"
+        },
+        {
+            "metadataKey": "qualityScore",
+            "metadataValue": "95",
+            "metadataValueType": "number"
+        },
+        {
+            "metadataKey": "dimensions",
+            "metadataValue": "{\"width\": 1024, \"height\": 768, \"depth\": 512}",
+            "metadataValueType": "json"
+        }
+    ]
+}
+```
+
+#### 2. File Metadata (model.glb.metadata.json)
+
+```json
+{
+    "type": "metadata",
+    "updateType": "replace_all",
+    "metadata": [
+        {
+            "metadataKey": "vertices",
+            "metadataValue": "150000",
+            "metadataValueType": "number"
+        },
+        {
+            "metadataKey": "triangles",
+            "metadataValue": "300000",
+            "metadataValueType": "number"
+        },
+        {
+            "metadataKey": "textureResolution",
+            "metadataValue": "2048x2048",
+            "metadataValueType": "string"
+        },
+        {
+            "metadataKey": "boundingBox",
+            "metadataValue": "{\"min\": {\"x\": -10, \"y\": -5, \"z\": 0}, \"max\": {\"x\": 10, \"y\": 5, \"z\": 20}}",
+            "metadataValueType": "json"
+        }
+    ]
+}
+```
+
+#### 3. File Attributes (model.glb.attribute.json)
+
+```json
+{
+    "type": "attribute",
+    "updateType": "update",
+    "metadata": [
+        {
+            "metadataKey": "color",
+            "metadataValue": "red",
+            "metadataValueType": "string"
+        },
+        {
+            "metadataKey": "material",
+            "metadataValue": "metal",
+            "metadataValueType": "string"
+        },
+        {
+            "metadataKey": "category",
+            "metadataValue": "building",
+            "metadataValueType": "string"
+        }
+    ]
+}
+```
+
+### Update Type Behavior
+
+#### `"update"` Mode (Default)
+
+-   **Behavior**: Upserts provided metadata keys
+-   **Existing Keys**: Leaves unchanged if not in the update
+-   **Use Case**: Incremental updates, adding new fields
+-   **Example**: Add processing timestamp without affecting other metadata
+
+```json
+{
+    "type": "metadata",
+    "updateType": "update",
+    "metadata": [
+        {
+            "metadataKey": "lastProcessed",
+            "metadataValue": "2024-01-15T10:30:00Z",
+            "metadataValueType": "date"
+        }
+    ]
+}
+```
+
+**Result**: Only `lastProcessed` is added/updated, all other existing metadata remains unchanged.
+
+#### `"replace_all"` Mode
+
+-   **Behavior**: Deletes ALL existing metadata/attributes, replaces with provided keys
+-   **Existing Keys**: All removed before adding new ones
+-   **Use Case**: Complete metadata refresh, ensuring no stale data
+-   **Permissions**: Requires PUT, POST, and DELETE permissions (SYSTEM_USER has these)
+-   **Rollback**: Automatically rolls back if operation fails
+
+```json
+{
+    "type": "metadata",
+    "updateType": "replace_all",
+    "metadata": [
+        {
+            "metadataKey": "vertices",
+            "metadataValue": "150000",
+            "metadataValueType": "number"
+        },
+        {
+            "metadataKey": "triangles",
+            "metadataValue": "300000",
+            "metadataValueType": "number"
+        }
+    ]
+}
+```
+
+**Result**: ALL existing metadata is deleted, only `vertices` and `triangles` remain.
+
+### File Path Examples
+
+For an asset with the following structure:
+
+```
+asset-id/
+├── model.glb
+├── textures/
+│   ├── diffuse.png
+│   └── normal.png
+└── materials/
+    └── metal.mtl
+```
+
+Pipeline metadata output structure:
+
+```
+outputS3AssetMetadataPath/
+├── asset.metadata.json                    # Asset-level metadata
+├── model.glb.metadata.json                # File metadata for model.glb
+├── model.glb.attribute.json               # File attributes for model.glb
+├── textures/diffuse.png.metadata.json     # File metadata for diffuse.png
+├── textures/diffuse.png.attribute.json    # File attributes for diffuse.png
+└── materials/metal.mtl.attribute.json     # File attributes for metal.mtl
+```
+
+### Validation and Error Handling
+
+VAMS automatically validates and corrects common issues:
+
+1. **Type Field Mismatch**: Auto-corrects if `type` doesn't match filename
+
+    ```
+    WARNING: Type mismatch in model.glb.metadata.json: expected 'metadata', got 'attribute'. Auto-correcting.
     ```
 
-4. **Reserved Fields**: `assetId` and `databaseId` fields are automatically excluded
+2. **Invalid updateType**: Defaults to "update" if invalid value provided
 
-### Metadata Behavior
+    ```
+    WARNING: Invalid updateType 'replace' in file.json. Defaulting to 'update'.
+    ```
 
--   **New Metadata**: If no metadata exists for the asset/file, a new metadata entry is created with:
+3. **Missing metadata Array**: Logs error and skips file
 
-    -   `databaseId`: The database ID of the asset
-    -   `assetId`: The asset ID (for root) or full file path (for file-level)
-    -   `_metadata_last_updated`: Current timestamp
+    ```
+    ERROR: Invalid metadata structure in file.json: missing or invalid 'metadata' array
+    ```
 
--   **Existing Metadata**: If metadata already exists:
+4. **Invalid JSON**: Logs error and skips file
+    ```
+    ERROR: Invalid JSON in file.json: Expecting property name enclosed in double quotes
+    ```
 
-    -   New fields are added
-    -   Existing fields are overwritten with new values
-    -   `_metadata_last_updated` is updated to current timestamp
+### SYSTEM_USER Context
 
--   **File-Level Metadata Storage**: File-level metadata is stored with the full file path as the `assetId`:
-    -   Format: `/{assetId}/folder1/folder2/filename.ext`
-    -   Example: `/x1c688932-ad0f-49c0-971d-578939126947/models/building.glb`
+Pipeline metadata operations use `SYSTEM_USER` context, which:
+
+-   Bypasses Casbin authorization checks
+-   Bypasses metadata schema validation
+-   Allows pipelines to write any metadata structure
+-   Still validates request model structure and value types
+
+This is intentional - pipelines are trusted to manage metadata.
 
 ### Example Pipeline Implementation
 
-Here's an example of a pipeline that generates both root and file-level metadata:
+Here's a complete example of a pipeline that generates asset metadata, file metadata, and file attributes:
 
 ```python
 import json
@@ -1855,79 +2256,307 @@ def lambda_handler(event, context):
     bucket = metadata_path.split('/')[2]
     base_key = '/'.join(metadata_path.split('/')[3:])
 
-    # Generate root asset metadata
-    root_metadata = {
-        "processingDate": datetime.now().isoformat(),
-        "pipelineType": "analysis",
-        "status": "completed",
-        "metrics": {
-            "processingTime": 12.5,
-            "confidence": 0.95
-        }
+    # 1. Generate asset-level metadata
+    asset_metadata = {
+        "type": "metadata",
+        "updateType": "update",
+        "metadata": [
+            {
+                "metadataKey": "processingDate",
+                "metadataValue": datetime.now().isoformat(),
+                "metadataValueType": "date"
+            },
+            {
+                "metadataKey": "pipelineVersion",
+                "metadataValue": "2.1.0",
+                "metadataValueType": "string"
+            },
+            {
+                "metadataKey": "totalProcessingTime",
+                "metadataValue": "45.2",
+                "metadataValueType": "number"
+            }
+        ]
     }
 
-    # Write root metadata
+    # Write asset metadata
     s3_client.put_object(
         Bucket=bucket,
-        Key=f"{base_key}/asset_metadata.json",
-        Body=json.dumps(root_metadata),
+        Key=f"{base_key}asset.metadata.json",
+        Body=json.dumps(asset_metadata),
         ContentType='application/json'
     )
 
-    # Generate file-level metadata for a specific file
+    # 2. Generate file-level metadata (replace all existing)
     file_metadata = {
-        "analyzed": "true",
-        "fileType": "3D Model",
-        "vertexCount": "25000",
-        "faceCount": "15000"
+        "type": "metadata",
+        "updateType": "replace_all",
+        "metadata": [
+            {
+                "metadataKey": "vertices",
+                "metadataValue": "150000",
+                "metadataValueType": "number"
+            },
+            {
+                "metadataKey": "triangles",
+                "metadataValue": "300000",
+                "metadataValueType": "number"
+            },
+            {
+                "metadataKey": "boundingBox",
+                "metadataValue": "{\"min\": {\"x\": -10, \"y\": -5, \"z\": 0}, \"max\": {\"x\": 10, \"y\": 5, \"z\": 20}}",
+                "metadataValueType": "json"
+            }
+        ]
     }
 
-    # Write file-level metadata
-    # For a file at /models/building.glb, create /models/building.glb_metadata.json
+    # Write file metadata
     s3_client.put_object(
         Bucket=bucket,
-        Key=f"{base_key}/models/building.glb_metadata.json",
+        Key=f"{base_key}models/building.glb.metadata.json",
         Body=json.dumps(file_metadata),
+        ContentType='application/json'
+    )
+
+    # 3. Generate file-level attributes (for search/filtering)
+    file_attributes = {
+        "type": "attribute",
+        "updateType": "update",
+        "metadata": [
+            {
+                "metadataKey": "color",
+                "metadataValue": "red",
+                "metadataValueType": "string"
+            },
+            {
+                "metadataKey": "material",
+                "metadataValue": "metal",
+                "metadataValueType": "string"
+            },
+            {
+                "metadataKey": "category",
+                "metadataValue": "building",
+                "metadataValueType": "string"
+            }
+        ]
+    }
+
+    # Write file attributes
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=f"{base_key}models/building.glb.attribute.json",
+        Body=json.dumps(file_attributes),
         ContentType='application/json'
     )
 
     return {
         'statusCode': 200,
-        'body': json.dumps({'message': 'Metadata generated successfully'})
+        'body': json.dumps({'message': 'Metadata and attributes generated successfully'})
     }
 ```
 
+### Metadata vs Attributes - When to Use Each
+
+#### Use Metadata When:
+
+-   You need rich data types (numbers, dates, JSON objects, coordinates)
+-   Data is complex or structured
+-   Data is used for display or detailed analysis
+-   Examples: dimensions, processing timestamps, bounding boxes, transformation matrices
+
+#### Use Attributes When:
+
+-   You need simple string key-value pairs
+-   Data is used for filtering or search
+-   Data is categorical or tag-like
+-   Examples: color, material, category, status, tags
+
 ### Best Practices
 
-1. **Use Descriptive Field Names**: Choose clear, meaningful field names that describe the metadata
-2. **Include Timestamps**: Add processing timestamps to track when metadata was generated
-3. **Validate JSON**: Ensure all metadata files are valid JSON before writing to S3
-4. **Handle Errors Gracefully**: Metadata generation failures shouldn't cause pipeline failures
-5. **Document Metadata Schema**: Document what metadata fields your pipeline generates
-6. **Use Appropriate Data Types**: Use strings for text, numbers for metrics, objects for structured data
-7. **Avoid Reserved Fields**: Don't use `assetId` or `databaseId` as metadata field names
-8. **Keep File Paths Consistent**: Ensure file-level metadata paths match the actual file structure
+1. **Choose Appropriate Update Type**:
+
+    - Use `"update"` for incremental changes (safer, preserves existing data)
+    - Use `"replace_all"` for complete refreshes (ensures no stale data)
+
+2. **Use Correct Value Types**:
+
+    - Match `metadataValueType` to your data
+    - Use `"number"` for numeric values (enables range queries)
+    - Use `"date"` for timestamps (enables date range queries)
+    - Use `"json"` for complex nested structures
+
+3. **Validate Before Writing**:
+
+    - Ensure JSON is valid before writing to S3
+    - Validate that `metadataValue` matches `metadataValueType`
+    - Test with small datasets first
+
+4. **Handle Errors Gracefully**:
+
+    - Metadata generation failures shouldn't cause pipeline failures
+    - Log errors but continue processing
+    - Return success even if some metadata files fail
+
+5. **Document Your Schema**:
+
+    - Document what metadata/attribute keys your pipeline generates
+    - Document expected value types
+    - Provide examples in pipeline documentation
+
+6. **Use Descriptive Keys**:
+
+    - Choose clear, meaningful key names
+    - Use consistent naming conventions (camelCase or snake_case)
+    - Avoid special characters in keys
+
+7. **Separate Concerns**:
+    - Use metadata for rich data types
+    - Use attributes for simple searchable values
+    - Don't duplicate data between metadata and attributes
+
+### Advanced Example: Multi-File Processing
+
+```python
+def process_multiple_files(metadata_path, bucket, base_key):
+    """Process multiple files and generate metadata/attributes for each"""
+
+    files_to_process = [
+        {
+            "path": "models/building.glb",
+            "metadata": {
+                "vertices": "150000",
+                "triangles": "300000"
+            },
+            "attributes": {
+                "category": "building",
+                "lod": "high"
+            }
+        },
+        {
+            "path": "textures/diffuse.png",
+            "metadata": {
+                "resolution": "2048x2048",
+                "format": "PNG"
+            },
+            "attributes": {
+                "type": "texture",
+                "channel": "diffuse"
+            }
+        }
+    ]
+
+    for file_info in files_to_process:
+        # Generate metadata
+        metadata_content = {
+            "type": "metadata",
+            "updateType": "update",
+            "metadata": [
+                {
+                    "metadataKey": key,
+                    "metadataValue": value,
+                    "metadataValueType": "string"  # Adjust based on actual type
+                }
+                for key, value in file_info["metadata"].items()
+            ]
+        }
+
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=f"{base_key}{file_info['path']}.metadata.json",
+            Body=json.dumps(metadata_content),
+            ContentType='application/json'
+        )
+
+        # Generate attributes
+        attributes_content = {
+            "type": "attribute",
+            "updateType": "update",
+            "metadata": [
+                {
+                    "metadataKey": key,
+                    "metadataValue": value,
+                    "metadataValueType": "string"
+                }
+                for key, value in file_info["attributes"].items()
+            ]
+        }
+
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=f"{base_key}{file_info['path']}.attribute.json",
+            Body=json.dumps(attributes_content),
+            ContentType='application/json'
+        )
+```
 
 ### Troubleshooting
 
 **Metadata Not Appearing:**
 
--   Verify files are named with `_metadata.json` suffix
--   Check that JSON is valid and properly formatted
--   Ensure files are written to the correct `outputS3AssetMetadataPath`
--   Review CloudWatch logs for processing errors
+-   Verify files follow naming convention: `.metadata.json` or `.attribute.json`
+-   Check that JSON follows request model structure
+-   Ensure files are written to correct `outputS3AssetMetadataPath`
+-   Review CloudWatch logs for validation errors
 
-**Metadata Overwriting Issues:**
+**Type Validation Errors:**
 
--   Remember that existing metadata fields are overwritten by new values
--   Use unique field names to avoid unintended overwrites
--   Check `_metadata_last_updated` timestamp to verify when metadata was last modified
+-   Ensure `metadataValueType` matches the actual value format
+-   For numbers, ensure value is numeric string: `"123"` not `123`
+-   For dates, use ISO format: `"2024-01-15T10:30:00Z"`
+-   For JSON, ensure value is JSON string: `"{\"key\": \"value\"}"`
 
-**File-Level Metadata Not Found:**
+**updateType Not Working:**
 
--   Verify the metadata filename exactly matches the target file with `_metadata.json` appended
--   Ensure the directory structure in metadata path matches the asset structure
--   Check that the file exists in the asset before adding metadata
+-   Verify `updateType` is `"update"` or `"replace_all"` (lowercase)
+-   Check CloudWatch logs for auto-correction warnings
+-   Ensure field is at top level of JSON, not nested
+
+**Attributes Rejected:**
+
+-   Attributes only support `"string"` metadataValueType
+-   Convert numbers/dates to strings for attributes
+-   Use metadata for rich data types
+
+**File Path Issues:**
+
+-   Ensure file paths in metadata filenames match actual file structure
+-   Use relative paths from asset root (no leading slash)
+-   Example: `folder/file.glb.metadata.json` not `/folder/file.glb.metadata.json`
+
+### Migration from Old Format
+
+If you have pipelines using the old `*_metadata.json` format (without request model structure), you need to update them:
+
+**Old Format (Deprecated):**
+
+```json
+{
+    "field1": "value1",
+    "field2": "value2"
+}
+```
+
+**New Format (Required):**
+
+```json
+{
+    "type": "metadata",
+    "metadata": [
+        {
+            "metadataKey": "field1",
+            "metadataValue": "value1",
+            "metadataValueType": "string"
+        },
+        {
+            "metadataKey": "field2",
+            "metadataValue": "value2",
+            "metadataValueType": "string"
+        }
+    ]
+}
+```
+
+The old format is **not backward compatible** with VAMS v2.3+. All pipelines must be updated to use the new request model structure.
 
 ## Use-case Specific Pipelines - Execution Through VAMS Pipelines
 

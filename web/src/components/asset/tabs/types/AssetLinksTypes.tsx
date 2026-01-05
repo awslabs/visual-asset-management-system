@@ -81,6 +81,7 @@ export interface AssetLinksState {
     searchTerm: string;
     searchResults: TreeNodeItem[];
     isSearching: boolean;
+    restrictMetadataOutsideSchemas?: boolean; // Restrict adding metadata outside schemas
     // Optional metadata change handler for upload mode
     onAssetLinkMetadataChange?: (
         assetId: string,
@@ -129,6 +130,7 @@ export interface AssetLinksTabProps {
     showErrors?: boolean;
     onAssetLinksChange?: (assetLinks: NewAssetLinksData) => void;
     initialData?: NewAssetLinksData;
+    restrictMetadataOutsideSchemas?: boolean;
     // databaseId is also used in upload mode to filter asset search
 }
 

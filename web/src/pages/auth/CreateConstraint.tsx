@@ -106,6 +106,38 @@ export default function CreateConstraint({
 
     console.log("formState", formState, initState);
 
+    // Filter out invalid criteria fields when editing an existing constraint
+    useEffect(() => {
+        if (initState && initState.objectType) {
+            const validFields = fieldNamesToObjectTypeMapping[initState.objectType];
+            if (validFields) {
+                const validFieldValues = validFields.map((field) => field.value);
+
+                const filterValidCriteria = (criteria: ConstraintCriteria[] | undefined) => {
+                    if (!criteria) return criteria;
+                    return criteria.filter((item) => validFieldValues.includes(item.field));
+                };
+
+                const filteredCriteriaAnd = filterValidCriteria(initState.criteriaAnd);
+                const filteredCriteriaOr = filterValidCriteria(initState.criteriaOr);
+
+                // Only update if filtering actually removed items
+                if (
+                    (initState.criteriaAnd &&
+                        filteredCriteriaAnd?.length !== initState.criteriaAnd.length) ||
+                    (initState.criteriaOr &&
+                        filteredCriteriaOr?.length !== initState.criteriaOr.length)
+                ) {
+                    setFormState({
+                        ...formState,
+                        criteriaAnd: filteredCriteriaAnd || [],
+                        criteriaOr: filteredCriteriaOr || [],
+                    });
+                }
+            }
+        }
+    }, [initState]);
+
     // useEffect(() => {
     //     const getData = async () => {
     //         let api_repsonse_message = await fetchMetadataSchema();

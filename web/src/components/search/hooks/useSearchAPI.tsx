@@ -169,7 +169,8 @@ export const useSearchAPI = () => {
                         const metadataKeys = searchQuery.metadataFilters
                             .filter((filter) => filter.key && filter.key.trim() !== "")
                             .map((filter) => {
-                                const fieldType = filter.fieldType || "str";
+                                // Always use "str" type for all metadata searches
+                                const fieldType = "str";
                                 let fieldName = filter.key;
 
                                 // Remove MD_ prefix if user added it
@@ -206,8 +207,8 @@ export const useSearchAPI = () => {
                         const metadataTerms = searchQuery.metadataFilters
                             .filter((filter) => filter.key && filter.key.trim() !== "") // Ignore empty field names
                             .map((filter) => {
-                                // Construct full field name: MD_<type>_<fieldname>
-                                const fieldType = filter.fieldType || "str";
+                                // Always use "str" type for all metadata searches
+                                const fieldType = "str";
                                 let fieldName = filter.key;
 
                                 // Remove MD_ prefix if user added it

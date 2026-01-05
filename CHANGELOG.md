@@ -2,80 +2,115 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.4.0] (2026-01-16)
+
 ### ⚠ BREAKING CHANGES
 
-The permission authorizations constraints has a new dynamoDB table that is no longer shared with authEntities to increase permission lookup performance. Old constraints added or updated will need to be migrated. VAMS default constructs will be re-added (Admin/RO).
+Permission authorization constraints now use a dedicated DynamoDB table (no longer shared with authEntities) to improve permission lookup performance. Existing custom constraints must be migrated. VAMS default constructs (Admin/RO) will be re-added automatically.
 
-**Recommended Upgrade Path:** Run upgrade script for the new permission constraints table to migrate from the old table to the new if new constraints added or modified on top of the default that VAMS already adds: `infra\deploymentDataMigration\v2.3_to_v2.4\upgrade`
+Metadata and metadataSchema DynamoDB tables have been replaced with new tables. The data migration script must be run to migrate data from the deprecated tables.
 
-## [2.4.0] (2026-02-30)
+OpenSearch indexes now include additional schema for "AB\_" attribute fields. A re-index with clearing of old indexes is required to apply the new schema. The migration script handles this process.
+
+**Recommended Upgrade Path:** Run the upgrade script to migrate permission constraints from the old table to the new one if custom constraints were added or modified beyond VAMS defaults: `infra\deploymentDataMigration\v2.3_to_v2.4\upgrade`
 
 ### Features
 
--   (Breaking Change) Reactored permission constraints dynamoDB table, Casbin logic for lookup, and authConstraints API to be more performant and follow the new refactor patterns for dynamoDB tables. This should increase performance of the solution for repeat data actions.
--   **Web** Added the Veerum 3D Model licened viewer to the viewer plugin system for `e57, las, laz, ply, and .json (3D Tile)` files. Head to [veerum.com](https://www.veerum.com/) for license purchasing and then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
-    -   Note: this viewer uses the Potree Auto-Processing pipeline and must be turned on to support the loading of PointCloud files.
--   Added a new Amazon EKS pipeline option for RapidPipeline use-case pipeline (to compliment existing Amazon ECS). This now provides a pattern example too for other use-case pipelines that would like to implement with Kubernetes (EKS) verses using the Elastic Container Service (ECS) implementation.
--   **Web** Added API (`/database/{databaseId}/assets/{assetId}/unarchiveAsset`) and UI on Asset and File search for Unarchive Asset. Additionally cleaned up UI logic for archived asset elements.
--   **Web** Added a Rename File operation on the asset details file manager when singly selecting files. This uses the existing file move API.
--   Added new CDK deployment configuration support for disabling both Cloudfront and ALB static website deployment options to allow for API-only deployments of VAMS
--   Added new CDK deployment configuration support for Cloudfront static website custom domains and TLS certificate imports
--   Refactored backend data indexing flow to allow for both current open search indexing and easy expansion to indexing data and files with other solutions or partner integrations
--   **Web** Refactor of the web upload workflow for files again to further parallelize uploads into batches, handles error and retries, and handle backend throttling
--   Update the ./listFiles API to have an additional `basic` query parameter boolean (default: false) to do a quick file listing pull without additional archival, version, or preview file data (much quicker).
+-   (Breaking Change) Overhauled metadata schema to support multiple schemas per database (including "GLOBAL" database schemas) and entity types (database, asset links, assets, asset files). Asset files can be further restricted by file extension. File metadata and attributes are now supported; file attributes only support "string" field type.
+    -   Supported field types for schemas and metadata across all entities: STRING, MULTILINE_STRING, INLINE_CONTROLLED_LIST, NUMBER, BOOLEAN, DATE, XYZ, WXYZ, MATRIX4X4, GEOPOINT, GEOJSON, LLA, JSON
+    -   Schemas can be named, and multiple schemas can apply to entity type metadata with aggregation (e.g., a GLOBAL schema for a specific entity type will stack with a database-specific schema for the same entity type). Field name conflicts default metadata to `string` with no conditions applied.
+    -   New CDK config options to auto-load default GLOBAL schemas. Options under `app.metadataSchema.X` are now available and enabled by default. See `infra\lib\nestedStacks\apiLambda\constructs\dynamodb-metadataschema-defaults-construct.ts` for default schemas.
+    -   New permission constraint fields for modifying and retrieving metadataSchema: metadataSchemaName, metadataSchemaEntityType. Deprecated: field
+    -   **Web** Updated to support new fields and APIs
+    -   **CLI** Updated to support new fields and APIs. CLI currently supports only GET/LIST for metadata schema.
+    -   Data migration scripts added to migrate old metadata schema to new DynamoDB tables
+    -   Note: Schema rule restrictions are enforced only when updating metadata via API and some web validation checks. Metadata may not match schema requirements in some cases (e.g., new asset creation or pipeline returns). Schema validation is not foolproof for restricting metadata (e.g., new assets won't have required metadata until the first metadata API call validates requirements).
+-   (Breaking Change) Overhauled metadata APIs, CLI, and Web interfaces to support metadata for multiple data entities and entity types (database, asset, asset file, asset links), improved validation and error handling, bulk metadata updates (including CSV import/export), and enhanced metadata schema overlays. Files now support "attributes" separately from metadata (only "string" value type for attributes). General file search includes file attribute fields, but specific metadata searching is limited to metadata fields.
+    -   Supported field types for metadata: STRING, MULTILINE_STRING, INLINE_CONTROLLED_LIST (only with applied schema), NUMBER, BOOLEAN, DATE, XYZ, WXYZ, MATRIX4X4, GEOPOINT, GEOJSON, LLA, JSON
+    -   MetadataSchema now enforced at API level with web support for schema overlays
+    -   Updated workflow executions and return formats for metadata (and updated applicable use-case pipelines) to support new entity types and field value types
+    -   Updated OpenSearch indexing to catalog new DynamoDB tables for metadata. File attributes are now stored separately in the file index as `AB_` fields. This creates new OpenSearch v2 indexes with a new name as new index schemas need to be applied.
+    -   Limit of 500 metadata and attributes per metadata entity type
+    -   **Web** Updated to support new fields and APIs. Web currently doesn't support displaying/updating database metadata (API/CLI functionality only).
+    -   **CLI** Updated to support new fields and APIs.
+    -   Data migration scripts added to migrate old asset and file metadata to new DynamoDB tables
+-   (Breaking Change) Refactored permission constraints DynamoDB table, Casbin lookup logic, and authConstraints API for improved performance following new DynamoDB table refactor patterns. This improves solution performance for repeated data actions.
+-   Updated databases, metadata, and file uploads to support new database config options (on database APIs) for optionally restricting file extension types on asset file upload and restricting additional metadata outside applicable schemas: `restrictMetadataOutsideSchemas` (bool, default: False) and `restrictFileUploadsToExtensions` (string, default: Empty (allow all), also supports `.all` to allow all)
+    -   Added new PUT API path to update databases at `/database/{databaseId}`; POST API method no longer allows database updating
+    -   Note: File extension restrictions apply only on file upload and are not checked on direct S3 bucket file manipulation
+    -   **Web** Updated to support new fields and APIs
+    -   **CLI** Updated to support new fields and APIs
+-   **Web** Added Veerum 3D Model licensed viewer to the viewer plugin system for `e57, las, laz, ply, and .json (3D Tile)` files. Visit [veerum.com](https://www.veerum.com/) for license purchasing, then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
+    -   Note: This viewer requires the Potree Auto-Processing pipeline to be enabled for PointCloud file loading.
+-   Added new Amazon EKS pipeline option for RapidPipeline use-case pipeline (complementing existing Amazon ECS). This provides a pattern example for other use-case pipelines implementing Kubernetes (EKS) versus Elastic Container Service (ECS).
+-   **Web** Added API (`/database/{databaseId}/assets/{assetId}/unarchiveAsset`) and UI on Asset and File search for Unarchive Asset. Cleaned up UI logic for archived asset elements.
+-   **Web** Added Rename File operation in asset details file manager when selecting single files. Uses existing file move API.
+-   Added new CDK deployment configuration support for disabling both CloudFront and ALB static website deployment options to enable API-only VAMS deployments
+-   Added new CDK deployment configuration support for CloudFront static website custom domains and TLS certificate imports
+-   Refactored backend data indexing flow to support current OpenSearch indexing and enable easy expansion to other indexing solutions or partner integrations
+-   **Web** Refactored web upload workflow for files to further parallelize uploads into batches, handle errors and retries, and manage backend throttling
+-   Updated ./listFiles API with additional `basic` query parameter (boolean, default: false) for quick file listing without archival, version, or preview file data (much faster).
     -   **CLI** File listing command now has auto-paginate and basic parameter flags
--   **Web** Updated asset files manager to implement a lazy loading approach to loading files with the API calls to make page loads quicker to getting to file information (helps when an asset has a lot of files)
--   **CLI** Added --auto-paginate params (and adjusted other associated pagination parameers) to listing of databases, buckets, assets, and lists
--   **CLI** Updated CLI profile/auth/setup to pull in and display across various commands more of the environment configurations pulled from the API
--   Workflow execution restrictions have been loosened to now allow for multiple running executions of the same workflow on an asset as long as the files being run against are different (previously didn't factor in inputted files and was only allowing 1 running execution per workflow per asset)
--   **Web** New workflow/pipelines auto-triggering execution system for file uploads. Workflows have a new property on them that can be set in the workflow editor and some have default configurations in the deployed CDK use-cases pipeline to auto-set this (`autoRegisterAutoTriggerOnFileUpload`). Parts of this system will be refactored again in an upcoming pipeline overhaul initiative.
-    -   The trigger for this is setting which file extensions should kick of the pipeline for each file uploaded to an asset (new or modified). This is a comma-deliminated list of extensions. If ".all" is provided, then it will execute on all file extensions uploaded.
-    -   Feature is implemented with the new indexing SNS where this is a new SQS queue subscribing to that system for file uploads to check on executions per file. This allows for high scalability for files being uploaded.
-    -   PotreePipeline now has it's default set to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, previously bypassing the Workflow system
--   **Web** Workflow Executions on View Asset now lazy loads data in, no longer for now shows the search bar
+-   **Web** Updated asset files manager to implement lazy loading approach for loading files via API calls, making page loads faster when accessing file information (especially helpful for assets with many files)
+-   **CLI** Added --auto-paginate parameter (and adjusted other pagination parameters) to listing of databases, buckets, assets, and lists
+-   **CLI** Updated CLI profile/auth/setup to pull in and display more environment configurations from the API across various commands
+-   Workflow execution restrictions loosened to allow multiple running executions of the same workflow on an asset as long as different files are being processed (previously allowed only 1 running execution per workflow per asset without considering input files)
+-   **Web** New workflow/pipeline auto-triggering execution system for file uploads. Workflows have a new property settable in the workflow editor; some have default configurations in deployed CDK use-case pipelines to auto-set this (`autoRegisterAutoTriggerOnFileUpload`). Parts of this system will be refactored in an upcoming pipeline overhaul.
+    -   Trigger is set by specifying which file extensions should initiate the pipeline for each file uploaded to an asset (new or modified). This is a comma-delimited list of extensions. If ".all" is provided, it executes on all file extensions uploaded.
+    -   Feature implemented with new indexing SNS where a new SQS queue subscribes to the system for file uploads to check executions per file. This enables high scalability for file uploads.
+    -   PotreePipeline now defaults to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, which previously bypassed the Workflow system
+-   **Web** Workflow Executions on View Asset now lazy loads data; search bar temporarily removed
 -   **CLI** Added new command grouping (`workflow`) and commands for workflow listing, asset workflow execution listing, and executing new workflows on assets
-    -   Note: Backend API hasn't been upgraded to new request/response model pattern yet, expected as part of pipeline/workflow overhaul development task
--   **Web** Web text viewer now additionally supports viewing of files of types" `".inf",".cfg",".md",".sh",".csv",".py",".log",".js",".ts",".sql",".ps1"`
--   File type uploads restrictions no longer restrict file types of `".ps1",".sh",".py",".ini",".inf",".sql",".js",".docx"`
-
+    -   Note: Backend API not yet upgraded to new request/response model pattern; expected as part of pipeline/workflow overhaul development task
+-   **Web** Web text viewer now additionally supports file types: `".inf", ".cfg", ".md", ".sh", ".csv", ".py", ".log", ".js", ".ts", ".sql", ".ps1"`
+-   File type upload restrictions no longer restrict: `".ps1", ".sh", ".py", ".ini", ".inf", ".sql", ".js", ".docx"`
+-   **Web** Asset Search now has a search mode option to show map thumbnails, similar to preview thumbnails, displaying a mini-map for each asset record in the regular search listing that has location or lat/long metadata defined. This is in addition to the existing map view for all assets with this data. Only shown if location services are enabled on the backend.
+-   OpenSearch (OS) no longer indexes metadata fields as individual OS fields but instead groups metadata (and the new attributes) under single `MD_` and `AB_` flat-object fields for asset and file indexes. This may reduce future functionality to be able to do advanced searching on these fields but provides both better performance and prevents future errors when hitting OS max field limits.
 
 ### Bug Fixes
 
--   Permanently deleting an asset now also deletes any associated asset link / asset link metadata in the database (caused inconsistencies with viewing asset links from the other related assets)
--   Fixed bug where archived assets were not being properly reindexed in OpenSearch as archived
--   Fixed bug where archiving an asset caused the asset (or a default database) to be re-created in some scenarios as part of the S3 file re-indexing process
--   S3 Bucket sync processes to create assets from S3 objects will now still operate, even when OpenSearch functionality is disabled (part of the indexing flow re-factor)
--   Fixed Casbin cache logic to truely be 60 seconds for updating constraints, roles, and users in roles in a lambda for authorization logic
--   Fixed bug with move file API command not allowing allowing a move (or rename) due to issues with the destination check logic
--   Fixed bug in many use-case pipelines where early-on errors or validation issues were not properly triggering the external workflow for an error (this caused workflows to run to prescribed timeout instead of failing early)
--   **Web** File previews, if provided as a `.previewFile.`. will now display correctly in the Asset/File search.
--   **Web** File operations in the asset details file manager appropriately refresh the details panel during certain operations
--   **Web** Fixed UI where some delete operations were not refreshing the page and/or not showing the correct record ID to be deleted (display issue only)
--   Fixed various API pagination issues with listing database, assets, and files
--   **CLI** Fix to ensure when the `--json-output` flag is set to make sure all errors coming back are also in proper JSON format
--   Fixed the assets and auxiliary assets streaming APIs to properly check for payload sizes to be under 6mb while also now returning presigned S3 URL redirects for larger payloads. This fixes issues with both Potree and 3D Tile viewers where the client may choose to fetch larger range sizes for tiled subsets.
--   **Web** Added tracking of asset file input for workflow execution history and displaying that on the view asset page
--   **Web** Updated logic for file viewers (Potree viewer) that require fetching/passing of JWT tokens for API header passing to now both fetch/refresh the token as needed without needing to refresh the page and properly work with external OAUTH2 tokens (non-cognito)
--   **CLI** Fixed assets download command to properly download an entire assets worth of files at once from the root or from different file folders on down
--   **Web** Fixed Workflow Execution on View Asset not auto-refreshing the data when executing a new workflow, shows proper execution counts now
--   **Web** Fixed error when building/installing Potree Viewer and Pipeline on some OS build versions (like Linux)
--   **Web** Fixed bug in "Execute Workflow" modal that didn't allow a user to select the entire asset as an input (had to select an individual file)
+-   Permanently deleting an asset now also deletes associated asset links and asset link metadata in the database (previously caused inconsistencies when viewing asset links from related assets)
+-   Fixed bug where archived assets were not properly reindexed in OpenSearch as archived
+-   Fixed bug where archiving an asset caused the asset (or default database) to be re-created in some scenarios during S3 file re-indexing
+-   S3 bucket sync processes to create assets from S3 objects now operate even when OpenSearch functionality is disabled (part of indexing flow refactor)
+-   Fixed Casbin cache logic to properly enforce 60-second cache duration for updating constraints, roles, and user roles in lambda authorization logic
+-   Fixed bug in move file API command that prevented moves (or renames) due to destination check logic issues
+-   Fixed bug in many use-case pipelines where early errors or validation issues did not properly trigger external workflow error handling (caused workflows to run to prescribed timeout instead of failing early)
+-   **Web** File previews provided as `.previewFile.` now display correctly in Asset/File search
+-   **Web** File operations in asset details file manager now appropriately refresh the details panel during certain operations
+-   **Web** Fixed UI where some delete operations did not refresh the page and/or did not show the correct record ID to be deleted (display issue only)
+-   Fixed various API pagination issues with listing databases, assets, and files
+-   **CLI** Fixed to ensure all errors return in proper JSON format when `--json-output` flag is set
+-   Fixed assets and auxiliary assets streaming APIs to properly check payload sizes under 6MB and return presigned S3 URL redirects for larger payloads. This fixes issues with Potree and 3D Tile viewers where clients may fetch larger range sizes for tiled subsets.
+-   **Web** Added tracking of asset file input for workflow execution history and display on the view asset page
+-   **Web** Updated logic for file viewers (Potree viewer) that require fetching/passing JWT tokens for API header passing to fetch/refresh tokens as needed without page refresh and properly work with external OAuth2 tokens (non-Cognito)
+-   **CLI** Fixed assets download command to properly download entire asset files at once from root or from different file folders
+-   **Web** Fixed Workflow Execution on View Asset not auto-refreshing data when executing a new workflow; now shows proper execution counts
+-   **Web** Fixed error when building/installing Potree Viewer and Pipeline on some OS build versions (e.g., Linux)
+-   **Web** Fixed bug in "Execute Workflow" modal that prevented user from selecting the entire asset as input (previously required selecting an individual file)
+-   Added back-off retries to OpenSearch file and asset indexing lambdas when 429 `too many requests` errors happens; this helps prevent files and assets from not getting indexed properly during heavy load or re-indexing operations
 
 ### Chores
 
--   Refactored the tag, tagType, roles, userRoles, authConstraints, auxiliary asset stream API service backends to meet new API standard for error handling/checking, validation, and request/response models usage.
--   Refactored some API request/response models to replace deprecated pdyantic v1 "extra" field and replaced with proper v2 pattern
--   Refactored rest of CDK lambdabuilder functions to follow new naming pattern for table inputs and permissions
--   Further adjusted upload thresholds for throttling and file/part/sequence splitting across the backend API, web, and CLI to tune for not only large files but many files for upload
--   Updated ./listFiles API to default maxitems to 10000 and max page size to be 1500 for basic mode and 100 for non-basic.
+-   Refactored tag, tagType, roles, userRoles, authConstraints, and auxiliary asset stream API service backends to meet new API standards for error handling, validation, and request/response model usage
+-   Refactored some API request/response models to replace deprecated Pydantic v1 "extra" field with proper v2 pattern
+-   Refactored remaining CDK lambdabuilder functions to follow new naming pattern for table inputs and permissions
+-   Further adjusted upload thresholds for throttling and file/part/sequence splitting across backend API, web, and CLI to optimize for both large files and many files
+-   Updated ./listFiles API to default maxItems to 10000 and max page size to 1500 for basic mode and 100 for non-basic mode
 -   API for `/secureConfig` now returns the website deployed URL (if a website is deployed)
--   File streaming APIs now support HEAD requests to allow for checking if a file exists before streaming its contents with a GET
--   **Web** Consolidated auth token functions to a utility function, out of Auth.tsx.
--   Updated logic of when fileIndexerSNS queue is published to from a S3 object change to reduce calls for objects generally that should be skipped (i.e. folder objects, `init` files/folders, special exclusion folder prefixes and their objects). These will still get processed by the sqsBucketSync queue/lambda but will not be further re-published. This should lessen processing downstream where usually these objects are ignored anyway.
--   **CLI** Removed API version check on all API commands to save on CLI API calls and increase performance a small amount. Only auth and setup commands will now check CLI version against API version.
--   Updated all lambdas memory to 5308 from 3003 which increases the vCPU from 2 to 4, increasing API response performance.
+-   File streaming APIs now support HEAD requests to check if a file exists before streaming its contents with GET
+-   **Web** Consolidated auth token functions to a utility function, moved out of Auth.tsx
+-   Updated logic for when fileIndexerSNS queue is published from S3 object changes to reduce calls for objects that should be skipped (e.g., folder objects, `init` files/folders, special exclusion folder prefixes and their objects). These still get processed by sqsBucketSync queue/lambda but will not be further re-published, reducing downstream processing where these objects are typically ignored.
+-   **CLI** Removed API version check on all API commands to reduce CLI API calls and slightly increase performance. Only auth and setup commands now check CLI version against API version.
+-   Updated all lambda memory to 5308 from 3003, increasing vCPU from 2 to 4 and improving API response performance
+-   Updated authz criteria builder on backend to ignore fields in criteria that are not in the current constants file (e.g., deprecated authz fields)
+-   Added warning on OS reindex utility when the lambda function times-outs that it doesn't return an error code. It returns a warning that the lambda may still be running and to check cloudwatch logs.
 
 ### Known Outstanding Issues
+
+-   With multiple S3 bucket support, scenarios may occur where identical assetIds exist across different buckets/prefixes in different databases, causing lookup conflicts in Asset Versions, Comments, and subscriptions functionality. This can only occur with manual S3 changes, as assetIds generated from VAMS uploads use unique GUIDs.
+-   Using the same pipeline ID in both GLOBAL and non-GLOBAL databases will cause overlap conflicts and issues.
+-   Pipeline metadata inputs have a limit when sending to ECS pipelines. Assets and/or files with extensive metadata may exceed the ECS limit for JSON metadata input (8k characters). Future pipeline overhauls will convert metadata input to a file to resolve this.
 
 ## [2.3.1] (2025-11-21)
 
