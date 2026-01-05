@@ -172,7 +172,7 @@
         </mxCell>
         <mxCell id="fq6umfQTNeX_q_3_Q7GG-76" value="Publish to&amp;nbsp;&lt;div&gt;File-Change SNS&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="fq6umfQTNeX_q_3_Q7GG-54" vertex="1" connectable="0">
           <mxGeometry x="-0.8794" y="1" relative="1" as="geometry">
-            <mxPoint x="4" y="-26" as="offset" />
+            <mxPoint x="-3" y="-18" as="offset" />
           </mxGeometry>
         </mxCell>
         <mxCell id="fq6umfQTNeX_q_3_Q7GG-55" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" parent="1" source="fq6umfQTNeX_q_3_Q7GG-14" target="fq6umfQTNeX_q_3_Q7GG-27" edge="1">
@@ -193,7 +193,7 @@
         </mxCell>
         <mxCell id="fq6umfQTNeX_q_3_Q7GG-75" value="Publish to&amp;nbsp;&lt;div&gt;File-Change SNS&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="fq6umfQTNeX_q_3_Q7GG-57" vertex="1" connectable="0">
           <mxGeometry x="-0.87" y="2" relative="1" as="geometry">
-            <mxPoint x="-9" y="-13" as="offset" />
+            <mxPoint x="-9" y="-14" as="offset" />
           </mxGeometry>
         </mxCell>
         <mxCell id="fq6umfQTNeX_q_3_Q7GG-58" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1.003;exitY=0.349;exitDx=0;exitDy=0;exitPerimeter=0;" parent="1" source="fq6umfQTNeX_q_3_Q7GG-13" edge="1">
@@ -217,14 +217,14 @@
         <mxCell id="fq6umfQTNeX_q_3_Q7GG-67" value="&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;Data Sources&amp;nbsp;&lt;/span&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;Change Trigger&lt;/span&gt;&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontStyle=1" parent="1" vertex="1">
           <mxGeometry x="70" y="-50" width="120" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="fq6umfQTNeX_q_3_Q7GG-68" value="Global&lt;div&gt;Queues&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontStyle=1" parent="1" vertex="1">
-          <mxGeometry x="321" y="-50" width="70" height="50" as="geometry" />
+        <mxCell id="fq6umfQTNeX_q_3_Q7GG-68" value="Global&lt;div&gt;Notifications&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="306" y="-50" width="100" height="50" as="geometry" />
         </mxCell>
         <mxCell id="fq6umfQTNeX_q_3_Q7GG-69" value="System-Specific&lt;div&gt;Subscriber Queues/Implementations&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=14;fontStyle=1" parent="1" vertex="1">
           <mxGeometry x="493" y="-50" width="250" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="fq6umfQTNeX_q_3_Q7GG-70" value="&lt;div&gt;Bucket Sync File/Asset Registration&lt;/div&gt;(Duplicated Per Asset Table)" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontStyle=1" parent="1" vertex="1">
-          <mxGeometry x="810" y="122" width="210" height="40" as="geometry" />
+        <mxCell id="fq6umfQTNeX_q_3_Q7GG-70" value="&lt;div&gt;Bucket Sync File/Asset Registration&lt;/div&gt;(Duplicated Per Asset Bucket/Prefix)" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="805" y="122" width="220" height="40" as="geometry" />
         </mxCell>
         <mxCell id="fq6umfQTNeX_q_3_Q7GG-71" value="&lt;div&gt;Future Use&lt;/div&gt;&lt;div&gt;Addons&lt;/div&gt;&lt;div&gt;(Not Currently Implemented)&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontStyle=1" parent="1" vertex="1">
           <mxGeometry x="830" y="790" width="170" height="60" as="geometry" />
@@ -235,8 +235,8 @@
         <mxCell id="fq6umfQTNeX_q_3_Q7GG-73" value="OpenSearch System&lt;div&gt;Indexer for File-level Data&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontStyle=1" parent="1" vertex="1">
           <mxGeometry x="835" y="587" width="160" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="fq6umfQTNeX_q_3_Q7GG-74" value="Workflow System&lt;div&gt;Workflow Auto-Trigger&amp;nbsp;&lt;/div&gt;&lt;div&gt;for S3 Object Add&lt;/div&gt;&lt;div&gt;(Ignores S3 Object Removal&amp;nbsp;&lt;/div&gt;&lt;div&gt;and Metadata Changes)&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontStyle=1" parent="1" vertex="1">
-          <mxGeometry x="825" y="1068.3700000000001" width="180" height="90" as="geometry" />
+        <mxCell id="fq6umfQTNeX_q_3_Q7GG-74" value="Workflow System&lt;div&gt;Workflow Auto-Trigger&amp;nbsp;&lt;/div&gt;&lt;div&gt;for S3 Object Add&lt;/div&gt;&lt;div&gt;(Ignores S3 Object Removal&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;)&lt;/span&gt;&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="825" y="1078.3700000000001" width="180" height="70" as="geometry" />
         </mxCell>
         <mxCell id="fq6umfQTNeX_q_3_Q7GG-77" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#66B2FF;" parent="1" vertex="1">
           <mxGeometry x="10" y="970" width="240" height="690" as="geometry" />
@@ -298,10 +298,10 @@
             <mxPoint as="offset" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="B30k3LrZ_cQ2gTXqQqMa-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="fq6umfQTNeX_q_3_Q7GG-17" target="fq6umfQTNeX_q_3_Q7GG-40">
+        <mxCell id="B30k3LrZ_cQ2gTXqQqMa-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" parent="1" source="fq6umfQTNeX_q_3_Q7GG-17" target="fq6umfQTNeX_q_3_Q7GG-40" edge="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="B30k3LrZ_cQ2gTXqQqMa-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="fq6umfQTNeX_q_3_Q7GG-32" target="fq6umfQTNeX_q_3_Q7GG-42">
+        <mxCell id="B30k3LrZ_cQ2gTXqQqMa-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;entryPerimeter=0;" parent="1" source="fq6umfQTNeX_q_3_Q7GG-32" target="fq6umfQTNeX_q_3_Q7GG-42" edge="1">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="780" y="50" />

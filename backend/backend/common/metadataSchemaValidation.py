@@ -163,6 +163,19 @@ def get_aggregated_schemas(
                 # Log schema structure for debugging
                 schema_id = deserialized_item.get('metadataSchemaId', 'unknown')
                 
+                # Check if schema is enabled - only apply enabled schemas
+                enabled = deserialized_item.get('enabled', True)  # Default to True if field doesn't exist
+                
+                # Parse enabled value (could be bool, string, etc.)
+                if isinstance(enabled, str):
+                    enabled = enabled.lower() == 'true'
+                elif not isinstance(enabled, bool):
+                    enabled = bool(enabled)
+                
+                if not enabled:
+                    logger.info(f"Skipping disabled schema: {schema_id}")
+                    continue  # Skip this schema
+                
                 # CRITICAL FIX: The field is stored as 'fields' not 'metadataSchemaFields'
                 # Try both field names for backward compatibility
                 fields = deserialized_item.get('fields') or deserialized_item.get('metadataSchemaFields', {})
