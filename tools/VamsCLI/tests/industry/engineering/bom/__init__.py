@@ -1,0 +1,1 @@
+"""BOM command tests for VamsCLI."""

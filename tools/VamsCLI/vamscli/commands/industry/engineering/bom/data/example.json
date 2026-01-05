@@ -1,0 +1,92 @@
+{
+  "sources": [
+    { "source": "engine_block", "storage": "VAMS" },
+    { "source": "piston_assembly", "storage": "VAMS" },
+    { "source": "crankshaft", "storage": "VAMS" },
+    { "source": "cylinder_head", "storage": "VAMS" },
+    { "source": "engine_complete", "storage": "no" }
+  ],
+  "scene": {
+    "nodes": [
+      { 
+        "node": "1",
+        "source": "engine_complete",
+        "matrix": [
+          1, 0, 0, 0,
+          0, 1, 0, 0,
+          0, 0, 1, 0,
+          0, 0, 0, 1
+        ],
+        "bomdata": {
+          "description": "Complete engine assembly",
+          "part_number": "ENG-001",
+          "quantity": 1
+        }
+      },
+      {
+        "node": "2",
+        "source": "engine_block",
+        "parent_node": "1",
+        "matrix": [
+          1, 0, 0, 0,
+          0, 1, 0, 0,
+          0, 0, 1, 0,
+          0, 0, 0, 1
+        ],
+        "bomdata": {
+          "description": "Main engine block",
+          "part_number": "BLK-001",
+          "quantity": 1
+        }
+      },
+      {
+        "node": "3",
+        "source": "piston_assembly",
+        "parent_node": "2",
+        "matrix": [
+          1, 0, 0, 0.05,
+          0, 1, 0, 0,
+          0, 0, 1, 0,
+          0, 0, 0, 1
+        ],
+        "bomdata": {
+          "description": "Piston and connecting rod assembly",
+          "part_number": "PST-001",
+          "quantity": 4
+        }
+      },
+      {
+        "node": "4",
+        "source": "crankshaft",
+        "parent_node": "2",
+        "matrix": [
+          1, 0, 0, 0,
+          0, 1, 0, -0.1,
+          0, 0, 1, 0,
+          0, 0, 0, 1
+        ],
+        "bomdata": {
+          "description": "Main crankshaft",
+          "part_number": "CRK-001",
+          "quantity": 1
+        }
+      },
+      {
+        "node": "5",
+        "source": "cylinder_head",
+        "parent_node": "2",
+        "matrix": [
+          1, 0, 0, 0,
+          0, 1, 0, 0.15,
+          0, 0, 1, 0,
+          0, 0, 0, 1
+        ],
+        "bomdata": {
+          "description": "Cylinder head with valves",
+          "part_number": "CYL-001",
+          "quantity": 1
+        }
+      }
+    ]  
+  }
+}
