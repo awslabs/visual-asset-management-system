@@ -51,7 +51,8 @@ try:
     asset_database_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"] 
     asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
-    asset_metadata_table_name = os.environ.get("METADATA_STORAGE_TABLE_NAME")
+    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
+    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
@@ -61,7 +62,8 @@ except Exception as e:
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_database_table_name)
 asset_version_files_table = dynamodb.Table(asset_version_files_table_name)
-asset_metadata_table = dynamodb.Table(asset_metadata_table_name)
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
+file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribute_table_name else None
 
 # Define allowed extensions
 allowed_previewFile_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
@@ -1482,10 +1484,10 @@ def get_asset_file_versions(assetId: str, assetVersionId: str, relativeFileKey: 
 #######################
 
 def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str) -> bool:
-    """Delete metadata record for a file
+    """Delete metadata and attributes for a file from new metadata tables
     
     Args:
-        databaseId: The database ID (partition key)
+        databaseId: The database ID
         assetId: The asset ID
         relative_file_path: The relative file path (without leading slash)
         
@@ -1498,30 +1500,68 @@ def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str)
             logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
             return True
         
-        # Construct the metadata sort key: /<assetId>/<relative_file_path>
-        metadata_sort_key = f"/{assetId}/{relative_file_path}"
+        # Construct the composite key for new metadata tables
+        # Format: {databaseId}:{assetId}:{relative_file_path}
+        composite_key = f"{databaseId}:{assetId}:{relative_file_path}"
         
-        # Query for the metadata record
-        response = asset_metadata_table.get_item(
-            Key={
-                'databaseId': databaseId,
-                'assetId': metadata_sort_key
-            }
-        )
+        deleted_count = 0
         
-        # If record exists, delete it
-        if 'Item' in response:
-            asset_metadata_table.delete_item(
-                Key={
-                    'databaseId': databaseId,
-                    'assetId': metadata_sort_key
-                }
-            )
-            logger.info(f"Deleted metadata for {metadata_sort_key}")
-            return True
-        else:
-            logger.info(f"No metadata found for {metadata_sort_key}")
-            return True
+        # Delete from asset_file_metadata_table (file metadata)
+        if asset_file_metadata_table:
+            try:
+                # Query all metadata for this file using GSI
+                response = asset_file_metadata_table.query(
+                    IndexName='DatabaseIdAssetIdFilePathIndex',
+                    KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+                )
+                
+                # Delete all metadata items
+                for item in response.get('Items', []):
+                    asset_file_metadata_table.delete_item(
+                        Key={
+                            'metadataKey': item['metadataKey'],
+                            'databaseId:assetId:filePath': composite_key
+                        }
+                    )
+                    deleted_count += 1
+                
+                if deleted_count > 0:
+                    logger.info(f"Deleted {deleted_count} metadata items for file {composite_key}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file metadata: {e}")
+        
+        # Delete from file_attribute_table (file attributes)
+        if file_attribute_table:
+            try:
+                # Query all attributes for this file using GSI
+                response = file_attribute_table.query(
+                    IndexName='DatabaseIdAssetIdFilePathIndex',
+                    KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+                )
+                
+                # Delete all attribute items
+                attribute_count = 0
+                for item in response.get('Items', []):
+                    file_attribute_table.delete_item(
+                        Key={
+                            'attributeKey': item['attributeKey'],
+                            'databaseId:assetId:filePath': composite_key
+                        }
+                    )
+                    attribute_count += 1
+                
+                if attribute_count > 0:
+                    logger.info(f"Deleted {attribute_count} attribute items for file {composite_key}")
+                    deleted_count += 1
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file attributes: {e}")
+        
+        if deleted_count == 0:
+            logger.info(f"No metadata or attributes found for file {composite_key}")
+        
+        return True
             
     except Exception as e:
         logger.exception(f"Error deleting metadata for file: {e}")

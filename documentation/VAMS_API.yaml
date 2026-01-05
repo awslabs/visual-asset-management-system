@@ -363,7 +363,7 @@ paths:
     /asset-links/{assetLinkId}/metadata:
         get:
             summary: "Get metadata for an asset link."
-            description: "Retrieve all metadata associated with a specific asset link."
+            description: "Retrieve all metadata associated with a specific asset link with pagination support."
             responses:
                 "200":
                     description: Metadata retrieved successfully.
@@ -372,7 +372,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/getAssetLinkMetadataResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or pagination token.
                     content:
                         application/json:
                             schema:
@@ -402,11 +402,14 @@ paths:
                 required: true
                 schema:
                     $ref: "#/components/schemas/uuid_regex"
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
         post:
-            summary: "Create metadata for an asset link."
-            description: "Add new metadata to a specific asset link."
+            summary: "Create metadata for an asset link (bulk operation)."
+            description: "Add new metadata items to a specific asset link. Supports bulk creation of multiple metadata items in a single request. Returns partial success information if some items fail."
             requestBody:
                 required: true
                 content:
@@ -415,13 +418,13 @@ paths:
                             $ref: "#/components/schemas/createAssetLinkMetadataRequest"
             responses:
                 "200":
-                    description: Metadata created successfully.
+                    description: Metadata creation completed (may include partial failures).
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/createAssetLinkMetadataResponse"
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or metadata key already exists.
+                    description: Invalid parameters or validation error.
                     content:
                         application/json:
                             schema:
@@ -453,10 +456,9 @@ paths:
                     $ref: "#/components/schemas/uuid_regex"
             security:
               - DefaultCognitoAuthorizer: []
-    /asset-links/{assetLinkId}/metadata/{metadataKey}:
         put:
-            summary: "Update metadata for an asset link."
-            description: "Update existing metadata for a specific asset link."
+            summary: "Update metadata for an asset link (bulk operation)."
+            description: "Update existing metadata items for a specific asset link. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -465,13 +467,13 @@ paths:
                             $ref: "#/components/schemas/updateAssetLinkMetadataRequest"
             responses:
                 "200":
-                    description: Metadata updated successfully.
+                    description: Metadata update completed (may include partial failures).
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/updateAssetLinkMetadataResponse"
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or validation error.
                     content:
                         application/json:
                             schema:
@@ -483,7 +485,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset link or metadata key not found.
+                    description: Asset link not found.
                     content:
                         application/json:
                             schema:
@@ -501,26 +503,26 @@ paths:
                 required: true
                 schema:
                     $ref: "#/components/schemas/uuid_regex"
-              - name: "metadataKey"
-                in: "path"
-                description: "Metadata key to update."
-                required: true
-                schema:
-                    type: string
             security:
               - DefaultCognitoAuthorizer: []
         delete:
-            summary: "Delete metadata for an asset link."
-            description: "Remove specific metadata from an asset link."
+            summary: "Delete metadata for an asset link (bulk operation)."
+            description: "Remove metadata items from an asset link. Supports bulk deletion of multiple metadata items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteAssetLinkMetadataRequest"
             responses:
                 "200":
-                    description: Metadata deleted successfully.
+                    description: Metadata deletion completed (may include partial failures).
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/deleteAssetLinkMetadataResponse"
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or validation error.
                     content:
                         application/json:
                             schema:
@@ -532,7 +534,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset link or metadata key not found.
+                    description: Asset link not found.
                     content:
                         application/json:
                             schema:
@@ -550,12 +552,6 @@ paths:
                 required: true
                 schema:
                     $ref: "#/components/schemas/uuid_regex"
-              - name: "metadataKey"
-                in: "path"
-                description: "Metadata key to delete."
-                required: true
-                schema:
-                    type: string
             security:
               - DefaultCognitoAuthorizer: []
     /auth/constraints:
@@ -1159,6 +1155,55 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+        put:
+            summary: "Update a database."
+            description: "Update an existing database's description, default bucket, or configuration options. At least one field must be provided for update."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateDatabaseRequest"
+            responses:
+                "200":
+                    description: Database updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/updateDatabaseResponse"
+                "400":
+                    description: Invalid parameters or bucket ID not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
     /buckets:
         get:
             summary: "List all S3 bucket configurations."
@@ -3683,20 +3728,31 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
                 - DefaultCognitoAuthorizer: []
-    /metadataschema/{databaseId}/:
+    /database/{databaseId}/assets/{assetId}/metadata:
         get:
-            summary: "Get metadata schema for a given database."
+            summary: "Get metadata for an asset."
+            description: "Retrieve all metadata associated with a specific asset with pagination support."
             responses:
                 "200":
-                    description: OK
+                    description: Metadata retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getAssetMetadataResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to view metadata for this asset.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Missing asset or database ID path parameters.
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -3708,26 +3764,624 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: "databaseId"
                 in: "path"
-                description: "Database Id"
+                description: "Unique identifier for database."
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
         post:
-            summary: "Update metadata schema for a given database."
+            summary: "Create metadata for an asset (bulk operation)."
+            description: "Add new metadata items to a specific asset. Supports bulk creation of multiple metadata items in a single request. Returns partial success information if some items fail."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: "#/components/schemas/metadata_schema"
+                            $ref: "#/components/schemas/createAssetMetadataRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Metadata creation completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update metadata for an asset (bulk operation)."
+            description: "Update existing metadata items for a specific asset. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateAssetMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata update completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update metadata for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete metadata for an asset (bulk operation)."
+            description: "Remove metadata items from an asset. Supports bulk deletion of multiple metadata items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteAssetMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata deletion completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete metadata for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/assets/{assetId}/metadata/file:
+        get:
+            summary: "Get metadata or attributes for a file."
+            description: "Retrieve all metadata or attributes associated with a specific file with pagination support. Supports both 'metadata' and 'attribute' types."
+            responses:
+                "200":
+                    description: File metadata/attributes retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getFileMetadataResponse"
+                "400":
+                    description: Invalid parameters, pagination token, or file path is a folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view metadata for this file.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "filePath"
+                in: "query"
+                description: "Relative file path (must not end with / for folders)."
+                required: true
+                schema:
+                    type: string
+              - name: "type"
+                in: "query"
+                description: "Type of data to retrieve: 'metadata' or 'attribute'."
+                required: true
+                schema:
+                    type: string
+                    enum: [metadata, attribute]
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create metadata or attributes for a file (bulk operation)."
+            description: "Add new metadata or attribute items to a specific file. Supports bulk creation. File attributes only support 'string' metadataValueType. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createFileMetadataRequest"
+            responses:
+                "200":
+                    description: File metadata/attributes creation completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters, validation error, or file path is a folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata for this file.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update metadata or attributes for a file (bulk operation)."
+            description: "Update existing metadata or attribute items for a specific file. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). File attributes only support 'string' metadataValueType. Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateFileMetadataRequest"
+            responses:
+                "200":
+                    description: File metadata/attributes update completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters, validation error, or file path is a folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update metadata for this file.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete metadata or attributes for a file (bulk operation)."
+            description: "Remove metadata or attribute items from a file. Supports bulk deletion of multiple items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteFileMetadataRequest"
+            responses:
+                "200":
+                    description: File metadata/attributes deletion completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters, validation error, or file path is a folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete metadata for this file.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/metadata:
+        get:
+            summary: "Get metadata for a database."
+            description: "Retrieve all metadata associated with a specific database with pagination support."
+            responses:
+                "200":
+                    description: Metadata retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getDatabaseMetadataResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view metadata for this database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create metadata for a database (bulk operation)."
+            description: "Add new metadata items to a specific database. Supports bulk creation of multiple metadata items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createDatabaseMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata creation completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata for this database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update metadata for a database (bulk operation)."
+            description: "Update existing metadata items for a specific database. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateDatabaseMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata update completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update metadata for this database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete metadata for a database (bulk operation)."
+            description: "Remove metadata items from a database. Supports bulk deletion of multiple metadata items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteDatabaseMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata deletion completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete metadata for this database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/metadataSchema/{metadataSchemaId}:
+        get:
+            summary: "Get a specific metadata schema."
+            description: "Retrieve details of a specific metadata schema by its ID. Returns the complete schema definition including field definitions, entity type, and configuration."
+            responses:
+                "200":
+                    description: Metadata schema retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/metadataSchemaResponse"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -3735,44 +4389,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to view this metadata schema.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Missing asset or database ID path parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters: 
-              - name: "databaseId"
-                in: "path"
-                description: "Database Id"
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-    /metadataschema/{databaseId}/{field}/:
-        delete:
-            summary: "Delete metadata schema field."
-            responses:
-                "200":
-                    description: OK
-                "403":
-                    description: Action not allowed or not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Missing asset or database ID path parameters.
+                    description: Metadata schema not found.
                     content:
                         application/json:
                             schema:
@@ -3784,18 +4407,199 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - name: "field"
-                in: "path"
-                description: "Field name"
-                required: true
-                schema:
-                    type: string
               - name: "databaseId"
                 in: "path"
-                description: "Database Id"
+                description: "Database ID"
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
+              - name: "metadataSchemaId"
+                in: "path"
+                description: "Metadata schema ID"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete a metadata schema."
+            description: "Delete a metadata schema by its ID. Requires confirmation in the request body."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteMetadataSchemaRequest"
+            responses:
+                "200":
+                    description: Metadata schema deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/metadataSchemaOperationResponse"
+                "400":
+                    description: Invalid parameters or confirmation not provided.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete this metadata schema.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Metadata schema not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Database ID"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "metadataSchemaId"
+                in: "path"
+                description: "Metadata schema ID"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /metadataschema:
+        get:
+            summary: "List metadata schemas with optional filters."
+            description: "Retrieve a paginated list of metadata schemas. Supports filtering by database ID and/or entity type. Returns schemas the user is authorized to view."
+            responses:
+                "200":
+                    description: Metadata schemas retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getMetadataSchemasResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to list metadata schemas.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "query"
+                description: "Filter by database ID (optional)"
+                required: false
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "metadataEntityType"
+                in: "query"
+                description: "Filter by entity type (optional)"
+                required: false
+                schema:
+                    type: string
+                    enum: [databaseMetadata, assetMetadata, fileMetadata, fileAttribute, assetLinkMetadata]
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+            security:
+                - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create a new metadata schema."
+            description: "Create a new metadata schema template for a specific entity type. Supports GLOBAL database ID for system-wide schemas. Validates field definitions and enforces constraints based on entity type."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createMetadataSchemaRequest"
+            responses:
+                "200":
+                    description: Metadata schema created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/metadataSchemaOperationResponse"
+                "400":
+                    description: Invalid parameters, validation error, or database does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata schemas.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update an existing metadata schema."
+            description: "Update an existing metadata schema's name, fields, file restrictions, or enabled status. At least one field must be provided for update."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateMetadataSchemaRequest"
+            responses:
+                "200":
+                    description: Metadata schema updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/metadataSchemaOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update this metadata schema.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Metadata schema not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
             security:
                 - DefaultCognitoAuthorizer: []
     /pipelines:
@@ -5298,10 +6102,72 @@ components:
                 defaultBucketId:
                     #example: 550e8400-e29b-41d4-a716-446655440000
                     $ref: '#/components/schemas/uuid_regex'
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    default: false
+                    description: "Whether to restrict metadata to only fields defined in schemas"
+                restrictFileUploadsToExtensions:
+                    type: string
+                    default: ""
+                    description: "Comma-delimited list of allowed file extensions (e.g., 'jpg,png,pdf'). Empty string allows all extensions."
             required:
                 - databaseId
                 - description
                 - defaultBucketId
+        
+        updateDatabaseRequest:
+            type: object
+            properties:
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated database description (optional)"
+                defaultBucketId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Updated default bucket ID (optional)"
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "Whether to restrict metadata to only fields defined in schemas (optional)"
+                restrictFileUploadsToExtensions:
+                    type: string
+                    description: "Comma-delimited list of allowed file extensions (optional)"
+            required: []
+            example:
+                description: "Updated 3d models used in training programs"
+                restrictMetadataOutsideSchemas: true
+                restrictFileUploadsToExtensions: "obj,fbx,gltf,glb"
+        
+        updateDatabaseResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID that was updated"
+                operation:
+                    type: string
+                    enum: [update]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - databaseId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "Database vr-models-training updated successfully"
+                databaseId: "vr-models-training"
+                operation: "update"
+                timestamp: "2024-01-15T10:30:00.000Z"
         email_pattern_regex: 
             type: string
             pattern: ^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$
@@ -5356,13 +6222,251 @@ components:
             properties:
                 assetPath:
                     $ref: '#/components/schemas/asset_path_pattern_regex'
-        metadata_schema:
+        
+        # Metadata Schema V2 API Schemas
+        metadataSchemaEntityType:
+            type: string
+            enum: [databaseMetadata, assetMetadata, fileMetadata, fileAttribute, assetLinkMetadata]
+            description: "Entity type for metadata schema"
+        
+        metadataSchemaFieldDefinition:
             type: object
             properties:
-                field:
+                metadataFieldKeyName:
                     type: string
+                    minLength: 1
+                    maxLength: 256
+                    description: "Field key name (1-256 characters)"
+                metadataFieldValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                    description: "Type of metadata value for this field"
+                required:
+                    type: boolean
+                    default: false
+                    description: "Whether this field is required"
+                dependsOnFieldKeyName:
+                    type: array
+                    items:
+                        type: string
+                    description: "Field keys this field depends on (optional)"
+                controlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Allowed values for INLINE_CONTROLLED_LIST type (required for that type)"
+                defaultMetadataFieldValue:
+                    type: string
+                    description: "Default value for this field (optional, must match metadataFieldValueType)"
             required:
-                - field
+                - metadataFieldKeyName
+                - metadataFieldValueType
+            example:
+                metadataFieldKeyName: "project_status"
+                metadataFieldValueType: "inline_controlled_list"
+                required: true
+                controlledListKeys: ["planning", "in_progress", "completed", "archived"]
+                defaultMetadataFieldValue: "planning"
+        
+        metadataSchemaFields:
+            type: object
+            properties:
+                fields:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataSchemaFieldDefinition"
+                    description: "Array of field definitions (at least one required)"
+            required:
+                - fields
+            example:
+                fields:
+                    - metadataFieldKeyName: "project_name"
+                      metadataFieldValueType: "string"
+                      required: true
+                    - metadataFieldKeyName: "project_status"
+                      metadataFieldValueType: "inline_controlled_list"
+                      required: true
+                      controlledListKeys: ["planning", "in_progress", "completed"]
+                      defaultMetadataFieldValue: "planning"
+        
+        createMetadataSchemaRequest:
+            type: object
+            properties:
+                databaseId:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                    description: "Database ID (supports 'GLOBAL' for system-wide schemas)"
+                metadataSchemaEntityType:
+                    $ref: "#/components/schemas/metadataSchemaEntityType"
+                    description: "Entity type this schema applies to"
+                schemaName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Schema name (1-256 characters)"
+                fileKeyTypeRestriction:
+                    type: string
+                    description: "Comma-delimited file extensions (e.g., 'jpg,png,pdf'). Only for fileMetadata/fileAttribute types."
+                fields:
+                    $ref: "#/components/schemas/metadataSchemaFields"
+                    description: "Field definitions for the schema"
+                enabled:
+                    type: boolean
+                    default: true
+                    description: "Whether schema is enabled"
+            required:
+                - databaseId
+                - metadataSchemaEntityType
+                - schemaName
+                - fields
+            example:
+                databaseId: "engineering-db"
+                metadataSchemaEntityType: "assetMetadata"
+                schemaName: "Engineering Asset Schema"
+                fields:
+                    fields:
+                        - metadataFieldKeyName: "project_name"
+                          metadataFieldValueType: "string"
+                          required: true
+                        - metadataFieldKeyName: "completion_date"
+                          metadataFieldValueType: "date"
+                          required: false
+                enabled: true
+        
+        updateMetadataSchemaRequest:
+            type: object
+            properties:
+                metadataSchemaId:
+                    $ref: "#/components/schemas/id_regex"
+                    description: "Metadata schema ID to update"
+                schemaName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Updated schema name (optional)"
+                fileKeyTypeRestriction:
+                    type: string
+                    description: "Updated file extension restrictions (optional)"
+                fields:
+                    $ref: "#/components/schemas/metadataSchemaFields"
+                    description: "Updated field definitions (optional)"
+                enabled:
+                    type: boolean
+                    description: "Updated enabled status (optional)"
+            required:
+                - metadataSchemaId
+            example:
+                metadataSchemaId: "550e8400-e29b-41d4-a716-446655440000"
+                schemaName: "Updated Engineering Asset Schema"
+                enabled: true
+        
+        deleteMetadataSchemaRequest:
+            type: object
+            properties:
+                confirmDelete:
+                    type: boolean
+                    default: false
+                    description: "Confirmation for deletion (must be true)"
+            required:
+                - confirmDelete
+            example:
+                confirmDelete: true
+        
+        metadataSchemaResponse:
+            type: object
+            properties:
+                metadataSchemaId:
+                    $ref: "#/components/schemas/id_regex"
+                    description: "Metadata schema ID"
+                databaseId:
+                    type: string
+                    description: "Database ID"
+                metadataSchemaEntityType:
+                    $ref: "#/components/schemas/metadataSchemaEntityType"
+                    description: "Entity type"
+                schemaName:
+                    type: string
+                    description: "Schema name"
+                fileKeyTypeRestriction:
+                    type: string
+                    description: "File extension restrictions (if applicable)"
+                fields:
+                    $ref: "#/components/schemas/metadataSchemaFields"
+                    description: "Field definitions"
+                enabled:
+                    type: boolean
+                    description: "Whether schema is enabled"
+                dateCreated:
+                    type: string
+                    format: date-time
+                    description: "Creation timestamp"
+                dateModified:
+                    type: string
+                    format: date-time
+                    description: "Last modification timestamp"
+                createdBy:
+                    type: string
+                    description: "Creator user ID"
+                modifiedBy:
+                    type: string
+                    description: "Last modifier user ID"
+            required:
+                - metadataSchemaId
+                - databaseId
+                - metadataSchemaEntityType
+                - schemaName
+                - fields
+                - enabled
+        
+        metadataSchemaOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                metadataSchemaId:
+                    $ref: "#/components/schemas/id_regex"
+                    description: "Metadata schema ID"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - metadataSchemaId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "Metadata schema 'Engineering Asset Schema' created successfully"
+                metadataSchemaId: "550e8400-e29b-41d4-a716-446655440000"
+                operation: "create"
+                timestamp: "2024-01-15T10:30:00.000Z"
+        
+        getMetadataSchemasResponse:
+            type: object
+            properties:
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/metadataSchemaResponse"
+                    description: "List of metadata schemas"
+                    default: []
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - Items
+        
         object_name_pattern_regex:
             type: string
             pattern: ^[a-zA-Z0-9\-._ ]{1,256}$
@@ -6963,38 +8067,156 @@ components:
                 - children
                 - unauthorizedCounts
         
-        # Asset Link Metadata Schemas
-        createAssetLinkMetadataRequest:
+        # Centralized Metadata Schemas (All Entity Types)
+        metadataValueType:
+            type: string
+            enum: [string, multiline_string, inline_controlled_list, number, boolean, date, xyz, wxyz, matrix4x4, geopoint, geojson, lla, json]
+            description: "Type of metadata value"
+            default: "string"
+        
+        metadataItem:
             type: object
             properties:
                 metadataKey:
                     type: string
-                    description: "Metadata key"
+                    minLength: 1
+                    maxLength: 256
+                    description: "Metadata key (1-256 characters)"
                 metadataValue:
                     type: string
-                    description: "Metadata value"
+                    description: "Metadata value as string"
                 metadataValueType:
-                    type: string
-                    enum: [string, number, boolean, date]
-                    description: "Type of metadata value"
-                    default: "string"
+                    $ref: "#/components/schemas/metadataValueType"
             required:
                 - metadataKey
                 - metadataValue
         
+        bulkMetadataItem:
+            type: object
+            properties:
+                metadataKey:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                    description: "Metadata key (1-256 characters) - used directly as primary key"
+                metadataValue:
+                    type: string
+                    description: "Metadata value as string"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+            required:
+                - metadataKey
+                - metadataValue
+        
+        bulkMetadataOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "True if at least one item succeeded"
+                totalItems:
+                    type: integer
+                    description: "Total number of items in the request"
+                successCount:
+                    type: integer
+                    description: "Number of items that succeeded"
+                failureCount:
+                    type: integer
+                    description: "Number of items that failed"
+                successfulItems:
+                    type: array
+                    items:
+                        type: string
+                    description: "List of metadata keys that succeeded"
+                    default: []
+                failedItems:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            key:
+                                type: string
+                                description: "Metadata key that failed"
+                            error:
+                                type: string
+                                description: "Error message"
+                    description: "List of failed items with error messages"
+                    default: []
+                message:
+                    type: string
+                    description: "Overall operation message"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Operation timestamp"
+            required:
+                - success
+                - totalItems
+                - successCount
+                - failureCount
+                - successfulItems
+                - failedItems
+                - message
+                - timestamp
+        
+        # Asset Link Metadata Schemas
+        createAssetLinkMetadataRequest:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataItem"
+                    description: "List of metadata items to create (at least one required)"
+            required:
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "relationship_strength"
+                      metadataValue: "strong"
+                      metadataValueType: "string"
+                    - metadataKey: "confidence_score"
+                      metadataValue: "0.95"
+                      metadataValueType: "number"
+        
         updateAssetLinkMetadataRequest:
             type: object
             properties:
-                metadataValue:
+                metadata:
+                    type: array
+                    minItems: 1
+                    maxItems: 500
+                    items:
+                        $ref: "#/components/schemas/bulkMetadataItem"
+                    description: "List of metadata items to update (at least one required, max 500 for REPLACE_ALL mode)"
+                updateType:
                     type: string
-                    description: "Updated metadata value"
-                metadataValueType:
-                    type: string
-                    enum: [string, number, boolean, date]
-                    description: "Type of metadata value"
-                    default: "string"
+                    enum: [update, replace_all]
+                    default: "update"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
             required:
-                - metadataValue
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "relationship_strength"
+                      metadataValue: "very_strong"
+                      metadataValueType: "string"
+                updateType: "update"
+        
+        deleteAssetLinkMetadataRequest:
+            type: object
+            properties:
+                metadataKeys:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: string
+                    description: "List of metadata keys to delete (at least one required)"
+            required:
+                - metadataKeys
+            example:
+                metadataKeys: ["relationship_strength", "confidence_score"]
         
         assetLinkMetadataModel:
             type: object
@@ -7009,23 +8231,38 @@ components:
                     type: string
                     description: "Metadata value"
                 metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                metadataSchemaField:
+                    type: boolean
+                    description: "Is this field defined in a schema?"
+                    nullable: true
+                metadataSchemaRequired:
+                    type: boolean
+                    description: "Is this field required per schema?"
+                    nullable: true
+                metadataSchemaDefaultValue:
                     type: string
-                    enum: [string, number, boolean, date]
-                    description: "Type of metadata value"
+                    description: "Default value from schema"
+                    nullable: true
+                metadataSchemaDependsOn:
+                    type: string
+                    description: "Field this depends on"
+                    nullable: true
+                metadataSchemaMultiFieldConflict:
+                    type: boolean
+                    description: "Multiple schemas define this field with conflicts"
+                    nullable: true
+                metadataSchemaControlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Controlled list values for INLINE_CONTROLLED_LIST type"
+                    nullable: true
             required:
                 - assetLinkId
                 - metadataKey
                 - metadataValue
                 - metadataValueType
-        
-        createAssetLinkMetadataResponse:
-            type: object
-            properties:
-                message:
-                    type: string
-                    description: "Success message"
-            required:
-                - message
         
         getAssetLinkMetadataResponse:
             type: object
@@ -7035,30 +8272,449 @@ components:
                     items:
                         $ref: "#/components/schemas/assetLinkMetadataModel"
                     description: "List of metadata for the asset link"
+                    default: []
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "True if either database restricts metadata outside schemas AND schemas exist for this entity type"
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
                 message:
                     type: string
                     description: "Response message"
                     default: "Success"
             required:
                 - metadata
+                - restrictMetadataOutsideSchemas
         
-        updateAssetLinkMetadataResponse:
+        # Asset Metadata Schemas
+        createAssetMetadataRequest:
             type: object
             properties:
-                message:
-                    type: string
-                    description: "Success message"
+                metadata:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataItem"
+                    description: "List of metadata items to create (at least one required)"
             required:
-                - message
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "project_name"
+                      metadataValue: "Building Renovation"
+                      metadataValueType: "string"
+                    - metadataKey: "location"
+                      metadataValue: '{"type":"Point","coordinates":[-122.4194,37.7749]}'
+                      metadataValueType: "geopoint"
         
-        deleteAssetLinkMetadataResponse:
+        updateAssetMetadataRequest:
             type: object
             properties:
+                metadata:
+                    type: array
+                    minItems: 1
+                    maxItems: 500
+                    items:
+                        $ref: "#/components/schemas/bulkMetadataItem"
+                    description: "List of metadata items to update (at least one required, max 500 for REPLACE_ALL mode)"
+                updateType:
+                    type: string
+                    enum: [update, replace_all]
+                    default: "update"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+            required:
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "project_name"
+                      metadataValue: "Building Renovation Phase 2"
+                      metadataValueType: "string"
+                updateType: "update"
+        
+        deleteAssetMetadataRequest:
+            type: object
+            properties:
+                metadataKeys:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: string
+                    description: "List of metadata keys to delete (at least one required)"
+            required:
+                - metadataKeys
+            example:
+                metadataKeys: ["project_name", "location"]
+        
+        assetMetadataModel:
+            type: object
+            properties:
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID"
+                metadataKey:
+                    type: string
+                    description: "Metadata key (used as primary key)"
+                metadataValue:
+                    type: string
+                    description: "Metadata value"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                metadataSchemaField:
+                    type: boolean
+                    description: "Is this field defined in a schema?"
+                    nullable: true
+                metadataSchemaRequired:
+                    type: boolean
+                    description: "Is this field required per schema?"
+                    nullable: true
+                metadataSchemaDefaultValue:
+                    type: string
+                    description: "Default value from schema"
+                    nullable: true
+                metadataSchemaDependsOn:
+                    type: string
+                    description: "Field this depends on"
+                    nullable: true
+                metadataSchemaMultiFieldConflict:
+                    type: boolean
+                    description: "Multiple schemas define this field with conflicts"
+                    nullable: true
+                metadataSchemaControlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Controlled list values for INLINE_CONTROLLED_LIST type"
+                    nullable: true
+            required:
+                - databaseId
+                - assetId
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+        
+        getAssetMetadataResponse:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetMetadataModel"
+                    description: "List of metadata for the asset"
+                    default: []
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "True if database restricts metadata outside schemas AND schemas exist for this entity type"
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
                 message:
                     type: string
-                    description: "Success message"
+                    description: "Response message"
+                    default: "Success"
             required:
-                - message
+                - metadata
+                - restrictMetadataOutsideSchemas
+        
+        # File Metadata/Attribute Schemas
+        createFileMetadataRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Relative file path (must not end with / for folders)"
+                type:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "Type: 'metadata' or 'attribute'. Attributes only support 'string' metadataValueType."
+                metadata:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataItem"
+                    description: "List of metadata/attribute items to create (at least one required)"
+            required:
+                - filePath
+                - type
+                - metadata
+            example:
+                filePath: "models/building.obj"
+                type: "metadata"
+                metadata:
+                    - metadataKey: "file_format_version"
+                      metadataValue: "2.0"
+                      metadataValueType: "string"
+                    - metadataKey: "polygon_count"
+                      metadataValue: "150000"
+                      metadataValueType: "number"
+        
+        updateFileMetadataRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Relative file path (must not end with / for folders)"
+                type:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "Type: 'metadata' or 'attribute'. Attributes only support 'string' metadataValueType."
+                metadata:
+                    type: array
+                    minItems: 1
+                    maxItems: 500
+                    items:
+                        $ref: "#/components/schemas/bulkMetadataItem"
+                    description: "List of metadata/attribute items to update (at least one required, max 500 for REPLACE_ALL mode)"
+                updateType:
+                    type: string
+                    enum: [update, replace_all]
+                    default: "update"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+            required:
+                - filePath
+                - type
+                - metadata
+            example:
+                filePath: "models/building.obj"
+                type: "metadata"
+                metadata:
+                    - metadataKey: "polygon_count"
+                      metadataValue: "175000"
+                      metadataValueType: "number"
+                updateType: "update"
+        
+        deleteFileMetadataRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Relative file path (must not end with / for folders)"
+                type:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "Type: 'metadata' or 'attribute'"
+                metadataKeys:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: string
+                    description: "List of metadata/attribute keys to delete (at least one required)"
+            required:
+                - filePath
+                - type
+                - metadataKeys
+            example:
+                filePath: "models/building.obj"
+                type: "metadata"
+                metadataKeys: ["file_format_version", "polygon_count"]
+        
+        fileMetadataModel:
+            type: object
+            properties:
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID"
+                filePath:
+                    type: string
+                    description: "Relative file path"
+                metadataKey:
+                    type: string
+                    description: "Metadata key (or attributeKey for attributes) - used as primary key"
+                metadataValue:
+                    type: string
+                    description: "Metadata value (or attributeValue for attributes)"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                metadataSchemaField:
+                    type: boolean
+                    description: "Is this field defined in a schema?"
+                    nullable: true
+                metadataSchemaRequired:
+                    type: boolean
+                    description: "Is this field required per schema?"
+                    nullable: true
+                metadataSchemaDefaultValue:
+                    type: string
+                    description: "Default value from schema"
+                    nullable: true
+                metadataSchemaDependsOn:
+                    type: string
+                    description: "Field this depends on"
+                    nullable: true
+                metadataSchemaMultiFieldConflict:
+                    type: boolean
+                    description: "Multiple schemas define this field with conflicts"
+                    nullable: true
+                metadataSchemaControlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Controlled list values for INLINE_CONTROLLED_LIST type"
+                    nullable: true
+            required:
+                - databaseId
+                - assetId
+                - filePath
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+        
+        getFileMetadataResponse:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/fileMetadataModel"
+                    description: "List of metadata/attributes for the file"
+                    default: []
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "True if database restricts metadata outside schemas AND schemas exist for this entity type"
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - metadata
+                - restrictMetadataOutsideSchemas
+        
+        # Database Metadata Schemas
+        createDatabaseMetadataRequest:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataItem"
+                    description: "List of metadata items to create (at least one required)"
+            required:
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "organization"
+                      metadataValue: "Engineering Department"
+                      metadataValueType: "string"
+                    - metadataKey: "data_classification"
+                      metadataValue: "Internal"
+                      metadataValueType: "string"
+        
+        updateDatabaseMetadataRequest:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    minItems: 1
+                    maxItems: 500
+                    items:
+                        $ref: "#/components/schemas/bulkMetadataItem"
+                    description: "List of metadata items to update (at least one required, max 500 for REPLACE_ALL mode)"
+                updateType:
+                    type: string
+                    enum: [update, replace_all]
+                    default: "update"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+            required:
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "organization"
+                      metadataValue: "Engineering & Design Department"
+                      metadataValueType: "string"
+                updateType: "update"
+        
+        deleteDatabaseMetadataRequest:
+            type: object
+            properties:
+                metadataKeys:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: string
+                    description: "List of metadata keys to delete (at least one required)"
+            required:
+                - metadataKeys
+            example:
+                metadataKeys: ["organization", "data_classification"]
+        
+        databaseMetadataModel:
+            type: object
+            properties:
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                metadataKey:
+                    type: string
+                    description: "Metadata key (used as primary key)"
+                metadataValue:
+                    type: string
+                    description: "Metadata value"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                metadataSchemaField:
+                    type: boolean
+                    description: "Is this field defined in a schema?"
+                    nullable: true
+                metadataSchemaRequired:
+                    type: boolean
+                    description: "Is this field required per schema?"
+                    nullable: true
+                metadataSchemaDefaultValue:
+                    type: string
+                    description: "Default value from schema"
+                    nullable: true
+                metadataSchemaDependsOn:
+                    type: string
+                    description: "Field this depends on"
+                    nullable: true
+                metadataSchemaMultiFieldConflict:
+                    type: boolean
+                    description: "Multiple schemas define this field with conflicts"
+                    nullable: true
+                metadataSchemaControlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Controlled list values for INLINE_CONTROLLED_LIST type"
+                    nullable: true
+            required:
+                - databaseId
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+        
+        getDatabaseMetadataResponse:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/databaseMetadataModel"
+                    description: "List of metadata for the database"
+                    default: []
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "True if database restricts metadata outside schemas AND schemas exist for this entity type"
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - metadata
+                - restrictMetadataOutsideSchemas
         
         # Set Primary File Schemas
         setPrimaryFileRequest:

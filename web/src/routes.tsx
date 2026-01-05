@@ -146,19 +146,19 @@ export const routeTable: RouteOption[] = [
         active: "#/auth/userroles/",
     },
     {
+        path: "/metadataschema/:databaseId",
+        Page: MetadataSchema,
+        active: "#/metadataschema",
+    },
+    {
+        path: "/metadataschema",
+        Page: MetadataSchema,
+        active: "#/metadataschema",
+    },
+    {
         path: "*",
         Page: LandingPage,
         active: "/",
-    },
-    {
-        path: "/metadataschema/create",
-        Page: MetadataSchema,
-        active: "#/metadataschema",
-    },
-    {
-        path: "/metadataschema/:databaseId/create",
-        Page: MetadataSchema,
-        active: "#/metadataschema",
     },
 ];
 

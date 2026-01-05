@@ -9,6 +9,7 @@ import base64
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -46,6 +47,7 @@ retry_config = Config(
 s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'}, retries={'max_attempts': 5, 'mode': 'adaptive'})
 s3_client = boto3.client('s3', region_name=region, config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="AssetExportService")
 
@@ -60,7 +62,8 @@ try:
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_versions_table_name = os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"]
     asset_file_versions_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
-    metadata_storage_table_name = os.environ["METADATA_STORAGE_TABLE_NAME"]
+    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
+    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
     asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
     asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
     s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
@@ -74,7 +77,6 @@ except Exception as e:
 asset_table = dynamodb.Table(asset_storage_table_name)
 asset_versions_table = dynamodb.Table(asset_versions_table_name)
 asset_file_versions_table = dynamodb.Table(asset_file_versions_table_name)
-metadata_table = dynamodb.Table(metadata_storage_table_name)
 asset_links_table = dynamodb.Table(asset_links_table_name)
 asset_links_metadata_table = dynamodb.Table(asset_links_metadata_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
@@ -366,53 +368,99 @@ def batch_get_assets(asset_identifiers: List[Dict]) -> Dict[str, Dict]:
     return asset_details
 
 def get_asset_metadata(databaseId: str, assetId: str) -> Dict:
-    """Get asset metadata"""
+    """Get asset-level metadata using new table structure"""
     try:
-        response = metadata_table.get_item(
-            Key={
-                'databaseId': databaseId,
-                'assetId': assetId
-            }
+        # Composite key for asset metadata: databaseId:assetId:/
+        composite_key = f"{databaseId}:{assetId}:/"
+        
+        # Query using GSI
+        response = dynamodb_client.query(
+            TableName=asset_file_metadata_table_name,
+            IndexName='DatabaseIdAssetIdFilePathIndex',
+            KeyConditionExpression='#pk = :pkValue',
+            ExpressionAttributeNames={'#pk': 'databaseId:assetId:filePath'},
+            ExpressionAttributeValues={':pkValue': {'S': composite_key}}
         )
         
-        if 'Item' in response:
-            metadata = response['Item'].copy()
-            # Remove system fields - filter out assetId and databaseId
-            metadata.pop('databaseId', None)
-            metadata.pop('assetId', None)
-            return metadata
+        # Deserialize and convert to dict
+        metadata = {}
+        deserializer = TypeDeserializer()
+        for item in response.get('Items', []):
+            deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+            # Store as key-value pairs
+            metadata[deserialized['metadataKey']] = deserialized['metadataValue']
         
-        return {}
+        return metadata
     except Exception as e:
         logger.warning(f"Error getting asset metadata for {assetId}: {e}")
         return {}
 
 def get_file_metadata(databaseId: str, assetId: str, relative_path: str) -> Dict:
-    """Get file-specific metadata"""
+    """Get file-specific metadata using new table structure"""
     try:
-        # Format: /{assetId}/{relativePath}
+        # Ensure relative_path starts with /
         if not relative_path.startswith('/'):
             relative_path = '/' + relative_path
         
-        metadata_key = f"/{assetId}{relative_path}"
+        # Composite key for file metadata: databaseId:assetId:/path/to/file
+        composite_key = f"{databaseId}:{assetId}:{relative_path}"
         
-        response = metadata_table.get_item(
-            Key={
-                'databaseId': databaseId,
-                'assetId': metadata_key
-            }
+        # Query using GSI
+        response = dynamodb_client.query(
+            TableName=asset_file_metadata_table_name,
+            IndexName='DatabaseIdAssetIdFilePathIndex',
+            KeyConditionExpression='#pk = :pkValue',
+            ExpressionAttributeNames={'#pk': 'databaseId:assetId:filePath'},
+            ExpressionAttributeValues={':pkValue': {'S': composite_key}}
         )
         
-        if 'Item' in response:
-            metadata = response['Item']
-            # Remove system fields
-            metadata.pop('databaseId', None)
-            metadata.pop('assetId', None)
-            return metadata
+        # Deserialize and convert to dict
+        metadata = {}
+        deserializer = TypeDeserializer()
+        for item in response.get('Items', []):
+            deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+            # Store as key-value pairs
+            metadata[deserialized['metadataKey']] = deserialized['metadataValue']
         
-        return {}
+        return metadata
     except Exception as e:
         logger.warning(f"Error getting file metadata for {relative_path}: {e}")
+        return {}
+
+
+def get_file_attributes(databaseId: str, assetId: str, relative_path: str) -> Dict:
+    """Get file attributes using new file attributes table"""
+    try:
+        # Ensure relative_path starts with /
+        if not relative_path.startswith('/'):
+            relative_path = '/' + relative_path
+        
+        # Composite key for file attributes: databaseId:assetId:/path/to/file
+        composite_key = f"{databaseId}:{assetId}:{relative_path}"
+        
+        # Query using GSI
+        response = dynamodb_client.query(
+            TableName=file_attribute_table_name,
+            IndexName='DatabaseIdAssetIdFilePathIndex',
+            KeyConditionExpression='#pk = :pkValue',
+            ExpressionAttributeNames={'#pk': 'databaseId:assetId:filePath'},
+            ExpressionAttributeValues={':pkValue': {'S': composite_key}}
+        )
+        
+        # Deserialize and convert to dict
+        attributes = {}
+        deserializer = TypeDeserializer()
+        for item in response.get('Items', []):
+            deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+            # Handle both attributeKey and metadataKey field names for compatibility
+            key = deserialized.get('attributeKey', deserialized.get('metadataKey'))
+            value = deserialized.get('attributeValue', deserialized.get('metadataValue'))
+            if key:
+                attributes[key] = value
+        
+        return attributes
+    except Exception as e:
+        logger.warning(f"Error getting file attributes for {relative_path}: {e}")
         return {}
 
 def get_asset_version_info(assetId: str, versionId: str) -> Optional[Dict]:
@@ -742,7 +790,9 @@ def process_asset_batch(
                 
                 # Get file metadata if requested - always return {} if no metadata
                 file_metadata = {}
+                file_attributes = {}
                 if request_model.includeFileMetadata and not file['isFolder']:
+                    # Get file metadata
                     raw_file_metadata = get_file_metadata(
                         asset_info['databaseId'],
                         asset_info['assetId'],
@@ -752,6 +802,20 @@ def process_asset_batch(
                         for key, value in raw_file_metadata.items():
                             if not key.startswith('_'):
                                 file_metadata[key] = {
+                                    'valueType': 'string',
+                                    'value': str(value)
+                                }
+                    
+                    # Get file attributes separately
+                    raw_file_attributes = get_file_attributes(
+                        asset_info['databaseId'],
+                        asset_info['assetId'],
+                        file['relativePath']
+                    )
+                    if raw_file_attributes:
+                        for key, value in raw_file_attributes.items():
+                            if not key.startswith('_'):
+                                file_attributes[key] = {
                                     'valueType': 'string',
                                     'value': str(value)
                                 }
@@ -801,6 +865,7 @@ def process_asset_batch(
                     'primaryType': file.get('primaryType'),
                     'previewFile': preview_file_path,
                     'metadata': file_metadata,
+                    'attributes': file_attributes,
                     'presignedFileDownloadUrl': presigned_url,
                     'presignedFileDownloadExpiresIn': presigned_expires
                 }

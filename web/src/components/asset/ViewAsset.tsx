@@ -25,7 +25,7 @@ import TabbedContainer from "./TabbedContainer";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
-import ControlledMetadata from "../metadata/ControlledMetadata";
+import { MetadataContainer } from "../metadataV2";
 import localforage from "localforage";
 import Synonyms from "../../synonyms";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
@@ -243,12 +243,14 @@ export default function ViewAsset() {
                                     filePathToNavigate={filePathToNavigate}
                                 />
 
-                                {/* Metadata */}
+                                {/* Metadata - New MetadataV2 Component */}
                                 <ErrorBoundary componentName="Metadata">
                                     {databaseId && assetId && (
-                                        <ControlledMetadata
+                                        <MetadataContainer
+                                            entityType="asset"
+                                            entityId={assetId}
                                             databaseId={databaseId}
-                                            assetId={assetId}
+                                            mode="online"
                                         />
                                     )}
                                 </ErrorBoundary>

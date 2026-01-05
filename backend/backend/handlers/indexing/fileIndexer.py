@@ -9,8 +9,10 @@ SPDX-License-Identifier: Apache-2.0
 import os
 import boto3
 import json
+import time
+import random
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Callable
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from botocore.config import Config
@@ -47,7 +49,8 @@ claims_and_roles = {}
 # Load environment variables with error handling
 try:
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    metadata_storage_table_name = os.environ["METADATA_STORAGE_TABLE_NAME"]
+    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
+    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
     s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
@@ -73,7 +76,8 @@ opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
 
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
-metadata_storage_table = dynamodb.Table(metadata_storage_table_name)
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
+file_attribute_table = dynamodb.Table(file_attribute_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
 #######################
@@ -138,6 +142,141 @@ class FileIndexOpenSearchManager:
 
 # Global client manager instance
 opensearch_manager = FileIndexOpenSearchManager()
+
+#######################
+# OpenSearch Retry Logic
+#######################
+
+def opensearch_operation_with_retry(operation_func: Callable, max_retries: int = 5, operation_name: str = "operation") -> Any:
+    """
+    Execute OpenSearch operation with exponential backoff retry for 429 errors
+    
+    Args:
+        operation_func: Lambda/function that performs the OpenSearch operation
+        max_retries: Maximum number of retry attempts (default: 5)
+        operation_name: Name of operation for logging
+    
+    Returns:
+        Result from the operation function
+        
+    Raises:
+        TransportError: If operation fails after all retries or for non-429 errors
+    """
+    from opensearchpy.exceptions import TransportError
+    
+    for attempt in range(max_retries):
+        try:
+            return operation_func()
+        except TransportError as e:
+            if e.status_code == 429 and attempt < max_retries - 1:
+                # Calculate exponential backoff with jitter
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                logger.warning(
+                    f"Rate limited (429) during {operation_name}, "
+                    f"retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(wait_time)
+            else:
+                # Re-raise if not 429 or max retries reached
+                raise
+
+#######################
+# Metadata Normalization
+#######################
+
+def normalize_metadata_value(value: str, value_type: Optional[str] = None) -> Any:
+    """
+    Normalize metadata values for OpenSearch indexing with type detection.
+    Handles dates, booleans, numbers, and strings with fallback to string.
+    
+    Args:
+        value: The metadata value to normalize (from DynamoDB)
+        value_type: Optional type hint from metadataValueType/attributeValueType field
+        
+    Returns:
+        Normalized value in the appropriate type, or string if parsing fails
+    """
+    import re
+    
+    if not isinstance(value, str):
+        return value
+    
+    # If we have a type hint, try to use it
+    if value_type:
+        try:
+            if value_type == 'boolean' or value_type == 'bool':
+                # Handle boolean values
+                if value.lower() in ('true', '1', 'yes', 'on'):
+                    return True
+                elif value.lower() in ('false', '0', 'no', 'off'):
+                    return False
+                else:
+                    return value  # Return as string if not parseable
+                    
+            elif value_type in ('number', 'integer', 'int'):
+                # Try integer first
+                try:
+                    return int(value)
+                except ValueError:
+                    # Try float
+                    try:
+                        return float(value)
+                    except ValueError:
+                        return value  # Return as string if not parseable
+                        
+            elif value_type in ('float', 'double'):
+                try:
+                    return float(value)
+                except ValueError:
+                    return value  # Return as string if not parseable
+                    
+            elif value_type in ('date', 'datetime'):
+                # Handle datetime - strip microseconds
+                datetime_pattern = r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(Z|[+-]\d{2}:\d{2})'
+                match = re.match(datetime_pattern, value)
+                if match:
+                    base_datetime = match.group(1)
+                    timezone = match.group(3)
+                    return f"{base_datetime}{timezone}"
+                else:
+                    return value  # Return as-is if already in correct format
+                    
+        except Exception as e:
+            logger.warning(f"Error parsing metadata value with type hint '{value_type}': {e}")
+            # Fall through to auto-detection
+    
+    # Auto-detection if no type hint or type hint parsing failed
+    
+    # 1. Try to detect and normalize datetime with microseconds
+    datetime_pattern = r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(Z|[+-]\d{2}:\d{2})'
+    match = re.match(datetime_pattern, value)
+    if match:
+        base_datetime = match.group(1)
+        timezone = match.group(3)
+        normalized = f"{base_datetime}{timezone}"
+        logger.debug(f"Normalized datetime from '{value}' to '{normalized}'")
+        return normalized
+    
+    # 2. Try boolean detection
+    if value.lower() in ('true', 'false'):
+        return value.lower() == 'true'
+    
+    # 3. Try number detection
+    try:
+        # Try integer first (no decimal point or scientific notation)
+        if '.' not in value and 'e' not in value.lower():
+            return int(value)
+    except ValueError:
+        pass
+    
+    try:
+        # Try float
+        return float(value)
+    except ValueError:
+        pass
+    
+    # 4. Default: return as string
+    return value
 
 #######################
 # Utility Functions
@@ -294,42 +433,70 @@ def lookup_database_id_for_permanent_delete(
         return None, False
        
 
-def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Dict[str, Any]:
-    """Get file-specific metadata from metadata table"""
+def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Get file-specific metadata AND attributes from new schema tables as flat single-level JSON objects.
+    Returns separate dictionaries for metadata and attributes without any type prefixes.
+    
+    Returns:
+        Tuple of (metadata_dict, attributes_dict) where:
+        - Keys are just the field names (no MD_/AB_ or type prefixes)
+        - Values are normalized (strings, numbers, booleans, dates)
+    """
     try:
-
-        # Query for metadata with specific path
-        # Note: For now the way metadata for a file is stored is as format /assetid/path/to/file
-        metadata_keys = [
-            f"{asset_id}{file_path}", # Path variant 1
-            f"/{asset_id}{file_path}" # Path variant 2
-        ]
+        # Build composite key for new schema
+        composite_key = f"{database_id}:{asset_id}:{file_path}"
         
-        all_metadata = {}
-
-        for key in metadata_keys:
-            try:
-                response = metadata_storage_table.get_item(
-                    Key={
-                        'databaseId': database_id,
-                        'assetId': key
-                    }
-                )
+        metadata = {}
+        attributes = {}
+        
+        # Query assetFileMetadataStorageTable for metadata fields
+        response = asset_file_metadata_table.query(
+            IndexName='DatabaseIdAssetIdFilePathIndex',
+            KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+        )
+        
+        for item in response.get('Items', []):
+            metadata_key = item.get('metadataKey')
+            metadata_value = item.get('metadataValue')
+            metadata_value_type = item.get('metadataValueType')
+            
+            # Skip system metadata records that conflict with OpenSearch field mappings
+            if metadata_key == 'REINDEX_METADATA_RECORD':
+                logger.debug(f"Skipping system metadata: {metadata_key}")
+                continue  # Skip this metadata, but continue processing others
+            
+            if metadata_key and metadata_value:
+                # Normalize the value with type hint
+                normalized_value = normalize_metadata_value(metadata_value, metadata_value_type)
                 
-                if 'Item' in response:
-                    metadata = response['Item']
-                    # Remove system fields and merge
-                    filtered_metadata = {k: v for k, v in metadata.items() 
-                                       if not k.startswith('_') and k not in ['databaseId', 'assetId']}
-                    all_metadata.update(filtered_metadata)
-            except Exception as e:
-                logger.warning(f"Error getting metadata for key {key} : {e}")
-                continue
+                # Store as flat single-level JSON: just field name -> value
+                # No type prefixes (str_, num_, etc.) - flat object handles all types as strings
+                metadata[metadata_key] = normalized_value
         
-        return all_metadata
+        # Query fileAttributeStorageTable for attribute fields
+        response = file_attribute_table.query(
+            IndexName='DatabaseIdAssetIdFilePathIndex',
+            KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+        )
+        
+        for item in response.get('Items', []):
+            attribute_key = item.get('attributeKey')
+            attribute_value = item.get('attributeValue')
+            attribute_value_type = item.get('attributeValueType')
+            
+            if attribute_key and attribute_value:
+                # Normalize the value with type hint
+                normalized_value = normalize_metadata_value(attribute_value, attribute_value_type)
+                
+                # Store as flat single-level JSON: just field name -> value
+                # No type prefixes (str_, num_, etc.) - flat object handles all types as strings
+                attributes[attribute_key] = normalized_value
+        
+        return metadata, attributes
     except Exception as e:
-        logger.exception(f"Error getting file metadata for {database_id}/{asset_id}/{file_path} : {e}")
-        return {}       
+        logger.exception(f"Error getting file metadata for {database_id}/{asset_id}/{file_path}: {e}")
+        return {}, {}
 
 def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, Any]], bool]:
     """Get S3 file information and archive status"""
@@ -415,7 +582,8 @@ def is_folder_path(file_path: str) -> bool:
 
 def build_file_document(request: FileIndexRequest, asset_details: Dict[str, Any], 
                        bucket_details: Dict[str, Any], file_metadata: Dict[str, Any],
-                       s3_file_info: Optional[Dict[str, Any]], is_archived: bool) -> FileDocumentModel:
+                       file_attributes: Dict[str, Any], s3_file_info: Optional[Dict[str, Any]], 
+                       is_archived: bool) -> FileDocumentModel:
     """Build a file document for indexing"""
     
     # Extract file extension
@@ -446,6 +614,10 @@ def build_file_document(request: FileIndexRequest, asset_details: Dict[str, Any]
     if file_metadata:
         doc.add_metadata_fields(file_metadata)
     
+    # Add attribute fields with AB_ prefix
+    if file_attributes:
+        doc.add_attribute_fields(file_attributes)
+    
     # Add S3 metadata if present
     if s3_file_info:
         s3_metadata = {k: v for k, v in s3_file_info.items() 
@@ -460,7 +632,7 @@ def build_file_document(request: FileIndexRequest, asset_details: Dict[str, Any]
 #######################
 
 def index_file_document(document: FileDocumentModel) -> bool:
-    """Index a file document in OpenSearch"""
+    """Index a file document in OpenSearch with retry logic for 429 errors"""
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
@@ -473,11 +645,14 @@ def index_file_document(document: FileDocumentModel) -> bool:
         # Convert document to dict for indexing
         doc_dict = document.dict(exclude_unset=True)
         
-        # Index the document
-        response = client.index(
-            index=opensearch_file_index,
-            id=doc_id,
-            body=doc_dict
+        # Index the document with retry logic
+        response = opensearch_operation_with_retry(
+            lambda: client.index(
+                index=opensearch_file_index,
+                id=doc_id,
+                body=doc_dict
+            ),
+            operation_name=f"index file {doc_id}"
         )
         
         logger.info(f"Indexed file document: {doc_id}")
@@ -488,7 +663,7 @@ def index_file_document(document: FileDocumentModel) -> bool:
         return False
 
 def delete_file_document(database_id: str, asset_id: str, file_path: str) -> bool:
-    """Delete a file document from OpenSearch"""
+    """Delete a file document from OpenSearch with retry logic for 429 errors"""
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
@@ -498,11 +673,14 @@ def delete_file_document(database_id: str, asset_id: str, file_path: str) -> boo
         # Create document ID
         doc_id = f"{database_id}#{asset_id}#{file_path}"
         
-        # Delete the document
-        response = client.delete(
-            index=opensearch_file_index,
-            id=doc_id,
-            ignore=[404]  # Ignore if document doesn't exist
+        # Delete the document with retry logic
+        response = opensearch_operation_with_retry(
+            lambda: client.delete(
+                index=opensearch_file_index,
+                id=doc_id,
+                ignore=[404]  # Ignore if document doesn't exist
+            ),
+            operation_name=f"delete file {doc_id}"
         )
         
         logger.info(f"Deleted file document: {doc_id}")
@@ -589,8 +767,8 @@ def process_file_index_request(request: FileIndexRequest) -> IndexOperationRespo
             if not bucket_details:
                 raise VAMSGeneralErrorResponse(f"Bucket details not found for bucket: {bucket_id}")
             
-            # Get file metadata
-            file_metadata = get_file_metadata(request.databaseId, request.assetId, request.filePath)
+            # Get file metadata and attributes (returned as separate dicts)
+            file_metadata, file_attributes = get_file_metadata(request.databaseId, request.assetId, request.filePath)
             
             # Get S3 file information
             s3_file_info, is_archived = get_s3_file_info(request.bucketName, request.s3Key)
@@ -612,7 +790,7 @@ def process_file_index_request(request: FileIndexRequest) -> IndexOperationRespo
             # Build document
             document = build_file_document(
                 request, asset_details, bucket_details, 
-                file_metadata, s3_file_info, is_archived
+                file_metadata, file_attributes, s3_file_info, is_archived
             )
             
             # Index the document
@@ -779,8 +957,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                 if not relative_path.startswith('/'):
                                     relative_path = '/' + relative_path
                                 
-                                # Get file metadata
-                                file_metadata = get_file_metadata(database_id, asset_id, relative_path)
+                                # Get file metadata and attributes (returned as separate dicts)
+                                file_metadata, file_attributes = get_file_metadata(database_id, asset_id, relative_path)
                                 
                                 # Get S3 file info from the version we already have
                                 s3_file_info = {
@@ -805,6 +983,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                     asset_details,
                                     bucket_details,
                                     file_metadata,
+                                    file_attributes,
                                     s3_file_info,
                                     True  # is_archived
                                 )
@@ -1015,62 +1194,160 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
         )
 
 def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationResponse:
-    """Handle DynamoDB metadata table stream for file indexing"""
+    """Handle DynamoDB metadata/attribute table streams for file indexing"""
     try:
         event_name = event_record.get('eventName', '')
+        dynamodb_data = event_record.get('dynamodb', {})
         
-        # Get the record data
+        # For REMOVE events, Keys are always present regardless of StreamViewType
+        # We should use Keys directly since NewImage won't exist for REMOVE
         if event_name == 'REMOVE':
-            # For deletes, use the old image
-            record_data = event_record.get('dynamodb', {}).get('OldImage', {})
-        else:
-            # For inserts/updates, use the new image
-            record_data = event_record.get('dynamodb', {}).get('NewImage', {})
+            # Get composite key from Keys (always present for REMOVE)
+            keys = dynamodb_data.get('Keys', {})
+            if not keys or 'databaseId:assetId:filePath' not in keys:
+                logger.warning("Missing Keys in REMOVE event")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Missing Keys in REMOVE event, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
+            
+            composite_key = keys.get('databaseId:assetId:filePath', {}).get('S')
+            if not composite_key:
+                logger.warning("Missing composite key value in REMOVE event")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Missing composite key value, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
+            
+            # Parse composite key
+            parts = composite_key.split(':', 2)
+            if len(parts) != 3:
+                logger.warning(f"Invalid composite key format in REMOVE: {composite_key}")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Invalid composite key format, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
+            
+            database_id, asset_id, file_path = parts
+            
+            # Skip if it's asset-level (file_path is just "/")
+            if file_path == '/':
+                logger.info("Asset-level metadata REMOVE, skipping for file index")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Asset-level metadata, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
+            
+            # Skip folder paths
+            if is_folder_path(file_path):
+                logger.info(f"Folder path metadata REMOVE, skipping: {file_path}")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Folder path, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
+            
+            # For REMOVE, we don't need to re-index, just return success
+            # The metadata/attribute was deleted, so we should re-index the file
+            # to update its metadata fields in OpenSearch
+            logger.info(f"Metadata REMOVE for file {database_id}/{asset_id}{file_path}, will re-index")
+            
+            # Get asset details to determine bucket and S3 key
+            asset_details = get_asset_details(database_id, asset_id)
+            if not asset_details:
+                logger.warning(f"Asset not found for metadata REMOVE: {database_id}/{asset_id}")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Asset not found, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
+            
+            # Get bucket details
+            bucket_details = get_bucket_details(asset_details.get('bucketId'))
+            if not bucket_details:
+                logger.warning(f"Bucket details not found for asset: {asset_id}")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Bucket details not found, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
+            
+            # Calculate S3 key
+            asset_location = asset_details.get('assetLocation', {})
+            asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
+            s3_key = asset_base_key + file_path.lstrip('/')
+            
+            # Ensure relative path starts with a slash
+            if not file_path.startswith('/'):
+                file_path = '/' + file_path
+            
+            # Create file index request to re-index (which will fetch remaining metadata)
+            request = FileIndexRequest(
+                databaseId=database_id,
+                assetId=asset_id,
+                filePath=file_path,
+                bucketName=bucket_details['bucketName'],
+                s3Key=s3_key,
+                operation="index"  # Re-index to update metadata
+            )
+            
+            # Process the request
+            return process_file_index_request(request)
+        
+        # For INSERT/MODIFY, get the record data from NewImage
+        record_data = dynamodb_data.get('NewImage', {})
         
         if not record_data:
-            logger.warning("No record data found in metadata stream event")
+            logger.warning("No NewImage found in INSERT/MODIFY event")
             return IndexOperationResponse(
                 success=True,
-                message="No record data, skipping",
+                message="No NewImage data, skipping",
                 indexName=opensearch_file_index,
                 operation="skip"
             )
         
-        # Extract database ID and asset ID from DynamoDB record
-        database_id = record_data.get('databaseId', {}).get('S')
-        asset_id_with_path = record_data.get('assetId', {}).get('S')
+        # Parse composite key format (databaseId:assetId:filePath)
+        composite_key = record_data.get('databaseId:assetId:filePath', {}).get('S')
         
-        if not database_id or not asset_id_with_path:
-            logger.warning("Missing database ID or asset ID in metadata stream")
+        if not composite_key:
+            logger.warning("Missing composite key in metadata stream")
             return IndexOperationResponse(
                 success=True,
-                message="Missing IDs, skipping",
+                message="Missing composite key, skipping",
                 indexName=opensearch_file_index,
                 operation="skip"
             )
         
-        # Check if this is a file metadata record (has path)
-        if '/' not in asset_id_with_path:
+        # Parse composite key
+        parts = composite_key.split(':', 2)
+        if len(parts) != 3:
+            logger.warning(f"Invalid composite key format: {composite_key}")
+            return IndexOperationResponse(
+                success=True,
+                message="Invalid composite key format, skipping",
+                indexName=opensearch_file_index,
+                operation="skip"
+            )
+        
+        database_id, asset_id, file_path = parts
+        
+        # Skip if it's asset-level (file_path is just "/")
+        if file_path == '/':
             logger.info("Asset-level metadata, skipping for file index")
             return IndexOperationResponse(
                 success=True,
                 message="Asset-level metadata, skipping",
-                indexName=opensearch_file_index,
-                operation="skip"
-            )
-        
-        # Extract asset ID and file path
-        # Example entry: "/ASSETID/PATH/TO/FILE"
-        # Remove leading slash before splitting
-        asset_id_with_path_clean = asset_id_with_path.lstrip('/')
-        asset_id, file_path = asset_id_with_path_clean.split('/', 1)
-        
-        # Skip if path is empty or root
-        if not file_path or file_path == '/' or file_path == '':
-            logger.info("Root path metadata, skipping for file index")
-            return IndexOperationResponse(
-                success=True,
-                message="Root path metadata, skipping",
                 indexName=opensearch_file_index,
                 operation="skip"
             )
@@ -1110,11 +1387,8 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
         # Calculate S3 key
         asset_location = asset_details.get('assetLocation', {})
         asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        s3_key = asset_base_key + file_path
+        s3_key = asset_base_key + file_path.lstrip('/')
         
-        # Determine operation
-        operation = "delete" if event_name == 'REMOVE' else "index"
-
         # Ensure relative path starts with a slash
         if not file_path.startswith('/'):
             file_path = '/' + file_path
@@ -1126,7 +1400,7 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
             filePath=file_path,
             bucketName=bucket_details['bucketName'],
             s3Key=s3_key,
-            operation=operation
+            operation="index"
         )
         
         # Process the request
@@ -1255,9 +1529,16 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         ))
                     
                 elif event_source == 'aws:dynamodb':
-                    # DynamoDB stream from metadata table
-                    result = handle_metadata_stream(record)
-                    results.append(result)
+                    # DynamoDB stream from metadata/attribute tables
+                    source_arn = record.get('eventSourceARN', '')
+                    
+                    if asset_file_metadata_table_name in source_arn or \
+                       file_attribute_table_name in source_arn:
+                        # Metadata or attribute table stream
+                        result = handle_metadata_stream(record)
+                        results.append(result)
+                    else:
+                        logger.warning(f"Unknown DynamoDB table in source ARN: {source_arn}")
                     
                 else:
                     logger.warning(f"Unknown event source: {event_source}")

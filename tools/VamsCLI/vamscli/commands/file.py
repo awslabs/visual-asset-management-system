@@ -16,7 +16,8 @@ from ..utils.exceptions import (
     VamsCLIError, InvalidFileError, FileTooLargeError, PreviewFileError,
     UploadSequenceError, FileUploadError, FileNotFoundError, FileOperationError,
     InvalidPathError, FilePermissionError, FileAlreadyExistsError, 
-    FileArchivedError, InvalidVersionError, AssetNotFoundError, InvalidAssetDataError
+    FileArchivedError, InvalidVersionError, AssetNotFoundError, InvalidAssetDataError,
+    DatabaseNotFoundError
 )
 from ..utils.file_processor import (
     FileInfo, collect_files_from_directory, collect_files_from_list,
@@ -278,6 +279,50 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         
         log_debug(f"All {len(files)} files validated successfully")
         
+        # Setup/auth already validated by decorator
+        profile_manager = get_profile_manager_from_context(ctx)
+        config = profile_manager.load_config()
+        api_gateway_url = config['api_gateway_url']
+        log_debug(f"Initializing API client with gateway: {api_gateway_url}")
+        api_client = APIClient(api_gateway_url, profile_manager)
+        
+        # NEW: Fetch database configuration for extension restrictions
+        output_status("Checking database upload restrictions...", json_output or hide_progress)
+        log_debug(f"Fetching database configuration for: {database_id}")
+        
+        try:
+            database_config = api_client.get_database(database_id)
+            log_debug(f"Database config retrieved: {database_config.get('databaseId')}")
+            
+            # Check for file extension restrictions
+            restricted_extensions = database_config.get('restrictFileUploadsToExtensions', '')
+            
+            if restricted_extensions and restricted_extensions.strip():
+                log_debug(f"Database has file extension restrictions: {restricted_extensions}")
+                output_status(f"Validating file extensions against database restrictions...", json_output or hide_progress)
+                
+                # Validate file extensions
+                from ..utils.file_processor import validate_file_extensions
+                validate_file_extensions(files, restricted_extensions, upload_type)
+                
+                log_debug(f"All {len(files)} files passed extension validation")
+            else:
+                log_debug("No file extension restrictions configured for this database")
+                
+        except DatabaseNotFoundError as e:
+            output_error(e, json_output, error_type="Database Not Found")
+            raise click.ClickException(str(e))
+        except InvalidFileError as e:
+            # Extension validation failed
+            output_error(
+                e,
+                json_output,
+                error_type="File Extension Validation Error",
+                helpful_message=f"The database '{database_id}' restricts uploads to specific file types. "
+                               f"Please check the allowed extensions and try again."
+            )
+            raise click.ClickException(str(e))
+        
         # Create upload sequences with enhanced validation
         log_debug(f"Creating upload sequences from {len(files)} files")
         try:
@@ -323,13 +368,6 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
                 click.echo(f"   These will be created during upload completion.")
             
             click.echo()
-        
-        # Setup/auth already validated by decorator
-        profile_manager = get_profile_manager_from_context(ctx)
-        config = profile_manager.load_config()
-        api_gateway_url = config['api_gateway_url']
-        log_debug(f"Initializing API client with gateway: {api_gateway_url}")
-        api_client = APIClient(api_gateway_url, profile_manager)
         
         # Run upload
         log_debug(f"Starting upload manager with {parallel_uploads} parallel uploads, {retry_attempts} retry attempts, force_skip={force_skip}")

@@ -55,6 +55,12 @@ class TestFileUploadCommand:
     def test_upload_success(self, cli_runner, file_command_mocks):
         """Test successful file upload."""
         with file_command_mocks as mocks:
+            # Mock database config (no restrictions)
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-db',
+                'restrictFileUploadsToExtensions': ''
+            }
+            
             # Use isolated filesystem to create actual test files
             with cli_runner.isolated_filesystem():
                 # Create a test file
@@ -160,6 +166,12 @@ class TestFileUploadCommand:
     def test_upload_json_input(self, cli_runner, file_command_mocks):
         """Test upload with JSON input."""
         with file_command_mocks as mocks:
+            # Mock database config (no restrictions)
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-db',
+                'restrictFileUploadsToExtensions': ''
+            }
+            
             with cli_runner.isolated_filesystem():
                 # Create a test file
                 with open('test_file.gltf', 'w') as f:

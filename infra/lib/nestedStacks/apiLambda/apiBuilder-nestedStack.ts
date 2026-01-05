@@ -56,8 +56,7 @@ import {
 import { NestedStack } from "aws-cdk-lib";
 
 import { buildMetadataSchemaService } from "../../lambdaBuilder/metadataSchemaFunctions";
-
-import { buildMetadataFunctions } from "../../lambdaBuilder/metadataFunctions";
+import { buildMetadataService } from "../../lambdaBuilder/metadataFunctions";
 import { buildAuthFunctions } from "../../lambdaBuilder/authFunctions";
 import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
 import {
@@ -68,7 +67,6 @@ import {
 import {
     buildAssetLinksService,
     buildCreateAssetLinkFunction,
-    buildAssetLinksMetadataFunction,
 } from "../../lambdaBuilder/assetsLinkFunctions";
 import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import {
@@ -82,6 +80,8 @@ import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { authResources } from "../auth/authBuilder-nestedStack";
+import { DynamoDbMetadataSchemaDefaultsConstruct } from "./constructs/dynamodb-metadataschema-defaults-construct";
+import * as iam from "aws-cdk-lib/aws-iam";
 
 interface apiGatewayLambdaConfiguration {
     routePath: string;
@@ -153,6 +153,11 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, databaseService, {
             routePath: "/database/{databaseId}",
             method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+        attachFunctionToApi(this, databaseService, {
+            routePath: "/database/{databaseId}",
+            method: apigateway.HttpMethod.PUT,
             api: api,
         });
         attachFunctionToApi(this, databaseService, {
@@ -501,33 +506,34 @@ export class ApiBuilderNestedStack extends NestedStack {
             api: api,
         });
 
-        // Asset Links Metadata Resources
-        const assetLinksMetadataService = buildAssetLinksMetadataFunction(
+        // Centralized Metadata Service - Handles all entity types
+        const metadataService = buildMetadataService(
             this,
             lambdaCommonBaseLayer,
-            config,
             storageResources,
+            config,
             vpc,
-            subnets,
-            storageResources.encryption.kmsKey
+            subnets
         );
-        attachFunctionToApi(this, assetLinksMetadataService, {
-            routePath: "/asset-links/{assetLinkId}/metadata",
-            method: apigateway.HttpMethod.POST,
-            api: api,
-        });
-        attachFunctionToApi(this, assetLinksMetadataService, {
+
+        // Asset Link Metadata Routes (updated - removed metadataKey path parameter)
+        attachFunctionToApi(this, metadataService, {
             routePath: "/asset-links/{assetLinkId}/metadata",
             method: apigateway.HttpMethod.GET,
             api: api,
         });
-        attachFunctionToApi(this, assetLinksMetadataService, {
-            routePath: "/asset-links/{assetLinkId}/metadata/{metadataKey}",
+        attachFunctionToApi(this, metadataService, {
+            routePath: "/asset-links/{assetLinkId}/metadata",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
+        attachFunctionToApi(this, metadataService, {
+            routePath: "/asset-links/{assetLinkId}/metadata",
             method: apigateway.HttpMethod.PUT,
             api: api,
         });
-        attachFunctionToApi(this, assetLinksMetadataService, {
-            routePath: "/asset-links/{assetLinkId}/metadata/{metadataKey}",
+        attachFunctionToApi(this, metadataService, {
+            routePath: "/asset-links/{assetLinkId}/metadata",
             method: apigateway.HttpMethod.DELETE,
             api: api,
         });
@@ -856,30 +862,40 @@ export class ApiBuilderNestedStack extends NestedStack {
             api: api,
         });
 
-        // metdata
-        const metadataCrudFunctions = buildMetadataFunctions(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
+        // Asset Metadata Routes (migrated to centralized metadata service)
         const methods = [
-            apigateway.HttpMethod.PUT,
             apigateway.HttpMethod.GET,
             apigateway.HttpMethod.POST,
+            apigateway.HttpMethod.PUT,
             apigateway.HttpMethod.DELETE,
         ];
         for (let i = 0; i < methods.length; i++) {
-            attachFunctionToApi(this, metadataCrudFunctions[i], {
+            attachFunctionToApi(this, metadataService, {
                 routePath: "/database/{databaseId}/assets/{assetId}/metadata",
                 method: methods[i],
                 api: api,
             });
         }
 
-        const metadataSchemaFunctions = buildMetadataSchemaService(
+        // File Metadata/Attribute Routes (new)
+        for (let i = 0; i < methods.length; i++) {
+            attachFunctionToApi(this, metadataService, {
+                routePath: "/database/{databaseId}/assets/{assetId}/metadata/file",
+                method: methods[i],
+                api: api,
+            });
+        }
+
+        // Database Metadata Routes (new)
+        for (let i = 0; i < methods.length; i++) {
+            attachFunctionToApi(this, metadataService, {
+                routePath: "/database/{databaseId}/metadata",
+                method: methods[i],
+                api: api,
+            });
+        }
+
+        const metadataSchemaService = buildMetadataSchemaService(
             this,
             lambdaCommonBaseLayer,
             storageResources,
@@ -888,21 +904,35 @@ export class ApiBuilderNestedStack extends NestedStack {
             subnets
         );
 
-        const metadataSchemaMethods = [
-            apigateway.HttpMethod.GET,
-            apigateway.HttpMethod.POST,
-            apigateway.HttpMethod.PUT,
-        ];
-        for (let i = 0; i < metadataSchemaMethods.length; i++) {
-            attachFunctionToApi(this, metadataSchemaFunctions, {
-                routePath: "/metadataschema/{databaseId}",
-                method: metadataSchemaMethods[i],
-                api: api,
-            });
-        }
-        attachFunctionToApi(this, metadataSchemaFunctions, {
-            routePath: "/metadataschema/{databaseId}/{field}",
+        // NEW V2 Routes: /database/{databaseId}/metadataSchema/{metadataSchemaId} - GET/DELETE
+        attachFunctionToApi(this, metadataSchemaService, {
+            routePath: "/database/{databaseId}/metadataSchema/{metadataSchemaId}",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, metadataSchemaService, {
+            routePath: "/database/{databaseId}/metadataSchema/{metadataSchemaId}",
             method: apigateway.HttpMethod.DELETE,
+            api: api,
+        });
+
+        // NEW V2 Routes: /metadataschema - GET/POST/PUT
+        attachFunctionToApi(this, metadataSchemaService, {
+            routePath: "/metadataschema",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, metadataSchemaService, {
+            routePath: "/metadataschema",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
+
+        attachFunctionToApi(this, metadataSchemaService, {
+            routePath: "/metadataschema",
+            method: apigateway.HttpMethod.PUT,
             api: api,
         });
 
@@ -1015,8 +1045,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             lambdaCommonBaseLayer,
             storageResources,
             uploadFileFunction,
-            metadataCrudFunctions[1],
-            metadataCrudFunctions[0],
+            metadataService,
             config,
             vpc,
             subnets
@@ -1042,7 +1071,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             this,
             lambdaCommonBaseLayer,
             storageResources,
-            metadataCrudFunctions[1],
+            metadataService,
             config,
             vpc,
             subnets
@@ -1054,25 +1083,8 @@ export class ApiBuilderNestedStack extends NestedStack {
             api: api,
         });
 
-        // Create SQS queue for workflow auto-execution
-        const workflowAutoExecuteQueue = new sqs.Queue(this, "WorkflowAutoExecuteQueue", {
-            queueName: `${config.name}-${config.env.coreStackName}-workflowAutoExecute`,
-            visibilityTimeout: cdk.Duration.minutes(15), // Match Lambda timeout
-            encryption: storageResources.encryption.kmsKey
-                ? sqs.QueueEncryption.KMS
-                : sqs.QueueEncryption.SQS_MANAGED,
-            encryptionMasterKey: storageResources.encryption.kmsKey,
-            enforceSSL: true,
-        });
-
-        // Grant SNS permission to send messages to the queue
-        const { Service } = require("../../helper/service-helper");
-        workflowAutoExecuteQueue.grantSendMessages(Service("SNS").Principal);
-
-        // Subscribe the queue to the file indexer SNS topic
-        storageResources.sns.fileIndexerSnsTopic.addSubscription(
-            new SqsSubscription(workflowAutoExecuteQueue)
-        );
+        // Use the workflow auto-execute queue from storage resources
+        const workflowAutoExecuteQueue = storageResources.sqs.workflowAutoExecuteQueue;
 
         // Create the auto-execute workflow Lambda function
         const sqsAutoExecuteWorkflowFunction = buildSqsAutoExecuteWorkflowFunction(
@@ -1186,6 +1198,74 @@ export class ApiBuilderNestedStack extends NestedStack {
             method: apigateway.HttpMethod.POST,
             api: api,
         });
+
+        // Metadata Schema Defaults - Auto-load default schemas if configured
+        if (
+            config.app.metadataSchema.autoLoadDefaultAssetLinksSchema ||
+            config.app.metadataSchema.autoLoadDefaultDatabaseSchema ||
+            config.app.metadataSchema.autoLoadDefaultAssetSchema ||
+            config.app.metadataSchema.autoLoadDefaultAssetFileSchema
+        ) {
+            // Setup Custom Resource Role Policy for metadata schema initialization
+            const metadataSchemaCustomResourcePolicy = new iam.PolicyDocument({
+                statements: [
+                    new iam.PolicyStatement({
+                        effect: iam.Effect.ALLOW,
+                        actions: ["dynamodb:PutItem"],
+                        resources: [storageResources.dynamo.metadataSchemaStorageTableV2.tableArn],
+                    }),
+                ],
+            });
+
+            const metadataSchemaCustomResourceRole = new iam.Role(
+                this,
+                "MetadataSchemaDefaultCustomResourceRole",
+                {
+                    assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+                    inlinePolicies: {
+                        TablePolicy: metadataSchemaCustomResourcePolicy,
+                    },
+                    managedPolicies: [
+                        iam.ManagedPolicy.fromAwsManagedPolicyName(
+                            "service-role/AWSLambdaBasicExecutionRole"
+                        ),
+                    ],
+                }
+            );
+
+            // Add KMS permissions if encryption is enabled
+            if (config.app.useKmsCmkEncryption.enabled && storageResources.encryption.kmsKey) {
+                metadataSchemaCustomResourceRole.attachInlinePolicy(
+                    new iam.Policy(this, "CRMetadataSchemaKmsPolicy", {
+                        statements: [
+                            new iam.PolicyStatement({
+                                actions: [
+                                    "kms:Decrypt",
+                                    "kms:DescribeKey",
+                                    "kms:Encrypt",
+                                    "kms:GenerateDataKey*",
+                                    "kms:ReEncrypt*",
+                                ],
+                                effect: iam.Effect.ALLOW,
+                                resources: [storageResources.encryption.kmsKey.keyArn],
+                            }),
+                        ],
+                    })
+                );
+            }
+
+            // Instantiate the metadata schema defaults construct
+            const metadataSchemaDefaults = new DynamoDbMetadataSchemaDefaultsConstruct(
+                this,
+                "MetadataSchemaDefaults",
+                {
+                    customResourceRole: metadataSchemaCustomResourceRole,
+                    lambdaCommonBaseLayer: lambdaCommonBaseLayer,
+                    storageResources: storageResources,
+                    config: config,
+                }
+            );
+        }
 
         //Nag Supressions
         NagSuppressions.addResourceSuppressions(

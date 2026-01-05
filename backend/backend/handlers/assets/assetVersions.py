@@ -705,7 +705,7 @@ def mark_assetVersion_as_current(assetId: str, new_assetVersionId: str) -> bool:
         logger.exception(f"Error marking version as current: {e}")
         return False
 
-def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment: Optional[str] = None, created_by: str = 'system') -> Dict:
+def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment: Optional[str] = None, created_by: str = 'SYSTEM_USER') -> Dict:
     """Update asset's version tracking metadata using asset versions table
     
     Args:
@@ -993,7 +993,7 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
                 Comment=version.get('comment', ''),
                 description=version.get('description', ''),
                 specifiedPipelines=version.get('specifiedPipelines', []),
-                createdBy=version.get('createdBy', 'system'),
+                createdBy=version.get('createdBy', 'SYSTEM_USER'),
                 isCurrent=version.get('isCurrentVersion', False),
                 fileCount=file_count
             )
@@ -1058,7 +1058,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
             'DateModified': version_metadata.get('dateCreated', ''),
             'Comment': version_metadata.get('comment', ''),
             'description': version_metadata.get('description', ''),
-            'createdBy': version_metadata.get('createdBy', 'system')
+            'createdBy': version_metadata.get('createdBy', 'SYSTEM_USER')
         }
     
     if not version_info:

@@ -151,16 +151,44 @@ class FileDocumentModel(BaseModel, extra='allow'):
     _rectype: str = Field("file", description="Record type identifier")
     
     def add_metadata_fields(self, metadata: Dict[str, Any]) -> None:
-        """Add metadata fields with MD_ prefix"""
+        """
+        Add metadata as a single flat object field.
+        All metadata is stored in the MD_ flat_object field without type prefixes.
+        Merges with existing metadata if called multiple times.
+        """
         if not metadata:
             return
-            
-        for field_name, field_value in metadata.items():
-            opensearch_field, processed_value = _determine_field_name_and_type(field_name, field_value)
-            if opensearch_field is not None:
-                # Add MD_ prefix for metadata fields
-                metadata_field_name = f"MD_{opensearch_field}"
-                setattr(self, metadata_field_name, processed_value)
+        
+        # Get existing metadata if it exists
+        existing_metadata = getattr(self, "MD_", {})
+        
+        # Merge new metadata with existing (new values overwrite existing for same keys)
+        if existing_metadata:
+            existing_metadata.update(metadata)
+            setattr(self, "MD_", existing_metadata)
+        else:
+            # No existing metadata, set directly
+            setattr(self, "MD_", metadata)
+    
+    def add_attribute_fields(self, attributes: Dict[str, Any]) -> None:
+        """
+        Add attributes as a single flat object field.
+        All attributes are stored in the AB_ flat_object field without type prefixes.
+        Merges with existing attributes if called multiple times.
+        """
+        if not attributes:
+            return
+        
+        # Get existing attributes if they exist
+        existing_attributes = getattr(self, "AB_", {})
+        
+        # Merge new attributes with existing (new values overwrite existing for same keys)
+        if existing_attributes:
+            existing_attributes.update(attributes)
+            setattr(self, "AB_", existing_attributes)
+        else:
+            # No existing attributes, set directly
+            setattr(self, "AB_", attributes)
 
 class FileIndexRequest(BaseModel, extra='ignore'):
     """Request model for file index operations"""
@@ -225,16 +253,44 @@ class AssetDocumentModel(BaseModel, extra='allow'):
     _rectype: str = Field("asset", description="Record type identifier")
     
     def add_metadata_fields(self, metadata: Dict[str, Any]) -> None:
-        """Add metadata fields with MD_ prefix"""
+        """
+        Add metadata as a single flat object field.
+        All metadata is stored in the MD_ flat_object field without type prefixes.
+        Merges with existing metadata if called multiple times.
+        """
         if not metadata:
             return
-            
-        for field_name, field_value in metadata.items():
-            opensearch_field, processed_value = _determine_field_name_and_type(field_name, field_value)
-            if opensearch_field is not None:
-                # Add MD_ prefix for metadata fields
-                metadata_field_name = f"MD_{opensearch_field}"
-                setattr(self, metadata_field_name, processed_value)
+        
+        # Get existing metadata if it exists
+        existing_metadata = getattr(self, "MD_", {})
+        
+        # Merge new metadata with existing (new values overwrite existing for same keys)
+        if existing_metadata:
+            existing_metadata.update(metadata)
+            setattr(self, "MD_", existing_metadata)
+        else:
+            # No existing metadata, set directly
+            setattr(self, "MD_", metadata)
+    
+    def add_attribute_fields(self, attributes: Dict[str, Any]) -> None:
+        """
+        Add attributes as a single flat object field.
+        All attributes are stored in the AB_ flat_object field without type prefixes.
+        Merges with existing attributes if called multiple times.
+        """
+        if not attributes:
+            return
+        
+        # Get existing attributes if they exist
+        existing_attributes = getattr(self, "AB_", {})
+        
+        # Merge new attributes with existing (new values overwrite existing for same keys)
+        if existing_attributes:
+            existing_attributes.update(attributes)
+            setattr(self, "AB_", existing_attributes)
+        else:
+            # No existing attributes, set directly
+            setattr(self, "AB_", attributes)
 
 class AssetIndexRequest(BaseModel, extra='ignore'):
     """Request model for asset index operations"""
@@ -321,14 +377,23 @@ class FileIndexMapping(BaseModel, extra='ignore'):
                     # Record type
                     "_rectype": {"type": "keyword"},
                     
-                    # Dynamic templates for metadata fields
+                    # Dynamic templates for metadata fields (MD_ prefix)
                     "MD_str_*": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
                     "MD_num_*": {"type": "double"},
                     "MD_bool_*": {"type": "boolean"},
                     "MD_date_*": {"type": "date"},
                     "MD_list_*": {"type": "keyword"},
                     "MD_gp_*": {"type": "geo_point"},
-                    "MD_gs_*": {"type": "text"}
+                    "MD_gs_*": {"type": "text"},
+                    
+                    # Dynamic templates for attribute fields (AB_ prefix)
+                    "AB_str_*": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                    "AB_num_*": {"type": "double"},
+                    "AB_bool_*": {"type": "boolean"},
+                    "AB_date_*": {"type": "date"},
+                    "AB_list_*": {"type": "keyword"},
+                    "AB_gp_*": {"type": "geo_point"},
+                    "AB_gs_*": {"type": "text"}
                 }
             },
             "settings": {
@@ -385,14 +450,23 @@ class AssetIndexMapping(BaseModel, extra='ignore'):
                     # Record type
                     "_rectype": {"type": "keyword"},
                     
-                    # Dynamic templates for metadata fields
+                    # Dynamic templates for metadata fields (MD_ prefix)
                     "MD_str_*": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
                     "MD_num_*": {"type": "double"},
                     "MD_bool_*": {"type": "boolean"},
                     "MD_date_*": {"type": "date"},
                     "MD_list_*": {"type": "keyword"},
                     "MD_gp_*": {"type": "geo_point"},
-                    "MD_gs_*": {"type": "text"}
+                    "MD_gs_*": {"type": "text"},
+                    
+                    # Dynamic templates for attribute fields (AB_ prefix)
+                    "AB_str_*": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                    "AB_num_*": {"type": "double"},
+                    "AB_bool_*": {"type": "boolean"},
+                    "AB_date_*": {"type": "date"},
+                    "AB_list_*": {"type": "keyword"},
+                    "AB_gp_*": {"type": "geo_point"},
+                    "AB_gs_*": {"type": "text"}
                 }
             },
             "settings": {

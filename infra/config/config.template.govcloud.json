@@ -157,6 +157,12 @@
         "api": {
             "globalRateLimit": 50,
             "globalBurstLimit": 100
+        },
+        "metadataSchema": {
+            "autoLoadDefaultAssetLinksSchema": true,
+            "autoLoadDefaultDatabaseSchema": true,
+            "autoLoadDefaultAssetSchema": true,
+            "autoLoadDefaultAssetFileSchema": true
         }
     }
 }

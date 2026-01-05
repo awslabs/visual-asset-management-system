@@ -279,6 +279,8 @@ class TestDatabaseCreateCommand:
         assert '--database-id' in result.output
         assert '--description' in result.output
         assert '--default-bucket-id' in result.output
+        assert '--restrict-metadata-outside-schemas' in result.output
+        assert '--restrict-file-uploads-to-extensions' in result.output
         assert '--json-input' in result.output
         assert '--json-output' in result.output
     
@@ -399,6 +401,92 @@ class TestDatabaseCreateCommand:
 
             assert result.exit_code == 1  # Our custom error handling
             assert '--description is required' in result.output
+    
+    def test_create_with_metadata_restriction(self, cli_runner, generic_command_mocks):
+        """Test database creation with metadata restriction."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].create_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database created successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'create',
+                '-d', 'test-database',
+                '--description', 'Test Database',
+                '--default-bucket-id', 'bucket-uuid',
+                '--restrict-metadata-outside-schemas'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database created successfully!' in result.output
+            
+            # Verify API call includes restrictMetadataOutsideSchemas
+            expected_data = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'defaultBucketId': 'bucket-uuid',
+                'restrictMetadataOutsideSchemas': True
+            }
+            mocks['api_client'].create_database.assert_called_once_with(expected_data)
+    
+    def test_create_with_file_extensions(self, cli_runner, generic_command_mocks):
+        """Test database creation with file extension restrictions."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].create_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database created successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'create',
+                '-d', 'test-database',
+                '--description', 'Test Database',
+                '--default-bucket-id', 'bucket-uuid',
+                '--restrict-file-uploads-to-extensions', '.pdf,.docx,.jpg'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database created successfully!' in result.output
+            
+            # Verify API call includes restrictFileUploadsToExtensions
+            expected_data = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'defaultBucketId': 'bucket-uuid',
+                'restrictFileUploadsToExtensions': '.pdf,.docx,.jpg'
+            }
+            mocks['api_client'].create_database.assert_called_once_with(expected_data)
+    
+    def test_create_with_both_restrictions(self, cli_runner, generic_command_mocks):
+        """Test database creation with both metadata and file restrictions."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].create_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database created successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'create',
+                '-d', 'test-database',
+                '--description', 'Test Database',
+                '--default-bucket-id', 'bucket-uuid',
+                '--restrict-metadata-outside-schemas',
+                '--restrict-file-uploads-to-extensions', '.pdf,.png'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database created successfully!' in result.output
+            
+            # Verify API call includes both restrictions
+            expected_data = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'defaultBucketId': 'bucket-uuid',
+                'restrictMetadataOutsideSchemas': True,
+                'restrictFileUploadsToExtensions': '.pdf,.png'
+            }
+            mocks['api_client'].create_database.assert_called_once_with(expected_data)
 
 
 class TestDatabaseUpdateCommand:
@@ -465,6 +553,156 @@ class TestDatabaseUpdateCommand:
 
             assert result.exit_code == 1  # Our custom error handling
             assert 'At least one field must be provided' in result.output
+    
+    def test_update_enable_metadata_restriction(self, cli_runner, generic_command_mocks):
+        """Test enabling metadata restriction."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-metadata-outside-schemas'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes restrictMetadataOutsideSchemas
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictMetadataOutsideSchemas': True
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_disable_metadata_restriction(self, cli_runner, generic_command_mocks):
+        """Test disabling metadata restriction."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--no-restrict-metadata-outside-schemas'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes restrictMetadataOutsideSchemas set to False
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictMetadataOutsideSchemas': False
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_file_extensions(self, cli_runner, generic_command_mocks):
+        """Test updating file extension restrictions."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-file-uploads-to-extensions', '.pdf,.png'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes restrictFileUploadsToExtensions
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictFileUploadsToExtensions': '.pdf,.png'
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_clear_file_extensions(self, cli_runner, generic_command_mocks):
+        """Test clearing file extension restrictions."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--clear-file-extensions'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes empty restrictFileUploadsToExtensions
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictFileUploadsToExtensions': ''
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_only_new_fields(self, cli_runner, generic_command_mocks):
+        """Test updating only new configuration fields."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-metadata-outside-schemas',
+                '--restrict-file-uploads-to-extensions', '.pdf'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes only new fields
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictMetadataOutsideSchemas': True,
+                'restrictFileUploadsToExtensions': '.pdf'
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_conflicting_metadata_flags(self, cli_runner, generic_command_mocks):
+        """Test that conflicting metadata flags are rejected."""
+        with generic_command_mocks('database') as mocks:
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-metadata-outside-schemas',
+                '--no-restrict-metadata-outside-schemas'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use both' in result.output
+            assert 'restrict-metadata-outside-schemas' in result.output
+    
+    def test_update_conflicting_extension_flags(self, cli_runner, generic_command_mocks):
+        """Test that conflicting extension flags are rejected."""
+        with generic_command_mocks('database') as mocks:
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-file-uploads-to-extensions', '.pdf',
+                '--clear-file-extensions'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use both' in result.output
+            assert 'restrict-file-uploads-to-extensions' in result.output
 
 
 class TestDatabaseGetCommand:
@@ -860,6 +1098,101 @@ class TestDatabaseCommandsEdgeCases:
             assert result.exit_code == 1
             assert '✗ Bucket Not Found' in result.output
             assert 'vamscli database list-buckets' in result.output
+
+
+class TestDatabaseNewFieldsDisplay:
+    """Test display of new database configuration fields."""
+    
+    def test_get_displays_new_fields(self, cli_runner, generic_command_mocks):
+        """Test that get command displays new configuration fields."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'dateCreated': '2024-01-01T00:00:00Z',
+                'assetCount': 5,
+                'defaultBucketId': 'bucket-uuid',
+                'bucketName': 'test-bucket',
+                'baseAssetsPrefix': 'assets/',
+                'restrictMetadataOutsideSchemas': True,
+                'restrictFileUploadsToExtensions': '.pdf,.docx,.jpg'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'get',
+                '-d', 'test-database'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Restrict Metadata Outside Schemas: True' in result.output
+            assert 'Restrict File Uploads To Extensions: .pdf,.docx,.jpg' in result.output
+    
+    def test_get_displays_no_restrictions(self, cli_runner, generic_command_mocks):
+        """Test that get command displays when no restrictions are set."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'dateCreated': '2024-01-01T00:00:00Z',
+                'assetCount': 5,
+                'defaultBucketId': 'bucket-uuid',
+                'restrictMetadataOutsideSchemas': False,
+                'restrictFileUploadsToExtensions': ''
+            }
+            
+            result = cli_runner.invoke(database, [
+                'get',
+                '-d', 'test-database'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Restrict Metadata Outside Schemas: False' in result.output
+            assert 'Restrict File Uploads To Extensions: (none)' in result.output
+    
+    def test_list_displays_new_fields(self, cli_runner, generic_command_mocks):
+        """Test that list command displays new configuration fields."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_databases.return_value = {
+                'Items': [
+                    {
+                        'databaseId': 'test-db-1',
+                        'description': 'Test Database 1',
+                        'dateCreated': '2024-01-01T00:00:00Z',
+                        'assetCount': 5,
+                        'defaultBucketId': 'bucket-uuid-1',
+                        'restrictMetadataOutsideSchemas': True,
+                        'restrictFileUploadsToExtensions': '.pdf,.png'
+                    }
+                ]
+            }
+            
+            result = cli_runner.invoke(database, ['list'])
+            
+            assert result.exit_code == 0
+            assert 'Restrict Metadata Outside Schemas: True' in result.output
+            assert 'Restrict File Uploads To Extensions: .pdf,.png' in result.output
+    
+    def test_json_output_includes_new_fields(self, cli_runner, generic_command_mocks):
+        """Test that JSON output includes new fields."""
+        with generic_command_mocks('database') as mocks:
+            api_response = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'restrictMetadataOutsideSchemas': True,
+                'restrictFileUploadsToExtensions': '.pdf,.docx'
+            }
+            mocks['api_client'].get_database.return_value = api_response
+            
+            result = cli_runner.invoke(database, [
+                'get',
+                '-d', 'test-database',
+                '--json-output'
+            ])
+            
+            assert result.exit_code == 0
+            output_json = json.loads(result.output.strip())
+            assert output_json['restrictMetadataOutsideSchemas'] == True
+            assert output_json['restrictFileUploadsToExtensions'] == '.pdf,.docx'
 
 
 class TestBucketSelectionFunction:

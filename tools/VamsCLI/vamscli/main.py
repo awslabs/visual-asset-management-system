@@ -10,7 +10,6 @@ from .commands.auth import auth
 from .commands.assets import assets
 from .commands.asset_version import asset_version
 from .commands.asset_links import asset_links
-from .commands.asset_links_metadata import asset_links_metadata
 from .commands.file import file
 from .commands.profile import profile
 from .commands.database import database
@@ -151,7 +150,6 @@ cli.add_command(auth)
 cli.add_command(assets)
 cli.add_command(asset_version)
 cli.add_command(asset_links)
-cli.add_command(asset_links_metadata)
 cli.add_command(file)
 cli.add_command(profile)
 cli.add_command(database)

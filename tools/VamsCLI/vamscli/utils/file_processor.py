@@ -118,6 +118,69 @@ def validate_file_for_upload(file_path: Path, upload_type: str, relative_key: st
             )
 
 
+def validate_file_extensions(files: List[FileInfo], allowed_extensions: str, upload_type: str = "assetFile") -> None:
+    """
+    Validate files against allowed extensions from database configuration.
+    
+    Args:
+        files: List of FileInfo objects to validate
+        allowed_extensions: Comma-delimited string of allowed extensions (e.g., ".glb,.gltf")
+        upload_type: Type of upload ("assetFile" or "assetPreview")
+    
+    Raises:
+        InvalidFileError: When files have disallowed extensions
+    """
+    # Skip validation entirely for asset preview uploads
+    if upload_type == "assetPreview":
+        return
+    
+    # Parse allowed extensions
+    if not allowed_extensions or not allowed_extensions.strip():
+        return  # No restrictions
+    
+    extensions_list = [ext.strip().lower() for ext in allowed_extensions.split(',')]
+    
+    # Check for ".all" wildcard
+    if '.all' in extensions_list:
+        return  # All extensions allowed
+    
+    # Collect files that don't meet restrictions
+    invalid_files = []
+    
+    for file_info in files:
+        # Skip preview files (asset preview uploads)
+        if file_info.is_preview_file:
+            continue
+        
+        # Skip .previewFile. auxiliary files
+        if '.previewFile.' in file_info.relative_key:
+            continue
+        
+        # Get file extension
+        file_ext = Path(file_info.local_path).suffix.lower()
+        
+        # Check if extension is allowed
+        if file_ext not in extensions_list:
+            invalid_files.append({
+                'file': file_info.relative_key,
+                'extension': file_ext
+            })
+    
+    # Raise error if any files are invalid
+    if invalid_files:
+        # Format the error message
+        error_lines = [
+            f"Database has file extension restrictions: {allowed_extensions}",
+            "",
+            "The following files do not meet the restriction:"
+        ]
+        
+        for invalid in invalid_files:
+            error_lines.append(f"  - {invalid['file']} (extension: {invalid['extension']})")
+        
+        raise InvalidFileError("\n".join(error_lines))
+
+
 def collect_files_from_directory(directory: Path, recursive: bool = False, 
                                 asset_location: str = "/") -> List[FileInfo]:
     """Collect files from a directory."""

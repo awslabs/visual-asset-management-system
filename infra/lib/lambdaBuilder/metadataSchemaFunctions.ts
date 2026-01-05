@@ -26,7 +26,7 @@ export function buildMetadataSchemaService(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "schema";
+    const name = "metadataSchemaService";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.metadataschema.${name}.lambda_handler`,
@@ -44,8 +44,8 @@ export function buildMetadataSchemaService(
                 : undefined,
         environment: {
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            METADATA_SCHEMA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.metadataSchemaStorageTable.tableName,
+            METADATA_SCHEMA_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
@@ -53,7 +53,7 @@ export function buildMetadataSchemaService(
         },
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.metadataSchemaStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.metadataSchemaStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);

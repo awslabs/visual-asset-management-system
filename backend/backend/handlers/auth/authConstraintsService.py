@@ -90,8 +90,8 @@ def _transform_to_denormalized_format(constraint_data):
         # Metadata
         'dateCreated': constraint_data.get('dateCreated', datetime.utcnow().isoformat()),
         'dateModified': datetime.utcnow().isoformat(),
-        'createdBy': constraint_data.get('createdBy', 'system'),
-        'modifiedBy': constraint_data.get('modifiedBy', 'system'),
+        'createdBy': constraint_data.get('createdBy', 'SYSTEM_USER'),
+        'modifiedBy': constraint_data.get('modifiedBy', 'SYSTEM_USER'),
     }
     
     # Create one item per UNIQUE groupId (not per permission)

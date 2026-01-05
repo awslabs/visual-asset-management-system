@@ -283,8 +283,24 @@ export default function UploadManager({
                     // Step 2: Add Metadata
                     if (Object.keys(metadata).length > 0) {
                         setUploadState((prev) => ({ ...prev, metadataStatus: "in-progress" }));
-                        await addMetadata(assetDetail.databaseId, assetId, metadata);
-                        setUploadState((prev) => ({ ...prev, metadataStatus: "completed" }));
+                        try {
+                            await addMetadata(assetDetail.databaseId, assetId, metadata);
+                            setUploadState((prev) => ({ ...prev, metadataStatus: "completed" }));
+                        } catch (error: any) {
+                            setUploadState((prev) => ({
+                                ...prev,
+                                metadataStatus: "failed",
+                                errors: [
+                                    ...prev.errors,
+                                    {
+                                        step: "Metadata",
+                                        message: error.message || "Failed to add metadata",
+                                    },
+                                ],
+                            }));
+                            // Stop here - don't continue to next steps
+                            return;
+                        }
                     }
 
                     // Step 2.5: Create Asset Links
@@ -310,6 +326,8 @@ export default function UploadManager({
                                     })),
                                 ],
                             }));
+                            // Stop here - don't continue to next steps
+                            return;
                         }
                     }
                 } else if (assetId) {
@@ -669,6 +687,325 @@ export default function UploadManager({
         [retryFailedParts, handleRetry]
     );
 
+    // Function to continue workflow after metadata step
+    const continueAfterMetadata = useCallback(async () => {
+        const assetId = uploadState.createdAssetId || assetDetail.assetId || "";
+
+        // Step 2.5: Create Asset Links
+        if (
+            assetDetail.assetLinksFe &&
+            (assetDetail.assetLinksFe.parents?.length ||
+                assetDetail.assetLinksFe.child?.length ||
+                assetDetail.assetLinksFe.related?.length)
+        ) {
+            setUploadState((prev) => ({ ...prev, assetLinksStatus: "in-progress" }));
+            const linkResult = await createAssetLinks(assetId, assetDetail);
+            if (linkResult.success) {
+                setUploadState((prev) => ({ ...prev, assetLinksStatus: "completed" }));
+            } else {
+                setUploadState((prev) => ({
+                    ...prev,
+                    assetLinksStatus: "failed",
+                    errors: [
+                        ...prev.errors,
+                        ...linkResult.errors.map((err) => ({
+                            step: "Asset Links",
+                            message: err,
+                        })),
+                    ],
+                }));
+                // Stop here - don't continue to file upload
+                return;
+            }
+        }
+
+        // Continue to file upload
+        await continueToFileUpload();
+    }, [uploadState.createdAssetId, assetDetail, createAssetLinks]);
+
+    // Function to continue to file upload after asset links
+    const continueToFileUpload = useCallback(async () => {
+        const assetId = uploadState.createdAssetId || assetDetail.assetId || "";
+
+        // Step 3: Initialize Upload Sequences
+        if (fileItems.length > 0 && assetId) {
+            // Convert fileItems to FileInfo
+            const fileInfos: FileInfo[] = fileItems.map((item, index) => ({
+                index: item.index,
+                name: item.name,
+                size: item.size,
+                relativePath: item.relativePath,
+                handle: item.handle,
+                isPreviewFile: item.relativePath.includes(".previewFile."),
+                isAssetPreview: item.index === 99999,
+            }));
+
+            // Create sequences and store in state
+            const sequences = createUploadSequences(fileInfos);
+            setUploadSequences(sequences);
+
+            const isMulti = needsMultiSequenceUpload(fileInfos);
+            setIsMultiSequence(isMulti);
+            setTotalSequences(sequences.length);
+
+            console.log(
+                `Created ${sequences.length} upload sequences (multi-sequence: ${isMulti})`
+            );
+
+            // Initialize all sequences
+            setUploadState((prev) => ({ ...prev, uploadInitStatus: "in-progress" }));
+            const initResults = [];
+
+            for (const sequence of sequences) {
+                try {
+                    const result = await initializeSequence(
+                        sequence,
+                        assetId,
+                        assetDetail.databaseId || "",
+                        fileUploadItems,
+                        (retryCount, error, backoffMs) => {
+                            const { message, isRateLimit } = formatRetryMessage(
+                                `Sequence ${sequence.sequenceId} initialization`,
+                                retryCount,
+                                error,
+                                backoffMs
+                            );
+                            setRetryMessage(message);
+                            setIsRateLimitRetry(isRateLimit);
+                        }
+                    );
+                    initResults.push(result);
+                    setCompletedInitSequences((prev) => prev + 1);
+                    setRetryMessage(null);
+                } catch (error: any) {
+                    console.error(`Failed to initialize sequence ${sequence.sequenceId}:`, error);
+                    setRetryMessage(null);
+                    setUploadState((prev) => ({
+                        ...prev,
+                        uploadInitStatus: "failed",
+                        errors: [
+                            ...prev.errors,
+                            {
+                                step: "Upload Initialization",
+                                message: error.message,
+                            },
+                        ],
+                    }));
+                    throw error;
+                }
+            }
+
+            setSequenceInitResults(initResults);
+            setUploadState((prev) => ({ ...prev, uploadInitStatus: "completed" }));
+
+            const allParts = createFilePartsFromSequences(sequences, initResults, fileUploadItems);
+            setFileParts(allParts);
+            setTotalParts(allParts.length);
+
+            setFileUploadItems((prev) =>
+                prev.map((item) =>
+                    item.size === 0
+                        ? { ...item, status: "Completed", progress: 100, loaded: item.total }
+                        : item
+                )
+            );
+
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
+            if (allParts.length > 0) {
+                console.log(`Starting upload of ${allParts.length} parts`);
+                setUploadState((prev) => ({
+                    ...prev,
+                    uploadStatus: "in-progress",
+                    completionStatus: "in-progress",
+                }));
+
+                const uploadResult = await uploadFileParts(
+                    fileUploadItems,
+                    allParts,
+                    (completed, total) => {
+                        const progress = Math.round((completed / total) * 100);
+                        setUploadState((prev) => ({ ...prev, overallProgress: progress }));
+                    },
+                    (fileIndex, progress) => {
+                        setFileUploadItems((prev) =>
+                            prev.map((item) =>
+                                item.index === fileIndex
+                                    ? {
+                                          ...item,
+                                          progress,
+                                          loaded: Math.round((progress * item.total) / 100),
+                                          status:
+                                              progress === 100
+                                                  ? "Completed"
+                                                  : progress > 0
+                                                  ? "In Progress"
+                                                  : "Queued",
+                                      }
+                                    : item
+                            )
+                        );
+                    },
+                    (sequenceId) => {
+                        if (handleSequenceCompletionRef.current) {
+                            handleSequenceCompletionRef.current(sequenceId);
+                        }
+                    }
+                );
+
+                if (uploadResult.success) {
+                    setUploadState((prev) => ({ ...prev, uploadStatus: "completed" }));
+                } else {
+                    setUploadState((prev) => ({
+                        ...prev,
+                        uploadStatus: "failed",
+                        errors: [
+                            ...prev.errors,
+                            {
+                                step: "File Upload",
+                                message: `${uploadResult.failedCount} file parts failed to upload`,
+                            },
+                        ],
+                    }));
+                }
+            } else {
+                setUploadState((prev) => ({
+                    ...prev,
+                    uploadStatus: "completed",
+                    completionStatus: "in-progress",
+                }));
+                if (handleSequenceCompletionRef.current) {
+                    uploadSequences.forEach((seq) =>
+                        handleSequenceCompletionRef.current!(seq.sequenceId)
+                    );
+                }
+            }
+        } else if (fileItems.length === 0) {
+            const mockResponse: CompleteUploadResponse = {
+                assetId,
+                message: "Asset created successfully without files",
+                uploadId: "no-upload-required",
+                fileResults: [],
+                overallSuccess: true,
+            };
+            setUploadState((prev) => ({ ...prev, finalCompletionTriggered: true }));
+            onUploadComplete(mockResponse);
+        }
+    }, [
+        uploadState.createdAssetId,
+        assetDetail,
+        fileItems,
+        fileUploadItems,
+        initializeSequence,
+        createFilePartsFromSequences,
+        setFileParts,
+        setTotalParts,
+        uploadFileParts,
+        onUploadComplete,
+    ]);
+
+    // Retry handler for metadata
+    const handleRetryMetadata = useCallback(async () => {
+        if (!uploadState.createdAssetId || !assetDetail.databaseId) return;
+
+        setUploadState((prev) => ({
+            ...prev,
+            metadataStatus: "in-progress",
+            errors: prev.errors.filter((e) => e.step !== "Metadata"),
+        }));
+
+        try {
+            await addMetadata(assetDetail.databaseId, uploadState.createdAssetId, metadata);
+            setUploadState((prev) => ({ ...prev, metadataStatus: "completed" }));
+            // Continue to next step
+            await continueAfterMetadata();
+        } catch (error: any) {
+            setUploadState((prev) => ({
+                ...prev,
+                metadataStatus: "failed",
+                errors: [
+                    ...prev.errors,
+                    {
+                        step: "Metadata",
+                        message: error.message || "Failed to add metadata",
+                    },
+                ],
+            }));
+        }
+    }, [
+        uploadState.createdAssetId,
+        assetDetail.databaseId,
+        metadata,
+        addMetadata,
+        continueAfterMetadata,
+    ]);
+
+    // Skip handler for metadata
+    const handleSkipMetadata = useCallback(async () => {
+        setUploadState((prev) => ({
+            ...prev,
+            metadataStatus: "skipped",
+            errors: prev.errors.filter((e) => e.step !== "Metadata"),
+        }));
+        // Continue to next step
+        await continueAfterMetadata();
+    }, [continueAfterMetadata]);
+
+    // Retry handler for asset links
+    const handleRetryAssetLinks = useCallback(async () => {
+        if (!uploadState.createdAssetId) return;
+
+        setUploadState((prev) => ({
+            ...prev,
+            assetLinksStatus: "in-progress",
+            errors: prev.errors.filter((e) => e.step !== "Asset Links"),
+        }));
+
+        try {
+            const linkResult = await createAssetLinks(uploadState.createdAssetId, assetDetail);
+            if (linkResult.success) {
+                setUploadState((prev) => ({ ...prev, assetLinksStatus: "completed" }));
+                // Continue to file upload
+                await continueToFileUpload();
+            } else {
+                setUploadState((prev) => ({
+                    ...prev,
+                    assetLinksStatus: "failed",
+                    errors: [
+                        ...prev.errors,
+                        ...linkResult.errors.map((err) => ({
+                            step: "Asset Links",
+                            message: err,
+                        })),
+                    ],
+                }));
+            }
+        } catch (error: any) {
+            setUploadState((prev) => ({
+                ...prev,
+                assetLinksStatus: "failed",
+                errors: [
+                    ...prev.errors,
+                    {
+                        step: "Asset Links",
+                        message: error.message || "Failed to create asset links",
+                    },
+                ],
+            }));
+        }
+    }, [uploadState.createdAssetId, assetDetail, createAssetLinks, continueToFileUpload]);
+
+    // Skip handler for asset links
+    const handleSkipAssetLinks = useCallback(async () => {
+        setUploadState((prev) => ({
+            ...prev,
+            assetLinksStatus: "skipped",
+            errors: prev.errors.filter((e) => e.step !== "Asset Links"),
+        }));
+        // Continue to file upload
+        await continueToFileUpload();
+    }, [continueToFileUpload]);
+
     // Count failed files
     const failedFilesCount = fileUploadItems.filter((item) => item.status === "Failed").length;
 
@@ -748,11 +1085,21 @@ export default function UploadManager({
                         <Box>
                             <SpaceBetween direction="vertical" size="xs">
                                 <Box variant="awsui-key-label">Metadata</Box>
-                                <StatusIndicator
-                                    type={getStatusIndicatorType(uploadState.metadataStatus)}
-                                >
-                                    {getStatusText(uploadState.metadataStatus)}
-                                </StatusIndicator>
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <StatusIndicator
+                                        type={getStatusIndicatorType(uploadState.metadataStatus)}
+                                    >
+                                        {getStatusText(uploadState.metadataStatus)}
+                                    </StatusIndicator>
+                                    {uploadState.metadataStatus === "failed" && (
+                                        <>
+                                            <Button onClick={handleRetryMetadata}>Retry</Button>
+                                            <Button onClick={handleSkipMetadata}>
+                                                Skip and Continue
+                                            </Button>
+                                        </>
+                                    )}
+                                </SpaceBetween>
                             </SpaceBetween>
                         </Box>
                     )}
@@ -761,11 +1108,21 @@ export default function UploadManager({
                         <Box>
                             <SpaceBetween direction="vertical" size="xs">
                                 <Box variant="awsui-key-label">Asset Links Creation</Box>
-                                <StatusIndicator
-                                    type={getStatusIndicatorType(uploadState.assetLinksStatus)}
-                                >
-                                    {getStatusText(uploadState.assetLinksStatus)}
-                                </StatusIndicator>
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <StatusIndicator
+                                        type={getStatusIndicatorType(uploadState.assetLinksStatus)}
+                                    >
+                                        {getStatusText(uploadState.assetLinksStatus)}
+                                    </StatusIndicator>
+                                    {uploadState.assetLinksStatus === "failed" && (
+                                        <>
+                                            <Button onClick={handleRetryAssetLinks}>Retry</Button>
+                                            <Button onClick={handleSkipAssetLinks}>
+                                                Skip and Continue
+                                            </Button>
+                                        </>
+                                    )}
+                                </SpaceBetween>
                             </SpaceBetween>
                         </Box>
                     )}

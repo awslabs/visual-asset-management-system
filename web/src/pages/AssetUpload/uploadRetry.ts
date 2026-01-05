@@ -17,6 +17,28 @@ export const RETRY_CONFIG = {
  * Extract error message from various error formats
  */
 export function extractErrorMessage(error: any): string {
+    // Check for error.response.data.message (API response format) - check this first
+    if (error.response?.data?.message) {
+        return error.response.data.message;
+    }
+
+    // Check for error.response.data as JSON string (AWS Amplify format)
+    if (error.response?.data && typeof error.response.data === "string") {
+        try {
+            const parsed = JSON.parse(error.response.data);
+            if (parsed.message) {
+                return parsed.message;
+            }
+        } catch (e) {
+            // Not JSON, continue
+        }
+    }
+
+    // Check for direct message property
+    if (error.data?.message) {
+        return error.data.message;
+    }
+
     // Check for error.message (standard Error object)
     if (error.message) {
         // If message is a JSON string, try to parse it
@@ -27,20 +49,28 @@ export function extractErrorMessage(error: any): string {
                     return parsed.message;
                 }
             } catch (e) {
-                // Not JSON, return as-is
+                // Not JSON, check if it contains "Request failed with status code"
+                // and try to extract the actual error from the string
+                if (error.message.includes("Request failed with status code")) {
+                    // This is a generic Axios error, try to get more details
+                    if (error.response?.data) {
+                        if (typeof error.response.data === "string") {
+                            try {
+                                const parsed = JSON.parse(error.response.data);
+                                if (parsed.message) {
+                                    return parsed.message;
+                                }
+                            } catch (e2) {
+                                return error.response.data;
+                            }
+                        } else if (error.response.data.message) {
+                            return error.response.data.message;
+                        }
+                    }
+                }
             }
         }
         return error.message;
-    }
-
-    // Check for error.response.data.message (API response format)
-    if (error.response?.data?.message) {
-        return error.response.data.message;
-    }
-
-    // Check for direct message property
-    if (error.data?.message) {
-        return error.data.message;
     }
 
     // Check for error string

@@ -358,6 +358,11 @@ class CasbinEnforcerService:
     def _generate_criteria_object_rules(self, policyCriteria):
         obj_rule = []
         for criterion in policyCriteria:
+            # Skip deprecated or unknown fields that are not in PERMISSION_CONSTRAINT_FIELDS
+            if criterion['field'] not in PERMISSION_CONSTRAINT_FIELDS:
+                logger.info(f"Skipping deprecated/unknown constraint field: {criterion['field']}")
+                continue
+            
             if criterion["operator"] == "equals":
                 obj_rule.append(
                     f"""regexMatch(r.obj.{criterion['field']}, '^{criterion['value']}$')"""

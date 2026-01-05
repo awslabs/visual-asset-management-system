@@ -1,546 +1,753 @@
 # Metadata Management Commands
 
-This document covers VamsCLI metadata management commands for assets, files, and metadata schemas.
+This document covers VamsCLI unified metadata management commands for assets, files, asset links, and databases (v2.2+).
 
-## Metadata Management Commands
+## Overview
 
-VamsCLI provides comprehensive metadata management capabilities for attaching custom key-value data to assets and individual files within assets, as well as managing the metadata schema that defines the structure and validation rules for metadata fields.
+VamsCLI provides comprehensive metadata management capabilities through a unified API that supports:
 
-## Metadata Schema Management
+-   **Asset Metadata**: Custom key-value data attached to assets
+-   **File Metadata**: Metadata for individual files within assets
+-   **Asset Link Metadata**: Metadata for relationships between assets
+-   **Database Metadata**: Metadata for entire databases
+-   **Bulk Operations**: Create, update, or delete multiple metadata items in a single operation
+-   **Update Modes**: Choose between upsert (update) or replace (replace_all) modes
 
-### `vamscli metadata-schema get`
+## Unified Metadata API (v2.2+)
 
-Get the metadata schema configuration for a database, showing all defined metadata fields, their data types, requirements, and dependencies.
+All metadata operations use a consistent request/response format:
+
+**Request Format:**
+
+```json
+{
+    "metadata": [
+        {
+            "metadataKey": "title",
+            "metadataValue": "My Asset",
+            "metadataValueType": "string"
+        },
+        {
+            "metadataKey": "priority",
+            "metadataValue": "1",
+            "metadataValueType": "number"
+        }
+    ],
+    "updateType": "update"
+}
+```
+
+**Update Modes:**
+
+-   `update` (default): Upsert mode - creates or updates provided metadata, keeps unlisted keys
+-   `replace_all`: Replace mode - deletes unlisted keys, upserts provided metadata (with rollback on failure)
+
+## Asset Metadata Commands
+
+### `vamscli metadata asset list`
+
+List all metadata for an asset.
 
 **Required Options:**
 
--   `-d, --database`: Database ID to get metadata schema for (required)
+-   `-d, --database-id`: Database ID containing the asset (required)
+-   `-a, --asset-id`: Asset ID to list metadata for (required)
 
 **Options:**
 
--   `--max-items`: Maximum number of items to return (default: 1000)
--   `--page-size`: Number of items per page (default: 100)
--   `--starting-token`: Token for pagination
--   `--json-input`: JSON input file path or JSON string with pagination parameters
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# Get metadata schema for a database
-vamscli metadata-schema get -d my-database
+# List asset metadata
+vamscli metadata asset list -d my-database -a my-asset
 
-# Get with pagination
-vamscli metadata-schema get -d my-database --max-items 50 --page-size 25
+# List with JSON output for automation
+vamscli metadata asset list -d my-database -a my-asset --json-output
 
-# Get with JSON output for automation
-vamscli metadata-schema get -d my-database --json-output
-
-# Get with JSON input for pagination
-vamscli metadata-schema get -d my-database --json-input '{"maxItems":100,"pageSize":50}'
-
-# Get with JSON input file
-vamscli metadata-schema get -d my-database --json-input pagination.json
-
-# Get with specific profile
-vamscli metadata-schema get -d my-database --profile production
-```
-
-**JSON Input Format (Pagination Parameters):**
-
-```json
-{
-    "maxItems": 100,
-    "pageSize": 50,
-    "startingToken": "..."
-}
+# List with specific profile
+vamscli metadata asset list -d my-database -a my-asset --profile production
 ```
 
 **CLI Output Format:**
 
 ```
-Metadata Schema for Database (3 field(s)):
-Field Name               Data Type       Required   Depends On
+Asset Metadata (3 item(s)):
+Key                      Value                    Type
 --------------------------------------------------------------------------------
-title                    string          Yes        None
-category                 string          No         title
-priority                 number          Yes        category, title
---------------------------------------------------------------------------------
-More results available. Use --starting-token 'token' to see additional fields.
+title                    My 3D Model              string
+priority                 1                        number
+properties               {"polygons": 50000}      object
 ```
 
 **JSON Output Format:**
 
 ```json
 {
-    "message": {
-        "Items": [
-            {
-                "field": "title",
-                "datatype": "string",
-                "required": true,
-                "dependsOn": []
-            },
-            {
-                "field": "category",
-                "datatype": "string",
-                "required": false,
-                "dependsOn": ["title"]
-            }
-        ],
-        "NextToken": "pagination-token"
-    }
+    "metadata": [
+        {
+            "metadataKey": "title",
+            "metadataValue": "My 3D Model",
+            "metadataValueType": "string"
+        },
+        {
+            "metadataKey": "priority",
+            "metadataValue": "1",
+            "metadataValueType": "number"
+        },
+        {
+            "metadataKey": "properties",
+            "metadataValue": "{\"polygons\": 50000}",
+            "metadataValueType": "object"
+        }
+    ]
 }
 ```
 
-**Schema Field Properties:**
+### `vamscli metadata asset update`
 
--   **field**: Name of the metadata field
--   **datatype**: Data type (string, number, boolean, array, object, enum, datetime)
--   **required**: Whether the field is required when creating metadata
--   **dependsOn**: Array of other fields that must be filled out first
-
-**Use Cases:**
-
--   **Validation**: Understand metadata requirements before creating assets
--   **Documentation**: Generate documentation of metadata structure
--   **Automation**: Build forms or validation logic based on schema
--   **Compliance**: Ensure metadata follows organizational standards
-
-## Asset and File Metadata Management
-
-### `vamscli metadata get`
-
-Get metadata for an asset or specific file.
+Create or update metadata for an asset (bulk operation).
 
 **Required Options:**
 
--   `-d, --database`: Database ID containing the asset (required)
--   `-a, --asset`: Asset ID to get metadata for (required)
+-   `-d, --database-id`: Database ID containing the asset (required)
+-   `-a, --asset-id`: Asset ID to update metadata for (required)
+-   `--json-input`: JSON input file path or JSON string with metadata array (required)
 
 **Options:**
 
--   `--file-path`: File path for file-specific metadata (optional)
--   `--json-input`: JSON input file path or JSON string with parameters
+-   `--update-type`: Update mode - 'update' (upsert, default) or 'replace_all' (replace)
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# Get asset metadata
-vamscli metadata get -d my-database -a my-asset
+# Update metadata (upsert mode - default)
+vamscli metadata asset update -d my-database -a my-asset --json-input '[
+  {"metadataKey": "title", "metadataValue": "My Asset", "metadataValueType": "string"},
+  {"metadataKey": "priority", "metadataValue": "1", "metadataValueType": "number"}
+]'
 
-# Get file-specific metadata
-vamscli metadata get -d my-database -a my-asset --file-path "/models/file.gltf"
+# Replace all metadata (replace mode)
+vamscli metadata asset update -d my-database -a my-asset --update-type replace_all --json-input '[
+  {"metadataKey": "title", "metadataValue": "New Asset", "metadataValueType": "string"}
+]'
 
-# Get with JSON input
-vamscli metadata get --json-input '{"database_id": "my-db", "asset_id": "my-asset"}'
+# Update from JSON file
+vamscli metadata asset update -d my-database -a my-asset --json-input @metadata.json
 
-# Get with JSON output for automation
-vamscli metadata get -d my-database -a my-asset --json-output
+# Update with JSON output for automation
+vamscli metadata asset update -d my-database -a my-asset --json-input '[...]' --json-output
 ```
 
 **JSON Input Format:**
 
 ```json
-{
-    "database_id": "my-database",
-    "asset_id": "my-asset",
-    "file_path": "/models/file.gltf"
-}
-```
-
-**Output Features:**
-
--   Shows all metadata key-value pairs
--   Supports complex JSON values (objects, arrays)
--   CLI-friendly formatted output by default
--   Raw JSON output available for automation
--   File-specific metadata when file path provided
-
-### `vamscli metadata create`
-
-Create metadata for an asset or specific file.
-
-**Required Options:**
-
--   `-d, --database`: Database ID containing the asset (required)
--   `-a, --asset`: Asset ID to add metadata to (required)
-
-**Options:**
-
--   `--file-path`: File path for file-specific metadata (optional)
--   `--json-input`: JSON input file path or JSON string with metadata
--   `--json-output`: Output raw JSON response
-
-**Examples:**
-
-```bash
-# Create metadata interactively
-vamscli metadata create -d my-database -a my-asset
-# Prompts: Enter key, enter value (supports JSON)
-
-# Create file-specific metadata
-vamscli metadata create -d my-database -a my-asset --file-path "/models/file.gltf"
-
-# Create with JSON input string
-vamscli metadata create -d my-database -a my-asset --json-input '{"title": "My Asset", "tags": ["3d", "model"], "properties": {"polygons": 50000}}'
-
-# Create from JSON file
-vamscli metadata create -d my-database -a my-asset --json-input @metadata.json
-
-# Create with JSON output for automation
-vamscli metadata create -d my-database -a my-asset --json-input '{"title": "Test Asset"}' --json-output
-```
-
-**JSON Input Format (Direct Metadata):**
-
-```json
-{
-    "database_id": "my-database",
-    "asset_id": "my-asset",
-    "file_path": "/models/file.gltf",
-    "title": "My 3D Model",
-    "category": "architecture",
-    "properties": {
-        "polygons": 50000,
-        "materials": ["wood", "metal"]
+[
+    {
+        "metadataKey": "title",
+        "metadataValue": "My 3D Model",
+        "metadataValueType": "string"
     },
-    "tags": ["building", "exterior"],
-    "active": true,
-    "priority": 1
-}
-```
-
-**JSON Input Format (Explicit Metadata Key):**
-
-```json
-{
-    "database_id": "my-database",
-    "asset_id": "my-asset",
-    "metadata": {
-        "title": "My 3D Model",
-        "category": "architecture",
-        "properties": {
-            "polygons": 50000,
-            "materials": ["wood", "metal"]
-        }
+    {
+        "metadataKey": "category",
+        "metadataValue": "architecture",
+        "metadataValueType": "string"
+    },
+    {
+        "metadataKey": "priority",
+        "metadataValue": "1",
+        "metadataValueType": "number"
+    },
+    {
+        "metadataKey": "active",
+        "metadataValue": "true",
+        "metadataValueType": "boolean"
+    },
+    {
+        "metadataKey": "properties",
+        "metadataValue": "{\"polygons\": 50000, \"materials\": [\"wood\", \"metal\"]}",
+        "metadataValueType": "object"
     }
-}
+]
 ```
-
-**Interactive Mode Features:**
-
--   Prompts for key-value pairs
--   Supports JSON values (objects, arrays, numbers, booleans)
--   Smart JSON parsing with string fallback
--   Allows overwriting existing keys
--   Type 'done' to finish input
 
 **Supported Value Types:**
 
--   **Strings**: Plain text values
--   **Numbers**: Integers and floats (parsed automatically)
--   **Booleans**: true/false values (parsed automatically)
--   **Objects**: JSON objects like `{"key": "value", "number": 42}`
--   **Arrays**: JSON arrays like `["item1", "item2", 123]`
+-   `string`: Text values
+-   `number`: Numeric values (integers or floats)
+-   `boolean`: true/false values
+-   `object`: JSON objects (stored as JSON string)
+-   `array`: JSON arrays (stored as JSON string)
 
-### `vamscli metadata update`
+**Update Modes:**
 
-Update existing metadata for an asset or specific file.
+-   **update** (default): Upserts provided metadata, keeps existing unlisted keys
+-   **replace_all**: Deletes unlisted keys, upserts provided metadata (atomic with rollback)
+
+### `vamscli metadata asset delete`
+
+Delete specific metadata keys from an asset.
 
 **Required Options:**
 
--   `-d, --database`: Database ID containing the asset (required)
--   `-a, --asset`: Asset ID to update metadata for (required)
+-   `-d, --database-id`: Database ID containing the asset (required)
+-   `-a, --asset-id`: Asset ID to delete metadata from (required)
+-   `--json-input`: JSON input file path or JSON string with metadata keys array (required)
 
 **Options:**
 
--   `--file-path`: File path for file-specific metadata (optional)
--   `--json-input`: JSON input file path or JSON string with metadata
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# Update metadata interactively
-vamscli metadata update -d my-database -a my-asset
-# Prompts for key-value pairs to update
+# Delete specific metadata keys
+vamscli metadata asset delete -d my-database -a my-asset --json-input '["title", "priority"]'
 
-# Update file-specific metadata
-vamscli metadata update -d my-database -a my-asset --file-path "/models/file.gltf"
-
-# Update with JSON input string
-vamscli metadata update -d my-database -a my-asset --json-input '{"title": "Updated Asset", "version": 2, "last_modified": "2024-01-15"}'
-
-# Update from JSON file
-vamscli metadata update -d my-database -a my-asset --json-input @updated_metadata.json
-
-# Update with JSON output for automation
-vamscli metadata update -d my-database -a my-asset --json-input '{"status": "reviewed"}' --json-output
-```
-
-**JSON Input Format:**
-Same as create command - supports both direct metadata and explicit metadata key formats.
-
-**Update Behavior:**
-
--   Merges new metadata with existing metadata
--   Overwrites existing keys with new values
--   Adds new keys that don't exist
--   Preserves existing keys not mentioned in update
--   Supports partial updates
-
-### `vamscli metadata delete`
-
-Delete metadata for an asset or specific file.
-
-**Required Options:**
-
--   `-d, --database`: Database ID containing the asset (required)
--   `-a, --asset`: Asset ID to delete metadata from (required)
-
-**Options:**
-
--   `--file-path`: File path for file-specific metadata (optional)
--   `--json-input`: JSON input file path or JSON string with parameters
--   `--json-output`: Output raw JSON response
-
-**Examples:**
-
-```bash
-# Delete asset metadata (requires confirmation)
-vamscli metadata delete -d my-database -a my-asset
-
-# Delete file-specific metadata
-vamscli metadata delete -d my-database -a my-asset --file-path "/models/file.gltf"
-
-# Delete with JSON input
-vamscli metadata delete --json-input '{"database_id": "my-db", "asset_id": "my-asset"}'
+# Delete from JSON file
+vamscli metadata asset delete -d my-database -a my-asset --json-input @keys-to-delete.json
 
 # Delete with JSON output for automation
-vamscli metadata delete -d my-database -a my-asset --json-output
+vamscli metadata asset delete -d my-database -a my-asset --json-input '["old_field"]' --json-output
 ```
 
 **JSON Input Format:**
 
 ```json
-{
-    "database_id": "my-database",
-    "asset_id": "my-asset",
-    "file_path": "/models/file.gltf"
-}
+["title", "priority", "old_field"]
 ```
 
-**Safety Features:**
+## File Metadata Commands
 
--   Interactive confirmation prompt
--   Clear warnings about permanent deletion
--   Shows what will be deleted (asset vs file metadata)
--   Cannot be undone once confirmed
+### `vamscli metadata file list`
 
-**What Gets Deleted:**
+List all metadata for a specific file within an asset.
 
--   **Asset Metadata**: All metadata associated with the asset
--   **File Metadata**: All metadata associated with the specific file
--   **Hierarchical Metadata**: File metadata inherits from parent directories and asset
+**Required Options:**
+
+-   `-d, --database-id`: Database ID containing the asset (required)
+-   `-a, --asset-id`: Asset ID containing the file (required)
+-   `-f, --file-id`: File ID to list metadata for (required)
+
+**Options:**
+
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# List file metadata
+vamscli metadata file list -d my-database -a my-asset -f file-uuid
+
+# List with JSON output
+vamscli metadata file list -d my-database -a my-asset -f file-uuid --json-output
+```
+
+**CLI Output Format:**
+
+```
+File Metadata (2 item(s)):
+Key                      Value                    Type
+--------------------------------------------------------------------------------
+lod_level                high                     string
+optimized                true                     boolean
+```
+
+### `vamscli metadata file update`
+
+Create or update metadata for a specific file (bulk operation).
+
+**Required Options:**
+
+-   `-d, --database-id`: Database ID containing the asset (required)
+-   `-a, --asset-id`: Asset ID containing the file (required)
+-   `-f, --file-id`: File ID to update metadata for (required)
+-   `--json-input`: JSON input file path or JSON string with metadata array (required)
+
+**Options:**
+
+-   `--update-type`: Update mode - 'update' (upsert, default) or 'replace_all' (replace)
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# Update file metadata
+vamscli metadata file update -d my-database -a my-asset -f file-uuid --json-input '[
+  {"metadataKey": "lod_level", "metadataValue": "high", "metadataValueType": "string"},
+  {"metadataKey": "optimized", "metadataValue": "true", "metadataValueType": "boolean"}
+]'
+
+# Replace all file metadata
+vamscli metadata file update -d my-database -a my-asset -f file-uuid --update-type replace_all --json-input '[...]'
+```
+
+### `vamscli metadata file delete`
+
+Delete specific metadata keys from a file.
+
+**Required Options:**
+
+-   `-d, --database-id`: Database ID containing the asset (required)
+-   `-a, --asset-id`: Asset ID containing the file (required)
+-   `-f, --file-id`: File ID to delete metadata from (required)
+-   `--json-input`: JSON input file path or JSON string with metadata keys array (required)
+
+**Options:**
+
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# Delete file metadata keys
+vamscli metadata file delete -d my-database -a my-asset -f file-uuid --json-input '["old_field", "deprecated"]'
+```
+
+## Asset Link Metadata Commands
+
+### `vamscli metadata asset-link list`
+
+List all metadata for an asset link (relationship between assets).
+
+**Required Options:**
+
+-   `--asset-link-id`: Asset link ID to list metadata for (required)
+
+**Options:**
+
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# List asset link metadata
+vamscli metadata asset-link list --asset-link-id link-uuid
+
+# List with JSON output
+vamscli metadata asset-link list --asset-link-id link-uuid --json-output
+```
+
+**CLI Output Format:**
+
+```
+Asset Link Metadata (2 item(s)):
+Key                      Value                    Type
+--------------------------------------------------------------------------------
+relationship_type        parent-child             string
+created_by               user@example.com         string
+```
+
+### `vamscli metadata asset-link update`
+
+Create or update metadata for an asset link (bulk operation).
+
+**Required Options:**
+
+-   `--asset-link-id`: Asset link ID to update metadata for (required)
+-   `--json-input`: JSON input file path or JSON string with metadata array (required)
+
+**Options:**
+
+-   `--update-type`: Update mode - 'update' (upsert, default) or 'replace_all' (replace)
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# Update asset link metadata
+vamscli metadata asset-link update --asset-link-id link-uuid --json-input '[
+  {"metadataKey": "relationship_type", "metadataValue": "parent-child", "metadataValueType": "string"},
+  {"metadataKey": "created_by", "metadataValue": "user@example.com", "metadataValueType": "string"}
+]'
+
+# Replace all asset link metadata
+vamscli metadata asset-link update --asset-link-id link-uuid --update-type replace_all --json-input '[...]'
+```
+
+### `vamscli metadata asset-link delete`
+
+Delete specific metadata keys from an asset link.
+
+**Required Options:**
+
+-   `--asset-link-id`: Asset link ID to delete metadata from (required)
+-   `--json-input`: JSON input file path or JSON string with metadata keys array (required)
+
+**Options:**
+
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# Delete asset link metadata keys
+vamscli metadata asset-link delete --asset-link-id link-uuid --json-input '["old_field"]'
+```
+
+## Database Metadata Commands
+
+### `vamscli metadata database list`
+
+List all metadata for a database.
+
+**Required Options:**
+
+-   `-d, --database-id`: Database ID to list metadata for (required)
+
+**Options:**
+
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# List database metadata
+vamscli metadata database list -d my-database
+
+# List with JSON output
+vamscli metadata database list -d my-database --json-output
+```
+
+**CLI Output Format:**
+
+```
+Database Metadata (3 item(s)):
+Key                      Value                    Type
+--------------------------------------------------------------------------------
+project                  Downtown Complex         string
+client                   City Planning Dept       string
+status                   active                   string
+```
+
+### `vamscli metadata database update`
+
+Create or update metadata for a database (bulk operation).
+
+**Required Options:**
+
+-   `-d, --database-id`: Database ID to update metadata for (required)
+-   `--json-input`: JSON input file path or JSON string with metadata array (required)
+
+**Options:**
+
+-   `--update-type`: Update mode - 'update' (upsert, default) or 'replace_all' (replace)
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# Update database metadata
+vamscli metadata database update -d my-database --json-input '[
+  {"metadataKey": "project", "metadataValue": "Downtown Complex", "metadataValueType": "string"},
+  {"metadataKey": "client", "metadataValue": "City Planning Dept", "metadataValueType": "string"}
+]'
+
+# Replace all database metadata
+vamscli metadata database update -d my-database --update-type replace_all --json-input '[...]'
+```
+
+### `vamscli metadata database delete`
+
+Delete specific metadata keys from a database.
+
+**Required Options:**
+
+-   `-d, --database-id`: Database ID to delete metadata from (required)
+-   `--json-input`: JSON input file path or JSON string with metadata keys array (required)
+
+**Options:**
+
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# Delete database metadata keys
+vamscli metadata database delete -d my-database --json-input '["old_project", "deprecated_field"]'
+```
 
 ## Metadata Management Workflow Examples
 
-### Basic Metadata Operations
+### Basic Asset Metadata Operations
 
 ```bash
-# Create asset with initial metadata
-vamscli metadata create -d my-db -a my-asset --json-input '{
-  "title": "3D Building Model",
-  "category": "architecture",
-  "created_by": "john.doe@example.com",
-  "properties": {
-    "polygons": 75000,
-    "materials": ["concrete", "glass", "steel"],
-    "dimensions": {"width": 50, "height": 120, "depth": 30}
-  },
-  "tags": ["building", "commercial", "downtown"],
-  "priority": 1,
-  "active": true
-}'
+# Create initial asset metadata
+vamscli metadata asset update -d my-db -a my-asset --json-input '[
+  {"metadataKey": "title", "metadataValue": "3D Building Model", "metadataValueType": "string"},
+  {"metadataKey": "category", "metadataValue": "architecture", "metadataValueType": "string"},
+  {"metadataKey": "priority", "metadataValue": "1", "metadataValueType": "number"},
+  {"metadataKey": "active", "metadataValue": "true", "metadataValueType": "boolean"},
+  {"metadataKey": "properties", "metadataValue": "{\"polygons\": 75000, \"materials\": [\"concrete\", \"glass\"]}", "metadataValueType": "object"}
+]'
 
-# Add file-specific metadata
-vamscli metadata create -d my-db -a my-asset --file-path "/models/building.gltf" --json-input '{
-  "lod_level": "high",
-  "optimized": true,
-  "file_size_mb": 15.2,
-  "compression": "draco"
-}'
+# List all metadata
+vamscli metadata asset list -d my-db -a my-asset
 
-# Get all metadata
-vamscli metadata get -d my-db -a my-asset
-vamscli metadata get -d my-db -a my-asset --file-path "/models/building.gltf"
+# Update specific fields (upsert mode)
+vamscli metadata asset update -d my-db -a my-asset --json-input '[
+  {"metadataKey": "title", "metadataValue": "Updated Building Model", "metadataValueType": "string"},
+  {"metadataKey": "version", "metadataValue": "2", "metadataValueType": "number"}
+]'
+
+# Delete specific keys
+vamscli metadata asset delete -d my-db -a my-asset --json-input '["old_field", "deprecated"]'
 ```
 
-### Interactive Metadata Creation
+### File-Specific Metadata
 
 ```bash
-# Interactive metadata creation
-vamscli metadata create -d my-db -a my-asset
+# Add metadata to a specific file
+vamscli metadata file update -d my-db -a my-asset -f file-uuid --json-input '[
+  {"metadataKey": "lod_level", "metadataValue": "high", "metadataValueType": "string"},
+  {"metadataKey": "optimized", "metadataValue": "true", "metadataValueType": "boolean"},
+  {"metadataKey": "file_size_mb", "metadataValue": "15.2", "metadataValueType": "number"},
+  {"metadataKey": "compression", "metadataValue": "draco", "metadataValueType": "string"}
+]'
 
-# Example interactive session:
-# Enter metadata key (or 'done' to finish): title
-# Enter value for 'title' (JSON supported): My 3D Model
-# Added: title = "My 3D Model"
-#
-# Enter metadata key (or 'done' to finish): properties
-# Enter value for 'properties' (JSON supported): {"polygons": 50000, "textured": true}
-# Added: properties = {"polygons": 50000, "textured": true}
-#
-# Enter metadata key (or 'done' to finish): tags
-# Enter value for 'tags' (JSON supported): ["architecture", "building"]
-# Added: tags = ["architecture", "building"]
-#
-# Enter metadata key (or 'done' to finish): done
+# List file metadata
+vamscli metadata file list -d my-db -a my-asset -f file-uuid
+
+# Update file metadata
+vamscli metadata file update -d my-db -a my-asset -f file-uuid --json-input '[
+  {"metadataKey": "lod_level", "metadataValue": "ultra", "metadataValueType": "string"}
+]'
 ```
 
-### Metadata Updates and Management
+### Asset Link Metadata
 
 ```bash
-# Update specific metadata fields
-vamscli metadata update -d my-db -a my-asset --json-input '{
-  "title": "Updated 3D Building Model",
-  "version": 2,
-  "last_modified": "2024-01-15T14:30:00Z",
-  "properties": {
-    "polygons": 85000,
-    "materials": ["concrete", "glass", "steel", "aluminum"],
-    "optimized": true
-  }
-}'
+# Add metadata to asset relationship
+vamscli metadata asset-link update --asset-link-id link-uuid --json-input '[
+  {"metadataKey": "relationship_type", "metadataValue": "parent-child", "metadataValueType": "string"},
+  {"metadataKey": "created_by", "metadataValue": "user@example.com", "metadataValueType": "string"},
+  {"metadataKey": "created_date", "metadataValue": "2024-01-15T10:30:00Z", "metadataValueType": "string"}
+]'
 
-# Update file-specific metadata
-vamscli metadata update -d my-db -a my-asset --file-path "/models/building.gltf" --json-input '{
-  "lod_level": "ultra",
-  "compression": "meshopt",
-  "file_size_mb": 18.7
-}'
+# List asset link metadata
+vamscli metadata asset-link list --asset-link-id link-uuid
+```
 
-# Check updated metadata
-vamscli metadata get -d my-db -a my-asset --json-output | jq '.metadata'
+### Database-Level Metadata
+
+```bash
+# Add database metadata
+vamscli metadata database update -d my-database --json-input '[
+  {"metadataKey": "project", "metadataValue": "Downtown Complex", "metadataValueType": "string"},
+  {"metadataKey": "client", "metadataValue": "City Planning Dept", "metadataValueType": "string"},
+  {"metadataKey": "status", "metadataValue": "active", "metadataValueType": "string"},
+  {"metadataKey": "budget", "metadataValue": "1500000", "metadataValueType": "number"}
+]'
+
+# List database metadata
+vamscli metadata database list -d my-database
+```
+
+### Bulk Operations with Replace Mode
+
+```bash
+# Replace all metadata (atomic operation)
+vamscli metadata asset update -d my-db -a my-asset --update-type replace_all --json-input '[
+  {"metadataKey": "title", "metadataValue": "New Asset", "metadataValueType": "string"},
+  {"metadataKey": "status", "metadataValue": "active", "metadataValueType": "string"}
+]'
+# This deletes all existing metadata and creates only these two fields
+# If operation fails, all changes are rolled back
+
+# Upsert mode (default) - keeps existing keys
+vamscli metadata asset update -d my-db -a my-asset --json-input '[
+  {"metadataKey": "version", "metadataValue": "3", "metadataValueType": "number"}
+]'
+# This adds/updates 'version' but keeps all other existing metadata
 ```
 
 ### Automation and Scripting
 
 ```bash
-# Batch metadata operations with JSON output
+# Batch metadata updates
 for asset in $(vamscli assets list -d my-db --json-output | jq -r '.assets[].assetId'); do
-  vamscli metadata create -d my-db -a "$asset" --json-input '{
-    "processed": true,
-    "batch_id": "batch-2024-001",
-    "processed_date": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
-  }'
+  vamscli metadata asset update -d my-db -a "$asset" --json-input '[
+    {"metadataKey": "processed", "metadataValue": "true", "metadataValueType": "boolean"},
+    {"metadataKey": "batch_id", "metadataValue": "batch-2024-001", "metadataValueType": "string"},
+    {"metadataKey": "processed_date", "metadataValue": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'", "metadataValueType": "string"}
+  ]'
 done
 
 # Extract metadata for reporting
-vamscli metadata get -d my-db -a my-asset --json-output | jq '.metadata | {title, category, properties}'
-```
+vamscli metadata asset list -d my-db -a my-asset --json-output | jq '.metadata[] | select(.metadataKey == "title" or .metadataKey == "priority")'
 
-### File Hierarchy Metadata
-
-```bash
-# Asset-level metadata (applies to entire asset)
-vamscli metadata create -d my-db -a building-model --json-input '{
-  "project": "Downtown Complex",
-  "client": "City Planning Dept",
-  "status": "approved"
-}'
-
-# Directory-level metadata (applies to files in directory)
-vamscli metadata create -d my-db -a building-model --file-path "/textures/" --json-input '{
-  "resolution": "4K",
-  "format": "PNG",
-  "color_space": "sRGB"
-}'
-
-# File-specific metadata (applies to individual file)
-vamscli metadata create -d my-db -a building-model --file-path "/models/building.gltf" --json-input '{
-  "lod_level": "high",
-  "polygon_count": 75000,
-  "optimized": true
-}'
-
-# Metadata inheritance: file inherits from directory and asset levels
-vamscli metadata get -d my-db -a building-model --file-path "/models/building.gltf"
-# Shows combined metadata from asset, directory, and file levels
+# Conditional metadata updates
+current_status=$(vamscli metadata asset list -d my-db -a my-asset --json-output | jq -r '.metadata[] | select(.metadataKey == "status") | .metadataValue')
+if [ "$current_status" = "draft" ]; then
+  vamscli metadata asset update -d my-db -a my-asset --json-input '[
+    {"metadataKey": "status", "metadataValue": "review", "metadataValueType": "string"},
+    {"metadataKey": "review_date", "metadataValue": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'", "metadataValueType": "string"}
+  ]'
+fi
 ```
 
 ## Metadata Best Practices
 
 ### Metadata Structure Guidelines
 
--   **Use consistent naming**: Use snake_case or camelCase consistently
--   **Organize with objects**: Group related metadata in JSON objects
--   **Include timestamps**: Add creation and modification dates
--   **Use appropriate types**: Numbers for numeric data, booleans for flags
--   **Document metadata schema**: Maintain documentation of your metadata structure
+-   **Use consistent naming**: Use snake_case or camelCase consistently across all metadata
+-   **Choose appropriate types**: Use correct metadataValueType for each field
+-   **Organize with objects**: Group related metadata in JSON objects for complex data
+-   **Include timestamps**: Add creation and modification dates for tracking
+-   **Document your schema**: Maintain documentation of your metadata structure
 
-### File vs Asset Metadata
+### Entity-Specific Metadata
 
 -   **Asset Metadata**: Project info, ownership, status, global properties
--   **Directory Metadata**: Common properties for files in a directory
 -   **File Metadata**: File-specific properties, processing info, technical details
+-   **Asset Link Metadata**: Relationship properties, creation info, link-specific data
+-   **Database Metadata**: Project-level info, client details, database-wide settings
 
-### Example Metadata Schema
+### Update Mode Selection
+
+-   **Use 'update' (default) when:**
+    -   Adding new metadata fields
+    -   Updating specific fields while preserving others
+    -   Incrementally building metadata over time
+-   **Use 'replace_all' when:**
+    -   Completely resetting metadata to a known state
+    -   Removing all old fields and starting fresh
+    -   Ensuring no legacy fields remain
+
+### Example Metadata Structures
+
+**Asset Metadata:**
 
 ```json
-{
-    "title": "Human-readable asset title",
-    "description": "Detailed asset description",
-    "category": "Asset category (architecture, character, vehicle, etc.)",
-    "project": "Project or client name",
-    "created_by": "Creator email or name",
-    "created_date": "2024-01-15T10:30:00Z",
-    "last_modified": "2024-01-20T14:45:00Z",
-    "status": "draft|review|approved|archived",
-    "priority": 1,
-    "properties": {
-        "polygon_count": 50000,
-        "materials": ["material1", "material2"],
-        "dimensions": { "width": 10, "height": 5, "depth": 8 },
-        "file_size_mb": 25.6
+[
+    { "metadataKey": "title", "metadataValue": "3D Building Model", "metadataValueType": "string" },
+    { "metadataKey": "category", "metadataValue": "architecture", "metadataValueType": "string" },
+    { "metadataKey": "priority", "metadataValue": "1", "metadataValueType": "number" },
+    { "metadataKey": "active", "metadataValue": "true", "metadataValueType": "boolean" },
+    {
+        "metadataKey": "created_date",
+        "metadataValue": "2024-01-15T10:30:00Z",
+        "metadataValueType": "string"
     },
-    "tags": ["tag1", "tag2", "tag3"],
-    "custom_fields": {
-        "client_id": "CLIENT-001",
-        "project_phase": "phase-2",
-        "approval_required": true
+    {
+        "metadataKey": "properties",
+        "metadataValue": "{\"polygons\": 75000, \"materials\": [\"concrete\", \"glass\"]}",
+        "metadataValueType": "object"
     }
-}
+]
 ```
 
-### Automation Examples
+**File Metadata:**
+
+```json
+[
+    { "metadataKey": "lod_level", "metadataValue": "high", "metadataValueType": "string" },
+    { "metadataKey": "optimized", "metadataValue": "true", "metadataValueType": "boolean" },
+    { "metadataKey": "file_size_mb", "metadataValue": "15.2", "metadataValueType": "number" },
+    { "metadataKey": "compression", "metadataValue": "draco", "metadataValueType": "string" }
+]
+```
+
+**Asset Link Metadata:**
+
+```json
+[
+    {
+        "metadataKey": "relationship_type",
+        "metadataValue": "parent-child",
+        "metadataValueType": "string"
+    },
+    {
+        "metadataKey": "created_by",
+        "metadataValue": "user@example.com",
+        "metadataValueType": "string"
+    },
+    { "metadataKey": "link_strength", "metadataValue": "0.95", "metadataValueType": "number" }
+]
+```
+
+**Database Metadata:**
+
+```json
+[
+    {
+        "metadataKey": "project",
+        "metadataValue": "Downtown Complex",
+        "metadataValueType": "string"
+    },
+    {
+        "metadataKey": "client",
+        "metadataValue": "City Planning Dept",
+        "metadataValueType": "string"
+    },
+    { "metadataKey": "budget", "metadataValue": "1500000", "metadataValueType": "number" },
+    { "metadataKey": "active", "metadataValue": "true", "metadataValueType": "boolean" }
+]
+```
+
+## Migration from Old Commands
+
+If you're migrating from the old metadata commands (pre-v2.2), here are the key changes:
+
+**Old Commands (Deprecated):**
 
 ```bash
-# Bulk metadata updates
-cat asset_list.txt | while read asset_id; do
-  vamscli metadata update -d my-db -a "$asset_id" --json-input '{
-    "last_processed": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-    "batch_id": "batch-2024-001"
-  }'
-done
+# Old asset metadata commands
+vamscli metadata get -d my-db -a my-asset
+vamscli metadata create -d my-db -a my-asset --json-input '{...}'
+vamscli metadata update -d my-db -a my-asset --json-input '{...}'
+vamscli metadata delete -d my-db -a my-asset
 
-# Extract metadata for reporting
-vamscli metadata get -d my-db -a my-asset --json-output | jq '.metadata | {
-  title,
-  category,
-  status,
-  created_date,
-  properties: {
-    polygon_count: .properties.polygon_count,
-    file_size_mb: .properties.file_size_mb
-  }
-}'
-
-# Conditional metadata updates
-current_status=$(vamscli metadata get -d my-db -a my-asset --json-output | jq -r '.metadata.status // "unknown"')
-if [ "$current_status" = "draft" ]; then
-  vamscli metadata update -d my-db -a my-asset --json-input '{"status": "review", "review_date": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}'
-fi
+# Old asset link metadata commands
+vamscli asset-links-metadata get --asset-link-id link-uuid
+vamscli asset-links-metadata create --asset-link-id link-uuid --json-input '{...}'
+vamscli asset-links-metadata update --asset-link-id link-uuid --json-input '{...}'
+vamscli asset-links-metadata delete --asset-link-id link-uuid
 ```
+
+**New Commands (v2.2+):**
+
+```bash
+# New unified metadata commands
+vamscli metadata asset list -d my-db -a my-asset
+vamscli metadata asset update -d my-db -a my-asset --json-input '[...]'
+vamscli metadata asset delete -d my-db -a my-asset --json-input '["key1", "key2"]'
+
+vamscli metadata file list -d my-db -a my-asset -f file-uuid
+vamscli metadata file update -d my-db -a my-asset -f file-uuid --json-input '[...]'
+vamscli metadata file delete -d my-db -a my-asset -f file-uuid --json-input '["key1"]'
+
+vamscli metadata asset-link list --asset-link-id link-uuid
+vamscli metadata asset-link update --asset-link-id link-uuid --json-input '[...]'
+vamscli metadata asset-link delete --asset-link-id link-uuid --json-input '["key1"]'
+
+vamscli metadata database list -d my-db
+vamscli metadata database update -d my-db --json-input '[...]'
+vamscli metadata database delete -d my-db --json-input '["key1"]'
+```
+
+**Key Differences:**
+
+1. **Unified Structure**: All entity types use the same command pattern
+2. **Bulk Operations**: All operations support multiple metadata items
+3. **Array Format**: JSON input uses array format with explicit type information
+4. **Update Modes**: New `--update-type` parameter for upsert vs replace behavior
+5. **Delete Format**: Delete operations use array of keys instead of full metadata objects
+
+## Related Commands
+
+-   **[Metadata Schema Management](metadata-schema.md)** - Manage metadata validation rules
+-   **[Asset Management](asset-management.md)** - Create and manage assets
+-   **[File Operations](file-operations.md)** - Upload and manage files
+-   **[Asset Links](asset-management.md#asset-relationship-management)** - Create relationships between assets
+-   **[Database Administration](database-admin.md)** - Manage databases
+
+## Troubleshooting
+
+For metadata-related issues, see:
+
+-   **[Database and Tag Issues](../troubleshooting/database-tag-issues.md)** - Metadata validation and schema problems
+-   **[Asset and File Issues](../troubleshooting/asset-file-issues.md)** - Asset and file metadata problems
+-   **[General Troubleshooting](../troubleshooting/general-troubleshooting.md)** - Debug mode and logging

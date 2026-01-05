@@ -60,6 +60,16 @@ def format_database_output(database_data: Dict[str, Any], json_output: bool = Fa
         if base_prefix:
             output_lines.append(f"  Base Assets Prefix: {base_prefix}")
     
+    # New configuration fields
+    restrict_metadata = database_data.get('restrictMetadataOutsideSchemas', False)
+    output_lines.append(f"  Restrict Metadata Outside Schemas: {restrict_metadata}")
+    
+    file_extensions = database_data.get('restrictFileUploadsToExtensions', '')
+    if file_extensions:
+        output_lines.append(f"  Restrict File Uploads To Extensions: {file_extensions}")
+    else:
+        output_lines.append(f"  Restrict File Uploads To Extensions: (none)")
+    
     return '\n'.join(output_lines)
 
 
@@ -273,6 +283,16 @@ def list(ctx: click.Context, show_deleted: bool, page_size: Optional[int], max_i
             if bucket_name:
                 lines.append(f"Bucket Name: {bucket_name}")
             
+            # New configuration fields
+            restrict_metadata = database.get('restrictMetadataOutsideSchemas', False)
+            lines.append(f"Restrict Metadata Outside Schemas: {restrict_metadata}")
+            
+            file_extensions = database.get('restrictFileUploadsToExtensions', '')
+            if file_extensions:
+                lines.append(f"Restrict File Uploads To Extensions: {file_extensions}")
+            else:
+                lines.append(f"Restrict File Uploads To Extensions: (none)")
+            
             lines.append("-" * 80)
         
         # Show nextToken for manual pagination
@@ -290,11 +310,14 @@ def list(ctx: click.Context, show_deleted: bool, page_size: Optional[int], max_i
 @click.option('-d', '--database-id', required=True, help='Database ID to create')
 @click.option('--description', help='Database description (required unless using --json-input)')
 @click.option('--default-bucket-id', help='Default bucket ID (optional - will prompt if not provided)')
+@click.option('--restrict-metadata-outside-schemas', is_flag=True, help='Restrict metadata to defined schemas only')
+@click.option('--restrict-file-uploads-to-extensions', help='Comma-separated list of allowed file extensions (e.g., ".pdf,.docx,.jpg")')
 @click.option('--json-input', help='JSON input file path or JSON string with all database data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def create(ctx: click.Context, database_id: str, description: Optional[str], default_bucket_id: Optional[str],
+           restrict_metadata_outside_schemas: bool, restrict_file_uploads_to_extensions: Optional[str],
            json_input: Optional[str], json_output: bool):
     """
     Create a new database.
@@ -307,6 +330,8 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
     Examples:
         vamscli database create -d my-database --description "My Database"
         vamscli database create -d my-database --description "My Database" --default-bucket-id "bucket-uuid"
+        vamscli database create -d my-database --description "My Database" --restrict-metadata-outside-schemas
+        vamscli database create -d my-database --description "My Database" --restrict-file-uploads-to-extensions ".pdf,.docx"
         vamscli database create --json-input '{"databaseId":"test","description":"Test","defaultBucketId":"uuid"}'
     """
     # Get profile manager and API client (setup/auth already validated by decorator)
@@ -337,6 +362,13 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
             else:
                 click.echo("No bucket ID provided. Please select from available buckets:")
                 database_data['defaultBucketId'] = prompt_bucket_selection(api_client)
+            
+            # Add new configuration fields if provided
+            if restrict_metadata_outside_schemas:
+                database_data['restrictMetadataOutsideSchemas'] = True
+            
+            if restrict_file_uploads_to_extensions:
+                database_data['restrictFileUploadsToExtensions'] = restrict_file_uploads_to_extensions
         
         output_status(f"Creating database '{database_id}'...", json_output)
         
@@ -387,11 +419,17 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
 @click.option('-d', '--database-id', required=True, help='Database ID to update')
 @click.option('--description', help='New database description')
 @click.option('--default-bucket-id', help='New default bucket ID')
+@click.option('--restrict-metadata-outside-schemas', is_flag=True, help='Enable metadata restriction to defined schemas')
+@click.option('--no-restrict-metadata-outside-schemas', is_flag=True, help='Disable metadata restriction')
+@click.option('--restrict-file-uploads-to-extensions', help='Set allowed file extensions (e.g., ".pdf,.docx,.jpg")')
+@click.option('--clear-file-extensions', is_flag=True, help='Clear file extension restrictions')
 @click.option('--json-input', help='JSON input file path or JSON string with update data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def update(ctx: click.Context, database_id: str, description: Optional[str], default_bucket_id: Optional[str],
+           restrict_metadata_outside_schemas: bool, no_restrict_metadata_outside_schemas: bool,
+           restrict_file_uploads_to_extensions: Optional[str], clear_file_extensions: bool,
            json_input: Optional[str], json_output: bool):
     """
     Update an existing database.
@@ -402,6 +440,10 @@ def update(ctx: click.Context, database_id: str, description: Optional[str], def
     Examples:
         vamscli database update -d my-database --description "Updated description"
         vamscli database update -d my-database --default-bucket-id "new-bucket-uuid"
+        vamscli database update -d my-database --restrict-metadata-outside-schemas
+        vamscli database update -d my-database --no-restrict-metadata-outside-schemas
+        vamscli database update -d my-database --restrict-file-uploads-to-extensions ".pdf,.png"
+        vamscli database update -d my-database --clear-file-extensions
         vamscli database update --json-input '{"databaseId":"test","description":"Updated","defaultBucketId":"uuid"}'
     """
     # Setup/auth already validated by decorator
@@ -427,11 +469,37 @@ def update(ctx: click.Context, database_id: str, description: Optional[str], def
             if default_bucket_id:
                 database_data['defaultBucketId'] = default_bucket_id
             
+            # Handle new configuration fields
+            # Check for conflicting flags
+            if restrict_metadata_outside_schemas and no_restrict_metadata_outside_schemas:
+                raise click.BadParameter(
+                    "Cannot use both --restrict-metadata-outside-schemas and --no-restrict-metadata-outside-schemas"
+                )
+            
+            if restrict_file_uploads_to_extensions and clear_file_extensions:
+                raise click.BadParameter(
+                    "Cannot use both --restrict-file-uploads-to-extensions and --clear-file-extensions"
+                )
+            
+            # Apply metadata restriction flags
+            if restrict_metadata_outside_schemas:
+                database_data['restrictMetadataOutsideSchemas'] = True
+            elif no_restrict_metadata_outside_schemas:
+                database_data['restrictMetadataOutsideSchemas'] = False
+            
+            # Apply file extension restrictions
+            if restrict_file_uploads_to_extensions:
+                database_data['restrictFileUploadsToExtensions'] = restrict_file_uploads_to_extensions
+            elif clear_file_extensions:
+                database_data['restrictFileUploadsToExtensions'] = ''
+            
             # Ensure at least one field is being updated
             if len(database_data) == 1:  # Only databaseId
                 raise click.BadParameter(
                     "At least one field must be provided for update. "
-                    "Use --description, --default-bucket-id, or --json-input."
+                    "Use --description, --default-bucket-id, --restrict-metadata-outside-schemas, "
+                    "--no-restrict-metadata-outside-schemas, --restrict-file-uploads-to-extensions, "
+                    "--clear-file-extensions, or --json-input."
                 )
         
         output_status(f"Updating database '{database_id}'...", json_output)

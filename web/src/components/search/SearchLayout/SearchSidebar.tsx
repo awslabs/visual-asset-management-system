@@ -43,6 +43,9 @@ interface SearchSidebarProps {
     // Display
     showThumbnails: boolean;
     onThumbnailToggle: () => void;
+    showMapThumbnails?: boolean;
+    onMapThumbnailToggle?: () => void;
+    useMapView?: boolean;
     isMapView?: boolean;
 }
 
@@ -66,6 +69,9 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
     databaseLocked = false,
     showThumbnails,
     onThumbnailToggle,
+    showMapThumbnails,
+    onMapThumbnailToggle,
+    useMapView,
     isMapView = false,
 }) => {
     return (
@@ -77,6 +83,9 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     onRecordTypeChange={onRecordTypeChange}
                     showThumbnails={showThumbnails}
                     onThumbnailToggle={onThumbnailToggle}
+                    showMapThumbnails={showMapThumbnails}
+                    onMapThumbnailToggle={onMapThumbnailToggle}
+                    useMapView={useMapView}
                     disabled={loading}
                 />
 

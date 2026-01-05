@@ -235,7 +235,7 @@ export function buildExecuteWorkflowFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    metadataReadFunction: lambda.IFunction,
+    metadataServiceFunction: lambda.IFunction,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -268,7 +268,7 @@ export function buildExecuteWorkflowFunction(
             CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
-            METADATA_READ_LAMBDA_FUNCTION_NAME: metadataReadFunction.functionName,
+            METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
@@ -283,7 +283,7 @@ export function buildExecuteWorkflowFunction(
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
-    metadataReadFunction.grantInvoke(fun);
+    metadataServiceFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -375,8 +375,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
     fileUploadLambdaFunction: lambda.Function,
-    readMetadataLambdaFunction: lambda.Function,
-    createMetadataLambdaFunction: lambda.Function,
+    metadataServiceFunction: lambda.IFunction,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -406,8 +405,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
                 storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
-            READ_METADATA_LAMBDA_FUNCTION_NAME: readMetadataLambdaFunction.functionName,
-            CREATE_METADATA_LAMBDA_FUNCTION_NAME: createMetadataLambdaFunction.functionName,
+            METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
@@ -416,8 +414,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
     });
 
     fileUploadLambdaFunction.grantInvoke(fun);
-    readMetadataLambdaFunction.grantInvoke(fun);
-    createMetadataLambdaFunction.grantInvoke(fun);
+    metadataServiceFunction.grantInvoke(fun);
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);

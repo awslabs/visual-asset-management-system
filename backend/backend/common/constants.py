@@ -104,7 +104,9 @@ PERMISSION_CONSTRAINT_FIELDS = {
 
             "workflowId": "",
 
-            "field": "",
+            "metadataSchemaName": "",
+            "metadataSchemaEntityType": "",
+            #"field": "", //deprecated, old metadata schema
 
             "object__type": "",
             "route__path": "",

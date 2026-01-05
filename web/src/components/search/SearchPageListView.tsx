@@ -37,6 +37,8 @@ import { useEffect, useState } from "react";
 import { fetchtagTypes } from "../../services/APIService";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 import { Checkbox } from "@cloudscape-design/components";
+import MapThumbnail from "./SearchResults/MapThumbnail";
+import { Cache } from "aws-amplify";
 
 var tagTypes: any;
 
@@ -88,11 +90,13 @@ const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ expl
     </Popover>
 );
 
-// Helper component to render metadata popover
+// Helper component to render metadata and attributes popover
 const MetadataPopover: React.FC<{
     metadata: Array<{ name: string; type: string; value: any }>;
-}> = ({ metadata }) => {
-    if (metadata.length === 0) {
+    attributes: Array<{ name: string; type: string; value: any }>;
+}> = ({ metadata, attributes }) => {
+    // Don't show popover if both arrays are empty
+    if (metadata.length === 0 && attributes.length === 0) {
         return <span></span>;
     }
 
@@ -104,19 +108,43 @@ const MetadataPopover: React.FC<{
             dismissButton={false}
             content={
                 <SpaceBetween size="s">
-                    <Box variant="h4">Metadata Fields ({metadata.length})</Box>
-                    <Box>
-                        <ul style={{ margin: 0, paddingLeft: "20px" }}>
-                            {metadata.map((field, idx) => (
-                                <li key={idx}>
-                                    <strong>
-                                        {field.name} ({field.type}):
-                                    </strong>{" "}
-                                    {String(field.value)}
-                                </li>
-                            ))}
-                        </ul>
-                    </Box>
+                    {/* Metadata Fields Section - only show if there are metadata fields */}
+                    {metadata.length > 0 && (
+                        <>
+                            <Box variant="h4">Metadata Fields ({metadata.length})</Box>
+                            <Box>
+                                <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                                    {metadata.map((field, idx) => (
+                                        <li key={idx}>
+                                            <strong>
+                                                {field.name} ({field.type}):
+                                            </strong>{" "}
+                                            {String(field.value)}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </Box>
+                        </>
+                    )}
+
+                    {/* Attribute Fields Section - only show if there are attribute fields */}
+                    {attributes.length > 0 && (
+                        <>
+                            <Box variant="h4">Attribute Fields ({attributes.length})</Box>
+                            <Box>
+                                <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                                    {attributes.map((field, idx) => (
+                                        <li key={idx}>
+                                            <strong>
+                                                {field.name} ({field.type}):
+                                            </strong>{" "}
+                                            {String(field.value)}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </Box>
+                        </>
+                    )}
                 </SpaceBetween>
             }
         >
@@ -125,47 +153,66 @@ const MetadataPopover: React.FC<{
     );
 };
 
-// Helper function to extract and format metadata fields with type information
-const extractMetadata = (item: any): Array<{ name: string; type: string; value: any }> => {
-    const metadata: Array<{ name: string; type: string; value: any }> = [];
-
-    // Type mapping for display
-    const typeLabels: Record<string, string> = {
-        str: "String",
-        num: "Number",
-        bool: "Boolean",
-        date: "Date",
-        list: "List",
-        gp: "Geo Point",
-        gs: "Geo Shape",
-    };
-
-    // Find all MD_ fields
-    Object.keys(item).forEach((key) => {
-        if (key.startsWith("MD_")) {
-            // Format: MD_<type>_<fieldname>
-            const parts = key.split("_");
-            if (parts.length >= 3) {
-                // parts[0] = 'MD', parts[1] = type, parts[2+] = field name
-                const fieldType = parts[1];
-                const fieldName = parts.slice(2).join("_");
-                metadata.push({
-                    name: fieldName,
-                    type: typeLabels[fieldType] || fieldType,
-                    value: item[key],
-                });
-            } else {
-                // Fallback: just remove MD_ prefix
-                metadata.push({
-                    name: key.substring(3),
-                    type: "Unknown",
-                    value: item[key],
-                });
-            }
+// Helper function to infer type from value
+const inferType = (value: any): string => {
+    if (value === null || value === undefined) {
+        return "Unknown";
+    }
+    if (typeof value === "number") {
+        return "Number";
+    }
+    if (typeof value === "boolean") {
+        return "Boolean";
+    }
+    if (Array.isArray(value)) {
+        return "List";
+    }
+    if (typeof value === "string") {
+        // Check if it's a date string
+        if (!isNaN(Date.parse(value)) && value.match(/^\d{4}-\d{2}-\d{2}/)) {
+            return "Date";
         }
-    });
+        return "String";
+    }
+    if (typeof value === "object") {
+        return "Object";
+    }
+    return "Unknown";
+};
 
-    return metadata;
+// Helper function to extract and format metadata and attribute fields with type information
+const extractMetadata = (
+    item: any
+): {
+    metadata: Array<{ name: string; type: string; value: any }>;
+    attributes: Array<{ name: string; type: string; value: any }>;
+} => {
+    const metadata: Array<{ name: string; type: string; value: any }> = [];
+    const attributes: Array<{ name: string; type: string; value: any }> = [];
+
+    // Check if MD_ exists as an object (new format)
+    if (item.MD_ && typeof item.MD_ === "object" && !Array.isArray(item.MD_)) {
+        Object.entries(item.MD_).forEach(([key, value]) => {
+            metadata.push({
+                name: key,
+                type: inferType(value),
+                value: value,
+            });
+        });
+    }
+
+    // Check if AB_ exists as an object (new format)
+    if (item.AB_ && typeof item.AB_ === "object" && !Array.isArray(item.AB_)) {
+        Object.entries(item.AB_).forEach(([key, value]) => {
+            attributes.push({
+                name: key,
+                type: inferType(value),
+                value: value,
+            });
+        });
+    }
+
+    return { metadata, attributes };
 };
 
 function columnRender(e: any, name: string, value: any, navigate?: any, isFileMode?: boolean) {
@@ -445,12 +492,22 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                               .slice(1)
                               .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
                               .join(" "),
-                cell: (e: any) =>
-                    name === "metadata" ? (
-                        <MetadataPopover metadata={extractMetadata(e)} />
-                    ) : (
-                        columnRender(e, name, e[name], navigate, isFileMode)
-                    ),
+                cell: (e: any) => {
+                    if (name === "metadata") {
+                        const { metadata, attributes } = extractMetadata(e);
+                        console.log("[MetadataDebug] Extracted data:", {
+                            metadata,
+                            attributes,
+                            allKeys: Object.keys(e).filter(
+                                (k) =>
+                                    k.toUpperCase().startsWith("MD_") ||
+                                    k.toUpperCase().startsWith("AB_")
+                            ),
+                        });
+                        return <MetadataPopover metadata={metadata} attributes={attributes} />;
+                    }
+                    return columnRender(e, name, e[name], navigate, isFileMode);
+                },
                 sortingField: name === "metadata" ? undefined : name,
                 isRowHeader: false,
             };
@@ -532,6 +589,58 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
         if (state.tablePreferences?.visibleContent) {
             state.tablePreferences.visibleContent = state.tablePreferences.visibleContent.filter(
                 (col: string) => col !== "preview"
+            );
+        }
+    }
+
+    // Add or remove map thumbnail column based on showMapThumbnails toggle
+    // Only for assets when maps are enabled
+    if (state.showMapThumbnails && state.useMapView && state.filters._rectype.value === "asset") {
+        const config = Cache.getItem("config");
+        const mapStyleUrl = config?.locationServiceApiUrl;
+
+        // Remove any existing map thumbnail columns first to avoid duplicates
+        enhancedColumnDefinitions = enhancedColumnDefinitions.filter(
+            (col: any) => col.id !== "mapThumbnail"
+        );
+
+        if (mapStyleUrl) {
+            // Add map thumbnail column after preview column (or at start if no preview)
+            const insertIndex = state.showPreviewThumbnails ? 1 : 0;
+            enhancedColumnDefinitions.splice(insertIndex, 0, {
+                id: "mapThumbnail",
+                header: "Map",
+                cell: (item: any) => (
+                    <MapThumbnail
+                        assetData={item}
+                        mapStyleUrl={mapStyleUrl}
+                        width={200}
+                        height={150}
+                    />
+                ),
+                sortingField: undefined, // Not sortable - client-side column
+                isRowHeader: false,
+            });
+
+            // Add mapThumbnail to visible columns if not already there
+            if (
+                state.tablePreferences?.visibleContent &&
+                !state.tablePreferences.visibleContent.includes("mapThumbnail")
+            ) {
+                const insertIndex = state.showPreviewThumbnails ? 1 : 0;
+                state.tablePreferences.visibleContent.splice(insertIndex, 0, "mapThumbnail");
+            }
+        }
+    } else {
+        // Remove map thumbnail column when toggle is off or not in asset mode
+        enhancedColumnDefinitions = enhancedColumnDefinitions.filter(
+            (col: any) => col.id !== "mapThumbnail"
+        );
+
+        // Remove mapThumbnail from visible columns
+        if (state.tablePreferences?.visibleContent) {
+            state.tablePreferences.visibleContent = state.tablePreferences.visibleContent.filter(
+                (col: string) => col !== "mapThumbnail"
             );
         }
     }

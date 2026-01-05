@@ -142,7 +142,10 @@ export function buildAssetService(
                 storageResources.dynamo.assetLinksStorageTableV2.tableName,
             ASSET_LINKS_METADATA_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
+                storageResources.dynamo.fileAttributeStorageTable.tableName,
             ASSET_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetVersionsStorageTable.tableName,
             ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
@@ -165,7 +168,8 @@ export function buildAssetService(
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
@@ -219,7 +223,10 @@ export function buildAssetFiles(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileVersionsStorageTable.tableName,
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
+                storageResources.dynamo.fileAttributeStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
@@ -233,7 +240,8 @@ export function buildAssetFiles(
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
-    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
@@ -278,6 +286,7 @@ export function buildUploadFileFunction(
         environment: {
             S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
@@ -293,6 +302,7 @@ export function buildUploadFileFunction(
     });
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
@@ -611,7 +621,6 @@ export function buildIngestAssetFunction(
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             CREATE_ASSET_LAMBDA_FUNCTION_NAME: createAssetLambdaFunction.functionName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: uploadFileLambdaFunction.functionName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
@@ -624,7 +633,6 @@ export function buildIngestAssetFunction(
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
@@ -673,7 +681,10 @@ export function buildAssetExportService(
                 storageResources.dynamo.assetVersionsStorageTable.tableName,
             ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileVersionsStorageTable.tableName,
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
+                storageResources.dynamo.fileAttributeStorageTable.tableName,
             ASSET_LINKS_STORAGE_TABLE_V2_NAME:
                 storageResources.dynamo.assetLinksStorageTableV2.tableName,
             ASSET_LINKS_METADATA_STORAGE_TABLE_NAME:
@@ -694,7 +705,8 @@ export function buildAssetExportService(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
-    storageResources.dynamo.metadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
