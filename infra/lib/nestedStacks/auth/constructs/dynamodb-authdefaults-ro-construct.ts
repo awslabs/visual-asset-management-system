@@ -239,22 +239,22 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
-                        {
-                            M: {
-                                field: {
-                                    S: "route__path",
-                                },
-                                id: {
-                                    S: `4_${roleNameIDClean}_web_paths`,
-                                },
-                                operator: {
-                                    S: "starts_with",
-                                },
-                                value: {
-                                    S: "/metadataschema",
-                                },
-                            },
-                        },
+                        // {
+                        //     M: {
+                        //         field: {
+                        //             S: "route__path",
+                        //         },
+                        //         id: {
+                        //             S: `4_${roleNameIDClean}_web_paths`,
+                        //         },
+                        //         operator: {
+                        //             S: "starts_with",
+                        //         },
+                        //         value: {
+                        //             S: "/metadataschema",
+                        //         },
+                        //     },
+                        // },
                         {
                             M: {
                                 field: {
@@ -619,6 +619,22 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `15_${roleNameIDClean}_api_paths`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/buckets",
+                                },
+                            },
+                        },
                     ],
                 },
                 description: {
@@ -661,7 +677,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                 constraintId: {
                     S: `initial_${roleNameIDClean}_allow_post_apis`,
                 },
-                criteriaAnd: {
+                criteriaOr: {
                     L: [
                         {
                             M: {

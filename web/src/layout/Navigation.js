@@ -169,6 +169,22 @@ export function Navigation({
 
     return loading ? (
         <CenterSpinner />
+    ) : navigationItems.length === 0 ? (
+        <div
+            style={{
+                padding: "20px",
+                textAlign: "center",
+                color: "#5f6b7a",
+            }}
+        >
+            <div style={{ marginBottom: "10px", fontSize: "16px", fontWeight: "bold" }}>
+                No Access
+            </div>
+            <div style={{ fontSize: "14px", lineHeight: "1.5" }}>
+                You don't have access to any web navigation pages. Please contact your administrator
+                to request the necessary permissions.
+            </div>
+        </div>
     ) : (
         <SideNavigation
             header={config.CUSTOMER_LOGO ? navHeader : null}

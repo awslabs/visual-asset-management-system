@@ -7,16 +7,68 @@ import { API } from "aws-amplify";
 import { fetchAssetS3Files } from "./APIService";
 
 /**
- * Fetches all asset versions for a given asset
+ * Fetches all asset versions for a given asset (fetches all pages)
  * @param {Object} params - Parameters object
  * @param {string} params.databaseId - Database ID
  * @param {string} params.assetId - Asset ID
- * @param {number} params.maxItems - Maximum items per page (optional)
+ * @param {number} params.pageSize - Page size for fetching (optional, default 100)
+ * @returns {Promise<[boolean, any]>}
+ */
+export const fetchAllAssetVersions = async ({ databaseId, assetId, pageSize = 100 }, api = API) => {
+    try {
+        if (!databaseId || !assetId) {
+            return [false, "Database ID and Asset ID are required"];
+        }
+
+        let allVersions = [];
+        let nextToken = null;
+
+        do {
+            const [success, response] = await fetchAssetVersions(
+                {
+                    databaseId,
+                    assetId,
+                    pageSize,
+                    startingToken: nextToken,
+                },
+                api
+            );
+
+            if (!success || !response) {
+                console.error("Failed to fetch page of versions");
+                break;
+            }
+
+            const versions = response.versions || [];
+            allVersions = [...allVersions, ...versions];
+            nextToken = response.NextToken || null;
+
+            console.log(
+                `Fetched ${versions.length} versions, total so far: ${
+                    allVersions.length
+                }, nextToken: ${nextToken ? "exists" : "null"}`
+            );
+        } while (nextToken);
+
+        console.log(`Finished fetching all versions, total: ${allVersions.length}`);
+        return [true, { versions: allVersions, totalCount: allVersions.length }];
+    } catch (error) {
+        console.error("Error fetching all asset versions:", error);
+        return [false, error?.message || "Failed to fetch all asset versions"];
+    }
+};
+
+/**
+ * Fetches a single page of asset versions for a given asset
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {number} params.pageSize - Page size (optional, default 100)
  * @param {string|null} params.startingToken - Pagination token (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchAssetVersions = async (
-    { databaseId, assetId, maxItems = 100, startingToken = null },
+    { databaseId, assetId, pageSize = 100, startingToken = null },
     api = API
 ) => {
     try {
@@ -25,7 +77,7 @@ export const fetchAssetVersions = async (
         }
 
         const queryParams = {
-            maxItems: maxItems.toString(),
+            pageSize: pageSize.toString(),
         };
 
         if (startingToken && startingToken != "") {
@@ -218,10 +270,11 @@ export const createAssetVersion = async (
  * @param {string} params.assetId - Asset ID
  * @param {string} params.assetVersionId - Asset version ID to revert to
  * @param {string} params.comment - Revert comment (optional)
+ * @param {boolean} params.revertMetadata - Whether to revert metadata/attributes (optional, default: false)
  * @returns {Promise<boolean|{message}|any>}
  */
 export const revertAssetVersion = async (
-    { databaseId, assetId, assetVersionId, comment = "" },
+    { databaseId, assetId, assetVersionId, comment = "", revertMetadata = false },
     api = API
 ) => {
     try {
@@ -229,7 +282,9 @@ export const revertAssetVersion = async (
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
         }
 
-        const body = {};
+        const body = {
+            revertMetadata: revertMetadata,
+        };
 
         if (comment) {
             body.comment = comment;

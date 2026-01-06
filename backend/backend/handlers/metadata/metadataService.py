@@ -2096,6 +2096,7 @@ def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items:
                         restore_item = {
                             'metadataKey': {'S': item['metadataKey']},
                             'databaseId:assetId:filePath': {'S': composite_key},
+                            'databaseId:assetId': {'S': asset_composite_key},
                             'metadataValue': {'S': item['metadataValue']},
                             'metadataValueType': {'S': item['metadataValueType']}
                         }
@@ -3197,6 +3198,7 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
                             restore_item = {
                                 'metadataKey': {'S': item['metadataKey']},
                                 'databaseId:assetId:filePath': {'S': composite_key},
+                                'databaseId:assetId': {'S': asset_composite_key},
                                 'metadataValue': {'S': item['metadataValue']},
                                 'metadataValueType': {'S': item['metadataValueType']}
                             }
@@ -3207,6 +3209,7 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
                             restore_item = {
                                 'attributeKey': {'S': key},
                                 'databaseId:assetId:filePath': {'S': composite_key},
+                                'databaseId:assetId': {'S': asset_composite_key},
                                 'attributeValue': {'S': value},
                                 'attributeValueType': {'S': value_type}
                             }

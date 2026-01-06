@@ -10,7 +10,7 @@ Permission authorization constraints now use a dedicated DynamoDB table (no long
 
 Metadata and metadataSchema DynamoDB tables have been replaced with new tables. The data migration script must be run to migrate data from the deprecated tables.
 
-OpenSearch indexes now include additional schema for "AB\_" attribute fields. A re-index with clearing of old indexes is required to apply the new schema. The migration script handles this process.
+OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now flat-objects). A re-index with clearing of old indexes is required to apply the new schema. The migration script handles this process.
 
 **Recommended Upgrade Path:** Run the upgrade script to migrate permission constraints from the old table to the new one if custom constraints were added or modified beyond VAMS defaults: `infra\deploymentDataMigration\v2.3_to_v2.4\upgrade`
 
@@ -29,7 +29,7 @@ OpenSearch indexes now include additional schema for "AB\_" attribute fields. A 
     -   Supported field types for metadata: STRING, MULTILINE_STRING, INLINE_CONTROLLED_LIST (only with applied schema), NUMBER, BOOLEAN, DATE, XYZ, WXYZ, MATRIX4X4, GEOPOINT, GEOJSON, LLA, JSON
     -   MetadataSchema now enforced at API level with web support for schema overlays
     -   Updated workflow executions and return formats for metadata (and updated applicable use-case pipelines) to support new entity types and field value types
-    -   Updated OpenSearch indexing to catalog new DynamoDB tables for metadata. File attributes are now stored separately in the file index as `AB_` fields. This creates new OpenSearch v2 indexes with a new name as new index schemas need to be applied.
+    -   Updated OpenSearch indexing to catalog new DynamoDB tables for metadata. File attributes are now stored separately in the file index as `AB_` fields. This creates new OpenSearch v2 indexes with a new name as new index schemas need to be applied. `MD_*` and `AB_*` fields are now flat object fields.
     -   Limit of 500 metadata and attributes per metadata entity type
     -   Updated relevant use-case pipelines that relied on metadata to properly funciton with the new system; the CAD3D metadata extraction pipeline now writes to file attributes instead of metadata
     -   **Web** Updated to support new fields and APIs. Web currently doesn't support displaying/updating database metadata (API/CLI functionality only).
@@ -41,6 +41,9 @@ OpenSearch indexes now include additional schema for "AB\_" attribute fields. A 
     -   Note: File extension restrictions apply only on file upload and are not checked on direct S3 bucket file manipulation
     -   **Web** Updated to support new fields and APIs
     -   **CLI** Updated to support new fields and APIs
+-   Asset versions will now save all and view asset and file metadata and atrributes as part of versioning an asset; previously versioned asset will not have any metadata as part of the version
+    -   There is now an option on reverting to a asset version to update and revert to the saved file and asset metadata (and file attributes)
+    -   Asset versions can now be created, even if no files are in the asset
 -   **Web** Added Veerum 3D Model licensed viewer to the viewer plugin system for `e57, las, laz, ply, and json (3D Tile)` files. Visit [veerum.com](https://www.veerum.com/) for license purchasing, then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
     -   Note: This viewer requires the Potree Auto-Processing pipeline to be enabled for PointCloud file loading.
 -   Added new Amazon EKS pipeline option for RapidPipeline use-case pipeline (complementing existing Amazon ECS). This provides a pattern example for other use-case pipelines implementing Kubernetes (EKS) versus Elastic Container Service (ECS).
@@ -62,6 +65,7 @@ OpenSearch indexes now include additional schema for "AB\_" attribute fields. A 
     -   PotreePipeline now defaults to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, which previously bypassed the Workflow system
 -   **Web** Workflow Executions on View Asset now lazy loads data; search bar temporarily removed
 -   **CLI** Added new command grouping (`workflow`) and commands for workflow listing, asset workflow execution listing, and executing new workflows on assets
+-   **CLI** Added new command sub-grouping (`bom`) under `industry engineering` which provides an example BOM query input command to to aggregate + file combine data across assets
     -   Note: Backend API not yet upgraded to new request/response model pattern; expected as part of pipeline/workflow overhaul development task
 -   **Web** Web text viewer now additionally supports file types: `".inf", ".cfg", ".md", ".sh", ".csv", ".py", ".log", ".js", ".ts", ".sql", ".ps1"`
 -   File type upload restrictions no longer restrict: `".ps1", ".sh", ".py", ".ini", ".inf", ".sql", ".js", ".docx"`
@@ -91,6 +95,10 @@ OpenSearch indexes now include additional schema for "AB\_" attribute fields. A 
 -   **Web** Fixed error when building/installing Potree Viewer and Pipeline on some OS build versions (e.g., Linux)
 -   **Web** Fixed bug in "Execute Workflow" modal that prevented user from selecting the entire asset as input (previously required selecting an individual file)
 -   Added back-off retries to OpenSearch file and asset indexing lambdas when 429 `too many requests` errors happens; this helps prevent files and assets from not getting indexed properly during heavy load or re-indexing operations
+-   Workflow pipelines that output files to be written back to the asset now properly keep the relative key path how of they should be stored in the asset (verses just storing all at the asset root currently)
+-   **Web** Fixed asset version component / tab data paging issue and column sorting not working
+-   **Web** Fix constraints editing form to allow selecting individual crtieria (or/and) items to remove; it only allowed select all or nothing
+-   Fixed default RO role constraint permission examples that get loaded during cdk deploy to work with changes that happened to APIs in v2.2+
 
 ### Chores
 
@@ -107,6 +115,7 @@ OpenSearch indexes now include additional schema for "AB\_" attribute fields. A 
 -   Updated all lambda memory to 5308 from 3003, increasing vCPU from 2 to 4 and improving API response performance
 -   Updated authz criteria builder on backend to ignore fields in criteria that are not in the current constants file (e.g., deprecated authz fields)
 -   Added warning on OS reindex utility when the lambda function times-outs that it doesn't return an error code. It returns a warning that the lambda may still be running and to check cloudwatch logs.
+-   **Web** Added a note on the web navigation bar if no items show up that the user doens't have permissions to view any web navigation pages
 
 ### Known Outstanding Issues
 

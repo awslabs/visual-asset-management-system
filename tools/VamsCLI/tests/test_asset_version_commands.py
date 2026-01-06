@@ -301,6 +301,7 @@ class TestAssetVersionRevertCommand:
         assert '--asset' in result.output
         assert '--version' in result.output
         assert '--comment' in result.output
+        assert '--revert-metadata' in result.output
         assert '--json-input' in result.output
         assert '--json-output' in result.output
     
@@ -380,6 +381,63 @@ class TestAssetVersionRevertCommand:
             assert '✗ Version Not Found' in result.output
             assert 'vamscli asset-version list' in result.output
     
+    def test_revert_with_metadata(self, cli_runner, asset_version_command_mocks):
+        """Test version revert with metadata reversion."""
+        with asset_version_command_mocks as mocks:
+            mocks['api_client'].revert_asset_version.return_value = {
+                'success': True,
+                'message': 'Successfully reverted to version 1 with 3 files and metadata',
+                'assetId': 'test-asset',
+                'assetVersionId': '3',
+                'operation': 'revert',
+                'timestamp': '2024-01-01T00:00:00Z',
+                'skippedFiles': []
+            }
+            
+            result = cli_runner.invoke(asset_version, [
+                'revert',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '-v', '1',
+                '--revert-metadata'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Asset version revert completed successfully' in result.output
+            
+            # Verify API call includes revertMetadata flag
+            mocks['api_client'].revert_asset_version.assert_called_once_with(
+                'test-db', 'test-asset', '1', {'revertMetadata': True}
+            )
+    
+    def test_revert_without_metadata_default(self, cli_runner, asset_version_command_mocks):
+        """Test version revert without metadata (default behavior)."""
+        with asset_version_command_mocks as mocks:
+            mocks['api_client'].revert_asset_version.return_value = {
+                'success': True,
+                'message': 'Successfully reverted to version 1 with 3 files',
+                'assetId': 'test-asset',
+                'assetVersionId': '3',
+                'operation': 'revert',
+                'timestamp': '2024-01-01T00:00:00Z',
+                'skippedFiles': []
+            }
+            
+            result = cli_runner.invoke(asset_version, [
+                'revert',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '-v', '1'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Asset version revert completed successfully' in result.output
+            
+            # Verify API call does NOT include revertMetadata flag (default false)
+            mocks['api_client'].revert_asset_version.assert_called_once_with(
+                'test-db', 'test-asset', '1', {}
+            )
+    
     def test_revert_error(self, cli_runner, asset_version_command_mocks):
         """Test revert command with revert error."""
         with asset_version_command_mocks as mocks:
@@ -408,8 +466,10 @@ class TestAssetVersionListCommand:
         assert 'List all versions for an asset' in result.output
         assert '--database' in result.output
         assert '--asset' in result.output
+        assert '--page-size' in result.output
         assert '--max-items' in result.output
         assert '--starting-token' in result.output
+        assert '--auto-paginate' in result.output
         assert '--json-output' in result.output
     
     def test_list_success(self, cli_runner, asset_version_command_mocks):
@@ -456,13 +516,13 @@ class TestAssetVersionListCommand:
             assert 'File Count: 3' in result.output
             assert 'File Count: 2' in result.output
             
-            # Verify API call
+            # Verify API call (no params in manual mode without options)
             mocks['api_client'].get_asset_versions.assert_called_once_with(
-                'test-db', 'test-asset', {'maxItems': 100}
+                'test-db', 'test-asset', {}
             )
     
-    def test_list_with_pagination(self, cli_runner, asset_version_command_mocks):
-        """Test version listing with pagination parameters."""
+    def test_list_with_page_size(self, cli_runner, asset_version_command_mocks):
+        """Test version listing with page size parameter."""
         with asset_version_command_mocks as mocks:
             mocks['api_client'].get_asset_versions.return_value = {
                 'versions': [
@@ -484,20 +544,212 @@ class TestAssetVersionListCommand:
                 'list',
                 '-d', 'test-db',
                 '-a', 'test-asset',
-                '--max-items', '50',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Asset Versions (1 total)' in result.output
+            assert 'Next token: next-token-123' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+            
+            # Verify API call
+            mocks['api_client'].get_asset_versions.assert_called_once_with(
+                'test-db', 'test-asset', {'pageSize': 50}
+            )
+    
+    def test_list_with_starting_token(self, cli_runner, asset_version_command_mocks):
+        """Test version listing with starting token for manual pagination."""
+        with asset_version_command_mocks as mocks:
+            mocks['api_client'].get_asset_versions.return_value = {
+                'versions': [
+                    {
+                        'Version': '1',
+                        'DateModified': '2024-01-01T00:00:00Z',
+                        'Comment': 'Initial version',
+                        'description': 'First upload',
+                        'specifiedPipelines': [],
+                        'createdBy': 'user@example.com',
+                        'isCurrent': False,
+                        'fileCount': 2
+                    }
+                ],
+                'NextToken': None
+            }
+            
+            result = cli_runner.invoke(asset_version, [
+                'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--page-size', '200',
                 '--starting-token', 'start-token-456'
             ])
             
             assert result.exit_code == 0
             assert 'Asset Versions (1 total)' in result.output
-            assert 'More versions available' in result.output
             
             # Verify API call
             mocks['api_client'].get_asset_versions.assert_called_once_with(
                 'test-db', 'test-asset', {
-                    'maxItems': 50,
+                    'pageSize': 200,
                     'startingToken': 'start-token-456'
                 }
+            )
+    
+    def test_list_auto_paginate(self, cli_runner, asset_version_command_mocks):
+        """Test version listing with auto-pagination."""
+        with asset_version_command_mocks as mocks:
+            # Simulate multiple pages
+            mocks['api_client'].get_asset_versions.side_effect = [
+                {
+                    'versions': [
+                        {'Version': '3', 'DateModified': '2024-01-03T00:00:00Z', 'Comment': 'V3', 
+                         'createdBy': 'user@example.com', 'isCurrent': True, 'fileCount': 1}
+                    ],
+                    'NextToken': 'token-page2'
+                },
+                {
+                    'versions': [
+                        {'Version': '2', 'DateModified': '2024-01-02T00:00:00Z', 'Comment': 'V2',
+                         'createdBy': 'user@example.com', 'isCurrent': False, 'fileCount': 1}
+                    ],
+                    'NextToken': 'token-page3'
+                },
+                {
+                    'versions': [
+                        {'Version': '1', 'DateModified': '2024-01-01T00:00:00Z', 'Comment': 'V1',
+                         'createdBy': 'user@example.com', 'isCurrent': False, 'fileCount': 1}
+                    ],
+                    'NextToken': None
+                }
+            ]
+            
+            result = cli_runner.invoke(asset_version, [
+                'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 3 items in 3 page(s)' in result.output
+            assert 'Asset Versions (3 total)' in result.output
+            assert 'Version: 3 (CURRENT)' in result.output
+            assert 'Version: 2' in result.output
+            assert 'Version: 1' in result.output
+            
+            # Verify multiple API calls
+            assert mocks['api_client'].get_asset_versions.call_count == 3
+    
+    def test_list_auto_paginate_with_max_items(self, cli_runner, asset_version_command_mocks):
+        """Test version listing with auto-pagination and max-items limit."""
+        with asset_version_command_mocks as mocks:
+            # Simulate a page with 3 items, but we'll only take 2
+            mocks['api_client'].get_asset_versions.return_value = {
+                'versions': [
+                    {'Version': '3', 'DateModified': '2024-01-03T00:00:00Z', 'Comment': 'V3',
+                     'createdBy': 'user@example.com', 'isCurrent': True, 'fileCount': 1},
+                    {'Version': '2', 'DateModified': '2024-01-02T00:00:00Z', 'Comment': 'V2',
+                     'createdBy': 'user@example.com', 'isCurrent': False, 'fileCount': 1},
+                    {'Version': '1', 'DateModified': '2024-01-01T00:00:00Z', 'Comment': 'V1',
+                     'createdBy': 'user@example.com', 'isCurrent': False, 'fileCount': 1}
+                ],
+                'NextToken': 'token-page2'
+            }
+            
+            result = cli_runner.invoke(asset_version, [
+                'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate',
+                '--max-items', '2'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 2 items in 1 page(s)' in result.output
+            assert 'Reached maximum of 2 items. More items may be available.' in result.output
+            assert 'Asset Versions (2 total)' in result.output
+            assert 'Version: 3 (CURRENT)' in result.output
+            assert 'Version: 2' in result.output
+            # Version 1 should NOT be in output (truncated)
+            assert 'V1' not in result.output or 'Version: 1' not in result.output
+            
+            # Verify only called once (truncated within first page)
+            assert mocks['api_client'].get_asset_versions.call_count == 1
+    
+    def test_list_auto_paginate_with_page_size(self, cli_runner, asset_version_command_mocks):
+        """Test version listing with auto-pagination and custom page size."""
+        with asset_version_command_mocks as mocks:
+            mocks['api_client'].get_asset_versions.side_effect = [
+                {
+                    'versions': [
+                        {'Version': '2', 'DateModified': '2024-01-02T00:00:00Z', 'Comment': 'V2',
+                         'createdBy': 'user@example.com', 'isCurrent': True, 'fileCount': 1}
+                    ],
+                    'NextToken': 'token-page2'
+                },
+                {
+                    'versions': [
+                        {'Version': '1', 'DateModified': '2024-01-01T00:00:00Z', 'Comment': 'V1',
+                         'createdBy': 'user@example.com', 'isCurrent': False, 'fileCount': 1}
+                    ],
+                    'NextToken': None
+                }
+            ]
+            
+            result = cli_runner.invoke(asset_version, [
+                'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate',
+                '--page-size', '500'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 2 items in 2 page(s)' in result.output
+            
+            # Verify page-size was passed to API
+            calls = mocks['api_client'].get_asset_versions.call_args_list
+            assert calls[0][0] == ('test-db', 'test-asset', {'pageSize': 500})
+            assert calls[1][0] == ('test-db', 'test-asset', {'pageSize': 500, 'startingToken': 'token-page2'})
+    
+    def test_list_pagination_validation_conflict(self, cli_runner, asset_version_command_mocks):
+        """Test that auto-paginate and starting-token cannot be used together."""
+        with asset_version_command_mocks as mocks:
+            result = cli_runner.invoke(asset_version, [
+                'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate',
+                '--starting-token', 'token123'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+    
+    def test_list_max_items_without_auto_paginate_warning(self, cli_runner, asset_version_command_mocks):
+        """Test warning when max-items used without auto-paginate."""
+        with asset_version_command_mocks as mocks:
+            mocks['api_client'].get_asset_versions.return_value = {
+                'versions': [
+                    {'Version': '1', 'DateModified': '2024-01-01T00:00:00Z', 'Comment': 'V1',
+                     'createdBy': 'user@example.com', 'isCurrent': True, 'fileCount': 1}
+                ],
+                'NextToken': None
+            }
+            
+            result = cli_runner.invoke(asset_version, [
+                'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--max-items', '100'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Warning: --max-items only applies with --auto-paginate' in result.output
+            
+            # Verify max-items was not passed to API
+            mocks['api_client'].get_asset_versions.assert_called_once_with(
+                'test-db', 'test-asset', {}
             )
     
     def test_list_empty(self, cli_runner, asset_version_command_mocks):
@@ -721,6 +973,82 @@ class TestAssetVersionGetCommand:
             assert '1.5 MB' in result.output  # Megabytes
             assert '2.0 GB' in result.output  # Gigabytes
             assert 'Unknown' in result.output  # Unknown size
+    
+    def test_get_with_versioned_metadata(self, cli_runner, asset_version_command_mocks):
+        """Test version details with versioned metadata and attributes."""
+        with asset_version_command_mocks as mocks:
+            mocks['api_client'].get_asset_version.return_value = {
+                'assetId': 'test-asset',
+                'assetVersionId': '1',
+                'dateCreated': '2024-01-01T00:00:00Z',
+                'comment': 'Version with metadata',
+                'createdBy': 'user@example.com',
+                'files': [
+                    {
+                        'relativeKey': 'model.obj',
+                        'versionId': 'abc123',
+                        'isPermanentlyDeleted': False,
+                        'isLatestVersionArchived': False,
+                        'size': 1024000
+                    }
+                ],
+                'versionedMetadata': [
+                    {
+                        'type': 'metadata',
+                        'filePath': '/',
+                        'metadataKey': 'project',
+                        'metadataValue': 'test-project',
+                        'metadataValueType': 'string'
+                    },
+                    {
+                        'type': 'attribute',
+                        'filePath': '/',
+                        'metadataKey': 'category',
+                        'metadataValue': 'models'
+                    },
+                    {
+                        'type': 'metadata',
+                        'filePath': '/model.obj',
+                        'metadataKey': 'format',
+                        'metadataValue': 'wavefront',
+                        'metadataValueType': 'string'
+                    },
+                    {
+                        'type': 'attribute',
+                        'filePath': '/model.obj',
+                        'metadataKey': 'quality',
+                        'metadataValue': 'high'
+                    }
+                ]
+            }
+            
+            result = cli_runner.invoke(asset_version, [
+                'get',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '-v', '1'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Asset Version Details:' in result.output
+            assert 'Versioned Metadata & Attributes (4 total):' in result.output
+            
+            # Check asset-level metadata
+            assert 'Asset-Level Metadata:' in result.output
+            assert 'project: test-project (type: string)' in result.output
+            
+            # Check asset-level attributes
+            assert 'Asset-Level Attributes:' in result.output
+            assert 'category: models' in result.output
+            
+            # Check file-level metadata
+            assert 'File-Level Metadata:' in result.output
+            assert '/model.obj:' in result.output
+            assert 'format: wavefront (type: string)' in result.output
+            
+            # Check file-level attributes
+            assert 'File-Level Attributes:' in result.output
+            assert 'quality: high' in result.output
 
 
 class TestAssetVersionCommandsIntegration:

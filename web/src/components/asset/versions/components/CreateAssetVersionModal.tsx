@@ -377,7 +377,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
             const [success, response] = await fetchAssetVersions({
                 databaseId,
                 assetId,
-                maxItems: 100,
+                pageSize: 100,
                 startingToken: null,
             });
 
@@ -725,6 +725,12 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                         ]}
                     />
                 </FormField>
+
+                <Alert type="info">
+                    <strong>Metadata Versioning:</strong> Creating this version will automatically
+                    snapshot the current metadata and attributes of the asset and all selected
+                    files.
+                </Alert>
 
                 {renderCreationModeContent()}
 

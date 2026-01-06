@@ -456,6 +456,12 @@ export function buildAssetVersionsFunction(
                 storageResources.dynamo.assetVersionsStorageTable.tableName,
             ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataVersionsStorageTable.tableName,
+            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
+                storageResources.dynamo.fileAttributeStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
@@ -469,6 +475,9 @@ export function buildAssetVersionsFunction(
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileMetadataVersionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
