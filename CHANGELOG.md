@@ -116,6 +116,7 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 -   Updated authz criteria builder on backend to ignore fields in criteria that are not in the current constants file (e.g., deprecated authz fields)
 -   Added warning on OS reindex utility when the lambda function times-outs that it doesn't return an error code. It returns a warning that the lambda may still be running and to check cloudwatch logs.
 -   **Web** Added a note on the web navigation bar if no items show up that the user doens't have permissions to view any web navigation pages
+-   Updated the custom lambda authorizer for cognito to use `joserfc` library from jose to overcome critical security findings on the jose library
 
 ### Known Outstanding Issues
 

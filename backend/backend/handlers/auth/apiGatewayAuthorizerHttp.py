@@ -12,8 +12,9 @@ from typing import Dict, Any, Optional, List, Tuple
 from aws_lambda_powertools import Logger
 
 # Import libraries for different JWT verification methods
-from jose import jwk, jwt as jose_jwt
-from jose.utils import base64url_decode
+from joserfc import jwt as joserfc_jwt
+from joserfc import jwk as joserfc_jwk
+from joserfc import jws as joserfc_jws
 import jwt as pyjwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -178,8 +179,7 @@ def extract_token_from_header(event: Dict[str, Any]) -> Optional[str]:
 
 def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
-    Verify Cognito JWT token using python-jose library (AWS best practices)
-    Based on: https://github.com/awslabs/aws-support-tools/blob/master/Cognito/decode-verify-jwt/decode-verify-jwt.py
+    Verify Cognito JWT token using joserfc library
     """
     try:
         if not USER_POOL_ID or not APP_CLIENT_ID:
@@ -187,7 +187,8 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             return None
         
         # Get the kid from the headers prior to verification
-        headers = jose_jwt.get_unverified_headers(token)
+        token_obj = joserfc_jws.extract_compact(token.encode())
+        headers = token_obj.protected
         kid = headers.get('kid')
         
         if not kid:
@@ -208,24 +209,16 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Public key not found in jwks.json for kid: {kid}")
             return None
         
-        # Construct the public key
-        public_key = jwk.construct(keys[key_index])
+        # Import the public key using joserfc
+        public_key = joserfc_jwk.import_key(keys[key_index])
         
-        # Get the last two sections of the token (message and signature)
-        message, encoded_signature = str(token).rsplit('.', 1)
-        
-        # Decode the signature
-        decoded_signature = base64url_decode(encoded_signature.encode('utf-8'))
-        
-        # Verify the signature
-        if not public_key.verify(message.encode("utf8"), decoded_signature):
-            logger.error('JWT signature verification failed')
-            return None
+        # Decode and verify the token using joserfc
+        token_result = joserfc_jwt.decode(token, public_key)
         
         logger.info('JWT signature successfully verified')
         
-        # Since we passed the verification, we can now safely use the unverified claims
-        claims = jose_jwt.get_unverified_claims(token)
+        # Extract claims from the verified token
+        claims = token_result.claims
         
         # Verify the token expiration
         current_time = time.time()
