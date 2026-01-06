@@ -39,6 +39,7 @@ export interface AssetVersion {
     createdBy: string;
     isCurrent: boolean;
     fileCount: number;
+    hasMetadata?: boolean; // Visual indicator for versions with metadata
 }
 
 export interface FileVersion {
@@ -52,6 +53,14 @@ export interface FileVersion {
     etag?: string;
 }
 
+export interface AssetVersionMetadataItem {
+    type: "metadata" | "attribute";
+    filePath: string;
+    metadataKey: string;
+    metadataValue: string;
+    metadataValueType: string;
+}
+
 export interface AssetVersionDetails {
     assetId: string;
     assetVersionId: string;
@@ -59,6 +68,7 @@ export interface AssetVersionDetails {
     comment?: string;
     files: FileVersion[];
     createdBy?: string;
+    versionedMetadata?: AssetVersionMetadataItem[];
 }
 
 // Context for sharing state between components
@@ -103,6 +113,15 @@ interface AssetVersionContextType {
     // Filtering properties
     filterText: string;
     setFilterText: (text: string) => void;
+    // Sorting properties
+    sortingColumn: {
+        sortingField: string;
+        isDescending: boolean;
+    };
+    setSortingColumn: (detail: {
+        sortingColumn: { sortingField?: string };
+        isDescending?: boolean;
+    }) => void;
     // File versions pagination and search properties
     fileFilterText: string;
     setFileFilterText: (text: string) => void;
@@ -162,6 +181,8 @@ export const AssetVersionManager: React.FC = () => {
         loadVersionDetails,
         filterText,
         setFilterText,
+        sortingColumn,
+        setSortingColumn,
     } = useAssetVersions(databaseId!, assetId!);
 
     // Debug effect to track re-renders
@@ -506,6 +527,9 @@ export const AssetVersionManager: React.FC = () => {
         // Filtering properties
         filterText,
         setFilterText,
+        // Sorting properties
+        sortingColumn,
+        setSortingColumn,
         // File versions pagination and search properties
         fileFilterText,
         setFileFilterText,

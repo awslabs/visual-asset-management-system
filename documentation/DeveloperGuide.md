@@ -988,30 +988,31 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 
 ## Tables
 
-| Table                         | Partition Key          | Sort Key                    | Attributes                                                                                                                                                                                                         |
-| ----------------------------- | ---------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| AppFeatureEnabledStorageTable | featureName            | n/a                         |                                                                                                                                                                                                                    |
-| AssetStorageTable             | databaseId             | assetId                     | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions, tags, status                                                                    |
-| AssetLinksStorageTable        | assetIdFrom            | assetIdTo                   |                                                                                                                                                                                                                    |
-| AssetFileVersionsStorageTable | assetId:assetVersionId | fileKey                     |                                                                                                                                                                                                                    |
-| AssetVersionsStorageTable     | assetId                | assetVersionId              | dateCreated, comment, description, specifiedPipelines, createdBy                                                                                                                                                   |
-| AssetUploadsStorageTable      | uploadId               | assetId                     | databaseId                                                                                                                                                                                                         |
-| AuthEntitiesStorageTable      | entityType             | sk                          |                                                                                                                                                                                                                    |
-| CommentStorageTable           | assetId                | assetVersionId:commentId    |                                                                                                                                                                                                                    |
-| ConstraintsStorageTable       | constraintId           | n/a                         | name, description, objectType, criteriaAnd (JSON), criteriaOr (JSON), groupPermissions (JSON), userPermissions (JSON), groupIds (StringSet), userIds (StringSet), dateCreated, dateModified, createdBy, modifiedBy |
-| DatabaseStorageTable          | databaseId             | n/a                         | assetCount, dateCreated, description, defaultBucketId, restrictMetadataOutsideSchemas, restrictFileUploadsToExtensions                                                                                             |
-| MetadataStorageTable          | databaseId             | assetId                     | Varies with user provided attributes                                                                                                                                                                               |
-| MetadataSchemaStorageTable    | databaseId             | field                       |                                                                                                                                                                                                                    |
-| PipelineStorageTable          | databaseId             | pipelineId                  | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType, inputParameters                                                                                                     |
-| RolesStorageTable             | roleName               | n/a                         |                                                                                                                                                                                                                    |
-| SubscriptionsStorageTable     | eventName              | entityName_entityId         |                                                                                                                                                                                                                    |
-| TagStorageTable               | tagName                | n/a                         |                                                                                                                                                                                                                    |
-| TagTypeStorageTable           | tagTypeName            | n/a                         |                                                                                                                                                                                                                    |
-| UserRolesStorageTable         | userId                 | roleName                    |                                                                                                                                                                                                                    |
-| UserStorageTable              | userId                 | n/a                         | email                                                                                                                                                                                                              |
-| S3AssetBucketsStorageTable    | bucketId               | bucketName:baseAssetsPrefix | bucketName, baseAssetsPrefix                                                                                                                                                                                       |
-| WorkflowStorageTable          | databaseId             | workflowId                  | dateCreated, description, specifiedPipelines, workflow_arn                                                                                                                                                         |
-| WorkflowExecutionStorageTable | assetId                | executionId                 | workflowId, databaseId, workflow_arn, execution_arn, startDate, stopDate, executionStatus                                                                                                                          |
+| Table                                 | Partition Key                     | Sort Key                    | Attributes                                                                                                                                                                                                         |
+| ------------------------------------- | --------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| AppFeatureEnabledStorageTable         | featureName                       | n/a                         |                                                                                                                                                                                                                    |
+| AssetStorageTable                     | databaseId                        | assetId                     | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions, tags, status                                                                    |
+| AssetLinksStorageTable                | assetIdFrom                       | assetIdTo                   |                                                                                                                                                                                                                    |
+| AssetFileVersionsStorageTable         | assetId:assetVersionId            | fileKey                     |                                                                                                                                                                                                                    |
+| AssetFileMetadataVersionsStorageTable | databaseId:assetId:assetVersionId | type:filePath:metadataKey   | databaseId:assetId, metadataKey, metadataValue, metadataValueType, createdAt                                                                                                                                       |
+| AssetVersionsStorageTable             | assetId                           | assetVersionId              | dateCreated, comment, description, specifiedPipelines, createdBy                                                                                                                                                   |
+| AssetUploadsStorageTable              | uploadId                          | assetId                     | databaseId                                                                                                                                                                                                         |
+| AuthEntitiesStorageTable              | entityType                        | sk                          |                                                                                                                                                                                                                    |
+| CommentStorageTable                   | assetId                           | assetVersionId:commentId    |                                                                                                                                                                                                                    |
+| ConstraintsStorageTable               | constraintId                      | n/a                         | name, description, objectType, criteriaAnd (JSON), criteriaOr (JSON), groupPermissions (JSON), userPermissions (JSON), groupIds (StringSet), userIds (StringSet), dateCreated, dateModified, createdBy, modifiedBy |
+| DatabaseStorageTable                  | databaseId                        | n/a                         | assetCount, dateCreated, description, defaultBucketId, restrictMetadataOutsideSchemas, restrictFileUploadsToExtensions                                                                                             |
+| MetadataStorageTable                  | databaseId                        | assetId                     | Varies with user provided attributes                                                                                                                                                                               |
+| MetadataSchemaStorageTable            | databaseId                        | field                       |                                                                                                                                                                                                                    |
+| PipelineStorageTable                  | databaseId                        | pipelineId                  | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType, inputParameters                                                                                                     |
+| RolesStorageTable                     | roleName                          | n/a                         |                                                                                                                                                                                                                    |
+| SubscriptionsStorageTable             | eventName                         | entityName_entityId         |                                                                                                                                                                                                                    |
+| TagStorageTable                       | tagName                           | n/a                         |                                                                                                                                                                                                                    |
+| TagTypeStorageTable                   | tagTypeName                       | n/a                         |                                                                                                                                                                                                                    |
+| UserRolesStorageTable                 | userId                            | roleName                    |                                                                                                                                                                                                                    |
+| UserStorageTable                      | userId                            | n/a                         | email                                                                                                                                                                                                              |
+| S3AssetBucketsStorageTable            | bucketId                          | bucketName:baseAssetsPrefix | bucketName, baseAssetsPrefix                                                                                                                                                                                       |
+| WorkflowStorageTable                  | databaseId                        | workflowId                  | dateCreated, description, specifiedPipelines, workflow_arn                                                                                                                                                         |
+| WorkflowExecutionStorageTable         | assetId                           | executionId                 | workflowId, databaseId, workflow_arn, execution_arn, startDate, stopDate, executionStatus                                                                                                                          |
 
 ## AssetStorageTable
 
@@ -1032,6 +1033,38 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | ----------- | ------------- | ---------- | --------------------------------------------------- |
 | BucketIdGSI | bucketId      | assetId    | For querying assets to a S3 bucket location         |
 | assetIdGSI  | assetId       | databaseId | For querying assets to a S3 asset id without a scan |
+
+---
+
+## AssetFileMetadataVersionsStorageTable (Current)
+
+**Purpose**: Stores historical snapshots of asset and file metadata/attributes for each asset version. This enables version control for metadata, allowing users to view what metadata existed at the time of a version and optionally revert metadata when reverting to a previous version. Introduced in v2.2 to support comprehensive asset versioning.
+
+| Field                             | Data Type | Description                                                           |
+| --------------------------------- | --------- | --------------------------------------------------------------------- |
+| databaseId:assetId:assetVersionId | String    | (PK) Composite key: database, asset, and version identifier           |
+| type:filePath:metadataKey         | String    | (SK) Composite key: metadata type, file path, and metadata key        |
+| databaseId:assetId                | String    | Composite key for asset-level queries (without version)               |
+| metadataKey                       | String    | The metadata/attribute field name (stored separately for easy access) |
+| metadataValue                     | String    | The metadata/attribute value at the time of version creation          |
+| metadataValueType                 | String    | Data type of the value (string, number, date, json, etc.)             |
+| createdAt                         | String    | ISO timestamp when this version snapshot was created                  |
+
+**Key Patterns**:
+
+-   Asset-level metadata: `type:filePath:metadataKey` = `metadata:/:{key}` or `attribute:/:{key}`
+-   File-level metadata: `type:filePath:metadataKey` = `metadata:/path/to/file:{key}` or `attribute:/path/to/file:{key}`
+
+**Type Values**:
+
+-   `metadata`: Snapshot from AssetFileMetadataStorageTableV2 (supports rich data types)
+-   `attribute`: Snapshot from FileAttributeStorageTableV2 (string-only values)
+
+### Global Secondary Indexes
+
+| Index Name             | Partition Key      | Sort Key                  | Description                                                         |
+| ---------------------- | ------------------ | ------------------------- | ------------------------------------------------------------------- |
+| DatabaseIdAssetIdIndex | databaseId:assetId | type:filePath:metadataKey | For querying all versioned metadata across all versions of an asset |
 
 ## PipelineStorageTable
 

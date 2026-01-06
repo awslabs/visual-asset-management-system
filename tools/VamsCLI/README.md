@@ -120,8 +120,12 @@ vamscli asset-version create -d my-database -a my-asset --comment "Initial versi
 vamscli file upload -d my-database -a my-asset /path/to/updated-file.gltf
 vamscli asset-version create -d my-database -a my-asset --comment "Updated model with fixes"
 
-# List all versions and get version details
+# List all versions with pagination support
 vamscli asset-version list -d my-database -a my-asset
+vamscli asset-version list -d my-database -a my-asset --auto-paginate  # Fetch all versions
+vamscli asset-version list -d my-database -a my-asset --page-size 200  # Manual pagination
+
+# Get version details
 vamscli asset-version get -d my-database -a my-asset -v 1
 
 # Revert to previous version if needed

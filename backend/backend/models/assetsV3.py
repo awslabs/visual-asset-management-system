@@ -745,6 +745,7 @@ class RevertAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for reverting to a previous asset version"""
     assetVersionId: str = Field(min_length=1, strip_whitespace=True)  # The version ID to revert to
     comment: str = Field(min_length=1, max_length=256, strip_whitespace=True)  # comment for the new version
+    revertMetadata: Optional[bool] = Field(default=False)  # Whether to revert metadata/attributes as well
 
 class GetAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for getting a specific asset version"""
@@ -752,8 +753,8 @@ class GetAssetVersionRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing asset versions"""
-    maxItems: Optional[int] = Field(default=100, ge=1)
-    pageSize: Optional[int] = Field(default=100, ge=1)
+    maxItems: Optional[int] = Field(default=1000, ge=1)
+    pageSize: Optional[int] = Field(default=1000, ge=1)
     startingToken: Optional[str] = None
 
 class AssetVersionFileModel(BaseModel, extra='ignore'):
@@ -766,6 +767,14 @@ class AssetVersionFileModel(BaseModel, extra='ignore'):
     lastModified: Optional[str] = None
     etag: Optional[str] = None
 
+class AssetVersionMetadataItemModel(BaseModel, extra='ignore'):
+    """Model for metadata/attribute item in a version"""
+    type: Literal["metadata", "attribute"]
+    filePath: str  # "/" for asset, "/path/to/file" for files
+    metadataKey: str
+    metadataValue: str
+    metadataValueType: str
+
 class AssetVersionResponseModel(BaseModel, extra='ignore'):
     """Response model for a specific asset version"""
     assetId: str
@@ -774,6 +783,7 @@ class AssetVersionResponseModel(BaseModel, extra='ignore'):
     comment: Optional[str] = None
     files: List[AssetVersionFileModel] = []
     createdBy: Optional[str] = None
+    versionedMetadata: List[AssetVersionMetadataItemModel] = []  # NEW FIELD
 
 class AssetVersionsListResponseModel(BaseModel, extra='ignore'):
     """Response model for listing asset versions"""

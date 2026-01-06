@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useContext, useState, useEffect } from "react";
+import React, { useContext, useState, useEffect, useMemo } from "react";
 import {
     Alert,
     Box,
@@ -19,9 +19,11 @@ import {
     TextFilter,
     Pagination,
     CollectionPreferences,
+    Tabs,
+    SegmentedControl,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams } from "react-router";
-import { AssetVersionContext, FileVersion } from "../AssetVersionManager";
+import { AssetVersionContext, FileVersion, AssetVersionMetadataItem } from "../AssetVersionManager";
 import { downloadAsset } from "../../../../services/APIService";
 
 export const FileVersionsList: React.FC = () => {
@@ -97,6 +99,112 @@ export const FileVersionsList: React.FC = () => {
     const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
     const [downloadProgress, setDownloadProgress] = useState<{ [key: string]: number }>({});
     const [downloadStatus, setDownloadStatus] = useState<{ [key: string]: string }>({});
+
+    // State for tabs
+    const [activeTabId, setActiveTabId] = useState<string>("files");
+
+    // State for metadata filtering
+    const [metadataTypeFilter, setMetadataTypeFilter] = useState<string>("all");
+    const [metadataLocationFilter, setMetadataLocationFilter] = useState<string>("all");
+    const [metadataSearchText, setMetadataSearchText] = useState<string>("");
+    const [metadataCurrentPage, setMetadataCurrentPage] = useState<number>(1);
+    const [metadataPageSize, setMetadataPageSize] = useState<number>(25);
+
+    // Filter and paginate metadata
+    const filteredMetadata = useMemo(() => {
+        if (!selectedVersionDetails?.versionedMetadata) return [];
+
+        let filtered = selectedVersionDetails.versionedMetadata;
+
+        // Filter by type
+        if (metadataTypeFilter !== "all") {
+            filtered = filtered.filter((item) => item.type === metadataTypeFilter);
+        }
+
+        // Filter by location
+        if (metadataLocationFilter === "asset") {
+            filtered = filtered.filter((item) => item.filePath === "/");
+        } else if (metadataLocationFilter === "files") {
+            filtered = filtered.filter((item) => item.filePath !== "/");
+        }
+
+        // Filter by search text
+        if (metadataSearchText.trim()) {
+            const searchLower = metadataSearchText.toLowerCase();
+            filtered = filtered.filter(
+                (item) =>
+                    item.metadataKey.toLowerCase().includes(searchLower) ||
+                    item.metadataValue.toLowerCase().includes(searchLower) ||
+                    item.filePath.toLowerCase().includes(searchLower)
+            );
+        }
+
+        return filtered;
+    }, [
+        selectedVersionDetails?.versionedMetadata,
+        metadataTypeFilter,
+        metadataLocationFilter,
+        metadataSearchText,
+    ]);
+
+    const paginatedMetadata = useMemo(() => {
+        const startIndex = (metadataCurrentPage - 1) * metadataPageSize;
+        return filteredMetadata.slice(startIndex, startIndex + metadataPageSize);
+    }, [filteredMetadata, metadataCurrentPage, metadataPageSize]);
+
+    // Metadata table columns
+    const metadataColumns = [
+        {
+            id: "type",
+            header: "Type",
+            cell: (item: AssetVersionMetadataItem) => (
+                <Badge color={item.type === "metadata" ? "blue" : "grey"}>
+                    {item.type === "metadata" ? "Metadata" : "Attribute"}
+                </Badge>
+            ),
+            sortingField: "type",
+        },
+        {
+            id: "location",
+            header: "Location",
+            cell: (item: AssetVersionMetadataItem) => (
+                <Box>
+                    {item.filePath === "/" ? (
+                        <Badge color="green">Asset</Badge>
+                    ) : (
+                        <div style={{ fontFamily: "monospace", fontSize: "0.9em" }}>
+                            {item.filePath}
+                        </div>
+                    )}
+                </Box>
+            ),
+            sortingField: "filePath",
+        },
+        {
+            id: "key",
+            header: "Key",
+            cell: (item: AssetVersionMetadataItem) => (
+                <div style={{ fontWeight: "500" }}>{item.metadataKey}</div>
+            ),
+            sortingField: "metadataKey",
+        },
+        {
+            id: "value",
+            header: "Value",
+            cell: (item: AssetVersionMetadataItem) => (
+                <div style={{ wordBreak: "break-word" }}>{item.metadataValue}</div>
+            ),
+            sortingField: "metadataValue",
+        },
+        {
+            id: "valueType",
+            header: "Value Type",
+            cell: (item: AssetVersionMetadataItem) => (
+                <div style={{ fontSize: "0.9em", color: "#5f6b7a" }}>{item.metadataValueType}</div>
+            ),
+            sortingField: "metadataValueType",
+        },
+    ];
 
     // Handle view file
     const handleViewFile = (file: FileVersion) => {
@@ -427,207 +535,372 @@ export const FileVersionsList: React.FC = () => {
         );
     }
 
-    // If we have a selected version but no details yet, and not loading, show no files message
-    if (selectedVersion && !selectedVersionDetails && !loading) {
-        console.log("FileVersionsList - Selected version but no details, not loading");
-        return (
-            <Container header={<Header variant="h3">Associated Files</Header>}>
-                <Box textAlign="center" padding="l">
-                    <div>No files associated with this asset version</div>
-                </Box>
-            </Container>
-        );
-    }
-
-    // If we have selectedVersionDetails but no files array or empty files array
-    if (
-        selectedVersionDetails &&
-        (!selectedVersionDetails.files || selectedVersionDetails.files.length === 0)
-    ) {
-        console.log(
-            "FileVersionsList - selectedVersionDetails exists but no files or empty files array"
-        );
-        return (
-            <Container header={<Header variant="h3">Associated Files</Header>}>
-                <Box textAlign="center" padding="l">
-                    <div>No files associated with this asset version</div>
-                </Box>
-            </Container>
-        );
-    }
-
     // If we don't have a selected version, don't render anything
     if (!selectedVersion) {
         return null;
     }
 
+    // If we have a selected version but no details yet, and not loading, show loading message
+    if (selectedVersion && !selectedVersionDetails && !loading) {
+        console.log("FileVersionsList - Selected version but no details, not loading");
+        return (
+            <Container
+                header={<Header variant="h3">Version v{selectedVersion?.Version} Details</Header>}
+            >
+                <Box textAlign="center" padding="l">
+                    <div>Loading version details...</div>
+                </Box>
+            </Container>
+        );
+    }
+
+    // Check if BOTH files and metadata are empty
+    const hasFiles = selectedVersionDetails?.files && selectedVersionDetails.files.length > 0;
+    const hasMetadata =
+        selectedVersionDetails?.versionedMetadata &&
+        selectedVersionDetails.versionedMetadata.length > 0;
+
+    // Only show "no data" message if BOTH files and metadata are empty
+    if (selectedVersionDetails && !hasFiles && !hasMetadata) {
+        console.log("FileVersionsList - No files and no metadata");
+        return (
+            <Container
+                header={<Header variant="h3">Version v{selectedVersion?.Version} Details</Header>}
+            >
+                <Box textAlign="center" padding="l">
+                    <div>No files or metadata associated with this asset version</div>
+                </Box>
+            </Container>
+        );
+    }
+
+    // If we have metadata but no files, still show the tabs
+    // The files tab will show "No files" but metadata tab will show data
+
+    // Render files tab content
+    const renderFilesTab = () => (
+        <Table
+            columnDefinitions={columns}
+            items={filteredFiles || []}
+            loading={loading}
+            loadingText="Loading file versions"
+            empty={
+                <Box textAlign="center" padding="l">
+                    <div>No files associated with this asset version</div>
+                </Box>
+            }
+            header={
+                <Box padding="s">
+                    <SpaceBetween direction="vertical" size="xs">
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <div>
+                                <strong>Total files:</strong> {totalFiles}
+                            </div>
+                            <div>
+                                <strong>Created by:</strong>{" "}
+                                {selectedVersionDetails?.createdBy || "System"}
+                            </div>
+                            <div>
+                                <strong>Created on:</strong>{" "}
+                                {formatDate(selectedVersionDetails?.dateCreated)}
+                            </div>
+                        </SpaceBetween>
+                        {selectedVersionDetails?.comment && (
+                            <div>
+                                <strong>Version comment:</strong> {selectedVersionDetails.comment}
+                            </div>
+                        )}
+                        {selectedVersionDetails?.files && (
+                            <div>
+                                <strong>File status:</strong>{" "}
+                                <span style={{ marginRight: "12px" }}>
+                                    <Badge color="green">
+                                        {
+                                            selectedVersionDetails.files.filter(
+                                                (f) =>
+                                                    !f.isPermanentlyDeleted &&
+                                                    !f.isLatestVersionArchived
+                                            ).length
+                                        }{" "}
+                                        Available
+                                    </Badge>
+                                </span>
+                                {selectedVersionDetails.files.some(
+                                    (f) => f.isLatestVersionArchived && !f.isPermanentlyDeleted
+                                ) && (
+                                    <span style={{ marginRight: "12px" }}>
+                                        <Badge color="grey">
+                                            {
+                                                selectedVersionDetails.files.filter(
+                                                    (f) =>
+                                                        f.isLatestVersionArchived &&
+                                                        !f.isPermanentlyDeleted
+                                                ).length
+                                            }{" "}
+                                            Archived
+                                        </Badge>
+                                    </span>
+                                )}
+                                {selectedVersionDetails.files.some(
+                                    (f) => f.isPermanentlyDeleted
+                                ) && (
+                                    <span>
+                                        <Badge color="red">
+                                            {
+                                                selectedVersionDetails.files.filter(
+                                                    (f) => f.isPermanentlyDeleted
+                                                ).length
+                                            }{" "}
+                                            Permanently Deleted
+                                        </Badge>
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                    </SpaceBetween>
+                </Box>
+            }
+            filter={
+                <TextFilter
+                    filteringText={fileFilterText}
+                    filteringPlaceholder="Find files"
+                    filteringAriaLabel="Filter files"
+                    onChange={({ detail }) => setFileFilterText(detail.filteringText)}
+                />
+            }
+            pagination={
+                <Pagination
+                    currentPageIndex={fileCurrentPage}
+                    pagesCount={Math.max(1, Math.ceil(totalFiles / filePageSize))}
+                    onChange={({ detail }) => setFileCurrentPage(detail.currentPageIndex)}
+                    ariaLabels={{
+                        nextPageLabel: "Next page",
+                        previousPageLabel: "Previous page",
+                        pageLabel: (pageNumber) =>
+                            `Page ${pageNumber} of ${Math.max(
+                                1,
+                                Math.ceil(totalFiles / filePageSize)
+                            )}`,
+                    }}
+                />
+            }
+            preferences={
+                <CollectionPreferences
+                    title="Preferences"
+                    confirmLabel="Confirm"
+                    cancelLabel="Cancel"
+                    preferences={preferences}
+                    onConfirm={({ detail }) => {
+                        // Create a new preferences object with the correct types
+                        const newPreferences = {
+                            pageSize: detail.pageSize || preferences.pageSize,
+                            visibleContent: detail.visibleContent
+                                ? [...detail.visibleContent]
+                                : preferences.visibleContent,
+                        };
+                        setPreferences(newPreferences);
+
+                        // Update page size if changed
+                        if (detail.pageSize !== undefined && detail.pageSize !== filePageSize) {
+                            setFilePageSize(detail.pageSize);
+                        }
+                    }}
+                    pageSizePreference={{
+                        title: "Page size",
+                        options: [
+                            { value: 10, label: "10 files" },
+                            { value: 20, label: "20 files" },
+                            { value: 50, label: "50 files" },
+                            { value: 100, label: "100 files" },
+                        ],
+                    }}
+                    visibleContentPreference={{
+                        title: "Select visible columns",
+                        options: [
+                            {
+                                label: "File information",
+                                options: [
+                                    { id: "fileName", label: "File Name" },
+                                    { id: "path", label: "Path" },
+                                    { id: "size", label: "Size" },
+                                    { id: "lastModified", label: "Last Modified" },
+                                    { id: "versionId", label: "Version ID" },
+                                ],
+                            },
+                            {
+                                label: "Actions",
+                                options: [{ id: "actions", label: "Actions" }],
+                            },
+                        ],
+                    }}
+                />
+            }
+            visibleColumns={preferences.visibleContent}
+        />
+    );
+
+    // Render metadata tab content
+    const renderMetadataTab = () => {
+        const hasMetadata =
+            selectedVersionDetails?.versionedMetadata &&
+            selectedVersionDetails.versionedMetadata.length > 0;
+
+        if (!hasMetadata) {
+            return (
+                <Box textAlign="center" padding="l">
+                    <div>No metadata snapshot available for this version</div>
+                </Box>
+            );
+        }
+
+        return (
+            <SpaceBetween direction="vertical" size="l">
+                <SpaceBetween direction="horizontal" size="xs">
+                    <SegmentedControl
+                        selectedId={metadataTypeFilter}
+                        onChange={({ detail }) => {
+                            setMetadataTypeFilter(detail.selectedId);
+                            setMetadataCurrentPage(1);
+                        }}
+                        label="Filter by type"
+                        options={[
+                            { text: "All", id: "all" },
+                            { text: "Metadata", id: "metadata" },
+                            { text: "Attributes", id: "attribute" },
+                        ]}
+                    />
+                    <SegmentedControl
+                        selectedId={metadataLocationFilter}
+                        onChange={({ detail }) => {
+                            setMetadataLocationFilter(detail.selectedId);
+                            setMetadataCurrentPage(1);
+                        }}
+                        label="Filter by location"
+                        options={[
+                            { text: "All", id: "all" },
+                            { text: "Asset-level", id: "asset" },
+                            { text: "File-level", id: "files" },
+                        ]}
+                    />
+                </SpaceBetween>
+
+                <Table
+                    columnDefinitions={metadataColumns}
+                    items={paginatedMetadata}
+                    loading={loading}
+                    loadingText="Loading metadata"
+                    empty={
+                        <Box textAlign="center" padding="l">
+                            <div>No metadata matches the current filters</div>
+                        </Box>
+                    }
+                    header={
+                        <Box padding="s">
+                            <SpaceBetween direction="vertical" size="xs">
+                                <div>
+                                    <strong>Total items:</strong> {filteredMetadata.length}
+                                    {selectedVersionDetails?.versionedMetadata &&
+                                        filteredMetadata.length !==
+                                            selectedVersionDetails.versionedMetadata.length && (
+                                            <span style={{ marginLeft: "8px", color: "#5f6b7a" }}>
+                                                (filtered from{" "}
+                                                {selectedVersionDetails.versionedMetadata.length})
+                                            </span>
+                                        )}
+                                </div>
+                            </SpaceBetween>
+                        </Box>
+                    }
+                    filter={
+                        <TextFilter
+                            filteringText={metadataSearchText}
+                            filteringPlaceholder="Search metadata keys, values, or file paths"
+                            filteringAriaLabel="Filter metadata"
+                            onChange={({ detail }) => {
+                                setMetadataSearchText(detail.filteringText);
+                                setMetadataCurrentPage(1);
+                            }}
+                        />
+                    }
+                    pagination={
+                        <Pagination
+                            currentPageIndex={metadataCurrentPage}
+                            pagesCount={Math.max(
+                                1,
+                                Math.ceil(filteredMetadata.length / metadataPageSize)
+                            )}
+                            onChange={({ detail }) =>
+                                setMetadataCurrentPage(detail.currentPageIndex)
+                            }
+                            ariaLabels={{
+                                nextPageLabel: "Next page",
+                                previousPageLabel: "Previous page",
+                                pageLabel: (pageNumber) =>
+                                    `Page ${pageNumber} of ${Math.max(
+                                        1,
+                                        Math.ceil(filteredMetadata.length / metadataPageSize)
+                                    )}`,
+                            }}
+                        />
+                    }
+                    preferences={
+                        <CollectionPreferences
+                            title="Preferences"
+                            confirmLabel="Confirm"
+                            cancelLabel="Cancel"
+                            preferences={{
+                                pageSize: metadataPageSize,
+                            }}
+                            onConfirm={({ detail }) => {
+                                if (detail.pageSize !== undefined) {
+                                    setMetadataPageSize(detail.pageSize);
+                                    setMetadataCurrentPage(1);
+                                }
+                            }}
+                            pageSizePreference={{
+                                title: "Page size",
+                                options: [
+                                    { value: 10, label: "10 items" },
+                                    { value: 25, label: "25 items" },
+                                    { value: 50, label: "50 items" },
+                                    { value: 100, label: "100 items" },
+                                ],
+                            }}
+                        />
+                    }
+                />
+            </SpaceBetween>
+        );
+    };
+
     return (
         <Container
-            header={<Header variant="h3">Files in Version v{selectedVersion?.Version}</Header>}
+            header={<Header variant="h3">Version v{selectedVersion?.Version} Details</Header>}
         >
             {downloadError && (
                 <Alert type="error" dismissible onDismiss={() => setDownloadError(null)}>
                     {downloadError}
                 </Alert>
             )}
-            <Table
-                columnDefinitions={columns}
-                items={filteredFiles || []}
-                loading={loading}
-                loadingText="Loading file versions"
-                empty={
-                    <Box textAlign="center" padding="l">
-                        <div>No files associated with this asset version</div>
-                    </Box>
-                }
-                header={
-                    <Box padding="s">
-                        <SpaceBetween direction="vertical" size="xs">
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <div>
-                                    <strong>Total files:</strong> {totalFiles}
-                                </div>
-                                <div>
-                                    <strong>Created by:</strong>{" "}
-                                    {selectedVersionDetails?.createdBy || "System"}
-                                </div>
-                                <div>
-                                    <strong>Created on:</strong>{" "}
-                                    {formatDate(selectedVersionDetails?.dateCreated)}
-                                </div>
-                            </SpaceBetween>
-                            {selectedVersionDetails?.comment && (
-                                <div>
-                                    <strong>Version comment:</strong>{" "}
-                                    {selectedVersionDetails.comment}
-                                </div>
-                            )}
-                            {selectedVersionDetails?.files && (
-                                <div>
-                                    <strong>File status:</strong>{" "}
-                                    <span style={{ marginRight: "12px" }}>
-                                        <Badge color="green">
-                                            {
-                                                selectedVersionDetails.files.filter(
-                                                    (f) =>
-                                                        !f.isPermanentlyDeleted &&
-                                                        !f.isLatestVersionArchived
-                                                ).length
-                                            }{" "}
-                                            Available
-                                        </Badge>
-                                    </span>
-                                    {selectedVersionDetails.files.some(
-                                        (f) => f.isLatestVersionArchived && !f.isPermanentlyDeleted
-                                    ) && (
-                                        <span style={{ marginRight: "12px" }}>
-                                            <Badge color="grey">
-                                                {
-                                                    selectedVersionDetails.files.filter(
-                                                        (f) =>
-                                                            f.isLatestVersionArchived &&
-                                                            !f.isPermanentlyDeleted
-                                                    ).length
-                                                }{" "}
-                                                Archived
-                                            </Badge>
-                                        </span>
-                                    )}
-                                    {selectedVersionDetails.files.some(
-                                        (f) => f.isPermanentlyDeleted
-                                    ) && (
-                                        <span>
-                                            <Badge color="red">
-                                                {
-                                                    selectedVersionDetails.files.filter(
-                                                        (f) => f.isPermanentlyDeleted
-                                                    ).length
-                                                }{" "}
-                                                Permanently Deleted
-                                            </Badge>
-                                        </span>
-                                    )}
-                                </div>
-                            )}
-                        </SpaceBetween>
-                    </Box>
-                }
-                filter={
-                    <TextFilter
-                        filteringText={fileFilterText}
-                        filteringPlaceholder="Find files"
-                        filteringAriaLabel="Filter files"
-                        onChange={({ detail }) => setFileFilterText(detail.filteringText)}
-                    />
-                }
-                pagination={
-                    <Pagination
-                        currentPageIndex={fileCurrentPage}
-                        pagesCount={Math.max(1, Math.ceil(totalFiles / filePageSize))}
-                        onChange={({ detail }) => setFileCurrentPage(detail.currentPageIndex)}
-                        ariaLabels={{
-                            nextPageLabel: "Next page",
-                            previousPageLabel: "Previous page",
-                            pageLabel: (pageNumber) =>
-                                `Page ${pageNumber} of ${Math.max(
-                                    1,
-                                    Math.ceil(totalFiles / filePageSize)
-                                )}`,
-                        }}
-                    />
-                }
-                preferences={
-                    <CollectionPreferences
-                        title="Preferences"
-                        confirmLabel="Confirm"
-                        cancelLabel="Cancel"
-                        preferences={preferences}
-                        onConfirm={({ detail }) => {
-                            // Create a new preferences object with the correct types
-                            const newPreferences = {
-                                pageSize: detail.pageSize || preferences.pageSize,
-                                visibleContent: detail.visibleContent
-                                    ? [...detail.visibleContent]
-                                    : preferences.visibleContent,
-                            };
-                            setPreferences(newPreferences);
-
-                            // Update page size if changed
-                            if (detail.pageSize !== undefined && detail.pageSize !== filePageSize) {
-                                setFilePageSize(detail.pageSize);
-                            }
-                        }}
-                        pageSizePreference={{
-                            title: "Page size",
-                            options: [
-                                { value: 10, label: "10 files" },
-                                { value: 20, label: "20 files" },
-                                { value: 50, label: "50 files" },
-                                { value: 100, label: "100 files" },
-                            ],
-                        }}
-                        visibleContentPreference={{
-                            title: "Select visible columns",
-                            options: [
-                                {
-                                    label: "File information",
-                                    options: [
-                                        { id: "fileName", label: "File Name" },
-                                        { id: "path", label: "Path" },
-                                        { id: "size", label: "Size" },
-                                        { id: "lastModified", label: "Last Modified" },
-                                        { id: "versionId", label: "Version ID" },
-                                    ],
-                                },
-                                {
-                                    label: "Actions",
-                                    options: [{ id: "actions", label: "Actions" }],
-                                },
-                            ],
-                        }}
-                    />
-                }
-                visibleColumns={preferences.visibleContent}
+            <Tabs
+                activeTabId={activeTabId}
+                onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
+                tabs={[
+                    {
+                        id: "files",
+                        label: `Files (${totalFiles})`,
+                        content: renderFilesTab(),
+                    },
+                    {
+                        id: "metadata",
+                        label: `Metadata${
+                            selectedVersionDetails?.versionedMetadata
+                                ? ` (${selectedVersionDetails.versionedMetadata.length})`
+                                : ""
+                        }`,
+                        content: renderMetadataTab(),
+                    },
+                ]}
             />
         </Container>
     );

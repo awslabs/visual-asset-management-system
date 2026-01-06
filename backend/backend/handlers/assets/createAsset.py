@@ -358,7 +358,7 @@ def create_initial_version_record(asset_id, version_id, description, created_by=
             'assetId': asset_id,
             'assetVersionId': version_id,
             'dateCreated': now,
-            'comment': f'Initial asset creation - Version {version_id} (No Files)',
+            'comment': f'Initial asset creation - Version {version_id} (No Files, No Metadata)',
             'description': description,
             'specifiedPipelines': [],
             'createdBy': created_by,

@@ -7595,6 +7595,12 @@ components:
                 createdBy:
                     type: string
                     description: "User who created this version"
+                versionedMetadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetVersionMetadataItemModel"
+                    description: "Snapshot of metadata and attributes at the time of version creation"
+                    default: []
             required:
                 - assetId
                 - assetVersionId
@@ -7715,12 +7721,48 @@ components:
                 - relativeKey
                 - versionId
         
+        assetVersionMetadataItemModel:
+            type: object
+            properties:
+                type:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "Type of metadata item: 'metadata' (from AssetFileMetadataStorageTableV2) or 'attribute' (from FileAttributeStorageTableV2)"
+                filePath:
+                    type: string
+                    description: "File path relative to asset root. '/' for asset-level metadata, '/path/to/file' for file-level metadata"
+                metadataKey:
+                    type: string
+                    description: "Metadata or attribute key name"
+                metadataValue:
+                    type: string
+                    description: "Metadata or attribute value (stored as string)"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                    description: "Data type of the value"
+            required:
+                - type
+                - filePath
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+            example:
+                type: "metadata"
+                filePath: "/"
+                metadataKey: "project_name"
+                metadataValue: "Building Renovation"
+                metadataValueType: "string"
+        
         revertAssetVersionRequest:
             type: object
             properties:
                 comment:
                     type: string
                     description: "Comment for the new version created by the revert operation"
+                revertMetadata:
+                    type: boolean
+                    default: false
+                    description: "Whether to revert metadata and attributes to the target version state. When true, deletes all current metadata/attributes and restores from the target version."
             required: []
         
         getAssetVersionRequest:

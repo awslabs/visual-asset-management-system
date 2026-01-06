@@ -126,7 +126,7 @@ def lookup_existing_asset(database_id, asset_id):
     else:
         return None
 
-def create_external_upload_record(asset_id, database_id, upload_type, temporary_prefix):
+def create_external_upload_record(asset_id, database_id, upload_type, baseFileKeyPrefix):
     """Create an external upload record in DynamoDB"""
     try:
         # Generate upload ID
@@ -148,7 +148,7 @@ def create_external_upload_record(asset_id, database_id, upload_type, temporary_
             totalParts=0,  # Not relevant for external uploads
             status="initialized",
             isExternalUpload=True,
-            temporaryPrefix=temporary_prefix
+            temporaryPrefix=baseFileKeyPrefix
         )
         
         # Save to DynamoDB
@@ -190,14 +190,26 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
         logger.exception(f"Error updating S3 object metadata: {e}")
         return False
 
-def process_external_upload(upload_id, asset_id, database_id, upload_type, files, temporary_prefix, request_context):
+def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context):
     """Process an external upload using the fileIngestion Lambda"""
     try:
         # Prepare the request payload
         file_list = []
         for file_key in files:
-            # Extract the file name from the key
-            file_name = os.path.basename(file_key)
+            # Extract the file name/path based on upload type
+            if upload_type == "assetFile":
+                # For asset files, preserve the relative path structure
+                if file_key.startswith(baseFileKeyPrefix):
+                    file_name = file_key[len(baseFileKeyPrefix):]
+                else:
+                    file_name = file_key
+                
+                # Remove leading slash if present
+                if file_name.startswith('/'):
+                    file_name = file_name[1:]
+            else:
+                # For other upload types (like assetPreview), just use the filename
+                file_name = os.path.basename(file_key)
             
             # Add to file list
             file_list.append({

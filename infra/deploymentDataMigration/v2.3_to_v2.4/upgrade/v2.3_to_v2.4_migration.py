@@ -1116,8 +1116,9 @@ def transform_metadata_to_new_format(old_metadata_record: Dict) -> List[Dict]:
     # Parse assetId to determine if it's an asset or file
     is_file, actual_asset_id, file_path = parse_asset_id(asset_id, database_id)
     
-    # Build composite key
+    # Build composite keys
     composite_key = f"{database_id}:{actual_asset_id}:{file_path}"
+    composite_key_asset = f"{database_id}:{actual_asset_id}"
     
     # Process all fields except databaseId, assetId, and fields starting with underscore
     for field_name, field_value in old_metadata_record.items():
@@ -1140,6 +1141,7 @@ def transform_metadata_to_new_format(old_metadata_record: Dict) -> List[Dict]:
         item = {
             'metadataKey': {'S': field_name},
             'databaseId:assetId:filePath': {'S': composite_key},
+            'databaseId:assetId': {'S': composite_key_asset},
             'metadataValue': {'S': value_str},
             'metadataValueType': {'S': 'string'}
         }

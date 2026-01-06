@@ -61,6 +61,7 @@ export interface storageResources {
         assetUploadsStorageTable: dynamodb.Table;
         assetVersionsStorageTable: dynamodb.Table;
         assetFileVersionsStorageTable: dynamodb.Table;
+        assetFileMetadataVersionsStorageTable: dynamodb.Table;
         authEntitiesStorageTable: dynamodb.Table;
         commentStorageTable: dynamodb.Table;
         constraintsStorageTable: dynamodb.Table;
@@ -1072,6 +1073,22 @@ export function storageResourcesBuilder(
         }
     );
 
+    const assetFileMetadataVersionsStorageTable = new dynamodb.Table(
+        scope,
+        "AssetFileMetadataVersionsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "databaseId:assetId:assetVersionId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "type:filePath:metadataKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
     const assetVersionsStorageTable = new dynamodb.Table(scope, "AssetVersionsStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -1190,6 +1207,7 @@ export function storageResourcesBuilder(
             assetStorageTable: assetStorageTable,
             assetUploadsStorageTable: assetUploadsStorageTable,
             assetFileVersionsStorageTable: assetFileVersionsStorageTable,
+            assetFileMetadataVersionsStorageTable: assetFileMetadataVersionsStorageTable,
             assetVersionsStorageTable: assetVersionsStorageTable,
             commentStorageTable: commentStorageTable,
             constraintsStorageTable: constraintsStorageTable,
