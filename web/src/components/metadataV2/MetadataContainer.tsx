@@ -34,6 +34,8 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     mode = "online",
     initialData = [],
     onDataChange,
+    onHasChangesChange,
+    onValidationChange,
     readOnly = false,
     showBulkEdit = true,
     restrictMetadataOutsideSchemas = false,
@@ -236,6 +238,83 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
             setHasSchemas(schemas !== null && schemas.fields.length > 0);
         }
     }, [apiRestriction, restrictMetadataOutsideSchemas, mode, data, schemas]);
+
+    // Check if all required fields are filled (memoized)
+    // This matches the validation logic in validateMetadataRow
+    const hasRequiredFieldsFilled = useMemo(() => {
+        // Get all non-deleted rows
+        const activeRows = rows.filter((row) => !row.isDeleted);
+
+        // Check if there are any required schema fields with empty values
+        const requiredFields = activeRows.filter((row) => row.metadataSchemaRequired);
+
+        if (requiredFields.length === 0) {
+            return true; // No required fields, so validation passes
+        }
+
+        // Check if all required fields have non-empty values
+        // Use the same logic as validateMetadataRow: check editValue first, then metadataValue
+        return requiredFields.every((row) => {
+            const value =
+                row.editValue !== undefined && row.editValue !== null
+                    ? row.editValue
+                    : row.metadataValue;
+            return value && value.trim() !== "";
+        });
+    }, [rows]);
+
+    // Notify parent when hasChanges state changes (use ref to prevent loops)
+    const prevHasChangesRef = useRef<boolean>();
+    const isInitialMount = useRef(true);
+    const onHasChangesChangeRef = useRef(onHasChangesChange);
+
+    // Update ref when callback changes
+    useEffect(() => {
+        onHasChangesChangeRef.current = onHasChangesChange;
+    }, [onHasChangesChange]);
+
+    useEffect(() => {
+        // Skip the first render to avoid triggering on initial mount
+        if (isInitialMount.current) {
+            isInitialMount.current = false;
+            prevHasChangesRef.current = hasChanges;
+            return;
+        }
+
+        // Only call callback if hasChanges actually changed
+        if (onHasChangesChangeRef.current && prevHasChangesRef.current !== hasChanges) {
+            prevHasChangesRef.current = hasChanges;
+            onHasChangesChangeRef.current(hasChanges);
+        }
+    }, [hasChanges]); // Remove onHasChangesChange from deps
+
+    // Notify parent when validation state changes (use ref to prevent loops)
+    const prevValidationRef = useRef<boolean>();
+    const isInitialMountValidation = useRef(true);
+    const onValidationChangeRef = useRef(onValidationChange);
+
+    // Update ref when callback changes
+    useEffect(() => {
+        onValidationChangeRef.current = onValidationChange;
+    }, [onValidationChange]);
+
+    useEffect(() => {
+        // Skip the first render to avoid triggering on initial mount
+        if (isInitialMountValidation.current) {
+            isInitialMountValidation.current = false;
+            prevValidationRef.current = hasRequiredFieldsFilled;
+            return;
+        }
+
+        // Only call callback if validation state actually changed
+        if (
+            onValidationChangeRef.current &&
+            prevValidationRef.current !== hasRequiredFieldsFilled
+        ) {
+            prevValidationRef.current = hasRequiredFieldsFilled;
+            onValidationChangeRef.current(hasRequiredFieldsFilled);
+        }
+    }, [hasRequiredFieldsFilled]);
 
     // Handle manual refresh
     const handleRefresh = useCallback(async () => {

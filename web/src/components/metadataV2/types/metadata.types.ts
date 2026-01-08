@@ -119,6 +119,8 @@ export interface MetadataContainerProps {
     // Offline mode props
     initialData?: MetadataRecord[];
     onDataChange?: (data: MetadataRecord[]) => void;
+    onHasChangesChange?: (hasChanges: boolean) => void; // Callback when uncommitted changes state changes
+    onValidationChange?: (isValid: boolean) => void; // Callback when validation state changes (e.g., required fields)
 
     // Optional customization
     readOnly?: boolean;

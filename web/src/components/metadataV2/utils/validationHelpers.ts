@@ -230,8 +230,13 @@ export const validateMetadataRow = (
     }
 
     // Validate required fields
+    // Check editValue first (even if empty string), then fall back to metadataValue
     if (row.metadataSchemaRequired) {
-        if (!valueToValidate || valueToValidate.trim() === "") {
+        const actualValue =
+            row.editValue !== undefined && row.editValue !== null
+                ? row.editValue
+                : row.metadataValue;
+        if (!actualValue || actualValue.trim() === "") {
             errors.push("This field is required by the schema");
         }
     }

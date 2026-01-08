@@ -627,12 +627,54 @@ export default function UploadManager({
 
     // Retry handler
     const handleRetry = useCallback(async () => {
-        retryFailedParts();
+        // Get the updated parts synchronously by using functional state update
+        let updatedParts: any[] = [];
+        setFileParts((prev) => {
+            updatedParts = prev.map((part) => {
+                if (part.status === "failed" && part.retryCount < 5) {
+                    return {
+                        ...part,
+                        status: "pending",
+                        lastError: undefined,
+                    };
+                }
+                return part;
+            });
+            return updatedParts;
+        });
 
-        // Re-trigger upload with current fileParts
+        // Calculate current progress based on completed parts only
+        const completedPartsCount = updatedParts.filter((p) => p.status === "completed").length;
+        const totalPartsCount = updatedParts.length;
+        const currentProgress = Math.round((completedPartsCount / totalPartsCount) * 100);
+
+        // Reset upload status to in-progress and update progress
+        setUploadState((prev) => ({
+            ...prev,
+            uploadStatus: "in-progress",
+            overallProgress: currentProgress,
+            errors: prev.errors.filter((e) => e.step !== "File Upload"),
+        }));
+
+        // Reset file statuses for files with failed parts
+        const fileIndicesWithFailedParts = new Set(
+            updatedParts
+                .filter((part) => part.status === "pending" && part.retryCount > 0)
+                .map((part) => part.fileIndex)
+        );
+
+        setFileUploadItems((prev) =>
+            prev.map((item) =>
+                fileIndicesWithFailedParts.has(item.index)
+                    ? { ...item, status: "Queued", progress: 0 }
+                    : item
+            )
+        );
+
+        // Re-trigger upload with the updated parts
         const uploadResult = await uploadFileParts(
             fileUploadItems,
-            fileParts,
+            updatedParts,
             (completed, total) => {
                 const progress = Math.round((completed / total) * 100);
                 setUploadState((prev) => ({ ...prev, overallProgress: progress }));
@@ -665,14 +707,59 @@ export default function UploadManager({
 
         if (uploadResult.success) {
             setUploadState((prev) => ({ ...prev, uploadStatus: "completed" }));
+        } else {
+            // If retry failed, set status back to failed
+            setUploadState((prev) => ({
+                ...prev,
+                uploadStatus: "failed",
+                errors: [
+                    ...prev.errors,
+                    {
+                        step: "File Upload",
+                        message: `${uploadResult.failedCount} file parts failed to upload after retry`,
+                    },
+                ],
+            }));
         }
-    }, [retryFailedParts, uploadFileParts, fileUploadItems, fileParts]);
+    }, [uploadFileParts, fileUploadItems, setFileParts, setFileUploadItems]);
 
     // Retry handler for individual file
     const handleRetryFile = useCallback(
         async (fileIndex: number) => {
             console.log(`Retrying file at index ${fileIndex}`);
-            retryFailedParts(fileIndex);
+
+            // Get the updated parts synchronously for this specific file
+            let updatedParts: any[] = [];
+            setFileParts((prev) => {
+                updatedParts = prev.map((part) => {
+                    if (
+                        part.status === "failed" &&
+                        part.fileIndex === fileIndex &&
+                        part.retryCount < 5
+                    ) {
+                        return {
+                            ...part,
+                            status: "pending",
+                            lastError: undefined,
+                        };
+                    }
+                    return part;
+                });
+                return updatedParts;
+            });
+
+            // Calculate current progress based on completed parts only
+            const completedPartsCount = updatedParts.filter((p) => p.status === "completed").length;
+            const totalPartsCount = updatedParts.length;
+            const currentProgress = Math.round((completedPartsCount / totalPartsCount) * 100);
+
+            // Reset upload status to in-progress if it was failed and update progress
+            setUploadState((prev) => ({
+                ...prev,
+                uploadStatus: prev.uploadStatus === "failed" ? "in-progress" : prev.uploadStatus,
+                overallProgress: currentProgress,
+                errors: prev.errors.filter((e) => e.step !== "File Upload"),
+            }));
 
             // Update file status
             setFileUploadItems((prev) =>
@@ -681,10 +768,58 @@ export default function UploadManager({
                 )
             );
 
-            // Re-trigger upload
-            await handleRetry();
+            // Re-trigger upload with the updated parts
+            const uploadResult = await uploadFileParts(
+                fileUploadItems,
+                updatedParts,
+                (completed, total) => {
+                    const progress = Math.round((completed / total) * 100);
+                    setUploadState((prev) => ({ ...prev, overallProgress: progress }));
+                },
+                (fileIdx, progress) => {
+                    setFileUploadItems((prev) =>
+                        prev.map((item) =>
+                            item.index === fileIdx
+                                ? {
+                                      ...item,
+                                      progress,
+                                      loaded: Math.round((progress * item.total) / 100),
+                                      status:
+                                          progress === 100
+                                              ? "Completed"
+                                              : progress > 0
+                                              ? "In Progress"
+                                              : "Queued",
+                                  }
+                                : item
+                        )
+                    );
+                },
+                (sequenceId) => {
+                    if (handleSequenceCompletionRef.current) {
+                        handleSequenceCompletionRef.current(sequenceId);
+                    }
+                }
+            );
+
+            if (uploadResult.success) {
+                setUploadState((prev) => ({ ...prev, uploadStatus: "completed" }));
+            } else {
+                // If retry failed, set status back to failed
+                setUploadState((prev) => ({
+                    ...prev,
+                    uploadStatus: "failed",
+                    errors: [
+                        ...prev.errors,
+                        {
+                            step: "File Upload",
+                            message: `${uploadResult.failedCount} file parts failed to upload after retry`,
+                        },
+                    ],
+                }));
+            }
         },
-        [retryFailedParts, handleRetry]
+        [uploadFileParts, fileUploadItems, setFileParts, setFileUploadItems]
     );
 
     // Function to continue workflow after metadata step
@@ -1006,6 +1141,106 @@ export default function UploadManager({
         await continueToFileUpload();
     }, [continueToFileUpload]);
 
+    // Skip failed parts handler
+    const handleSkipFailed = useCallback(async () => {
+        console.log("Skipping failed parts and completing upload");
+
+        // First, identify all files that have any failed parts
+        const filesWithFailedParts = new Set<number>();
+        fileParts.forEach((part) => {
+            if (part.status === "failed") {
+                filesWithFailedParts.add(part.fileIndex);
+            }
+        });
+
+        console.log(`Files with failed parts: ${Array.from(filesWithFailedParts).join(", ")}`);
+
+        // Mark ALL parts of files with failed parts as cancelled (not just the failed parts)
+        setFileParts((prev) =>
+            prev.map((part) =>
+                filesWithFailedParts.has(part.fileIndex) ? { ...part, status: "cancelled" } : part
+            )
+        );
+
+        // Add these files to cancelled files set
+        filesWithFailedParts.forEach((index) => {
+            setCancelledFiles((prev) => new Set(prev).add(index));
+        });
+
+        // Mark these files as cancelled in the UI
+        setFileUploadItems((prev) =>
+            prev.map((item) =>
+                filesWithFailedParts.has(item.index)
+                    ? { ...item, status: "Cancelled" as any }
+                    : item
+            )
+        );
+
+        // Clear file upload errors
+        setUploadState((prev) => ({
+            ...prev,
+            uploadStatus: "completed",
+            errors: prev.errors.filter((e) => e.step !== "File Upload"),
+        }));
+
+        // Wait a tick to ensure state is updated
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Check which sequences can be completed
+        // A sequence can be completed if all its parts are either completed or cancelled
+        const sequencesToComplete = new Set<number>();
+
+        setFileParts((currentParts) => {
+            uploadSequences.forEach((sequence) => {
+                const sequenceParts = currentParts.filter(
+                    (p) => p.sequenceId === sequence.sequenceId
+                );
+
+                if (sequenceParts.length === 0) {
+                    console.log(`Sequence ${sequence.sequenceId} has no parts, skipping`);
+                    return;
+                }
+
+                const allPartsHandled = sequenceParts.every(
+                    (p) => p.status === "completed" || p.status === "cancelled"
+                );
+
+                // Check if this sequence has already been completed
+                const alreadyCompleted =
+                    sequenceCompleteStatuses.get(sequence.sequenceId) === "completed";
+
+                console.log(
+                    `Sequence ${sequence.sequenceId}: allPartsHandled=${allPartsHandled}, alreadyCompleted=${alreadyCompleted}`
+                );
+
+                if (allPartsHandled && !alreadyCompleted) {
+                    sequencesToComplete.add(sequence.sequenceId);
+                }
+            });
+            return currentParts;
+        });
+
+        // Trigger completion for sequences that are ready
+        console.log(
+            `Triggering completion for ${sequencesToComplete.size} sequences: ${Array.from(
+                sequencesToComplete
+            ).join(", ")}`
+        );
+        sequencesToComplete.forEach((sequenceId) => {
+            if (handleSequenceCompletionRef.current) {
+                handleSequenceCompletionRef.current(sequenceId);
+            }
+        });
+    }, [
+        fileParts,
+        setFileParts,
+        setFileUploadItems,
+        setCancelledFiles,
+        fileUploadItems,
+        uploadSequences,
+        sequenceCompleteStatuses,
+    ]);
+
     // Count failed files
     const failedFilesCount = fileUploadItems.filter((item) => item.status === "Failed").length;
 
@@ -1172,6 +1407,9 @@ export default function UploadManager({
                     <SpaceBetween direction="horizontal" size="xs">
                         <Button onClick={handleRetry} variant="primary">
                             Retry Failed Uploads
+                        </Button>
+                        <Button onClick={handleSkipFailed} variant="normal">
+                            Skip Failed Parts
                         </Button>
                         {onCancel && <Button onClick={onCancel}>Back to Review</Button>}
                     </SpaceBetween>

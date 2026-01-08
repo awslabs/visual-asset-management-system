@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
     MetadataRecord,
     MetadataRowState,
@@ -175,11 +175,11 @@ export const useMetadataState = (initialData: MetadataRecord[] = []): UseMetadat
         setOriginalRows(sorted);
     }, [rows]);
 
-    // Calculate if there are unsaved changes
-    const hasChanges = hasUnsavedChanges(rows);
+    // Calculate if there are unsaved changes (memoized to prevent infinite loops)
+    const hasChanges = useMemo(() => hasUnsavedChanges(rows), [rows]);
 
-    // Calculate the changes
-    const changes = calculateChanges(originalRows, rows);
+    // Calculate the changes (memoized to prevent unnecessary recalculations)
+    const changes = useMemo(() => calculateChanges(originalRows, rows), [originalRows, rows]);
 
     return {
         rows,

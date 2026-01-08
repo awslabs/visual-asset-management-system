@@ -720,6 +720,8 @@ const AssetMetadataInfo = ({
 }) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState } = assetDetailContext;
+    const [hasPendingChanges, setHasPendingChanges] = useState(false);
+    const [hasRequiredFieldsFilled, setHasRequiredFieldsFilled] = useState(true);
 
     // Memoize the metadata array to prevent creating new array on every render
     const metadataArray = useMemo(() => {
@@ -759,10 +761,35 @@ const AssetMetadataInfo = ({
         [setMetadata]
     );
 
-    // Set as valid only once on mount (validation happens in MetadataContainer)
+    // Handle changes to pending changes state from MetadataContainer
+    // Use useCallback with empty deps to ensure stable reference
+    const handleHasChangesChange = useCallback((hasChanges: boolean) => {
+        setHasPendingChanges(hasChanges);
+    }, []);
+
+    // Handle changes to validation state from MetadataContainer
+    // Use useCallback with empty deps to ensure stable reference
+    const handleValidationChange = useCallback((isValid: boolean) => {
+        setHasRequiredFieldsFilled(isValid);
+    }, []);
+
+    // Use ref to track previous validation state to prevent unnecessary setValid calls
+    const prevValidRef = useRef<boolean>();
+
+    // Update validation state based on both pending changes AND required fields
     useEffect(() => {
-        setValid(true);
-    }, []); // Empty deps - only run once on mount
+        // Invalid if:
+        // 1. There are pending changes that need to be committed, OR
+        // 2. Required fields are not filled
+        // Valid only if no pending changes AND all required fields are filled
+        const isValid = !hasPendingChanges && hasRequiredFieldsFilled;
+
+        // Only call setValid if the value actually changed
+        if (prevValidRef.current !== isValid) {
+            prevValidRef.current = isValid;
+            setValid(isValid);
+        }
+    }, [hasPendingChanges, hasRequiredFieldsFilled, setValid]);
 
     return (
         <MetadataContainer
@@ -772,6 +799,8 @@ const AssetMetadataInfo = ({
             mode="offline"
             initialData={metadataArray}
             onDataChange={handleMetadataChange}
+            onHasChangesChange={handleHasChangesChange}
+            onValidationChange={handleValidationChange}
             restrictMetadataOutsideSchemas={
                 assetDetailState.restrictMetadataOutsideSchemas || false
             }
@@ -1510,7 +1539,7 @@ const UploadForm = () => {
                                     showErrors={showErrorsForPage >= 2}
                                 />
                             ),
-                            isOptional: false,
+                            isOptional: true,
                         },
                         {
                             title: "Select Files to upload",
