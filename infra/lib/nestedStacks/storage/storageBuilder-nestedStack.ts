@@ -1385,6 +1385,20 @@ export function storageResourcesBuilder(
         const cfnEsmAssetIndexerLinks = esmAssetIndexerLinks.node
             .defaultChild as lambda.CfnEventSourceMapping;
         cfnEsmAssetIndexerLinks.addPropertyDeletionOverride("Tags");
+
+        const esmAssetIndexerLinksMetadata = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetLinksStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetLinksMetadataStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+        const cfnEsmAssetIndexerLinksMetadata = esmAssetIndexerLinksMetadata.node
+            .defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmAssetIndexerLinksMetadata.addPropertyDeletionOverride("Tags");
     } else {
         const esmAssetIndexerLinksNonGov = new lambda.EventSourceMapping(
             scope,
@@ -1392,6 +1406,17 @@ export function storageResourcesBuilder(
             {
                 target: assetIndexerSnsQueuingFunction,
                 eventSourceArn: assetLinksStorageTableV2.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+
+        const esmAssetIndexerLinksMetadataNonGov = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetLinksMetadataStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetLinksMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
             }

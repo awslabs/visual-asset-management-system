@@ -22,6 +22,7 @@ import { VAMS_APP_FEATURES } from "../common/vamsAppFeatures";
 import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBuilder-nestedStack";
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
+import { AddonBuilderNestedStack } from "./nestedStacks/addon/addonBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
 import { LogRetentionAspect } from "./aspects/log-retention.aspect";
 import * as s3AssetBuckets from "./helper/s3AssetBuckets";
@@ -297,6 +298,18 @@ export class CoreVAMSStack extends cdk.Stack {
                 }
             );
             pipelineBuilderNestedStack.addDependency(storageResourcesNestedStack);
+
+            ///Optional Addons (Nested Stack)
+            const addonBuilderNestedStack = new AddonBuilderNestedStack(this, "AddonBuilder", {
+                ...props,
+                config: props.config,
+                storageResources: storageResourcesNestedStack.storageResources,
+                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                vpc: this.vpc,
+                isolatedSubnets: this.subnetsIsolated,
+                privateSubnets: this.subnetsPrivate,
+            });
+            addonBuilderNestedStack.addDependency(storageResourcesNestedStack);
 
             //Write final output configurations (pulling forward from nested stacks)
             const gatewayURLParamsOutput = new cdk.CfnOutput(this, "APIGatewayEndpointOutput", {

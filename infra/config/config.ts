@@ -172,6 +172,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useModelOps.enabled = false;
     }
 
+    if (config.app.addons.useGarnetFramework.enabled == undefined) {
+        config.app.addons.useGarnetFramework.enabled = false;
+    }
+
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
@@ -652,6 +656,66 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // Garnet Framework Configuration Validation
+    if (config.app.addons.useGarnetFramework.enabled) {
+        if (
+            !config.app.addons.useGarnetFramework.garnetApiEndpoint ||
+            config.app.addons.useGarnetFramework.garnetApiEndpoint === "UNDEFINED" ||
+            config.app.addons.useGarnetFramework.garnetApiEndpoint === ""
+        ) {
+            throw new Error(
+                "Configuration Error: Garnet Framework requires garnetApiEndpoint when enabled"
+            );
+        }
+
+        if (
+            !config.app.addons.useGarnetFramework.garnetApiToken ||
+            config.app.addons.useGarnetFramework.garnetApiToken === "UNDEFINED" ||
+            config.app.addons.useGarnetFramework.garnetApiToken === ""
+        ) {
+            throw new Error(
+                "Configuration Error: Garnet Framework requires garnetApiToken when enabled"
+            );
+        }
+
+        if (
+            !config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl ||
+            config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl === "UNDEFINED" ||
+            config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl === ""
+        ) {
+            throw new Error(
+                "Configuration Error: Garnet Framework requires garnetIngestionQueueSqsUrl when enabled"
+            );
+        }
+
+        // Validate API endpoint URL format
+        try {
+            new URL(config.app.addons.useGarnetFramework.garnetApiEndpoint);
+        } catch (e) {
+            throw new Error(
+                `Configuration Error: Garnet Framework garnetApiEndpoint must be a valid URL. Got: ${config.app.addons.useGarnetFramework.garnetApiEndpoint}`
+            );
+        }
+
+        // Validate SQS URL format (basic validation)
+        const sqsUrlPattern = /^https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com\/\d+\/[a-zA-Z0-9_-]+$/;
+        if (!sqsUrlPattern.test(config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl)) {
+            throw new Error(
+                `Configuration Error: Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL. Expected format: https://sqs.region.amazonaws.com/account/queue-name. Got: ${config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl}`
+            );
+        }
+
+        // Warn if OpenSearch is not enabled (Garnet works independently but this might be unintended)
+        if (
+            !config.app.openSearch.useServerless.enabled &&
+            !config.app.openSearch.useProvisioned.enabled
+        ) {
+            console.warn(
+                "Configuration Warning: Garnet Framework is enabled but OpenSearch is disabled. Garnet indexing will work independently of VAMS search functionality."
+            );
+        }
+    }
+
     return config;
 }
 
@@ -792,6 +856,14 @@ export interface ConfigPublic {
                 enabled: boolean;
                 ecrContainerImageURI: string;
                 autoRegisterWithVAMS: boolean;
+            };
+        };
+        addons: {
+            useGarnetFramework: {
+                enabled: boolean;
+                garnetApiEndpoint: string;
+                garnetApiToken: string;
+                garnetIngestionQueueSqsUrl: string;
             };
         };
         authProvider: {

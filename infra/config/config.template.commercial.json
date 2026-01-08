@@ -125,6 +125,14 @@
                 "autoRegisterWithVAMS": true
             }
         },
+        "addons": { 
+            "useGarnetFramework": {
+                "enabled": false,
+                "garnetApiEndpoint": "",
+                "garnetApiToken": "",
+                "garnetIngestionQueueSqsUrl": ""
+            }
+        },
         "authProvider": {
             "presignedUrlTimeoutSeconds": 86400,
             "authorizerOptions": {

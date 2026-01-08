@@ -244,6 +244,7 @@ export function buildAssetIndexingFunction(
     storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantStreamRead(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantStreamRead(fun);
+    storageResources.dynamo.assetLinksMetadataStorageTable.grantStreamRead(fun);
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -479,6 +480,7 @@ export function buildAssetIndexerSnsQueuingFunction(
     storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantStreamRead(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantStreamRead(fun);
+    storageResources.dynamo.assetLinksMetadataStorageTable.grantStreamRead(fun);
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

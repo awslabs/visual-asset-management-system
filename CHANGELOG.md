@@ -17,6 +17,7 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 ### Features
 
 -   (Breaking Change) Overhauled metadata schema to support multiple schemas per database (including "GLOBAL" database schemas) and entity types (database, asset links, assets, asset files). Asset files can be further restricted by file extension. File metadata and attributes are now supported; file attributes only support "string" field type.
+    -   Support for both database specific and GLOBAL (all database) schemas. All schemas apply that are relevant.
     -   Supported field types for schemas and metadata across all entities: STRING, MULTILINE_STRING, INLINE_CONTROLLED_LIST, NUMBER, BOOLEAN, DATE, XYZ, WXYZ, MATRIX4X4, GEOPOINT, GEOJSON, LLA, JSON
     -   Schemas can be named, and multiple schemas can apply to entity type metadata with aggregation (e.g., a GLOBAL schema for a specific entity type will stack with a database-specific schema for the same entity type). Field name conflicts default metadata to `string` with no conditions applied.
     -   New CDK config options to auto-load default GLOBAL schemas. Options under `app.metadataSchema.X` are now available and enabled by default. See `infra\lib\nestedStacks\apiLambda\constructs\dynamodb-metadataschema-defaults-construct.ts` for default schemas.
@@ -44,6 +45,7 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 -   Asset versions will now save all and view asset and file metadata and atrributes as part of versioning an asset; previously versioned asset will not have any metadata as part of the version
     -   There is now an option on reverting to a asset version to update and revert to the saved file and asset metadata (and file attributes)
     -   Asset versions can now be created, even if no files are in the asset
+-   New addon feature and configuration which allows pushing database, asset, and file changes to a Garnet Framework solution (Knowledge graph) deployed in the same AWS account. Visit [garnet-framework.dev](https://garnet-framework.dev/) for more information on the garnet framework solution. See the [ConfigurationGuide.md](./documentation/ConfigurationGuide.md) on how to turn this addon feature on.
 -   **Web** Added Veerum 3D Model licensed viewer to the viewer plugin system for `e57, las, laz, ply, and json (3D Tile)` files. Visit [veerum.com](https://www.veerum.com/) for license purchasing, then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
     -   Note: This viewer requires the Potree Auto-Processing pipeline to be enabled for PointCloud file loading.
 -   Added new Amazon EKS pipeline option for RapidPipeline use-case pipeline (complementing existing Amazon ECS). This provides a pattern example for other use-case pipelines implementing Kubernetes (EKS) versus Elastic Container Service (ECS).

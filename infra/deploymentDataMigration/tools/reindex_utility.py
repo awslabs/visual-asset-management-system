@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-VAMS OpenSearch Reindexing Utility - Lambda Invocation Wrapper
+VAMS Indexer and OpenSearch Reindexing Utility - Lambda Invocation Wrapper
 
-This utility script provides a simple wrapper for triggering OpenSearch reindexing
+This utility script provides a simple wrapper for triggering the global indexing and OpenSearch reindexing
 by invoking the deployed Lambda function. All reindexing logic now runs in the cloud
 via the deployed Lambda function, eliminating the need for local execution with
 direct AWS resource access.

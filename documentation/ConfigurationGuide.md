@@ -98,6 +98,11 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.pipelines.useModelOps.enabled` | default: false | #Feature to use VNTANA's ModelOps solution within VAMS. This solution requires an active subscription to VNTANA Intelligent 3D Optimization Engine Container on AWS Marketplace. [Click here](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4?applicationId=AWSMPContessa&ref_=beagle&sr=0-1) to find the AWS Marketplace listing, and then select **Continue to Subscribe**.
 -   `app.pipelines.useModelOps.autoRegisterWithVAMS` | default: true | #Feature to automatically register the ModelOps solution and associated workflows in the global VAMS database during CDK deployment. When enabled, the pipeline will be available immediately after deployment without manual registration through the UI.
 
+-   `app.addons.useGarnetFramework.enabled` | default: false | #Feature to enable Garnet Framework integration. When enabled, VAMS will automatically index all data changes to the external Garnet Framework knowledge graph in NGSI-LD format.
+-   `app.addons.useGarnetFramework.garnetApiEndpoint` | default: UNDEFINED | #The Garnet Framework API endpoint URL (e.g., https://XXX.execute-api.us-east-1.amazonaws.com). Must be a valid URL. Required when Garnet Framework is enabled.
+-   `app.addons.useGarnetFramework.garnetApiToken` | default: UNDEFINED | #The API authentication token for the Garnet Framework. Used for authenticated API calls to Garnet. Required when Garnet Framework is enabled.
+-   `app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl` | default: UNDEFINED | #The SQS queue URL for Garnet Framework data ingestion. Must be a valid SQS URL in the format: https://sqs.region.amazonaws.com/account/queue-name. VAMS will send NGSI-LD formatted entities to this queue for ingestion into Garnet. Required when Garnet Framework is enabled.
+
 -   `app.authProvider.presignedUrlTimeoutSeconds` | default: 86400 | #Used to specify timeouts for upload/download presigned URLs.
 -   `app.authProvider.authorizerOptions.allowedIpRanges` | default: [] | #Optional array of IP range pairs for restricting API access. Each range is defined as ["min_ip", "max_ip"]. Example: [["192.168.1.1", "192.168.1.255"], ["10.0.0.1", "10.0.0.255"]]. Leave empty to allow all IPs. IP validation is performed before skipped paths check and JWT authentication for security and performance optimization.
 -   `app.authProvider.useCognito.enabled` | default: true | #Feature to use Cognito Use Pools should be used for VAMS user management and authentication. At least 1 authProvider must be enabled in the configuration.
@@ -429,6 +434,65 @@ If Cognito AWS VPC Interface Endpoints are supported in the future, the top cogn
 ## Additional Configuration Docker Options
 
 See [CDK SSL Deploy in the developer guide](./DeveloperGuide.md#CDK-Deploy-with-Custom-SSL-Cert-Proxy) for information on customized docker settings for CDK deployment builds
+
+## Garnet Framework Integration
+
+VAMS supports integration with the Garnet Framework, an external knowledge graph tracking solution that provides advanced semantic search and relationship querying capabilities across your asset management data.
+
+When enabled, VAMS automatically synchronizes all data changes (databases, assets, asset links, files, and metadata) to the Garnet Framework in real-time using NGSI-LD format, the open standard for context information management.
+
+### What Gets Indexed
+
+When Garnet Framework integration is enabled, VAMS automatically creates and maintains NGSI-LD entities for:
+
+1. **Databases** - Complete database records including bucket associations and custom metadata
+2. **Assets** - Full asset information including relationships, versions, and custom metadata
+3. **Asset Links** - Relationship entities connecting assets (parent-child, related) with metadata
+4. **Files** - Individual file entities with S3 information, attributes, and custom metadata
+
+### NGSI-LD Entity Types
+
+VAMS creates the following NGSI-LD entity types in Garnet Framework:
+
+-   **VAMSDatabase** - Database entities with URN format: `urn:vams:database:{databaseId}`
+-   **VAMSAsset** - Asset entities with URN format: `urn:vams:asset:{databaseId}:{assetId}`
+-   **VAMSAssetLink** - Asset link relationship entities with URN format: `urn:vams:assetlink:{assetLinkId}`
+-   **VAMSFile** - File entities with URN format: `urn:vams:file:{databaseId}:{assetId}:{encodedFilePath}`
+
+### Real-Time Synchronization
+
+VAMS uses DynamoDB Streams and S3 event notifications to capture all data changes and automatically:
+
+-   Creates new entities in Garnet when data is created in VAMS
+-   Updates entities in Garnet when data is modified in VAMS
+-   Deletes entities in Garnet when data is deleted in VAMS
+-   Maintains bidirectional relationships between entities
+-   Includes all custom metadata fields as NGSI-LD properties
+
+### Event Flow
+
+Data changes flow through the following architecture:
+
+1. **DynamoDB Streams** � SNS Topics � SQS Queues � Garnet Indexer Lambdas
+2. **S3 Events** � SNS Topics � SQS Queues � Garnet File Indexer Lambda
+3. **Garnet Indexer Lambdas** � Convert to NGSI-LD � External Garnet Ingestion SQS Queue
+
+### Configuration Requirements
+
+To enable Garnet Framework integration:
+
+1. **Deploy Garnet Framework** in your AWS environment (separate from VAMS)
+2. **Update VAMS Configuration** with the three required parameters
+3. **Deploy VAMS** with the updated configuration
+4. **Existing VAMS Deployment Note** - If you need all current VAMS data in an existing deployment, use the re-index utility in the migratino scripts (don't clear OpenSearch indexes) to trigger a full data re-index in the global notification queues. This will re-index all VAMS relevant data with the Garnet Framework.
+
+### IAM Permissions
+
+VAMS automatically configures the necessary IAM permissions for:
+
+-   Reading from DynamoDB tables (databases, assets, files, metadata, links)
+-   Sending messages to the external Garnet ingestion SQS queue
+-   Processing DynamoDB stream events and S3 notifications
 
 ## Additional Configuration LoginProfile Updating
 

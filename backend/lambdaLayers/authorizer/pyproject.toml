@@ -12,6 +12,7 @@ pyjwt = {extras = ["crypto"], version = "^2.10.1"}
 requests = "^2.32.5"
 cryptography = "^45.0.6"
 joserfc = "1.6.1"
+urllib3 = "2.6.3"
 
 
 [build-system]

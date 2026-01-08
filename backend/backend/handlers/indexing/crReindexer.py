@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-VAMS OpenSearch Reindexer Lambda Function
+VAMS Indexer and OpenSearch Reindexer Lambda Function
 
-This Lambda function provides reindexing capabilities for VAMS OpenSearch indexes.
-It can be invoked directly or triggered via CloudFormation custom resources.
+This Lambda function provides reindexing capabilities for VAMS global indexing and OpenSearch indexes.
+It can be invoked directly or triggered via CloudFormation custom resources or directly.
 
 Key Features:
 - Reindex assets and/or files by "touching" the AssetFileMetadata DynamoDB table
