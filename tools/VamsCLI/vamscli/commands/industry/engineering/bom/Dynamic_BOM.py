@@ -58,7 +58,8 @@ from .....utils.glb_combiner import (
     write_combined_glb,
     format_file_size,
     GLBCombineError,
-    sanitize_node_name
+    sanitize_node_name,
+    build_transform_matrix_from_metadata
 )
 
 # Import existing commands to invoke programmatically
@@ -71,6 +72,10 @@ def bom():
     """Bill of materital engineering commands."""
     pass
 
+@bom.group()
+def bomassemble():
+    """Bill of Material assemble format commands."""
+    pass
 
 def parse_bom_json(json_path: str) -> Dict[str, Any]:
     """
@@ -164,13 +169,13 @@ def find_root_nodes(node_tree: Dict[str, Dict[str, Any]]) -> List[str]:
     return root_nodes
 
 
-def get_asset_id_by_name(api_client: APIClient, database_id: str, 
+def get_asset_id_by_name(ctx: click.Context, database_id: str, 
                          asset_name: str, json_output: bool) -> Optional[str]:
     """
     Retrieve asset ID by asset name from VAMS using search.
     
     Args:
-        api_client: API client instance
+        ctx: Click context
         database_id: Database ID to search in
         asset_name: Asset name to search for
         json_output: Whether JSON output mode is enabled
@@ -180,6 +185,11 @@ def get_asset_id_by_name(api_client: APIClient, database_id: str,
     """
     try:
         output_status(f"Searching for asset: {asset_name}", json_output)
+        
+        # Get API client from context
+        profile_manager = get_profile_manager_from_context(ctx)
+        config = profile_manager.load_config()
+        api_client_local = APIClient(config['api_gateway_url'], profile_manager)
         
         # Build search request directly (using API client instead of ctx.invoke for reliability)
         search_request = {
@@ -192,7 +202,7 @@ def get_asset_id_by_name(api_client: APIClient, database_id: str,
         }
         
         # Execute search directly via API client
-        search_result = api_client.search_simple(search_request)
+        search_result = api_client_local.search_simple(search_request)
         
         # Extract asset ID from search results
         hits = search_result.get("hits", {}).get("hits", [])
@@ -233,7 +243,7 @@ def download_glb_for_node(ctx: click.Context, api_client: APIClient, database_id
     source_name = node_data['source']
     
     # Get asset ID
-    asset_id = get_asset_id_by_name(api_client, database_id, source_name, json_output)
+    asset_id = get_asset_id_by_name(ctx, database_id, source_name, json_output)
     if not asset_id:
         return None
     
@@ -293,23 +303,19 @@ def download_glb_for_node(ctx: click.Context, api_client: APIClient, database_id
         return None
 
 
-def combine_node_geometries(ctx: click.Context,
-                            node_tree: Dict[str, Dict[str, Any]], 
-                            node_id: str,
-                            glb_cache: Dict[str, str],
-                            api_client: APIClient,
-                            database_id: str,
-                            temp_dir: str,
-                            sources: List[Dict[str, Any]],
-                            json_output: bool) -> Optional[str]:
+def download_all_glbs_for_tree(ctx: click.Context,
+                               node_tree: Dict[str, Dict[str, Any]],
+                               api_client: APIClient,
+                               database_id: str,
+                               temp_dir: str,
+                               sources: List[Dict[str, Any]],
+                               json_output: bool) -> Dict[str, str]:
     """
-    Recursively combine geometries for a node and its children.
+    Download all GLB files for stored nodes in the tree (non-recursive).
     
     Args:
         ctx: Click context
         node_tree: Complete node tree
-        node_id: Current node ID to process
-        glb_cache: Cache of source name to GLB file path
         api_client: API client instance
         database_id: Database ID
         temp_dir: Temporary directory
@@ -317,278 +323,195 @@ def combine_node_geometries(ctx: click.Context,
         json_output: Whether JSON output mode is enabled
         
     Returns:
-        Path to combined GLB file for this node, or None if failed
+        Dictionary mapping source names to GLB file paths
     """
-    node_data = node_tree[node_id]
-    source_name = node_data['source']
+    glb_cache = {}
     
-    output_status(f"Processing node {node_id}: {source_name}", json_output)
+    # Find all stored sources that need GLB files
+    stored_sources = set()
+    for node_id, node_data in node_tree.items():
+        source_name = node_data['source']
+        source_info = next((s for s in sources if s['source'] == source_name), None)
+        if source_info and source_info.get('storage') == 'VAMS':
+            stored_sources.add(source_name)
     
-    # Check if this source is stored
-    source_info = next((s for s in sources if s['source'] == source_name), None)
-    is_stored = source_info and source_info.get('storage') == 'VAMS'
-    
-    # Process children first (bottom-up approach)
-    child_glbs = []
-    child_transforms = []
-    
-    for child_id in node_data['children']:
-        child_glb = combine_node_geometries(
-            ctx, node_tree, child_id, glb_cache, api_client, 
-            database_id, temp_dir, sources, json_output
-        )
+    # Download GLB files for all stored sources
+    for source_name in stored_sources:
+        output_status(f"Downloading GLB for source: {source_name}", json_output)
         
-        if child_glb:
-            child_glbs.append(child_glb)
-            child_transforms.append(node_tree[child_id]['matrix'])
-    
-    # Get or download GLB for this node if stored
-    node_glb = None
-    if is_stored:
-        if source_name in glb_cache:
-            node_glb = glb_cache[source_name]
-        else:
-            node_glb = download_glb_for_node(
+        # Find a node with this source (any will do for downloading)
+        node_data = None
+        for node_id, node in node_tree.items():
+            if node['source'] == source_name:
+                node_data = node
+                break
+        
+        if node_data:
+            glb_path = download_glb_for_node(
                 ctx, api_client, database_id, node_data, temp_dir, json_output
             )
-            if node_glb:
-                glb_cache[source_name] = node_glb
+            if glb_path:
+                glb_cache[source_name] = glb_path
     
-    # If no children and no GLB, return None
-    if not child_glbs and not node_glb:
-        output_warning(f"No geometry found for node {node_id}: {source_name}", json_output)
-        return None
-    
-    # If only node GLB (no children), return it directly
-    if node_glb and not child_glbs:
-        return node_glb
-    
-    # If only children (no node GLB), combine children
-    if child_glbs and not node_glb:
-        output_status(f"Combining {len(child_glbs)} child geometries for node {node_id}", json_output)
-        return combine_glb_files_with_transforms(
-            child_glbs, child_transforms, node_id, source_name, temp_dir, json_output
-        )
-    
-    # If both node GLB and children, combine all
-    if node_glb and child_glbs:
-        output_status(
-            f"Combining node geometry with {len(child_glbs)} children for node {node_id}", 
-            json_output
-        )
-        all_glbs = [node_glb] + child_glbs
-        all_transforms = [node_data['matrix']] + child_transforms
-        return combine_glb_files_with_transforms(
-            all_glbs, all_transforms, node_id, source_name, temp_dir, json_output
-        )
-    
-    return None
+    return glb_cache
 
 
-def combine_glb_files_with_transforms(glb_files: List[str], 
-                                      transforms: List[List[float]],
-                                      node_id: str,
-                                      node_name: str,
-                                      temp_dir: str,
-                                      json_output: bool) -> str:
+def build_complete_export_from_bom(node_tree: Dict[str, Dict[str, Any]],
+                                   root_node_id: str,
+                                   glb_cache: Dict[str, str],
+                                   sources: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Combine multiple GLB files with their transforms using glb_combiner utilities.
+    Build a complete export structure from BOM tree for GLB combining.
+    
+    This creates the export structure that the GLB combining utilities expect,
+    representing the entire BOM hierarchy in one structure.
     
     Args:
-        glb_files: List of GLB file paths
-        transforms: List of 4x4 transform matrices (16 floats each)
-        node_id: Node ID for naming
-        node_name: Node name for naming
+        node_tree: Complete node tree
+        root_node_id: Root node ID
+        glb_cache: Cache of source name to GLB file path
+        sources: List of source definitions with storage status
+        
+    Returns:
+        Export structure compatible with build_transform_tree_from_export
+    """
+    mock_assets = []
+    mock_relationships = []
+    
+    # Create assets for all nodes
+    for node_id, node_data in node_tree.items():
+        source_name = node_data['source']
+        source_info = next((s for s in sources if s['source'] == source_name), None)
+        is_stored = source_info and source_info.get('storage') == 'VAMS'
+        is_root = (node_id == root_node_id)
+        
+        # Create asset
+        asset = {
+            'assetid': node_id,
+            'assetname': sanitize_node_name(source_name),
+            'is_root_lookup_asset': is_root,
+            'files': []
+        }
+        
+        # Add GLB file if this source is stored and we have it cached
+        if is_stored and source_name in glb_cache:
+            glb_path = glb_cache[source_name]
+            glb_filename = os.path.basename(glb_path)
+            asset['files'].append({
+                'fileName': glb_filename,
+                'key': glb_filename
+            })
+        
+        mock_assets.append(asset)
+    
+    # Create relationships for all parent-child connections
+    for node_id, node_data in node_tree.items():
+        parent_id = node_data.get('parent_id')
+        if parent_id and parent_id in node_tree:
+            # Create relationship from parent to this child
+            mock_relationships.append({
+                'parentAssetId': parent_id,
+                'childAssetId': node_id,
+                'assetLinkAliasId': f"alias_{parent_id}_{node_id}",
+                'metadata': {
+                    'Matrix': {
+                        'value': node_data['matrix']
+                    }
+                }
+            })
+    
+    return {
+        'assets': mock_assets,
+        'relationships': mock_relationships
+    }
+
+
+def combine_bom_hierarchy_optimized(ctx: click.Context,
+                                    node_tree: Dict[str, Dict[str, Any]], 
+                                    root_node_id: str,
+                                    api_client: APIClient,
+                                    database_id: str,
+                                    temp_dir: str,
+                                    sources: List[Dict[str, Any]],
+                                    json_output: bool) -> Optional[str]:
+    """
+    Optimized BOM hierarchy combining using tree-first approach.
+    
+    This function replaces the recursive combine_node_geometries approach with
+    a more efficient tree-first strategy that:
+    1. Downloads all GLB files in one pass
+    2. Builds complete export structure representing entire hierarchy
+    3. Uses GLB combining utilities once to process everything
+    
+    Args:
+        ctx: Click context
+        node_tree: Complete node tree
+        root_node_id: Root node ID to process
+        api_client: API client instance
+        database_id: Database ID
         temp_dir: Temporary directory
+        sources: List of source definitions with storage status
         json_output: Whether JSON output mode is enabled
         
     Returns:
-        Path to combined GLB file
+        Path to combined GLB file for the root node, or None if failed
     """
     try:
-        from .....utils.glb_combiner import (
-            read_glb_file, write_glb_file, sanitize_node_name
+        root_node_data = node_tree[root_node_id]
+        root_source_name = root_node_data['source']
+        
+        output_status(f"Processing BOM hierarchy for root node {root_node_id}: {root_source_name}", json_output)
+        
+        # Step 1: Download all GLB files for stored sources
+        output_status("Downloading all required GLB files...", json_output)
+        glb_cache = download_all_glbs_for_tree(
+            ctx, node_tree, api_client, database_id, temp_dir, sources, json_output
         )
         
-        if not glb_files:
-            raise GLBCombineError("No GLB files to combine")
+        if not glb_cache:
+            output_warning(f"No GLB files found for BOM hierarchy", json_output)
+            return None
         
-        # If only one file, just return it
-        if len(glb_files) == 1:
-            return glb_files[0]
+        output_status(f"Downloaded {len(glb_cache)} GLB files", json_output)
         
-        output_status(f"Combining {len(glb_files)} GLB files for node {node_id}", json_output)
+        # Step 2: Build complete export structure
+        output_status("Building complete export structure from BOM...", json_output)
+        export_structure = build_complete_export_from_bom(
+            node_tree, root_node_id, glb_cache, sources
+        )
         
-        # Initialize combined glTF structure
-        combined_gltf = {
-            'asset': {'version': '2.0'},
-            'scene': 0,
-            'scenes': [{'nodes': []}],
-            'nodes': [],
-            'meshes': [],
-            'materials': [],
-            'textures': [],
-            'images': [],
-            'accessors': [],
-            'bufferViews': [],
-            'buffers': [{'byteLength': 0}]
-        }
+        # Step 3: Copy GLB files to temp directory with expected names
+        for source_name, glb_path in glb_cache.items():
+            glb_filename = os.path.basename(glb_path)
+            dest_path = os.path.join(temp_dir, glb_filename)
+            if not os.path.exists(dest_path):
+                import shutil
+                shutil.copy2(glb_path, dest_path)
         
-        combined_binary = b''
+        # Step 4: Use GLB combining utilities to process entire hierarchy
+        output_status("Building transform tree from complete BOM structure...", json_output)
+        tree_data = build_transform_tree_from_export(export_structure)
         
-        # Process each GLB file with its transform
-        for idx, (glb_path, transform) in enumerate(zip(glb_files, transforms)):
-            output_status(f"Adding GLB {idx+1}/{len(glb_files)}: {os.path.basename(glb_path)}", json_output)
-            
-            # Read GLB file
-            glb_data = read_glb_file(glb_path)
-            child_json = glb_data['json']
-            child_binary = glb_data['binary']
-            
-            # Get current offsets
-            current_binary_offset = len(combined_binary)
-            mesh_offset = len(combined_gltf['meshes'])
-            material_offset = len(combined_gltf['materials'])
-            texture_offset = len(combined_gltf['textures'])
-            image_offset = len(combined_gltf['images'])
-            accessor_offset = len(combined_gltf['accessors'])
-            buffer_view_offset = len(combined_gltf['bufferViews'])
-            node_offset = len(combined_gltf['nodes'])
-            
-            # Update buffer views with new offset
-            if 'bufferViews' in child_json:
-                for buffer_view in child_json['bufferViews']:
-                    if 'byteOffset' in buffer_view:
-                        buffer_view['byteOffset'] += current_binary_offset
-                    else:
-                        buffer_view['byteOffset'] = current_binary_offset
-            
-            # Update accessors
-            if 'accessors' in child_json:
-                for accessor in child_json['accessors']:
-                    if 'bufferView' in accessor:
-                        accessor['bufferView'] += buffer_view_offset
-            
-            # Update meshes
-            glb_filename = os.path.splitext(os.path.basename(glb_path))[0]
-            glb_filename = sanitize_node_name(glb_filename)
-            
-            if 'meshes' in child_json:
-                for mesh_idx, mesh in enumerate(child_json['meshes']):
-                    # Set mesh name
-                    if len(child_json['meshes']) > 1:
-                        mesh['name'] = f"{glb_filename}_{mesh_idx}"
-                    else:
-                        mesh['name'] = glb_filename
-                    
-                    # Update primitive references
-                    if 'primitives' in mesh:
-                        for primitive in mesh['primitives']:
-                            if 'indices' in primitive:
-                                primitive['indices'] += accessor_offset
-                            if 'attributes' in primitive:
-                                for attr_name, attr_idx in primitive['attributes'].items():
-                                    primitive['attributes'][attr_name] = attr_idx + accessor_offset
-                            if 'material' in primitive:
-                                primitive['material'] += material_offset
-            
-            # Update materials
-            if 'materials' in child_json:
-                for material in child_json['materials']:
-                    # Update texture references
-                    if 'pbrMetallicRoughness' in material:
-                        pbr = material['pbrMetallicRoughness']
-                        if 'baseColorTexture' in pbr and 'index' in pbr['baseColorTexture']:
-                            pbr['baseColorTexture']['index'] += texture_offset
-                        if 'metallicRoughnessTexture' in pbr and 'index' in pbr['metallicRoughnessTexture']:
-                            pbr['metallicRoughnessTexture']['index'] += texture_offset
-                    
-                    if 'normalTexture' in material and 'index' in material['normalTexture']:
-                        material['normalTexture']['index'] += texture_offset
-                    if 'occlusionTexture' in material and 'index' in material['occlusionTexture']:
-                        material['occlusionTexture']['index'] += texture_offset
-                    if 'emissiveTexture' in material and 'index' in material['emissiveTexture']:
-                        material['emissiveTexture']['index'] += texture_offset
-            
-            # Update textures
-            if 'textures' in child_json:
-                for texture in child_json['textures']:
-                    if 'source' in texture:
-                        texture['source'] += image_offset
-            
-            # Update images
-            if 'images' in child_json:
-                for image in child_json['images']:
-                    if 'bufferView' in image:
-                        image['bufferView'] += buffer_view_offset
-            
-            # Create transform node for this GLB
-            # Use the child's source name (from GLB filename) instead of parent's node_name
-            child_source_name = os.path.splitext(os.path.basename(glb_path))[0]
-            # Remove any existing suffixes like __COMBINED or _node_X_combined
-            child_source_name = child_source_name.replace('__COMBINED', '').split('_node_')[0]
-            child_source_name = sanitize_node_name(child_source_name)
-            
-            transform_node = {
-                'name': child_source_name if len(glb_files) > 1 else sanitize_node_name(node_name),
-                'children': []
-            }
-            
-            # Add transform matrix if not identity
-            identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 
-                       0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-            if transform != identity:
-                transform_node['matrix'] = transform
-            
-            # Add child nodes from GLB
-            if 'nodes' in child_json:
-                for child_node in child_json['nodes']:
-                    # Update mesh reference
-                    if 'mesh' in child_node:
-                        child_node['mesh'] += mesh_offset
-                    # Update children references
-                    if 'children' in child_node:
-                        child_node['children'] = [c + node_offset + 1 for c in child_node['children']]
-                
-                # Add all child nodes
-                for child_node in child_json['nodes']:
-                    combined_gltf['nodes'].append(child_node)
-                
-                # Reference child scene nodes from transform node
-                if 'scenes' in child_json and child_json['scenes']:
-                    child_scene_nodes = child_json['scenes'][0].get('nodes', [])
-                    transform_node['children'] = [n + node_offset + 1 for n in child_scene_nodes]
-            
-            # Add transform node
-            combined_gltf['nodes'].insert(node_offset, transform_node)
-            
-            # Add transform node to scene
-            combined_gltf['scenes'][0]['nodes'].append(node_offset)
-            
-            # Merge resources
-            for resource_type in ['meshes', 'materials', 'textures', 'images', 'accessors', 'bufferViews']:
-                if resource_type in child_json:
-                    combined_gltf[resource_type].extend(child_json[resource_type])
-            
-            # Append binary data
-            combined_binary += child_binary
+        output_status("Merging all GLB meshes into transform tree...", json_output)
+        final_gltf, combined_binary = merge_glb_meshes_into_tree(tree_data, temp_dir)
         
-        # Update buffer length
-        combined_gltf['buffers'][0]['byteLength'] = len(combined_binary)
-        
-        # Write combined GLB
+        # Step 5: Write final combined GLB
         output_path = os.path.join(
             temp_dir, 
-            f"{sanitize_node_name(node_name)}_node_{node_id}_combined.glb"
+            f"{sanitize_node_name(root_source_name)}_root_{root_node_id}_combined.glb"
         )
         
-        write_glb_file(output_path, combined_gltf, combined_binary)
+        write_combined_glb(output_path, final_gltf, combined_binary)
         
-        output_status(f"Created combined GLB: {output_path}", json_output)
+        output_status(f"✓ Created optimized combined GLB: {output_path}", json_output)
+        output_status(f"  File size: {format_file_size(os.path.getsize(output_path))}", json_output)
+        
         return output_path
         
     except Exception as e:
-        raise GLBCombineError(f"Failed to combine GLB files: {e}")
+        output_warning(f"Error in optimized BOM combining: {e}", json_output)
+        return None
+
 
 
 @bom.command(name='bomassemble')
@@ -605,7 +528,7 @@ def combine_glb_files_with_transforms(glb_files: List[str],
 @click.option('--delete-temporary-files', is_flag=True, default=True,
               help='[OPTIONAL, default: True] Delete temp files after upload (only with --asset-create-name)')
 @click.option('--json-output', is_flag=True,
-              help='[OPTIONAL] Outpu JSON')
+              help='[OPTIONAL] Output JSON')
 @click.pass_context
 @requires_setup_and_auth
 def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files, 
@@ -635,19 +558,19 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
     
     Examples:
         # Basic assembly
-        vamscli industry aerospace bomassemble -j example.json -d my-database
+        vamscli industry bom bomassemble -j example.json -d my-database
         
         # Assembly with asset creation
-        vamscli industry aerospace bomassemble -j example.json -d my-database --asset-create-name "Engine Assembly"
+        vamscli industry bom bomassemble -j example.json -d my-database --asset-create-name "Engine Assembly"
         
         # With custom temp directory
-        vamscli industry aerospace bomassemble -j example.json -d my-database --local-path ./temp
+        vamscli industry bom bomassemble -j example.json -d my-database --local-path ./temp
         
         # Keep temp files for debugging
-        vamscli industry aerospace bomassemble -j example.json -d my-database --keep-temp-files
+        vamscli industry bom bomassemble -j example.json -d my-database --keep-temp-files
         
         # JSON output
-        vamscli industry aerospace bomassemble -j example.json -d my-database --json-output
+        vamscli industry bom bomassemble -j example.json -d my-database --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -690,16 +613,15 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
         os.makedirs(temp_dir, exist_ok=True)
         output_status(f"Using temp directory: {temp_dir}", json_output)
         
-        # Step 5: Process each root node (usually just one)
-        glb_cache = {}  # Cache downloaded GLBs by source name
+        # Step 5: Process each root node using optimized tree-first approach
         results = []
         
         for root_id in root_nodes:
             output_status(f"Processing root node: {root_id}", json_output)
             
             try:
-                combined_glb = combine_node_geometries(
-                    ctx, node_tree, root_id, glb_cache, api_client,
+                combined_glb = combine_bom_hierarchy_optimized(
+                    ctx, node_tree, root_id, api_client,
                     database_id, temp_dir, sources, json_output
                 )
                 
@@ -737,7 +659,7 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
             'root_nodes_processed': len(results),
             'assemblies': results,
             'temporary_directory': temp_dir if keep_temp_files else 'deleted',
-            'glbs_downloaded': len(glb_cache)
+            'optimization': 'tree-first approach (optimized)'
         }
         
         # Step 7: Optionally create asset and upload all GLB files
@@ -790,15 +712,10 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     if os.path.exists(glb_path):
                         glb_files_to_upload.append(glb_path)
                 
-                # Add all downloaded/cached GLBs
-                for source_name, glb_path in glb_cache.items():
-                    if os.path.exists(glb_path) and glb_path not in glb_files_to_upload:
-                        glb_files_to_upload.append(glb_path)
-                
-                # Add all intermediate node combined GLBs from temp directory
+                # Add all GLB files from temp directory (downloaded and intermediate files)
                 if temp_dir and os.path.exists(temp_dir):
                     for file in os.listdir(temp_dir):
-                        if file.endswith('_combined.glb'):
+                        if file.endswith('.glb'):
                             glb_path = os.path.join(temp_dir, file)
                             if os.path.exists(glb_path) and glb_path not in glb_files_to_upload:
                                 glb_files_to_upload.append(glb_path)
@@ -926,8 +843,10 @@ def format_assembly_result(data: Dict[str, Any]) -> str:
     lines.append(f"Database: {data.get('database_id')}")
     lines.append(f"Total Nodes: {data.get('total_nodes', 0)}")
     lines.append(f"Total Sources: {data.get('total_sources', 0)}")
-    lines.append(f"GLBs Downloaded: {data.get('glbs_downloaded', 0)}")
     lines.append(f"Root Nodes Processed: {data.get('root_nodes_processed', 0)}")
+    
+    if data.get('optimization'):
+        lines.append(f"Processing: {data.get('optimization')}")
     
     if data.get('assemblies'):
         lines.append("\nAssembled Root Nodes:")
@@ -948,3 +867,5 @@ def format_assembly_result(data: Dict[str, Any]) -> str:
         lines.append(f"\nTemporary Directory: {data['temporary_directory']}")
     
     return '\n'.join(lines)
+
+

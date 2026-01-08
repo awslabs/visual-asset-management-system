@@ -731,7 +731,8 @@ class TestBOMUtilityFunctions:
         assert 'BOM JSON: test.json' in result
         assert 'Database: test-db' in result
         assert 'Total Nodes: 4' in result
-        assert 'GLBs Downloaded: 3' in result
+        assert 'Total Sources: 4' in result
+        assert 'Root Nodes Processed: 1' in result
         assert 'New Asset Created:' in result
         assert 'Asset ID: new-asset-123' in result
 
