@@ -93,9 +93,21 @@ export default function CreateConstraint({
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
     const createOrUpdate = (initState && "Update") || "Create";
+
+    // Ensure all criteria have unique IDs when loading from API
+    const ensureUniqueIds = (criteria: ConstraintCriteria[] | undefined): ConstraintCriteria[] => {
+        if (!criteria) return [];
+        return criteria.map((item) => ({
+            ...item,
+            id: item.id || "c" + Math.random().toString(36).substr(2, 9),
+        }));
+    };
+
     const [formState, setFormState] = useState<ConstraintFields>({
         constraintId: generateUUID(),
         ...initState,
+        criteriaAnd: ensureUniqueIds(initState?.criteriaAnd),
+        criteriaOr: ensureUniqueIds(initState?.criteriaOr),
     });
 
     const [selectedCriteriaAnd, setSelectedCriteriaAnd] = useState<ConstraintCriteria[]>([]);
@@ -105,6 +117,44 @@ export default function CreateConstraint({
     // >([]);
 
     console.log("formState", formState, initState);
+
+    // Clear selection state when modal opens or initState changes
+    useEffect(() => {
+        setSelectedCriteriaAnd([]);
+        setSelectedCriteriaOr([]);
+    }, [open, initState]);
+
+    // Filter out invalid criteria fields when editing an existing constraint
+    useEffect(() => {
+        if (initState && initState.objectType) {
+            const validFields = fieldNamesToObjectTypeMapping[initState.objectType];
+            if (validFields) {
+                const validFieldValues = validFields.map((field) => field.value);
+
+                const filterValidCriteria = (criteria: ConstraintCriteria[] | undefined) => {
+                    if (!criteria) return criteria;
+                    return criteria.filter((item) => validFieldValues.includes(item.field));
+                };
+
+                const filteredCriteriaAnd = filterValidCriteria(initState.criteriaAnd);
+                const filteredCriteriaOr = filterValidCriteria(initState.criteriaOr);
+
+                // Only update if filtering actually removed items
+                if (
+                    (initState.criteriaAnd &&
+                        filteredCriteriaAnd?.length !== initState.criteriaAnd.length) ||
+                    (initState.criteriaOr &&
+                        filteredCriteriaOr?.length !== initState.criteriaOr.length)
+                ) {
+                    setFormState({
+                        ...formState,
+                        criteriaAnd: filteredCriteriaAnd || [],
+                        criteriaOr: filteredCriteriaOr || [],
+                    });
+                }
+            }
+        }
+    }, [initState]);
 
     // useEffect(() => {
     //     const getData = async () => {
@@ -126,17 +176,16 @@ export default function CreateConstraint({
     // }, []);
 
     function addNewConstraintAnd() {
-        let criteriaAnd = formState.criteriaAnd;
-        if (!criteriaAnd) {
-            criteriaAnd = [];
-        }
-        criteriaAnd.push({
+        const newCriteria = {
             // create a unique id using a uuid
             id: "c" + Math.random().toString(36).substr(2, 9),
             field: "",
             operator: "",
             value: "",
-        });
+        };
+        const criteriaAnd = formState.criteriaAnd
+            ? [...formState.criteriaAnd, newCriteria]
+            : [newCriteria];
         console.log("new constraint", criteriaAnd);
         setFormState({
             ...formState,
@@ -145,17 +194,16 @@ export default function CreateConstraint({
     }
 
     function addNewConstraintOr() {
-        let criteriaOr = formState.criteriaOr;
-        if (!criteriaOr) {
-            criteriaOr = [];
-        }
-        criteriaOr.push({
+        const newCriteria = {
             // create a unique id using a uuid
             id: "c" + Math.random().toString(36).substr(2, 9),
             field: "",
             operator: "",
             value: "",
-        });
+        };
+        const criteriaOr = formState.criteriaOr
+            ? [...formState.criteriaOr, newCriteria]
+            : [newCriteria];
         console.log("new constraint", criteriaOr);
         setFormState({
             ...formState,
@@ -513,6 +561,7 @@ export default function CreateConstraint({
                                                         ...formState,
                                                         criteriaAnd: criteria,
                                                     });
+                                                    setSelectedCriteriaAnd([]);
                                                 }}
                                             >
                                                 Remove Criteria
@@ -662,6 +711,17 @@ export default function CreateConstraint({
                                     ];
 
                                     setFormState({ ...formState, criteriaAnd: criteria });
+
+                                    // Update selection state to maintain correct references
+                                    const wasSelected = selectedCriteriaAnd.some(
+                                        (x) => x.id === item.id
+                                    );
+                                    if (wasSelected) {
+                                        setSelectedCriteriaAnd([
+                                            ...selectedCriteriaAnd.filter((x) => x.id !== item.id),
+                                            item,
+                                        ]);
+                                    }
                                 }
                             }}
                             selectionType="multi"
@@ -711,6 +771,7 @@ export default function CreateConstraint({
                                                         ...formState,
                                                         criteriaOr: criteria,
                                                     });
+                                                    setSelectedCriteriaOr([]);
                                                 }}
                                             >
                                                 Remove Criteria
@@ -860,6 +921,17 @@ export default function CreateConstraint({
                                     ];
 
                                     setFormState({ ...formState, criteriaOr: criteria });
+
+                                    // Update selection state to maintain correct references
+                                    const wasSelected = selectedCriteriaOr.some(
+                                        (x) => x.id === item.id
+                                    );
+                                    if (wasSelected) {
+                                        setSelectedCriteriaOr([
+                                            ...selectedCriteriaOr.filter((x) => x.id !== item.id),
+                                            item,
+                                        ]);
+                                    }
                                 }
                             }}
                             selectionType="multi"

@@ -1,27 +1,41 @@
-"""Metadata management commands for VamsCLI."""
+"""Unified metadata management commands for VamsCLI - All entity types."""
 
 import json
-import sys
-from pathlib import Path
-from typing import Dict, Any
-
 import click
+from typing import Dict, Any, Optional, List
+from pathlib import Path
+from builtins import list as builtin_list  # Avoid namespace collision with 'list' command
 
-from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
-from ..utils.json_output import output_status, output_result, output_error, output_info
-from ..utils.exceptions import (
-    AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError
-)
 from ..utils.api_client import APIClient
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.json_output import output_status, output_result, output_error
+from ..utils.exceptions import (
+    AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError, InvalidDatabaseDataError,
+    AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError
+)
 
 
-def parse_json_input(json_input: str) -> dict:
-    """Parse JSON input from string or file."""
-    # Handle None, empty string, or Click Sentinel objects
-    if not json_input or (hasattr(json_input, '__class__') and 'Sentinel' in json_input.__class__.__name__):
-        return {}
-        
-    # Check if it's a file path
+#######################
+# Helper Functions
+#######################
+
+def load_json_input(json_input: str) -> Dict[str, Any]:
+    """
+    Load JSON input from file or string.
+    
+    Args:
+        json_input: JSON string or file path (with @ prefix)
+    
+    Returns:
+        Parsed JSON data
+    
+    Raises:
+        click.ClickException: If JSON is invalid or file not found
+    """
+    if not json_input:
+        raise click.ClickException("JSON input is required")
+    
+    # Check if it's a file path (starts with @)
     if json_input.startswith('@'):
         file_path = Path(json_input[1:])
         if not file_path.exists():
@@ -39,165 +53,199 @@ def parse_json_input(json_input: str) -> dict:
             raise click.ClickException(f"Invalid JSON input: {e}")
 
 
-def parse_value(value_str: str) -> Any:
-    """Parse a value string, attempting JSON parsing first, then returning as string."""
-    if not value_str:
-        return value_str
-    
-    # Try to parse as JSON first (for numbers, booleans, objects, arrays)
-    try:
-        return json.loads(value_str)
-    except json.JSONDecodeError:
-        # If JSON parsing fails, return as string
-        return value_str
-
-
-def collect_metadata_interactively(json_output: bool = False) -> Dict[str, Any]:
-    """Collect metadata key-value pairs interactively.
+def format_metadata_list(metadata_list: List[Dict[str, Any]], entity_type: str) -> str:
+    """
+    Format metadata list for CLI display.
     
     Args:
-        json_output: If True, suppress interactive prompts (not compatible with JSON mode)
+        metadata_list: List of metadata items
+        entity_type: Entity type for context
     
     Returns:
-        Dictionary of metadata key-value pairs
+        Formatted string for display
     """
-    # Interactive collection is not compatible with JSON output mode
-    if json_output:
-        raise click.ClickException(
-            "Interactive metadata collection is not available in JSON output mode. "
-            "Please use --json-input to provide metadata."
-        )
+    if not metadata_list:
+        return f"No metadata found for this {entity_type}."
     
-    metadata = {}
+    lines = [f"Metadata ({len(metadata_list)} items):", "=" * 60]
     
-    click.echo("Enter metadata key-value pairs (values can be JSON objects/arrays):")
-    click.echo("Type 'done' when finished, or press Ctrl+C to cancel.")
-    
-    while True:
-        try:
-            key = click.prompt("Enter metadata key (or 'done' to finish)", type=str)
-            
-            if key.lower() == 'done':
-                break
-                
-            if not key.strip():
-                click.echo("Key cannot be empty. Please try again.")
-                continue
-                
-            if key in metadata:
-                if not click.confirm(f"Key '{key}' already exists. Overwrite?"):
-                    continue
-            
-            value_str = click.prompt(f"Enter value for '{key}' (JSON supported)", type=str)
-            metadata[key] = parse_value(value_str)
-            
-            click.echo(f"Added: {key} = {json.dumps(metadata[key])}")
-            
-        except click.Abort:
-            click.echo("\nOperation cancelled.")
-            sys.exit(1)
-        except Exception as e:
-            click.echo(f"Error processing input: {e}")
-            continue
-    
-    if not metadata:
-        click.echo("No metadata entered.")
+    for item in metadata_list:
+        key = item.get('metadataKey', 'N/A')
+        value = item.get('metadataValue', 'N/A')
+        value_type = item.get('metadataValueType', 'N/A')
         
-    return metadata
-
-
-def format_metadata_output(metadata: Dict[str, Any], indent: int = 0) -> str:
-    """Format metadata for CLI display."""
-    if not metadata:
-        return "No metadata found."
+        lines.append(f"Key: {key}")
+        lines.append(f"Value: {value}")
+        lines.append(f"Type: {value_type}")
+        
+        # Show schema enrichment if available
+        if item.get('metadataSchemaField'):
+            lines.append(f"Schema Field: Yes")
+            if item.get('metadataSchemaRequired'):
+                lines.append(f"Required: Yes")
+        
+        lines.append("-" * 40)
     
+    return '\n'.join(lines)
+
+
+def format_bulk_operation_result(result: Dict[str, Any], operation: str) -> str:
+    """
+    Format bulk operation result for CLI display.
+    
+    Args:
+        result: BulkOperationResponseModel result
+        operation: Operation name (e.g., "updated", "deleted")
+    
+    Returns:
+        Formatted string for display
+    """
     lines = []
-    prefix = "  " * indent
+    lines.append(f"Total Items: {result.get('totalItems', 0)}")
+    lines.append(f"Successful: {result.get('successCount', 0)}")
+    lines.append(f"Failed: {result.get('failureCount', 0)}")
     
-    for key, value in metadata.items():
-        if isinstance(value, (dict, list)):
-            lines.append(f"{prefix}{key}: {json.dumps(value, indent=2)}")
-        else:
-            lines.append(f"{prefix}{key}: {value}")
+    if result.get('successfulItems'):
+        lines.append(f"\nSuccessfully {operation}:")
+        for key in result['successfulItems']:
+            lines.append(f"  • {key}")
     
-    return "\n".join(lines)
+    if result.get('failedItems'):
+        lines.append(f"\nFailed items:")
+        for item in result['failedItems']:
+            lines.append(f"  • {item.get('key', 'unknown')}: {item.get('error', 'unknown error')}")
+    
+    return '\n'.join(lines)
 
+
+#######################
+# Main Metadata Group
+#######################
 
 @click.group()
 def metadata():
-    """Metadata management commands."""
+    """Metadata management commands for all entity types."""
     pass
 
 
-@metadata.command()
-@click.option('-d', '--database', 'database_id', required=True, help='Database ID')
-@click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
-@click.option('--file-path', help='File path for file-specific metadata')
-@click.option('--json-input', help='JSON input with all parameters (file path with @ prefix or JSON string)')
-@click.option('--json-output', is_flag=True, help='Output API response as JSON')
+#######################
+# Asset Metadata Commands
+#######################
+
+@metadata.group()
+def asset():
+    """Asset metadata commands."""
+    pass
+
+
+@asset.command()
+@click.option('-d', '--database-id', required=True, help='Database ID')
+@click.option('-a', '--asset-id', required=True, help='Asset ID')
+@click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
+@click.option('--starting-token', help='Token for pagination')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def get(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
-    """Get metadata for an asset or file.
+def list(ctx: click.Context, database_id: str, asset_id: str, page_size: int, starting_token: str, json_output: bool):
+    """
+    List all metadata for an asset.
     
     Examples:
-        # Get asset metadata
-        vamscli metadata get -d my-db -a my-asset
-        
-        # Get file-specific metadata
-        vamscli metadata get -d my-db -a my-asset --file-path "/models/file.gltf"
-        
-        # Get with JSON input
-        vamscli metadata get --json-input '{"database_id": "my-db", "asset_id": "my-asset"}'
-        
-        # Get with JSON output
-        vamscli metadata get -d my-db -a my-asset --json-output
+        vamscli metadata asset list -d my-db -a my-asset
+        vamscli metadata asset list -d my-db -a my-asset --json-output
+        vamscli metadata asset list -d my-db -a my-asset --page-size 100
     """
-    # Parse JSON input if provided
-    json_data = parse_json_input(json_input) if json_input else {}
-    
-    # Override arguments with JSON data
-    database_id = json_data.get('database_id', database_id)
-    asset_id = json_data.get('asset_id', asset_id)
-    file_path = json_data.get('file_path', file_path)
-    
-    # Validate required arguments
-    if not database_id:
-        raise click.ClickException("Database ID is required (-d/--database)")
-    if not asset_id:
-        raise click.ClickException("Asset ID is required (-a/--asset)")
-    
-    # Get profile manager and API client (setup/auth already validated by decorator)
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        output_status("Retrieving metadata...", json_output)
+        output_status("Retrieving asset metadata...", json_output)
         
-        # Call API
-        result = api_client.get_metadata(database_id, asset_id, file_path)
+        result = api_client.get_asset_metadata_v2(database_id, asset_id, page_size, starting_token)
         
-        def format_get_result(data):
-            """Format get result for CLI display."""
-            lines = []
-            target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-            lines.append(f"Target: {target} in database '{database_id}'")
-            
-            metadata = data.get('metadata', {})
-            if metadata:
-                lines.append("\nMetadata:")
-                lines.append(format_metadata_output(metadata, indent=1))
-            else:
-                lines.append("\nNo metadata found.")
-            
-            return '\n'.join(lines)
+        def format_list_output(data):
+            metadata_list = data.get('metadata', [])
+            return format_metadata_list(metadata_list, 'asset')
+        
+        output_result(result, json_output, cli_formatter=format_list_output)
+        return result
+        
+    except (AssetNotFoundError, DatabaseNotFoundError) as e:
+        output_error(
+            e,
+            json_output,
+            error_type=e.__class__.__name__.replace('Error', ''),
+            helpful_message="Verify the database and asset IDs are correct."
+        )
+        raise click.ClickException(str(e))
+
+
+@asset.command()
+@click.option('-d', '--database-id', required=True, help='Database ID')
+@click.option('-a', '--asset-id', required=True, help='Asset ID')
+@click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
+@click.option('--update-type', type=click.Choice(['update', 'replace_all']), default='update',
+              help='Update type: update (upsert) or replace_all (replace all metadata)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def update(ctx: click.Context, database_id: str, asset_id: str, json_input: str, update_type: str, json_output: bool):
+    """
+    Create or update metadata for an asset (bulk operation).
+    
+    JSON Input Format:
+        {
+          "metadata": [
+            {
+              "metadataKey": "key1",
+              "metadataValue": "value1",
+              "metadataValueType": "string"
+            }
+          ]
+        }
+    
+    Update Types:
+        - update: Upsert provided metadata (create or update, keep unlisted keys)
+        - replace_all: Replace ALL metadata (delete unlisted keys, upsert provided)
+    
+    Examples:
+        # Update metadata (upsert mode)
+        vamscli metadata asset update -d my-db -a my-asset --json-input @metadata.json
+        
+        # Replace all metadata
+        vamscli metadata asset update -d my-db -a my-asset --json-input @metadata.json --update-type replace_all
+        
+        # Inline JSON
+        vamscli metadata asset update -d my-db -a my-asset --json-input '{"metadata":[{"metadataKey":"title","metadataValue":"My Asset","metadataValueType":"string"}]}'
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        # Load and validate JSON input
+        json_data = load_json_input(json_input)
+        
+        if 'metadata' not in json_data:
+            raise click.ClickException("JSON input must contain 'metadata' array")
+        
+        metadata_items = json_data['metadata']
+        if not isinstance(metadata_items, builtin_list) or not metadata_items:
+            raise click.ClickException("'metadata' must be a non-empty array")
+        
+        output_status(f"Updating asset metadata (mode: {update_type})...", json_output)
+        
+        result = api_client.update_asset_metadata_v2(database_id, asset_id, metadata_items, update_type)
+        
+        def format_update_output(data):
+            return format_bulk_operation_result(data, 'updated')
         
         output_result(
             result,
             json_output,
-            success_message="✓ Metadata retrieved successfully",
-            cli_formatter=format_get_result
+            success_message="✓ Asset metadata updated successfully!",
+            cli_formatter=format_update_output
         )
         
         return result
@@ -206,270 +254,59 @@ def get(ctx: click.Context, database_id: str, asset_id: str, file_path: str, jso
         output_error(
             e,
             json_output,
-            error_type=type(e).__name__.replace('Error', ' Error'),
-            helpful_message="Use 'vamscli assets list' or 'vamscli database list' to see available resources."
+            error_type="Metadata Error",
+            helpful_message="Verify the database and asset IDs are correct and metadata format is valid."
         )
         raise click.ClickException(str(e))
 
 
-@metadata.command()
-@click.option('-d', '--database', 'database_id', required=True, help='Database ID')
-@click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
-@click.option('--file-path', help='File path for file-specific metadata')
-@click.option('--json-input', help='JSON input with all parameters (file path with @ prefix or JSON string)')
-@click.option('--json-output', is_flag=True, help='Output API response as JSON')
+@asset.command()
+@click.option('-d', '--database-id', required=True, help='Database ID')
+@click.option('-a', '--asset-id', required=True, help='Asset ID')
+@click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def create(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
-    """Create metadata for an asset or file.
+def delete(ctx: click.Context, database_id: str, asset_id: str, json_input: str, json_output: bool):
+    """
+    Delete metadata for an asset (bulk operation).
+    
+    JSON Input Format:
+        {
+          "metadataKeys": ["key1", "key2", "key3"]
+        }
     
     Examples:
-        # Create metadata interactively
-        vamscli metadata create -d my-db -a my-asset
-        
-        # Create file-specific metadata
-        vamscli metadata create -d my-db -a my-asset --file-path "/models/file.gltf"
-        
-        # Create with JSON input
-        vamscli metadata create -d my-db -a my-asset --json-input '{"title": "My Asset", "tags": ["3d", "model"]}'
-        
-        # Create from JSON file
-        vamscli metadata create -d my-db -a my-asset --json-input @metadata.json
+        vamscli metadata asset delete -d my-db -a my-asset --json-input @delete-keys.json
+        vamscli metadata asset delete -d my-db -a my-asset --json-input '{"metadataKeys":["old_field","deprecated"]}'
     """
-    # Parse JSON input if provided
-    json_data = parse_json_input(json_input) if json_input else {}
-    
-    # Override arguments with JSON data
-    database_id = json_data.get('database_id', database_id)
-    asset_id = json_data.get('asset_id', asset_id)
-    file_path = json_data.get('file_path', file_path)
-    
-    # Validate required arguments
-    if not database_id:
-        raise click.ClickException("Database ID is required (-d/--database)")
-    if not asset_id:
-        raise click.ClickException("Asset ID is required (-a/--asset)")
-    
-    # JSON output mode requires JSON input
-    if json_output and not json_input:
-        raise click.ClickException(
-            "JSON output mode requires JSON input. "
-            "Please provide metadata using --json-input option."
-        )
-    
-    # Get metadata from JSON input or collect interactively
-    if json_input and 'metadata' in json_data:
-        metadata = json_data['metadata']
-    elif json_input:
-        # If JSON input provided but no 'metadata' key, treat entire input as metadata
-        metadata = {k: v for k, v in json_data.items() 
-                   if k not in ['database_id', 'asset_id', 'file_path']}
-    else:
-        # Collect metadata interactively (not compatible with JSON output mode)
-        metadata = collect_metadata_interactively(json_output)
-    
-    if not metadata:
-        raise click.ClickException("No metadata provided")
-    
-    # Get profile manager and API client (setup/auth already validated by decorator)
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        output_status("Creating metadata...", json_output)
+        # Load and validate JSON input
+        json_data = load_json_input(json_input)
         
-        # Call API
-        result = api_client.create_metadata(database_id, asset_id, metadata, file_path)
+        if 'metadataKeys' not in json_data:
+            raise click.ClickException("JSON input must contain 'metadataKeys' array")
         
-        def format_create_result(data):
-            """Format create result for CLI display."""
-            lines = []
-            target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-            lines.append(f"Target: {target} in database '{database_id}'")
-            lines.append("\nCreated metadata:")
-            lines.append(format_metadata_output(metadata, indent=1))
-            return '\n'.join(lines)
+        metadata_keys = json_data['metadataKeys']
+        if not isinstance(metadata_keys, builtin_list) or not metadata_keys:
+            raise click.ClickException("'metadataKeys' must be a non-empty array")
         
-        output_result(
-            result,
-            json_output,
-            success_message="✓ Metadata created successfully!",
-            cli_formatter=format_create_result
-        )
+        output_status("Deleting asset metadata...", json_output)
         
-        return result
+        result = api_client.delete_asset_metadata_v2(database_id, asset_id, metadata_keys)
         
-    except (AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
-        output_error(
-            e,
-            json_output,
-            error_type=type(e).__name__.replace('Error', ' Error'),
-            helpful_message="Use 'vamscli assets list' or 'vamscli database list' to see available resources."
-        )
-        raise click.ClickException(str(e))
-
-
-@metadata.command()
-@click.option('-d', '--database', 'database_id', required=True, help='Database ID')
-@click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
-@click.option('--file-path', help='File path for file-specific metadata')
-@click.option('--json-input', help='JSON input with all parameters (file path with @ prefix or JSON string)')
-@click.option('--json-output', is_flag=True, help='Output API response as JSON')
-@click.pass_context
-@requires_setup_and_auth
-def update(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
-    """Update metadata for an asset or file.
-    
-    Examples:
-        # Update metadata interactively
-        vamscli metadata update -d my-db -a my-asset
-        
-        # Update file-specific metadata
-        vamscli metadata update -d my-db -a my-asset --file-path "/models/file.gltf"
-        
-        # Update with JSON input
-        vamscli metadata update -d my-db -a my-asset --json-input '{"title": "Updated Asset", "version": 2}'
-        
-        # Update from JSON file
-        vamscli metadata update -d my-db -a my-asset --json-input @updated_metadata.json
-    """
-    # Parse JSON input if provided
-    json_data = parse_json_input(json_input) if json_input else {}
-    
-    # Override arguments with JSON data
-    database_id = json_data.get('database_id', database_id)
-    asset_id = json_data.get('asset_id', asset_id)
-    file_path = json_data.get('file_path', file_path)
-    
-    # Validate required arguments
-    if not database_id:
-        raise click.ClickException("Database ID is required (-d/--database)")
-    if not asset_id:
-        raise click.ClickException("Asset ID is required (-a/--asset)")
-    
-    # JSON output mode requires JSON input
-    if json_output and not json_input:
-        raise click.ClickException(
-            "JSON output mode requires JSON input. "
-            "Please provide metadata using --json-input option."
-        )
-    
-    # Get metadata from JSON input or collect interactively
-    if json_input and 'metadata' in json_data:
-        metadata = json_data['metadata']
-    elif json_input:
-        # If JSON input provided but no 'metadata' key, treat entire input as metadata
-        metadata = {k: v for k, v in json_data.items() 
-                   if k not in ['database_id', 'asset_id', 'file_path']}
-    else:
-        # Collect metadata interactively (not compatible with JSON output mode)
-        metadata = collect_metadata_interactively(json_output)
-    
-    if not metadata:
-        raise click.ClickException("No metadata provided")
-    
-    # Get profile manager and API client (setup/auth already validated by decorator)
-    profile_manager = get_profile_manager_from_context(ctx)
-    config = profile_manager.load_config()
-    api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
-    try:
-        output_status("Updating metadata...", json_output)
-        
-        # Call API
-        result = api_client.update_metadata(database_id, asset_id, metadata, file_path)
-        
-        def format_update_result(data):
-            """Format update result for CLI display."""
-            lines = []
-            target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-            lines.append(f"Target: {target} in database '{database_id}'")
-            lines.append("\nUpdated metadata:")
-            lines.append(format_metadata_output(metadata, indent=1))
-            return '\n'.join(lines)
+        def format_delete_output(data):
+            return format_bulk_operation_result(data, 'deleted')
         
         output_result(
             result,
             json_output,
-            success_message="✓ Metadata updated successfully!",
-            cli_formatter=format_update_result
-        )
-        
-        return result
-        
-    except (AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
-        output_error(
-            e,
-            json_output,
-            error_type=type(e).__name__.replace('Error', ' Error'),
-            helpful_message="Use 'vamscli assets list' or 'vamscli database list' to see available resources."
-        )
-        raise click.ClickException(str(e))
-
-
-@metadata.command()
-@click.option('-d', '--database', 'database_id', required=True, help='Database ID')
-@click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
-@click.option('--file-path', help='File path for file-specific metadata')
-@click.option('--json-input', help='JSON input with all parameters (file path with @ prefix or JSON string)')
-@click.option('--json-output', is_flag=True, help='Output API response as JSON')
-@click.pass_context
-@requires_setup_and_auth
-def delete(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
-    """Delete metadata for an asset or file.
-    
-    Examples:
-        # Delete asset metadata
-        vamscli metadata delete -d my-db -a my-asset
-        
-        # Delete file-specific metadata
-        vamscli metadata delete -d my-db -a my-asset --file-path "/models/file.gltf"
-        
-        # Delete with JSON input
-        vamscli metadata delete --json-input '{"database_id": "my-db", "asset_id": "my-asset"}'
-    """
-    # Parse JSON input if provided
-    json_data = parse_json_input(json_input) if json_input else {}
-    
-    # Override arguments with JSON data
-    database_id = json_data.get('database_id', database_id)
-    asset_id = json_data.get('asset_id', asset_id)
-    file_path = json_data.get('file_path', file_path)
-    
-    # Validate required arguments
-    if not database_id:
-        raise click.ClickException("Database ID is required (-d/--database)")
-    if not asset_id:
-        raise click.ClickException("Asset ID is required (-a/--asset)")
-    
-    # Confirm deletion (suppress in JSON output mode)
-    target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-    if not json_output:
-        if not click.confirm(f"Are you sure you want to delete all metadata for {target} in database '{database_id}'?"):
-            output_info("Operation cancelled.", json_output)
-            return None
-    
-    # Get profile manager and API client (setup/auth already validated by decorator)
-    profile_manager = get_profile_manager_from_context(ctx)
-    config = profile_manager.load_config()
-    api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
-    try:
-        output_status("Deleting metadata...", json_output)
-        
-        # Call API
-        result = api_client.delete_metadata(database_id, asset_id, file_path)
-        
-        def format_delete_result(data):
-            """Format delete result for CLI display."""
-            return f"Target: {target} in database '{database_id}'"
-        
-        output_result(
-            result,
-            json_output,
-            success_message="✓ Metadata deleted successfully!",
-            cli_formatter=format_delete_result
+            success_message="✓ Asset metadata deleted successfully!",
+            cli_formatter=format_delete_output
         )
         
         return result
@@ -478,7 +315,561 @@ def delete(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
         output_error(
             e,
             json_output,
-            error_type=type(e).__name__.replace('Error', ' Error'),
-            helpful_message="Use 'vamscli assets list' or 'vamscli database list' to see available resources."
+            error_type="Metadata Error",
+            helpful_message="Verify the database and asset IDs are correct."
+        )
+        raise click.ClickException(str(e))
+
+
+#######################
+# File Metadata Commands
+#######################
+
+@metadata.group()
+def file():
+    """File metadata and attribute commands."""
+    pass
+
+
+@file.command()
+@click.option('-d', '--database-id', required=True, help='Database ID')
+@click.option('-a', '--asset-id', required=True, help='Asset ID')
+@click.option('--file-path', required=True, help='Relative file path')
+@click.option('--type', 'metadata_type', type=click.Choice(['metadata', 'attribute']), required=True,
+              help='Type: metadata or attribute')
+@click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
+@click.option('--starting-token', help='Token for pagination')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def list(ctx: click.Context, database_id: str, asset_id: str, file_path: str, metadata_type: str, 
+         page_size: int, starting_token: str, json_output: bool):
+    """
+    List all metadata or attributes for a file.
+    
+    Examples:
+        vamscli metadata file list -d my-db -a my-asset --file-path "models/file.gltf" --type metadata
+        vamscli metadata file list -d my-db -a my-asset --file-path "models/file.gltf" --type attribute --json-output
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        output_status(f"Retrieving file {metadata_type}...", json_output)
+        
+        result = api_client.get_file_metadata_v2(database_id, asset_id, file_path, metadata_type, page_size, starting_token)
+        
+        def format_list_output(data):
+            metadata_list = data.get('metadata', [])
+            return format_metadata_list(metadata_list, f'file {metadata_type}')
+        
+        output_result(result, json_output, cli_formatter=format_list_output)
+        return result
+        
+    except (AssetNotFoundError, DatabaseNotFoundError) as e:
+        output_error(
+            e,
+            json_output,
+            error_type="File Metadata Error",
+            helpful_message="Verify the database, asset, and file path are correct."
+        )
+        raise click.ClickException(str(e))
+
+
+@file.command()
+@click.option('-d', '--database-id', required=True, help='Database ID')
+@click.option('-a', '--asset-id', required=True, help='Asset ID')
+@click.option('--file-path', required=True, help='Relative file path')
+@click.option('--type', 'metadata_type', type=click.Choice(['metadata', 'attribute']), required=True,
+              help='Type: metadata or attribute')
+@click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
+@click.option('--update-type', type=click.Choice(['update', 'replace_all']), default='update',
+              help='Update type: update (upsert) or replace_all (replace all metadata)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def update(ctx: click.Context, database_id: str, asset_id: str, file_path: str, metadata_type: str,
+           json_input: str, update_type: str, json_output: bool):
+    """
+    Create or update metadata/attributes for a file (bulk operation).
+    
+    JSON Input Format:
+        {
+          "metadata": [
+            {
+              "metadataKey": "key1",
+              "metadataValue": "value1",
+              "metadataValueType": "string"
+            }
+          ]
+        }
+    
+    Note: File attributes only support 'string' metadataValueType.
+    
+    Examples:
+        vamscli metadata file update -d my-db -a my-asset --file-path "models/file.gltf" --type metadata --json-input @metadata.json
+        vamscli metadata file update -d my-db -a my-asset --file-path "models/file.gltf" --type attribute --json-input @attributes.json --update-type replace_all
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        # Load and validate JSON input
+        json_data = load_json_input(json_input)
+        
+        if 'metadata' not in json_data:
+            raise click.ClickException("JSON input must contain 'metadata' array")
+        
+        metadata_items = json_data['metadata']
+        if not isinstance(metadata_items, builtin_list) or not metadata_items:
+            raise click.ClickException("'metadata' must be a non-empty array")
+        
+        output_status(f"Updating file {metadata_type} (mode: {update_type})...", json_output)
+        
+        result = api_client.update_file_metadata_v2(database_id, asset_id, file_path, metadata_type, metadata_items, update_type)
+        
+        def format_update_output(data):
+            return format_bulk_operation_result(data, 'updated')
+        
+        output_result(
+            result,
+            json_output,
+            success_message=f"✓ File {metadata_type} updated successfully!",
+            cli_formatter=format_update_output
+        )
+        
+        return result
+        
+    except (AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
+        output_error(
+            e,
+            json_output,
+            error_type="File Metadata Error",
+            helpful_message="Verify the database, asset, file path, and metadata format are correct."
+        )
+        raise click.ClickException(str(e))
+
+
+@file.command()
+@click.option('-d', '--database-id', required=True, help='Database ID')
+@click.option('-a', '--asset-id', required=True, help='Asset ID')
+@click.option('--file-path', required=True, help='Relative file path')
+@click.option('--type', 'metadata_type', type=click.Choice(['metadata', 'attribute']), required=True,
+              help='Type: metadata or attribute')
+@click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def delete(ctx: click.Context, database_id: str, asset_id: str, file_path: str, metadata_type: str,
+           json_input: str, json_output: bool):
+    """
+    Delete metadata/attributes for a file (bulk operation).
+    
+    JSON Input Format:
+        {
+          "metadataKeys": ["key1", "key2", "key3"]
+        }
+    
+    Examples:
+        vamscli metadata file delete -d my-db -a my-asset --file-path "models/file.gltf" --type metadata --json-input @delete-keys.json
+        vamscli metadata file delete -d my-db -a my-asset --file-path "models/file.gltf" --type attribute --json-input '{"metadataKeys":["old_attr"]}'
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        # Load and validate JSON input
+        json_data = load_json_input(json_input)
+        
+        if 'metadataKeys' not in json_data:
+            raise click.ClickException("JSON input must contain 'metadataKeys' array")
+        
+        metadata_keys = json_data['metadataKeys']
+        if not isinstance(metadata_keys, builtin_list) or not metadata_keys:
+            raise click.ClickException("'metadataKeys' must be a non-empty array")
+        
+        output_status(f"Deleting file {metadata_type}...", json_output)
+        
+        result = api_client.delete_file_metadata_v2(database_id, asset_id, file_path, metadata_type, metadata_keys)
+        
+        def format_delete_output(data):
+            return format_bulk_operation_result(data, 'deleted')
+        
+        output_result(
+            result,
+            json_output,
+            success_message=f"✓ File {metadata_type} deleted successfully!",
+            cli_formatter=format_delete_output
+        )
+        
+        return result
+        
+    except (AssetNotFoundError, DatabaseNotFoundError) as e:
+        output_error(
+            e,
+            json_output,
+            error_type="File Metadata Error",
+            helpful_message="Verify the database, asset, and file path are correct."
+        )
+        raise click.ClickException(str(e))
+
+
+#######################
+# Asset Link Metadata Commands
+#######################
+
+@metadata.group()
+def asset_link():
+    """Asset link metadata commands."""
+    pass
+
+
+@asset_link.command()
+@click.option('--asset-link-id', required=True, help='Asset link ID')
+@click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
+@click.option('--starting-token', help='Token for pagination')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def list(ctx: click.Context, asset_link_id: str, page_size: int, starting_token: str, json_output: bool):
+    """
+    List all metadata for an asset link.
+    
+    Examples:
+        vamscli metadata asset-link list --asset-link-id abc123-def456-ghi789
+        vamscli metadata asset-link list --asset-link-id abc123-def456-ghi789 --json-output
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        output_status("Retrieving asset link metadata...", json_output)
+        
+        result = api_client.get_asset_link_metadata_v2(asset_link_id, page_size, starting_token)
+        
+        def format_list_output(data):
+            metadata_list = data.get('metadata', [])
+            return format_metadata_list(metadata_list, 'asset link')
+        
+        output_result(result, json_output, cli_formatter=format_list_output)
+        return result
+        
+    except (AssetLinkNotFoundError, AssetLinkPermissionError) as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Metadata Error",
+            helpful_message="Verify the asset link ID is correct and you have permission to access it."
+        )
+        raise click.ClickException(str(e))
+
+
+@asset_link.command()
+@click.option('--asset-link-id', required=True, help='Asset link ID')
+@click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
+@click.option('--update-type', type=click.Choice(['update', 'replace_all']), default='update',
+              help='Update type: update (upsert) or replace_all (replace all metadata)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def update(ctx: click.Context, asset_link_id: str, json_input: str, update_type: str, json_output: bool):
+    """
+    Create or update metadata for an asset link (bulk operation).
+    
+    JSON Input Format:
+        {
+          "metadata": [
+            {
+              "metadataKey": "key1",
+              "metadataValue": "value1",
+              "metadataValueType": "string"
+            }
+          ]
+        }
+    
+    Examples:
+        vamscli metadata asset-link update --asset-link-id abc123 --json-input @metadata.json
+        vamscli metadata asset-link update --asset-link-id abc123 --json-input @metadata.json --update-type replace_all
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        # Load and validate JSON input
+        json_data = load_json_input(json_input)
+        
+        if 'metadata' not in json_data:
+            raise click.ClickException("JSON input must contain 'metadata' array")
+        
+        metadata_items = json_data['metadata']
+        if not isinstance(metadata_items, builtin_list) or not metadata_items:
+            raise click.ClickException("'metadata' must be a non-empty array")
+        
+        output_status(f"Updating asset link metadata (mode: {update_type})...", json_output)
+        
+        result = api_client.update_asset_link_metadata_v2(asset_link_id, metadata_items, update_type)
+        
+        def format_update_output(data):
+            return format_bulk_operation_result(data, 'updated')
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset link metadata updated successfully!",
+            cli_formatter=format_update_output
+        )
+        
+        return result
+        
+    except (AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError) as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Metadata Error",
+            helpful_message="Verify the asset link ID is correct and metadata format is valid."
+        )
+        raise click.ClickException(str(e))
+
+
+@asset_link.command()
+@click.option('--asset-link-id', required=True, help='Asset link ID')
+@click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def delete(ctx: click.Context, asset_link_id: str, json_input: str, json_output: bool):
+    """
+    Delete metadata for an asset link (bulk operation).
+    
+    JSON Input Format:
+        {
+          "metadataKeys": ["key1", "key2", "key3"]
+        }
+    
+    Examples:
+        vamscli metadata asset-link delete --asset-link-id abc123 --json-input @delete-keys.json
+        vamscli metadata asset-link delete --asset-link-id abc123 --json-input '{"metadataKeys":["old_field"]}'
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        # Load and validate JSON input
+        json_data = load_json_input(json_input)
+        
+        if 'metadataKeys' not in json_data:
+            raise click.ClickException("JSON input must contain 'metadataKeys' array")
+        
+        metadata_keys = json_data['metadataKeys']
+        if not isinstance(metadata_keys, builtin_list) or not metadata_keys:
+            raise click.ClickException("'metadataKeys' must be a non-empty array")
+        
+        output_status("Deleting asset link metadata...", json_output)
+        
+        result = api_client.delete_asset_link_metadata_v2(asset_link_id, metadata_keys)
+        
+        def format_delete_output(data):
+            return format_bulk_operation_result(data, 'deleted')
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset link metadata deleted successfully!",
+            cli_formatter=format_delete_output
+        )
+        
+        return result
+        
+    except (AssetLinkNotFoundError, AssetLinkPermissionError) as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Link Metadata Error",
+            helpful_message="Verify the asset link ID is correct and you have permission to delete metadata."
+        )
+        raise click.ClickException(str(e))
+
+
+#######################
+# Database Metadata Commands
+#######################
+
+@metadata.group()
+def database():
+    """Database metadata commands."""
+    pass
+
+
+@database.command()
+@click.option('-d', '--database-id', required=True, help='Database ID')
+@click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
+@click.option('--starting-token', help='Token for pagination')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def list(ctx: click.Context, database_id: str, page_size: int, starting_token: str, json_output: bool):
+    """
+    List all metadata for a database.
+    
+    Examples:
+        vamscli metadata database list -d my-db
+        vamscli metadata database list -d my-db --json-output
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        output_status("Retrieving database metadata...", json_output)
+        
+        result = api_client.get_database_metadata_v2(database_id, page_size, starting_token)
+        
+        def format_list_output(data):
+            metadata_list = data.get('metadata', [])
+            return format_metadata_list(metadata_list, 'database')
+        
+        output_result(result, json_output, cli_formatter=format_list_output)
+        return result
+        
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Error",
+            helpful_message="Verify the database ID is correct."
+        )
+        raise click.ClickException(str(e))
+
+
+@database.command()
+@click.option('-d', '--database-id', required=True, help='Database ID')
+@click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
+@click.option('--update-type', type=click.Choice(['update', 'replace_all']), default='update',
+              help='Update type: update (upsert) or replace_all (replace all metadata)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def update(ctx: click.Context, database_id: str, json_input: str, update_type: str, json_output: bool):
+    """
+    Create or update metadata for a database (bulk operation).
+    
+    JSON Input Format:
+        {
+          "metadata": [
+            {
+              "metadataKey": "key1",
+              "metadataValue": "value1",
+              "metadataValueType": "string"
+            }
+          ]
+        }
+    
+    Examples:
+        vamscli metadata database update -d my-db --json-input @metadata.json
+        vamscli metadata database update -d my-db --json-input @metadata.json --update-type replace_all
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        # Load and validate JSON input
+        json_data = load_json_input(json_input)
+        
+        if 'metadata' not in json_data:
+            raise click.ClickException("JSON input must contain 'metadata' array")
+        
+        metadata_items = json_data['metadata']
+        if not isinstance(metadata_items, builtin_list) or not metadata_items:
+            raise click.ClickException("'metadata' must be a non-empty array")
+        
+        output_status(f"Updating database metadata (mode: {update_type})...", json_output)
+        
+        result = api_client.update_database_metadata_v2(database_id, metadata_items, update_type)
+        
+        def format_update_output(data):
+            return format_bulk_operation_result(data, 'updated')
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Database metadata updated successfully!",
+            cli_formatter=format_update_output
+        )
+        
+        return result
+        
+    except (DatabaseNotFoundError, InvalidDatabaseDataError) as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Metadata Error",
+            helpful_message="Verify the database ID is correct and metadata format is valid."
+        )
+        raise click.ClickException(str(e))
+
+
+@database.command()
+@click.option('-d', '--database-id', required=True, help='Database ID')
+@click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def delete(ctx: click.Context, database_id: str, json_input: str, json_output: bool):
+    """
+    Delete metadata for a database (bulk operation).
+    
+    JSON Input Format:
+        {
+          "metadataKeys": ["key1", "key2", "key3"]
+        }
+    
+    Examples:
+        vamscli metadata database delete -d my-db --json-input @delete-keys.json
+        vamscli metadata database delete -d my-db --json-input '{"metadataKeys":["old_field","deprecated"]}'
+    """
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        # Load and validate JSON input
+        json_data = load_json_input(json_input)
+        
+        if 'metadataKeys' not in json_data:
+            raise click.ClickException("JSON input must contain 'metadataKeys' array")
+        
+        metadata_keys = json_data['metadataKeys']
+        if not isinstance(metadata_keys, builtin_list) or not metadata_keys:
+            raise click.ClickException("'metadataKeys' must be a non-empty array")
+        
+        output_status("Deleting database metadata...", json_output)
+        
+        result = api_client.delete_database_metadata_v2(database_id, metadata_keys)
+        
+        def format_delete_output(data):
+            return format_bulk_operation_result(data, 'deleted')
+        
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Database metadata deleted successfully!",
+            cli_formatter=format_delete_output
+        )
+        
+        return result
+        
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Error",
+            helpful_message="Verify the database ID is correct."
         )
         raise click.ClickException(str(e))

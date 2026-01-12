@@ -131,8 +131,10 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                     "X-Api-Key",
                     "X-Amz-Security-Token",
                     "X-Amz-User-Agent",
+                    "Access-Control-Allow-Origin",
                 ],
                 allowMethods: [
+                    apigw.CorsHttpMethod.HEAD,
                     apigw.CorsHttpMethod.OPTIONS,
                     apigw.CorsHttpMethod.GET,
                     apigw.CorsHttpMethod.PUT,

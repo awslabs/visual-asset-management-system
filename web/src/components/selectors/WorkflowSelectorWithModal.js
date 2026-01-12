@@ -15,6 +15,7 @@ import {
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
+import { fetchAssetS3Files } from "../../services/APIService";
 
 // Helper function to check if a file has an extension (is a file, not a folder)
 const isFile = (file) => {
@@ -23,12 +24,14 @@ const isFile = (file) => {
 };
 
 export default function WorkflowSelectorWithModal(props) {
-    const { databaseId, assetId, setOpen, open, assetFiles = [], onWorkflowExecuted } = props;
+    const { databaseId, assetId, setOpen, open, onWorkflowExecuted } = props;
     const [reload, setReload] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const [selectedWorkflow, setSelectedWorkflow] = useState(null);
     const [selectedFileKey, setSelectedFileKey] = useState(null);
     const [filteredFiles, setFilteredFiles] = useState([]);
+    const [assetFiles, setAssetFiles] = useState([]);
+    const [loadingFiles, setLoadingFiles] = useState(false);
     const [apiError, setApiError] = useState(null);
     const [isExecuting, setIsExecuting] = useState(false);
     const navigate = useNavigate();
@@ -48,6 +51,42 @@ export default function WorkflowSelectorWithModal(props) {
         }
     }, [databaseId, reload]);
 
+    // Fetch asset files when modal opens
+    useEffect(() => {
+        const fetchFiles = async () => {
+            if (!open || !databaseId || !assetId) return;
+
+            setLoadingFiles(true);
+            setApiError(null);
+
+            try {
+                const [success, files] = await fetchAssetS3Files({
+                    databaseId: databaseId,
+                    assetId: assetId,
+                    includeArchived: false,
+                    basic: true, // Use basic mode for fast fetching
+                });
+
+                if (success && files && Array.isArray(files)) {
+                    setAssetFiles(files);
+                } else if (!success) {
+                    setApiError(
+                        typeof files === "string"
+                            ? files
+                            : "Failed to load asset files. Please try again."
+                    );
+                }
+            } catch (error) {
+                console.error("Error fetching asset files:", error);
+                setApiError(`Failed to load asset files: ${error.message || "Unknown error"}`);
+            } finally {
+                setLoadingFiles(false);
+            }
+        };
+
+        fetchFiles();
+    }, [open, databaseId, assetId]);
+
     // Initialize filtered files and find primary file when asset files change
     useEffect(() => {
         if (assetFiles && assetFiles.length > 0) {
@@ -56,10 +95,7 @@ export default function WorkflowSelectorWithModal(props) {
 
             setFilteredFiles(onlyFiles);
 
-            // Only set the selected file key if there are files available
-            if (onlyFiles.length > 0) {
-                setSelectedFileKey(onlyFiles[0].key);
-            }
+            // Don't auto-select any file - leave it as null (no file selected by default)
         }
     }, [assetFiles]);
 
@@ -82,7 +118,7 @@ export default function WorkflowSelectorWithModal(props) {
                 databaseId: databaseId,
                 assetId: assetId,
                 workflowId: selectedWorkflow.workflowId,
-                fileKey: selectedFileKey, // Pass the selected file key
+                ...(selectedFileKey && { fileKey: selectedFileKey }), // Only include fileKey if a file is selected
                 isGlobalWorkflow: isGlobalWorkflow,
             });
 
@@ -162,13 +198,20 @@ export default function WorkflowSelectorWithModal(props) {
                     <FormField label="Select File to Process (Optional)">
                         <Select
                             onChange={handleFileSelection}
-                            options={filteredFiles.map((file) => {
-                                return {
-                                    label: file.relativePath || file.fileName,
-                                    value: file.key,
+                            options={[
+                                {
+                                    label: "-- No file (process entire asset) --",
+                                    value: null,
                                     description: "",
-                                };
-                            })}
+                                },
+                                ...filteredFiles.map((file) => {
+                                    return {
+                                        label: file.relativePath || file.fileName,
+                                        value: file.key,
+                                        description: "",
+                                    };
+                                }),
+                            ]}
                             selectedOption={
                                 selectedFileKey
                                     ? {
@@ -180,7 +223,10 @@ export default function WorkflowSelectorWithModal(props) {
                                                   ?.fileName ||
                                               selectedFileKey,
                                       }
-                                    : null
+                                    : {
+                                          label: "-- No file (process entire asset) --",
+                                          value: null,
+                                      }
                             }
                             filteringType="auto"
                             selectedAriaLabel="Selected"

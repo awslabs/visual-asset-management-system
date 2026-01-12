@@ -4,15 +4,10 @@
 import os
 import boto3
 import json
-import uuid
 from botocore.config import Config
-from datetime import datetime
-from handlers.metadata import to_update_expr
-from common.constants import STANDARD_JSON_RESPONSE
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from common.s3 import validateS3AssetExtensionsAndContentType
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from models.common import (
@@ -41,7 +36,6 @@ logger = safeLogger(service_name="IngestAsset")
 try:
     db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    metadata_table_name = os.environ["METADATA_STORAGE_TABLE_NAME"]
     # Lambda functions for cross-calls
     create_asset_lambda = os.environ["CREATE_ASSET_LAMBDA_FUNCTION_NAME"]
     file_upload_lambda = os.environ["FILE_UPLOAD_LAMBDA_FUNCTION_NAME"]
@@ -100,27 +94,6 @@ def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
         logger.exception(f"Error invoking lambda function {function_name}: {e}")
         raise VAMSGeneralErrorResponse(f"Error invoking lambda function.")
 
-def update_metadata(database_id, asset_id):
-    """Update the metadata timestamp for an asset"""
-    try:
-        table = dynamodb.Table(metadata_table_name)
-        metadata = {'_metadata_last_updated': datetime.now().isoformat()}
-        keys_map, values_map, expr = to_update_expr(metadata)
-        table.update_item(
-            Key={
-                "databaseId": database_id,
-                "assetId": asset_id,
-            },
-            ExpressionAttributeNames=keys_map,
-            ExpressionAttributeValues=values_map,
-            UpdateExpression=expr,
-        )
-        logger.info("Updated metadata successfully")
-        return True
-    except Exception as e:
-        logger.warning(f"Error updating metadata: {e}")
-        # Continue even if metadata update fails
-        return False
 
 #######################
 # API Implementations
@@ -285,9 +258,6 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
         error_message = response_body.get('message', "Unknown error completing upload")
         logger.error(f"Error completing upload: {error_message}")
         raise VAMSGeneralErrorResponse(f"Error completing upload: {error_message}")
-    
-    # Update metadata
-    update_metadata(database_id, asset_id)
     
     # Parse response
     response_body = json.loads(file_upload_response.get("body", "{}"))

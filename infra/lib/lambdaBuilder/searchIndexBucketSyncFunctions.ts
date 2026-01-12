@@ -21,6 +21,7 @@ import {
 } from "../helper/security";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
@@ -69,6 +70,7 @@ export function buildSearchFunction(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -83,6 +85,7 @@ export function buildSearchFunction(
     );
 
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
@@ -122,7 +125,10 @@ export function buildFileIndexingFunction(
 
         environment: {
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
+                storageResources.dynamo.fileAttributeStorageTable.tableName,
             S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
@@ -131,6 +137,7 @@ export function buildFileIndexingFunction(
                 ? "provisioned"
                 : "serverless",
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -146,14 +153,13 @@ export function buildFileIndexingFunction(
 
     // Grant permissions
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.metadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
-
-    // Grant stream read permissions
-    storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
 
     // Grant S3 read permissions
     grantReadPermissionsToAllAssetBuckets(fun);
@@ -195,7 +201,8 @@ export function buildAssetIndexingFunction(
 
         environment: {
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
             S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_LINKS_STORAGE_TABLE_V2_NAME:
@@ -208,6 +215,7 @@ export function buildAssetIndexingFunction(
                 ? "provisioned"
                 : "serverless",
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -223,18 +231,20 @@ export function buildAssetIndexingFunction(
 
     // Grant permissions
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.metadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant stream read permissions
     storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
-    storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantStreamRead(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantStreamRead(fun);
+    storageResources.dynamo.assetLinksMetadataStorageTable.grantStreamRead(fun);
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -248,7 +258,6 @@ export function buildSqsBucketSyncFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    indexingS3ObjectMetadataFunction: lambda.Function | undefined,
     bucketName: string,
     bucketPrefix: string,
     defaultDatabaseId: string,
@@ -256,7 +265,8 @@ export function buildSqsBucketSyncFunction(
     index: number,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    workflowAutoExecuteQueue: sqs.IQueue
 ): lambda.Function {
     const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
     const fun = new lambda.Function(scope, "sqsBucketSync-" + handlerType + "-" + index, {
@@ -278,23 +288,26 @@ export function buildSqsBucketSyncFunction(
         environment: {
             S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
+                storageResources.dynamo.fileAttributeStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetVersionsStorageTable.tableName,
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            INDEXING_FUNCTION_NAME: indexingS3ObjectMetadataFunction
-                ? indexingS3ObjectMetadataFunction.functionName
-                : "",
+            FILE_INDEXER_SNS_TOPIC_ARN: storageResources.sns.fileIndexerSnsTopic.topicArn,
+            WORKFLOW_AUTO_EXECUTE_SQS_URL: workflowAutoExecuteQueue.queueUrl,
             ASSET_BUCKET_NAME: bucketName,
             ASSET_BUCKET_PREFIX: bucketPrefix,
             DEFAULT_DATABASE_ID: defaultDatabaseId,
         },
     });
 
-    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
@@ -302,9 +315,11 @@ export function buildSqsBucketSyncFunction(
     storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
     storageResources.dynamo.tagStorageTable.grantReadData(fun);
 
-    if (indexingS3ObjectMetadataFunction) {
-        indexingS3ObjectMetadataFunction.grantInvoke(fun);
-    }
+    // Grant SNS publish permissions
+    storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
+
+    // Grant SQS send message permissions for workflow auto-execute queue
+    workflowAutoExecuteQueue.grantSendMessages(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -351,7 +366,8 @@ export function buildReindexerFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
             OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
             OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
@@ -372,7 +388,7 @@ export function buildReindexerFunction(
     // Grant DynamoDB permissions
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
 
     // Grant S3 read permissions
     grantReadPermissionsToAllAssetBuckets(fun);
@@ -381,6 +397,137 @@ export function buildReindexerFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
+
+    return fun;
+}
+
+export function buildFileIndexerSnsQueuingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "fileIndexerSnsQueuing";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.snsQueuing.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            SNS_TOPIC_ARN: storageResources.sns.fileIndexerSnsTopic.topicArn,
+        },
+    });
+
+    // Grant SNS publish permissions
+    storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.assetFileMetadataStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.fileAttributeStorageTable.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    return fun;
+}
+
+export function buildAssetIndexerSnsQueuingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "assetIndexerSnsQueuing";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.snsQueuing.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            SNS_TOPIC_ARN: storageResources.sns.assetIndexerSnsTopic.topicArn,
+        },
+    });
+
+    // Grant SNS publish permissions
+    storageResources.sns.assetIndexerSnsTopic.grantPublish(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.assetLinksStorageTableV2.grantStreamRead(fun);
+    storageResources.dynamo.assetLinksMetadataStorageTable.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    return fun;
+}
+
+export function buildDatabaseIndexerSnsQueuingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "databaseIndexerSnsQueuing";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.snsQueuing.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            SNS_TOPIC_ARN: storageResources.sns.databaseIndexerSnsTopic.topicArn,
+        },
+    });
+
+    // Grant SNS publish permissions
+    storageResources.sns.databaseIndexerSnsTopic.grantPublish(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.databaseStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.databaseMetadataStorageTable.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;
 }

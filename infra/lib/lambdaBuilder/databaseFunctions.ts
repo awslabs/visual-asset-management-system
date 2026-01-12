@@ -28,7 +28,7 @@ export function buildCreateDatabaseLambdaFunction(
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "createDatabase";
-    const createDatabaseFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.databases.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -48,19 +48,21 @@ export function buildCreateDatabaseLambdaFunction(
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
-    storageResources.dynamo.databaseStorageTable.grantReadWriteData(createDatabaseFunction);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(createDatabaseFunction);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(createDatabaseFunction);
-    storageResources.dynamo.rolesStorageTable.grantReadData(createDatabaseFunction);
-    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(createDatabaseFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(createDatabaseFunction, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(createDatabaseFunction, config);
-    return createDatabaseFunction;
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildDatabaseService(
@@ -73,7 +75,7 @@ export function buildDatabaseService(
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "databaseService";
-    const databaseService = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.databases.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -96,21 +98,23 @@ export function buildDatabaseService(
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
-    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(databaseService);
-    storageResources.dynamo.databaseStorageTable.grantReadWriteData(databaseService);
-    storageResources.dynamo.workflowStorageTable.grantReadData(databaseService);
-    storageResources.dynamo.pipelineStorageTable.grantReadData(databaseService);
-    storageResources.dynamo.assetStorageTable.grantReadData(databaseService);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(databaseService);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(databaseService);
-    storageResources.dynamo.rolesStorageTable.grantReadData(databaseService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(databaseService, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(databaseService, config);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.workflowStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
-    return databaseService;
+    return fun;
 }

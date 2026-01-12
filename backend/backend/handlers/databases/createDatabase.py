@@ -9,7 +9,6 @@ from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.dynamodb import to_update_expr
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -33,24 +32,17 @@ except Exception as e:
 #######################
 
 def create_database(request_model: CreateDatabaseRequestModel):
-    """Create a new database entry in DynamoDB"""
+    """Create a new database entry in DynamoDB
+    
+    This function uses put_item with a conditional expression to ensure
+    the database is only created if it doesn't already exist. This prevents
+    the POST endpoint from updating existing databases.
+    """
     try:
         table = dynamodb.Table(db_database)
         dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
         
-        # Check if database ID already exists
-        try:
-            existing_db = table.get_item(
-                Key={'databaseId': request_model.databaseId}
-            )
-            if 'Item' in existing_db:
-                raise VAMSGeneralErrorResponse("Database ID already exists")
-        except ClientError as e:
-            # If the error is not about the item not existing, re-raise it
-            if e.response['Error']['Code'] != 'ResourceNotFoundException':
-                raise e
-        
-        # Check if the bucket exists in S3_ASSET_BUCKETS_STORAGE_TABLE
+        # Validate bucket exists in S3_ASSET_BUCKETS_STORAGE_TABLE
         # Using query instead of get_item because the table has a sort key
         buckets_table = dynamodb.Table(s3_asset_buckets_table)
         from boto3.dynamodb.conditions import Key
@@ -61,51 +53,34 @@ def create_database(request_model: CreateDatabaseRequestModel):
         if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
             raise VAMSGeneralErrorResponse("Bucket ID not found")
         
-
-        # First update the description and defaultBucketId
-        item = {
-            'description': request_model.description,
-            'defaultBucketId': request_model.defaultBucketId
-        }
-        keys_map, values_map, expr = to_update_expr(item)
-        table.update_item(
-            Key={
+        # Create database with put_item and conditional expression
+        # This will fail atomically if database already exists
+        table.put_item(
+            Item={
                 'databaseId': request_model.databaseId,
+                'description': request_model.description,
+                'defaultBucketId': request_model.defaultBucketId,
+                'restrictMetadataOutsideSchemas': request_model.restrictMetadataOutsideSchemas,
+                'restrictFileUploadsToExtensions': request_model.restrictFileUploadsToExtensions,
+                'assetCount': 0,
+                'dateCreated': dtNow,
             },
-            UpdateExpression=expr,
-            ExpressionAttributeNames=keys_map,
-            ExpressionAttributeValues=values_map,
+            ConditionExpression='attribute_not_exists(databaseId)'
         )
-
-        # Then update the assetCount and dateCreated if they don't exist
-        keys_map, values_map, expr = to_update_expr({
-            'assetCount': json.dumps(0),
-            'dateCreated': json.dumps(dtNow),
-        })
-        try:
-            table.update_item(
-                Key={
-                    'databaseId': request_model.databaseId,
-                },
-                UpdateExpression=expr,
-                ExpressionAttributeNames=keys_map,
-                ExpressionAttributeValues=values_map,
-                ConditionExpression="attribute_not_exists(assetCount)"
-            )
-        except ClientError as ex:
-            # This just means the record already exists, and we are updating an existing record
-            if ex.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                pass
-            else:
-                raise ex
-
+        
         return CreateDatabaseResponseModel(
             databaseId=request_model.databaseId,
             message="Database created successfully"
         )
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            logger.error(f"Database already exists")
+            raise VAMSGeneralErrorResponse("Database already exists")
+        logger.exception(f"Error creating database: {e}")
+        raise VAMSGeneralErrorResponse("Error creating database")
     except Exception as e:
         logger.exception(f"Error creating database: {e}")
-        raise VAMSGeneralErrorResponse(f"Error creating database.")
+        raise VAMSGeneralErrorResponse("Error creating database")
 
 #######################
 # Lambda Handler

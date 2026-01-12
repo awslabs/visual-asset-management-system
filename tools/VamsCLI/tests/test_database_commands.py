@@ -46,9 +46,10 @@ class TestDatabaseListCommand:
         assert result.exit_code == 0
         assert 'List all databases' in result.output
         assert '--show-deleted' in result.output
-        assert '--max-items' in result.output
         assert '--page-size' in result.output
+        assert '--max-items' in result.output
         assert '--starting-token' in result.output
+        assert '--auto-paginate' in result.output
         assert '--json-output' in result.output
     
     def test_list_success(self, cli_runner, generic_command_mocks):
@@ -84,35 +85,165 @@ class TestDatabaseListCommand:
             assert 'test-db-2' in result.output
             assert 'Test Database 1' in result.output
             assert 'Test Database 2' in result.output
-            assert 'More results available' in result.output
+            assert 'Next token: next-page-token' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
             
             # Verify API call
             mocks['api_client'].list_databases.assert_called_once_with(show_deleted=False, params={})
     
-    def test_list_with_pagination(self, cli_runner, generic_command_mocks):
-        """Test database listing with pagination parameters."""
+    def test_list_with_page_size(self, cli_runner, generic_command_mocks):
+        """Test database listing with page size."""
         with generic_command_mocks('database') as mocks:
             mocks['api_client'].list_databases.return_value = {
-                'Items': [],
+                'Items': [{'databaseId': 'db1', 'description': 'Database 1'}],
+                'NextToken': 'next-token-123'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 database(s):' in result.output
+            assert 'Next token: next-token-123' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+            
+            # Verify API call includes pageSize but NOT maxItems
+            call_args = mocks['api_client'].list_databases.call_args
+            assert call_args[1]['params']['pageSize'] == 50
+            assert 'maxItems' not in call_args[1]['params']
+    
+    def test_list_with_starting_token(self, cli_runner, generic_command_mocks):
+        """Test database listing with starting token."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_databases.return_value = {
+                'Items': [{'databaseId': 'db2', 'description': 'Database 2'}]
+            }
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--starting-token', 'token-123',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 database(s):' in result.output
+            
+            # Verify API call includes startingToken and pageSize but NOT maxItems
+            call_args = mocks['api_client'].list_databases.call_args
+            assert call_args[1]['params']['startingToken'] == 'token-123'
+            assert call_args[1]['params']['pageSize'] == 50
+            assert 'maxItems' not in call_args[1]['params']
+    
+    def test_list_auto_paginate(self, cli_runner, generic_command_mocks):
+        """Test database listing with auto-pagination."""
+        with generic_command_mocks('database') as mocks:
+            # Mock multiple pages
+            mocks['api_client'].list_databases.side_effect = [
+                {
+                    'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(100, 150)],
+                    'NextToken': None
+                }
+            ]
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--auto-paginate'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            assert 'Found 150 database(s):' in result.output
+            
+            # Verify API was called twice
+            assert mocks['api_client'].list_databases.call_count == 2
+    
+    def test_list_auto_paginate_with_max_items(self, cli_runner, generic_command_mocks):
+        """Test database listing with auto-pagination and custom max-items."""
+        with generic_command_mocks('database') as mocks:
+            # Mock two pages
+            mocks['api_client'].list_databases.side_effect = [
+                {
+                    'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(100, 150)],
+                    'NextToken': 'token2'
+                }
+            ]
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--auto-paginate',
+                '--max-items', '150'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            
+            # Verify API was called twice and maxItems was NOT passed
+            assert mocks['api_client'].list_databases.call_count == 2
+            for call in mocks['api_client'].list_databases.call_args_list:
+                assert 'maxItems' not in call[1]['params']
+    
+    def test_list_auto_paginate_with_page_size(self, cli_runner, generic_command_mocks):
+        """Test database listing with auto-pagination and custom page size."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_databases.return_value = {
+                'Items': [{'databaseId': f'db{i}', 'description': f'Database {i}'} for i in range(50)],
                 'NextToken': None
             }
             
             result = cli_runner.invoke(database, [
-                'list', 
-                '--max-items', '50',
-                '--page-size', '25',
-                '--starting-token', 'test-token'
+                'list',
+                '--auto-paginate',
+                '--page-size', '50'
             ])
             
             assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 50 items in 1 page(s)' in result.output
             
-            # Verify API call with pagination parameters
-            expected_params = {
-                'maxItems': 50,
-                'pageSize': 25,
-                'startingToken': 'test-token'
+            # Verify API call includes pageSize but NOT maxItems
+            call_args = mocks['api_client'].list_databases.call_args
+            assert call_args[1]['params']['pageSize'] == 50
+            assert 'maxItems' not in call_args[1]['params']
+    
+    def test_list_auto_paginate_conflict(self, cli_runner, generic_command_mocks):
+        """Test that auto-paginate conflicts with starting-token."""
+        with generic_command_mocks('database') as mocks:
+            result = cli_runner.invoke(database, [
+                'list',
+                '--auto-paginate',
+                '--starting-token', 'token123'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+    
+    def test_list_max_items_without_auto_paginate_warning(self, cli_runner, generic_command_mocks):
+        """Test that max-items without auto-paginate shows warning."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_databases.return_value = {
+                'Items': [{'databaseId': 'db1', 'description': 'Database 1'}]
             }
-            mocks['api_client'].list_databases.assert_called_once_with(show_deleted=False, params=expected_params)
+            
+            result = cli_runner.invoke(database, [
+                'list',
+                '--max-items', '100'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Warning: --max-items only applies with --auto-paginate' in result.output
+            
+            # Verify maxItems was NOT passed to API
+            call_args = mocks['api_client'].list_databases.call_args
+            assert 'maxItems' not in call_args[1]['params']
     
     def test_list_json_output(self, cli_runner, generic_command_mocks):
         """Test database listing with JSON output."""
@@ -148,6 +279,8 @@ class TestDatabaseCreateCommand:
         assert '--database-id' in result.output
         assert '--description' in result.output
         assert '--default-bucket-id' in result.output
+        assert '--restrict-metadata-outside-schemas' in result.output
+        assert '--restrict-file-uploads-to-extensions' in result.output
         assert '--json-input' in result.output
         assert '--json-output' in result.output
     
@@ -268,6 +401,92 @@ class TestDatabaseCreateCommand:
 
             assert result.exit_code == 1  # Our custom error handling
             assert '--description is required' in result.output
+    
+    def test_create_with_metadata_restriction(self, cli_runner, generic_command_mocks):
+        """Test database creation with metadata restriction."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].create_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database created successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'create',
+                '-d', 'test-database',
+                '--description', 'Test Database',
+                '--default-bucket-id', 'bucket-uuid',
+                '--restrict-metadata-outside-schemas'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database created successfully!' in result.output
+            
+            # Verify API call includes restrictMetadataOutsideSchemas
+            expected_data = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'defaultBucketId': 'bucket-uuid',
+                'restrictMetadataOutsideSchemas': True
+            }
+            mocks['api_client'].create_database.assert_called_once_with(expected_data)
+    
+    def test_create_with_file_extensions(self, cli_runner, generic_command_mocks):
+        """Test database creation with file extension restrictions."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].create_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database created successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'create',
+                '-d', 'test-database',
+                '--description', 'Test Database',
+                '--default-bucket-id', 'bucket-uuid',
+                '--restrict-file-uploads-to-extensions', '.pdf,.docx,.jpg'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database created successfully!' in result.output
+            
+            # Verify API call includes restrictFileUploadsToExtensions
+            expected_data = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'defaultBucketId': 'bucket-uuid',
+                'restrictFileUploadsToExtensions': '.pdf,.docx,.jpg'
+            }
+            mocks['api_client'].create_database.assert_called_once_with(expected_data)
+    
+    def test_create_with_both_restrictions(self, cli_runner, generic_command_mocks):
+        """Test database creation with both metadata and file restrictions."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].create_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database created successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'create',
+                '-d', 'test-database',
+                '--description', 'Test Database',
+                '--default-bucket-id', 'bucket-uuid',
+                '--restrict-metadata-outside-schemas',
+                '--restrict-file-uploads-to-extensions', '.pdf,.png'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database created successfully!' in result.output
+            
+            # Verify API call includes both restrictions
+            expected_data = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'defaultBucketId': 'bucket-uuid',
+                'restrictMetadataOutsideSchemas': True,
+                'restrictFileUploadsToExtensions': '.pdf,.png'
+            }
+            mocks['api_client'].create_database.assert_called_once_with(expected_data)
 
 
 class TestDatabaseUpdateCommand:
@@ -334,6 +553,156 @@ class TestDatabaseUpdateCommand:
 
             assert result.exit_code == 1  # Our custom error handling
             assert 'At least one field must be provided' in result.output
+    
+    def test_update_enable_metadata_restriction(self, cli_runner, generic_command_mocks):
+        """Test enabling metadata restriction."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-metadata-outside-schemas'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes restrictMetadataOutsideSchemas
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictMetadataOutsideSchemas': True
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_disable_metadata_restriction(self, cli_runner, generic_command_mocks):
+        """Test disabling metadata restriction."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--no-restrict-metadata-outside-schemas'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes restrictMetadataOutsideSchemas set to False
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictMetadataOutsideSchemas': False
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_file_extensions(self, cli_runner, generic_command_mocks):
+        """Test updating file extension restrictions."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-file-uploads-to-extensions', '.pdf,.png'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes restrictFileUploadsToExtensions
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictFileUploadsToExtensions': '.pdf,.png'
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_clear_file_extensions(self, cli_runner, generic_command_mocks):
+        """Test clearing file extension restrictions."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--clear-file-extensions'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes empty restrictFileUploadsToExtensions
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictFileUploadsToExtensions': ''
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_only_new_fields(self, cli_runner, generic_command_mocks):
+        """Test updating only new configuration fields."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].update_database.return_value = {
+                'databaseId': 'test-database',
+                'message': 'Database updated successfully'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-metadata-outside-schemas',
+                '--restrict-file-uploads-to-extensions', '.pdf'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Database updated successfully!' in result.output
+            
+            # Verify API call includes only new fields
+            expected_data = {
+                'databaseId': 'test-database',
+                'restrictMetadataOutsideSchemas': True,
+                'restrictFileUploadsToExtensions': '.pdf'
+            }
+            mocks['api_client'].update_database.assert_called_once_with(expected_data)
+    
+    def test_update_conflicting_metadata_flags(self, cli_runner, generic_command_mocks):
+        """Test that conflicting metadata flags are rejected."""
+        with generic_command_mocks('database') as mocks:
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-metadata-outside-schemas',
+                '--no-restrict-metadata-outside-schemas'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use both' in result.output
+            assert 'restrict-metadata-outside-schemas' in result.output
+    
+    def test_update_conflicting_extension_flags(self, cli_runner, generic_command_mocks):
+        """Test that conflicting extension flags are rejected."""
+        with generic_command_mocks('database') as mocks:
+            result = cli_runner.invoke(database, [
+                'update',
+                '-d', 'test-database',
+                '--restrict-file-uploads-to-extensions', '.pdf',
+                '--clear-file-extensions'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use both' in result.output
+            assert 'restrict-file-uploads-to-extensions' in result.output
 
 
 class TestDatabaseGetCommand:
@@ -486,9 +855,10 @@ class TestDatabaseListBucketsCommand:
         result = cli_runner.invoke(database, ['list-buckets', '--help'])
         assert result.exit_code == 0
         assert 'List available S3 bucket configurations' in result.output
-        assert '--max-items' in result.output
         assert '--page-size' in result.output
+        assert '--max-items' in result.output
         assert '--starting-token' in result.output
+        assert '--auto-paginate' in result.output
         assert '--json-output' in result.output
     
     def test_list_buckets_success(self, cli_runner, generic_command_mocks):
@@ -532,6 +902,116 @@ class TestDatabaseListBucketsCommand:
             
             assert result.exit_code == 0
             assert 'No bucket configurations found.' in result.output
+    
+    def test_list_buckets_with_page_size(self, cli_runner, generic_command_mocks):
+        """Test bucket listing with page size."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [{'bucketId': 'bucket1', 'bucketName': 'Bucket 1'}],
+                'NextToken': 'next-token-123'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 bucket configuration(s):' in result.output
+            assert 'Next token: next-token-123' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+            
+            # Verify API call includes pageSize but NOT maxItems
+            call_args = mocks['api_client'].list_buckets.call_args
+            assert call_args[0][0]['pageSize'] == 50
+            assert 'maxItems' not in call_args[0][0]
+    
+    def test_list_buckets_auto_paginate(self, cli_runner, generic_command_mocks):
+        """Test bucket listing with auto-pagination."""
+        with generic_command_mocks('database') as mocks:
+            # Mock multiple pages
+            mocks['api_client'].list_buckets.side_effect = [
+                {
+                    'Items': [{'bucketId': f'bucket{i}', 'bucketName': f'Bucket {i}'} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'Items': [{'bucketId': f'bucket{i}', 'bucketName': f'Bucket {i}'} for i in range(100, 150)],
+                    'NextToken': None
+                }
+            ]
+            
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--auto-paginate'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            assert 'Found 150 bucket configuration(s):' in result.output
+            
+            # Verify API was called twice
+            assert mocks['api_client'].list_buckets.call_count == 2
+    
+    def test_list_buckets_auto_paginate_with_max_items(self, cli_runner, generic_command_mocks):
+        """Test bucket listing with auto-pagination and custom max-items."""
+        with generic_command_mocks('database') as mocks:
+            # Mock two pages
+            mocks['api_client'].list_buckets.side_effect = [
+                {
+                    'Items': [{'bucketId': f'bucket{i}', 'bucketName': f'Bucket {i}'} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'Items': [{'bucketId': f'bucket{i}', 'bucketName': f'Bucket {i}'} for i in range(100, 150)],
+                    'NextToken': 'token2'
+                }
+            ]
+            
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--auto-paginate',
+                '--max-items', '150'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            
+            # Verify API was called twice and maxItems was NOT passed
+            assert mocks['api_client'].list_buckets.call_count == 2
+            for call in mocks['api_client'].list_buckets.call_args_list:
+                assert 'maxItems' not in call[0][0]
+    
+    def test_list_buckets_auto_paginate_conflict(self, cli_runner, generic_command_mocks):
+        """Test that auto-paginate conflicts with starting-token."""
+        with generic_command_mocks('database') as mocks:
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--auto-paginate',
+                '--starting-token', 'token123'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+    
+    def test_list_buckets_max_items_without_auto_paginate_warning(self, cli_runner, generic_command_mocks):
+        """Test that max-items without auto-paginate shows warning."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [{'bucketId': 'bucket1', 'bucketName': 'Bucket 1'}]
+            }
+            
+            result = cli_runner.invoke(database, [
+                'list-buckets',
+                '--max-items', '100'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Warning: --max-items only applies with --auto-paginate' in result.output
+            
+            # Verify maxItems was NOT passed to API
+            call_args = mocks['api_client'].list_buckets.call_args
+            assert 'maxItems' not in call_args[0][0]
 
 
 class TestDatabaseCommandsIntegration:
@@ -618,6 +1098,101 @@ class TestDatabaseCommandsEdgeCases:
             assert result.exit_code == 1
             assert '✗ Bucket Not Found' in result.output
             assert 'vamscli database list-buckets' in result.output
+
+
+class TestDatabaseNewFieldsDisplay:
+    """Test display of new database configuration fields."""
+    
+    def test_get_displays_new_fields(self, cli_runner, generic_command_mocks):
+        """Test that get command displays new configuration fields."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'dateCreated': '2024-01-01T00:00:00Z',
+                'assetCount': 5,
+                'defaultBucketId': 'bucket-uuid',
+                'bucketName': 'test-bucket',
+                'baseAssetsPrefix': 'assets/',
+                'restrictMetadataOutsideSchemas': True,
+                'restrictFileUploadsToExtensions': '.pdf,.docx,.jpg'
+            }
+            
+            result = cli_runner.invoke(database, [
+                'get',
+                '-d', 'test-database'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Restrict Metadata Outside Schemas: True' in result.output
+            assert 'Restrict File Uploads To Extensions: .pdf,.docx,.jpg' in result.output
+    
+    def test_get_displays_no_restrictions(self, cli_runner, generic_command_mocks):
+        """Test that get command displays when no restrictions are set."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'dateCreated': '2024-01-01T00:00:00Z',
+                'assetCount': 5,
+                'defaultBucketId': 'bucket-uuid',
+                'restrictMetadataOutsideSchemas': False,
+                'restrictFileUploadsToExtensions': ''
+            }
+            
+            result = cli_runner.invoke(database, [
+                'get',
+                '-d', 'test-database'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Restrict Metadata Outside Schemas: False' in result.output
+            assert 'Restrict File Uploads To Extensions: (none)' in result.output
+    
+    def test_list_displays_new_fields(self, cli_runner, generic_command_mocks):
+        """Test that list command displays new configuration fields."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_databases.return_value = {
+                'Items': [
+                    {
+                        'databaseId': 'test-db-1',
+                        'description': 'Test Database 1',
+                        'dateCreated': '2024-01-01T00:00:00Z',
+                        'assetCount': 5,
+                        'defaultBucketId': 'bucket-uuid-1',
+                        'restrictMetadataOutsideSchemas': True,
+                        'restrictFileUploadsToExtensions': '.pdf,.png'
+                    }
+                ]
+            }
+            
+            result = cli_runner.invoke(database, ['list'])
+            
+            assert result.exit_code == 0
+            assert 'Restrict Metadata Outside Schemas: True' in result.output
+            assert 'Restrict File Uploads To Extensions: .pdf,.png' in result.output
+    
+    def test_json_output_includes_new_fields(self, cli_runner, generic_command_mocks):
+        """Test that JSON output includes new fields."""
+        with generic_command_mocks('database') as mocks:
+            api_response = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'restrictMetadataOutsideSchemas': True,
+                'restrictFileUploadsToExtensions': '.pdf,.docx'
+            }
+            mocks['api_client'].get_database.return_value = api_response
+            
+            result = cli_runner.invoke(database, [
+                'get',
+                '-d', 'test-database',
+                '--json-output'
+            ])
+            
+            assert result.exit_code == 0
+            output_json = json.loads(result.output.strip())
+            assert output_json['restrictMetadataOutsideSchemas'] == True
+            assert output_json['restrictFileUploadsToExtensions'] == '.pdf,.docx'
 
 
 class TestBucketSelectionFunction:

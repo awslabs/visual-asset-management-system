@@ -5,20 +5,15 @@ the business logic below manages mapping the Amazon S3 information to VAMS asset
 """
 import json
 import os
-import re
 import boto3
 import time
-from botocore.config import Config
-from datetime import datetime
-from handlers.metadata import to_update_expr
+import hashlib
 from customLogging.logger import safeLogger
 from handlers.assets.createAsset import create_asset
 from models.assetsV3 import CreateAssetRequestModel
 from handlers.databases.createDatabase import create_database
 from models.databases import CreateDatabaseRequestModel
-from aws_lambda_powertools.utilities.typing import LambdaContext
-from aws_lambda_powertools.utilities.parser import parse, ValidationError
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
@@ -26,6 +21,7 @@ from common.validators import validate
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
 sns_client = boto3.client('sns')
+sqs_client = boto3.client('sqs')
 s3_client = boto3.client('s3')
 s3_resource = boto3.resource('s3')
 lambda_client = boto3.client('lambda')
@@ -42,13 +38,20 @@ try:
     asset_table_name = os.environ.get('ASSET_STORAGE_TABLE_NAME')
     db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     database_id = os.environ.get('DEFAULT_DATABASE_ID')  
-    openSearchIndexing_lambda_name = os.environ["INDEXING_FUNCTION_NAME"]
+    file_indexer_sns_topic_arn = os.environ.get("FILE_INDEXER_SNS_TOPIC_ARN", "")
+    workflow_auto_execute_sqs_url = os.environ.get("WORKFLOW_AUTO_EXECUTE_SQS_URL", "")
+    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
+    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
 
 if not database_id:
     raise Exception('databaseId not configured')
+
+# Initialize metadata tables
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
+file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribute_table_name else None
 
 # Cache implementation
 class SimpleCache:
@@ -414,6 +417,78 @@ def lookup_asset(bucket_id: str, asset_id: str) -> Optional[Dict]:
         logger.exception(f"Error looking up asset: {e}")
         return None
 
+def lookup_archived_asset(bucket_id: str, asset_id: str) -> Optional[Dict]:
+    """
+    Look up archived asset in DynamoDB (with #deleted suffix in databaseId)
+    
+    Args:
+        bucket_id: The bucket ID
+        asset_id: The asset ID
+        
+    Returns:
+        dict: Archived asset data if found, None otherwise
+    """
+    # Check cache first
+    cache_key = f"{bucket_id}:{asset_id}:archived"
+    cached_result = asset_cache.get(cache_key)
+    if cached_result is not None:
+        logger.info(f"Cache hit for archived asset {asset_id} in bucket {bucket_id}")
+        return cached_result
+    
+    try:
+        # Query the asset table using the GSI
+        table = dynamodb.Table(asset_table_name)
+        response = table.query(
+            IndexName="BucketIdGSI",
+            KeyConditionExpression=Key('bucketId').eq(bucket_id) & Key('assetId').eq(asset_id)
+        )
+        
+        # Filter for archived assets (databaseId ends with #deleted)
+        for item in response.get('Items', []):
+            if item.get('databaseId', '').endswith('#deleted'):
+                logger.info(f"Found archived asset {asset_id} in bucket {bucket_id}")
+                # Cache the result
+                asset_cache.set(cache_key, item)
+                return item
+        
+        return None
+    except Exception as e:
+        logger.exception(f"Error looking up archived asset: {e}")
+        return None
+
+def lookup_archived_database(database_id: str) -> Optional[Dict]:
+    """
+    Look up archived database in DynamoDB (with #deleted suffix)
+    
+    Args:
+        database_id: The database ID (without #deleted suffix)
+        
+    Returns:
+        dict: Archived database data if found, None otherwise
+    """
+    # Check cache first
+    cache_key = f"database:{database_id}:archived"
+    cached_result = database_cache.get(cache_key)
+    if cached_result is not None:
+        logger.info(f"Cache hit for archived database {database_id}")
+        return cached_result
+    
+    try:
+        table = dynamodb.Table(db_table_name)
+        archived_db_id = f"{database_id}#deleted"
+        response = table.get_item(Key={'databaseId': archived_db_id})
+        
+        if 'Item' in response:
+            logger.info(f"Found archived database {database_id}")
+            # Cache the result
+            database_cache.set(cache_key, response['Item'])
+            return response['Item']
+        
+        return None
+    except Exception as e:
+        logger.exception(f"Error looking up archived database: {e}")
+        return None
+
 def lookup_databases(bucket_id: str) -> List[Dict]:
     """
     Look up databases by bucket ID
@@ -479,6 +554,145 @@ def create_new_database(bucket_id: str, database_id: str) -> Optional[str]:
     except Exception as e:
         logger.exception(f"Error creating database: {e}")
         return None
+
+def get_bucket_info_from_bucket_id(bucket_id: str) -> Optional[Dict]:
+    """
+    Get bucket information from S3 asset buckets table using bucket ID.
+    Uses caching to prevent excessive DynamoDB calls.
+    
+    Args:
+        bucket_id: The bucket ID
+        
+    Returns:
+        dict: Bucket information if found, None otherwise
+    """
+    # Check cache first
+    cache_key = f"bucket_info:{bucket_id}"
+    cached_result = s3_buckets_cache.get(cache_key)
+    if cached_result is not None:
+        logger.info(f"Cache hit for bucket info {bucket_id}")
+        return cached_result
+    
+    try:
+        buckets_table = dynamodb.Table(s3_asset_buckets_table)
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucket_id)
+        )
+        if bucket_response.get('Items'):
+            bucket_info = bucket_response['Items'][0]
+            # Cache the result
+            s3_buckets_cache.set(cache_key, bucket_info)
+            return bucket_info
+        
+        return None
+    except Exception as e:
+        logger.exception(f"Error getting bucket info: {e}")
+        return None
+
+def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: str) -> Optional[str]:
+    """
+    Get or create a database for a specific bucket/prefix combination.
+    Ensures unique database names per bucket/prefix and checks for archived databases.
+    Uses caching to prevent excessive DynamoDB calls.
+    
+    Args:
+        bucket_id: The bucket ID
+        bucket_name: The S3 bucket name
+        prefix: The base prefix in the bucket
+        
+    Returns:
+        str: Database ID if found or created successfully, None if archived or error
+    """
+    # Check cache for this specific bucket/prefix combination
+    prefix_for_cache = prefix.rstrip('/') if prefix else 'root'
+    cache_key = f"db_for_bucket_prefix:{bucket_name}:{prefix_for_cache}"
+    cached_db_id = database_cache.get(cache_key)
+    if cached_db_id is not None:
+        logger.info(f"Cache hit for database for bucket {bucket_name} prefix {prefix}")
+        return cached_db_id
+    
+    # Look up databases that match this bucket
+    databases = lookup_databases(bucket_id)
+    
+    # Filter databases to match this specific bucket/prefix combination
+    matching_databases = []
+    for db in databases:
+        # Get bucket info for this database (uses caching)
+        bucket_info = get_bucket_info_from_bucket_id(db.get('defaultBucketId'))
+        if bucket_info:
+            # Normalize prefix for comparison
+            db_prefix = bucket_info.get('baseAssetsPrefix', '').rstrip('/')
+            check_prefix = prefix.rstrip('/') if prefix else ''
+            
+            if bucket_info.get('bucketName') == bucket_name and db_prefix == check_prefix:
+                matching_databases.append(db)
+    
+    # If we found matching databases, use the first one (or default if it exists)
+    if matching_databases:
+        # Check if default database exists in matching databases
+        default_db = next((db for db in matching_databases if db['databaseId'] == database_id), None)
+        if default_db:
+            logger.info(f"Using default database {database_id} for bucket {bucket_name} prefix {prefix}")
+            # Cache the result
+            database_cache.set(cache_key, default_db['databaseId'])
+            return default_db['databaseId']
+        else:
+            logger.info(f"Using existing database {matching_databases[0]['databaseId']} for bucket {bucket_name} prefix {prefix}")
+            # Cache the result
+            database_cache.set(cache_key, matching_databases[0]['databaseId'])
+            return matching_databases[0]['databaseId']
+    
+    # No matching database found - need to create one
+    # Generate unique database ID based on bucket and prefix
+    prefix_for_hash = prefix.rstrip('/') if prefix else 'root'
+    prefix_hash = hashlib.md5(f"{bucket_name}:{prefix_for_hash}".encode()).hexdigest()[:8]
+    unique_db_id = f"{database_id}-{prefix_hash}"
+    
+    # Check cache for this specific database ID
+    db_cache_key = f"database:{unique_db_id}"
+    cached_db = database_cache.get(db_cache_key)
+    if cached_db is not None:
+        logger.info(f"Cache hit for database {unique_db_id}")
+        # Cache the bucket/prefix mapping as well
+        database_cache.set(cache_key, unique_db_id)
+        return unique_db_id
+    
+    # Check if this database ID already exists (active)
+    existing_db = None
+    try:
+        db_table = dynamodb.Table(db_table_name)
+        response = db_table.get_item(Key={'databaseId': unique_db_id})
+        existing_db = response.get('Item')
+        if existing_db:
+            # Cache the result
+            database_cache.set(db_cache_key, existing_db)
+    except Exception as e:
+        logger.warning(f"Error checking for existing database: {e}")
+    
+    # If database exists and is active, use it
+    if existing_db:
+        logger.info(f"Using existing database {unique_db_id} for bucket {bucket_name} prefix {prefix}")
+        # Cache the bucket/prefix mapping
+        database_cache.set(cache_key, unique_db_id)
+        return existing_db['databaseId']
+    
+    # Check for archived version - DO NOT recreate if archived
+    archived_db = lookup_archived_database(unique_db_id)
+    if archived_db:
+        logger.info(f"Database {unique_db_id} is archived, skipping creation")
+        # Cache the fact that this database is archived (cache as None)
+        database_cache.set(cache_key, None)
+        return None
+    
+    # Create new database
+    logger.info(f"Creating new database {unique_db_id} for bucket {bucket_name} prefix {prefix}")
+    created_db_id = create_new_database(bucket_id, unique_db_id)
+    
+    # Cache the result if creation was successful
+    if created_db_id:
+        database_cache.set(cache_key, created_db_id)
+    
+    return created_db_id
 
 def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optional[str]:
     """
@@ -653,6 +867,128 @@ def extract_asset_id_from_key(object_key: str, prefix: str) -> Optional[str]:
                 return parts[0]
     return None
 
+
+def extract_relative_file_path(object_key: str, prefix: str, asset_id: str) -> str:
+    """
+    Extract the relative file path from S3 object key
+    
+    This removes the prefix and asset_id to get the file path relative to the asset base.
+    
+    Args:
+        object_key: The S3 object key (e.g., "prefix/assetId/folder/file.txt")
+        prefix: The base prefix (e.g., "prefix/")
+        asset_id: The asset ID (e.g., "assetId")
+        
+    Returns:
+        str: Relative file path (e.g., "folder/file.txt")
+    """
+    # Normalize prefix
+    if prefix and prefix != '/' and prefix != '':
+        if not prefix.endswith('/'):
+            prefix = prefix + '/'
+    else:
+        prefix = ''
+    
+    # Remove prefix from object key
+    if prefix and object_key.startswith(prefix):
+        path_after_prefix = object_key[len(prefix):]
+    else:
+        path_after_prefix = object_key
+    
+    # Remove asset_id and the following slash
+    asset_prefix = f"{asset_id}/"
+    if path_after_prefix.startswith(asset_prefix):
+        relative_path = path_after_prefix[len(asset_prefix):]
+        return relative_path
+    
+    # If we can't extract properly, return the path after prefix
+    return path_after_prefix
+
+
+def delete_file_metadata_on_s3_delete(database_id: str, asset_id: str, relative_file_path: str):
+    """Delete metadata and attributes when file is deleted directly in S3
+    
+    Args:
+        database_id: The database ID
+        asset_id: The asset ID
+        relative_file_path: The relative file path (without asset base prefix)
+    """
+    try:
+        # Skip if this is a folder (ends with /)
+        if relative_file_path.endswith('/'):
+            logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
+            return
+        
+        # Skip if relative path is empty
+        if not relative_file_path:
+            logger.info("Skipping metadata deletion for empty relative path")
+            return
+        
+        # Construct the composite key for new metadata tables
+        # Format: {databaseId}:{assetId}:{relative_file_path}
+        composite_key = f"{database_id}:{asset_id}:{relative_file_path}"
+        
+        deleted_metadata_count = 0
+        deleted_attribute_count = 0
+        
+        # Delete from asset_file_metadata_table (file metadata)
+        if asset_file_metadata_table:
+            try:
+                # Query all metadata for this file using GSI
+                response = asset_file_metadata_table.query(
+                    IndexName='DatabaseIdAssetIdFilePathIndex',
+                    KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+                )
+                
+                # Delete all metadata items
+                for item in response.get('Items', []):
+                    asset_file_metadata_table.delete_item(
+                        Key={
+                            'metadataKey': item['metadataKey'],
+                            'databaseId:assetId:filePath': composite_key
+                        }
+                    )
+                    deleted_metadata_count += 1
+                
+                if deleted_metadata_count > 0:
+                    logger.info(f"Deleted {deleted_metadata_count} metadata items for file {composite_key}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file metadata: {e}")
+        
+        # Delete from file_attribute_table (file attributes)
+        if file_attribute_table:
+            try:
+                # Query all attributes for this file using GSI
+                response = file_attribute_table.query(
+                    IndexName='DatabaseIdAssetIdFilePathIndex',
+                    KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+                )
+                
+                # Delete all attribute items
+                for item in response.get('Items', []):
+                    file_attribute_table.delete_item(
+                        Key={
+                            'attributeKey': item['attributeKey'],
+                            'databaseId:assetId:filePath': composite_key
+                        }
+                    )
+                    deleted_attribute_count += 1
+                
+                if deleted_attribute_count > 0:
+                    logger.info(f"Deleted {deleted_attribute_count} attribute items for file {composite_key}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file attributes: {e}")
+        
+        if deleted_metadata_count == 0 and deleted_attribute_count == 0:
+            logger.info(f"No metadata or attributes found for file {composite_key}")
+        
+    except Exception as e:
+        logger.exception(f"Error deleting metadata for file on S3 delete: {e}")
+        # Don't fail the whole operation if metadata deletion fails
+        pass
+
 def verify_database_exists(database_id):
     """Check if a database exists"""
     table = dynamodb.Table(db_table_name)
@@ -678,71 +1014,200 @@ def verify_asset_exists(database_id, asset_id):
         logger.exception(f"Error verifying asset: {e}")
         raise Exception(f"Error verifying asset.")
 
-def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
-    """Invoke a lambda function with the given payload"""
-    try:
-        logger.info(f"Invoking {function_name} lambda...")
-        lambda_response = lambda_client.invoke(
-            FunctionName=function_name,
-            InvocationType=invocation_type,
-            Payload=json.dumps(payload).encode('utf-8')
-        )
-        
-        if invocation_type == "RequestResponse":
-            stream = lambda_response['Payload']
-            response_payload = json.loads(stream.read().decode("utf-8"))
-            logger.info(f"Lambda response: {response_payload}")
-            return response_payload
-        return None
-    except Exception as e:
-        logger.exception(f"Error invoking lambda function {function_name}: {e}")
-        raise Exception(f"Error invoking lambda function.")
-
-def runOpenSearchIndexingLambda(event):
+def build_filtered_event(original_event, successful_s3_records):
     """
-    Run the OpenSearch indexing lambda
+    Build a filtered event that preserves the original structure
+    but only includes successfully processed S3 records.
     
     Args:
-        event: The event to pass to the lambda
+        original_event: The original event (SQS, SNS, or direct S3)
+        successful_s3_records: List of S3 records that were successfully processed
+        
+    Returns:
+        dict: Filtered event with same structure as original, or None if no records
+    """
+    if not successful_s3_records:
+        return None
+    
+    try:
+        # Check if this is a direct S3 event
+        if 'Records' in original_event and original_event['Records'] and 'eventSource' in original_event['Records'][0] and original_event['Records'][0]['eventSource'] == 'aws:s3':
+            logger.info("Building filtered direct S3 event")
+            return {
+                'Records': successful_s3_records
+            }
+        
+        # Check if this is an SQS event
+        if 'Records' in original_event and original_event['Records'] and 'eventSource' in original_event['Records'][0] and original_event['Records'][0]['eventSource'] == 'aws:sqs':
+            logger.info("Building filtered SQS event")
+            filtered_sqs_records = []
+            
+            for sqs_record in original_event['Records']:
+                if not sqs_record.get('body'):
+                    continue
+                
+                try:
+                    parsed_body = json.loads(sqs_record['body'])
+                    
+                    # Check if this is an SNS message
+                    if 'Message' in parsed_body:
+                        try:
+                            message = json.loads(parsed_body['Message'])
+                            if 'Records' in message:
+                                # Filter S3 records in the SNS message
+                                filtered_s3_records = [r for r in message['Records'] if r in successful_s3_records]
+                                if filtered_s3_records:
+                                    message['Records'] = filtered_s3_records
+                                    parsed_body['Message'] = json.dumps(message)
+                                    sqs_record_copy = sqs_record.copy()
+                                    sqs_record_copy['body'] = json.dumps(parsed_body)
+                                    filtered_sqs_records.append(sqs_record_copy)
+                        except json.JSONDecodeError:
+                            # If Message is not valid JSON, keep original if any successful records
+                            if successful_s3_records:
+                                filtered_sqs_records.append(sqs_record)
+                    elif 'Records' in parsed_body:
+                        # Direct S3 event in SQS body
+                        filtered_s3_records = [r for r in parsed_body['Records'] if r in successful_s3_records]
+                        if filtered_s3_records:
+                            parsed_body['Records'] = filtered_s3_records
+                            sqs_record_copy = sqs_record.copy()
+                            sqs_record_copy['body'] = json.dumps(parsed_body)
+                            filtered_sqs_records.append(sqs_record_copy)
+                except json.JSONDecodeError:
+                    logger.warning("Could not parse SQS body, skipping record")
+                    continue
+            
+            if filtered_sqs_records:
+                return {
+                    'Records': filtered_sqs_records
+                }
+            return None
+        
+        # Check if this is an SNS event
+        if 'Records' in original_event and original_event['Records'] and 'EventSource' in original_event['Records'][0] and original_event['Records'][0]['EventSource'] == 'aws:sns':
+            logger.info("Building filtered SNS event")
+            filtered_sns_records = []
+            
+            for sns_record in original_event['Records']:
+                if not sns_record.get('Sns') or not sns_record['Sns'].get('Message'):
+                    continue
+                
+                try:
+                    message = json.loads(sns_record['Sns']['Message'])
+                    if 'Records' in message:
+                        # Filter S3 records in the SNS message
+                        filtered_s3_records = [r for r in message['Records'] if r in successful_s3_records]
+                        if filtered_s3_records:
+                            message['Records'] = filtered_s3_records
+                            sns_record_copy = sns_record.copy()
+                            sns_record_copy['Sns'] = sns_record['Sns'].copy()
+                            sns_record_copy['Sns']['Message'] = json.dumps(message)
+                            filtered_sns_records.append(sns_record_copy)
+                except json.JSONDecodeError:
+                    logger.warning("Could not parse SNS message, skipping record")
+                    continue
+            
+            if filtered_sns_records:
+                return {
+                    'Records': filtered_sns_records
+                }
+            return None
+        
+        # If we can't determine the event type, return None
+        logger.warning("Could not determine event type for filtering, returning None")
+        return None
+    except Exception as e:
+        logger.exception(f"Error building filtered event: {e}")
+        return None
+
+def publish_to_file_indexer_sns(event):
+    """
+    Publish S3 event to file indexer SNS topic for downstream processing.
+    
+    Args:
+        event: The S3 event to publish
     """
     try:
+        if not file_indexer_sns_topic_arn:
+            logger.warning("FILE_INDEXER_SNS_TOPIC_ARN not configured, skipping SNS publish")
+            return
+        
         # Prepare payload for indexing
         event.update({
             "ASSET_BUCKET_NAME": asset_bucket_name,
             "ASSET_BUCKET_PREFIX": asset_bucket_prefix
         })
         
-        # Invoke openSearchIndexing lambda
-        invoke_lambda(openSearchIndexing_lambda_name, event, 'Event')
-        logger.info("Successfully invoked OpenSearch indexing lambda")
+        # Publish to SNS topic
+        response = sns_client.publish(
+            TopicArn=file_indexer_sns_topic_arn,
+            Message=json.dumps(event, default=str),
+            Subject='S3 Bucket Sync Event'
+        )
+        
+        logger.info(f"Successfully published to file indexer SNS topic: {response['MessageId']}")
     except Exception as e:
-        logger.exception(f"Error running OpenSearch indexing lambda: {e}")
+        logger.exception(f"Error publishing to file indexer SNS topic: {e}")
         # We don't re-raise the exception here to avoid stopping the process
 
-def process_s3_record(record: Dict) -> Tuple[bool, str]:
+def publish_to_workflow_execution_sqs(event):
+    """
+    Publish S3 event directly to workflow auto-execute SQS queue.
+    This triggers automatic workflow execution based on file uploads.
+    
+    Args:
+        event: The S3 event to publish
+    """
+    try:
+        if not workflow_auto_execute_sqs_url:
+            logger.warning("WORKFLOW_AUTO_EXECUTE_SQS_URL not configured, skipping SQS publish")
+            return
+        
+        # Prepare payload with bucket information
+        event.update({
+            "ASSET_BUCKET_NAME": asset_bucket_name,
+            "ASSET_BUCKET_PREFIX": asset_bucket_prefix
+        })
+        
+        # Publish to SQS queue
+        response = sqs_client.send_message(
+            QueueUrl=workflow_auto_execute_sqs_url,
+            MessageBody=json.dumps(event, default=str)
+        )
+        
+        logger.info(f"Successfully published to workflow auto-execute SQS queue: {response['MessageId']}")
+    except Exception as e:
+        logger.exception(f"Error publishing to workflow auto-execute SQS queue: {e}")
+        # We don't re-raise the exception here to avoid stopping the process
+
+def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
     """
     Process a single S3 record
     
     This function implements the core business logic for processing S3 events:
-    1. Validates bucket and prefix against environment variables
-    2. Checks if bucket and prefix have a record in S3 asset buckets table
-    3. Skips special folders (temp-uploads, preview, pipeline, etc.)
-    4. Validates asset ID format
-    5. Looks up or creates assets/databases as needed
-    6. Handles "init" files by deleting them
-    7. Updates S3 metadata with database and asset IDs
+    *. Validates bucket and prefix against environment variables
+    *. Checks if bucket and prefix have a record in S3 asset buckets table
+    *. Skips special folders (temp-uploads, preview, pipeline, etc.)
+    *. Validates asset ID format
+    *. Looks up or creates assets/databases as needed
+    *. Handles "init" files by deleting them
+    *. Updates S3 metadata with database and asset IDs
+    *. Detects folder markers (keys ending with '/') and skips indexing
     
     Args:
         record: The S3 record to process
         
     Returns:
-        tuple: (success, message) where success is a boolean indicating if the
-               processing was successful, and message is a string with details
+        tuple: (processing_success, should_index, message) where:
+            - processing_success: boolean indicating if processing was successful
+            - should_index: boolean indicating if record should be sent to indexer
+            - message: string with details about the processing result
     """
     try:
         # Validate record has S3 information
         if not record.get('s3'):
-            return False, "Record does not contain S3 information"
+            return False, False, "Record does not contain S3 information"
 
         # Extract bucket name and object key
         bucket_name = record['s3']['bucket']['name']
@@ -760,12 +1225,12 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
         # 1.a. Check if record bucket and base prefix matches the environment variables
         if asset_bucket_name and bucket_name != asset_bucket_name:
             logger.info(f"Bucket {bucket_name} does not match configured bucket {asset_bucket_name}, skipping")
-            return False, f"Bucket {bucket_name} does not match configured bucket"
+            return False, False, f"Bucket {bucket_name} does not match configured bucket"
         
         #Note: if '/' given, treat this as no prefix
         if prefix and prefix != '/' and not object_key.startswith(prefix):
             logger.info(f"Object key {object_key} does not start with configured prefix {prefix}, skipping")
-            return False, f"Object key does not start with configured prefix"
+            return False, False, f"Object key does not start with configured prefix"
         
         # Use the configured prefix or empty string
         prefix = prefix or ""
@@ -775,23 +1240,23 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
         bucket_id = get_bucket_id(bucket_name, prefix)
         if not bucket_id:
             logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping")
-            return False, f"No bucket ID found for {bucket_name} with prefix {prefix}"
+            return False, False, f"No bucket ID found for {bucket_name} with prefix {prefix}"
         
         # Extract asset ID from the object key
         asset_id = extract_asset_id_from_key(object_key, prefix)
         if not asset_id:
             logger.info(f"Could not extract asset ID from {object_key}, skipping")
-            return False, f"Could not extract asset ID from {object_key}"
+            return False, False, f"Could not extract asset ID from {object_key}"
         
         # 1.c Check if asset ID is a special folder to skip
         if asset_id in reservedPrefixFolders:
             logger.info(f"Asset ID {asset_id} is a special folder, skipping")
-            return False, f"Asset ID {asset_id} is a special folder"
+            return False, False, f"Asset ID {asset_id} is a special folder"
         
         # 1.d Validate asset ID
         if not validate_asset_id(asset_id):
             logger.info(f"Asset ID {asset_id} is not valid, skipping")
-            return False, f"Asset ID {asset_id} is not valid"
+            return False, False, f"Asset ID {asset_id} is not valid"
         
         # 2.a. Lookup asset in assets dynamoDB table
         # Use cache to prevent excessive lookups (TTL: 60 seconds)
@@ -802,53 +1267,27 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             logger.info(f"Asset {asset_id} found in bucket {bucket_id}")
             database_id_to_use = asset_data.get('databaseId')
         else:
-            # 2.b. Lookup databases that match the bucketId
-            # Use cache to prevent excessive lookups (TTL: 60 seconds)
-            databases = lookup_databases(bucket_id)
+            # Check if asset is archived before creating new one
+            archived_asset = lookup_archived_asset(bucket_id, asset_id)
+            if archived_asset:
+                logger.info(f"Asset {asset_id} is archived, skipping processing")
+                return True, True, f"Skipped archived asset {asset_id}"  # Return true for both - indexing may care about these events
             
-            if not databases:
-                # Create a new database with defaultDatabaseId
-                logger.info(f"No databases found for bucket {bucket_id}, creating new database")
-                created_db_id = create_new_database(bucket_id, database_id)
-                if not created_db_id:
-                    logger.error(f"Failed to create database for bucket {bucket_id}")
-                    return False, f"Failed to create database for bucket {bucket_id}"
-                database_id_to_use = created_db_id
-            elif len(databases) == 1:
-                # Use the single database
-                database_id_to_use = databases[0]['databaseId']
-                logger.info(f"Using single database {database_id_to_use} for bucket {bucket_id}")
-            else:
-                # Multiple databases, check if any match defaultDatabaseId
-                # First check cache
-                cache_key = f"database:{database_id}"
-                default_db = database_cache.get(cache_key)
-                
-                # If not in cache, check the list of databases
-                if default_db is None:
-                    default_db = next((db for db in databases if db['databaseId'] == database_id), None)
-                
-                if default_db:
-                    database_id_to_use = default_db['databaseId']
-                    logger.info(f"Using default database {database_id_to_use} for bucket {bucket_id}")
-                else:
-                    # Create a new database with defaultDatabaseId
-                    logger.info(f"No default database found for bucket {bucket_id}, creating new database")
-                    created_db_id = create_new_database(bucket_id, database_id)
-                    if not created_db_id:
-                        logger.error(f"Failed to create database for bucket {bucket_id}")
-                        return False, f"Failed to create database for bucket {bucket_id}"
-                    database_id_to_use = created_db_id
+            # Get or create database for this bucket/prefix
+            database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
             
-            # 3. If asset doesn't exist, create it
-            if not asset_data:
-                logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
-                created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
-                if not created_asset_id:
-                    logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
-                    return False, f"Failed to create asset {asset_id} in database {database_id_to_use}"
+            if not database_id_to_use:
+                logger.error(f"Could not get or create database for bucket {bucket_id} (may be archived)")
+                return False, False, f"Could not get or create database for bucket {bucket_id}"
+            
+            # Create the asset
+            logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
+            created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+            if not created_asset_id:
+                logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
+                return False, False, f"Failed to create asset {asset_id} in database {database_id_to_use}"
         
-        # 4. Check if the object key ends with "init" - If so delete and skip rest of steps
+        # 3. Check if the object key ends with "init" - If so delete and skip indexing
         if object_key.endswith('init') or object_key.endswith('init/'):
             # Check if versioning is enabled
             versioning_enabled = is_versioning_enabled(bucket_id)
@@ -858,25 +1297,31 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             delete_result = delete_s3_object(bucket_name, object_key, versioning_enabled)
             if not delete_result:
                 logger.error(f"Failed to delete init object {object_key}")
-                return False, f"Failed to delete init object {object_key}"
+                return False, False, f"Failed to delete init object {object_key}"
             
-            return True, f"Deleted init object {object_key}"
+            # Processed successfully but skip indexing
+            return True, False, f"Deleted init object {object_key}"
         
-        # 5. Check if file has S3 metadata attributes that match databaseid and assetid
+        # 4. Check if file has S3 metadata attributes that match databaseid and assetid
         update_result = update_s3_metadata(bucket_name, object_key, database_id_to_use, asset_id)
         if not update_result:
             logger.error(f"Failed to update metadata for {object_key}")
-            return False, f"Failed to update metadata for {object_key}"
+            return False, False, f"Failed to update metadata for {object_key}"
         
-        # 6. Update asset type based on all files in the bucket
+        # 5. Update asset type based on all files in the bucket
         # Construct the asset base key (prefix + assetId + /)
         asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
         update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+
+        # 6. Check if object key ends with '/' (folder marker) - process but skip indexing
+        if object_key.endswith('/'):
+            logger.info(f"Folder marker detected: {object_key}, processing but skipping indexing")
+            return True, False, f"Processed folder marker {object_key}"
         
-        return True, f"Successfully processed {object_key}"
+        return True, True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
-        return False, f"Error processing S3 record."
+        return False, False, f"Error processing S3 record."
 
 def on_storage_event_created(event):
     """
@@ -895,13 +1340,16 @@ def on_storage_event_created(event):
         event: The S3 event containing records to process
         
     Returns:
-        bool: True if processing completed without hard errors, False otherwise
+        tuple: (success_status, successful_records) where success_status is a boolean
+               indicating if processing completed without hard errors, and successful_records
+               is a list of records that were successfully processed
     """
     logger.info(f"Processing storage event: {json.dumps(event)}")
     
     success_count = 0
     error_count = 0
     skip_count = 0
+    successful_records = []
     
     # Process each record in the event
     for record in event.get('Records', []):
@@ -913,13 +1361,18 @@ def on_storage_event_created(event):
             
         # Handle records with S3 information
         try:
-            # Process the S3 record
-            success, message = process_s3_record(record)
+            # Process the S3 record - now returns (success, should_index, message)
+            success, should_index, message = process_s3_record(record)
             
             # Track success/failure counts
             if success:
                 success_count += 1
-                logger.info(f"Successfully processed record: {message}")
+                # Only add to successful_records if should_index is True
+                if should_index:
+                    successful_records.append(record)
+                    logger.info(f"Successfully processed record for indexing: {message}")
+                else:
+                    logger.info(f"Successfully processed record but skipping indexing: {message}")
             else:
                 if "skipping" in message.lower():
                     skip_count += 1
@@ -935,8 +1388,8 @@ def on_storage_event_created(event):
     # Log summary of processing results
     logger.info(f"Processed {len(event.get('Records', []))} records: {success_count} successful, {error_count} errors, {skip_count} skipped")
     
-    # Return True if there were no errors or some are successful
-    return (error_count == 0 or success_count > 0)
+    # Return success status and list of successful records
+    return (error_count == 0 or success_count > 0), successful_records
 
 def parse_event(event):
     """
@@ -1054,7 +1507,7 @@ def lambda_handler_created(event, context):
     This function is the main entry point for processing file creation events.
     It parses the event from different sources (SQS, SNS, direct S3),
     processes the storage event, and runs the OpenSearch indexing lambda
-    if there were no hard errors.
+    if there were no hard errors and only for successfully processed records.
     
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
@@ -1071,22 +1524,33 @@ def lambda_handler_created(event, context):
         
         # Process the storage event if it contains records
         if parsed_event.get('Records'):
-            # Process the storage event and get success status
-            success = on_storage_event_created(parsed_event)
+            # Process the storage event and get success status and successful records
+            success, successful_records = on_storage_event_created(parsed_event)
             
-            # Only run indexing if there were no hard errors
-            if success:
-                # Run OpenSearch indexing
-                logger.info("No hard errors encountered, running OpenSearch indexing")
-                runOpenSearchIndexingLambda(event)
+            # Only publish to SNS and SQS if there were no hard errors and we have successful records
+            if success and successful_records:
+                # Build filtered event preserving original structure
+                filtered_event = build_filtered_event(event, successful_records)
+                
+                if filtered_event:
+                    logger.info(f"Publishing {len(successful_records)} successful records to file indexer SNS")
+                    publish_to_file_indexer_sns(filtered_event)
+                    
+                    # Also publish to workflow auto-execute SQS for created events only
+                    logger.info(f"Publishing {len(successful_records)} successful records to workflow auto-execute SQS")
+                    publish_to_workflow_execution_sqs(filtered_event)
+                else:
+                    logger.info("All records filtered out, skipping file indexer SNS and workflow SQS publish")
             else:
-                logger.warning("Hard errors encountered, skipping OpenSearch indexing")
+                if not success:
+                    logger.warning("Hard errors encountered, skipping file indexer SNS and workflow SQS publish")
+                else:
+                    logger.info("No successful records to publish, skipping file indexer SNS and workflow SQS publish")
         else:
             logger.warning("No records found in parsed event, nothing to process")
     except Exception as e:
         logger.exception(f"Unhandled error in lambda_handler_created: {e}")
         # We don't run the indexing lambda on unhandled exceptions to avoid potential data corruption
-        # This is a change from the previous behavior where we would still run the indexing lambda
 
 def lambda_handler_deleted(event, context):
     """
@@ -1095,6 +1559,7 @@ def lambda_handler_deleted(event, context):
     This function is the entry point for processing file deletion events.
     For deletions, we update the asset type if the file is not a folder marker,
     then run the OpenSearch indexing lambda to update the search index.
+    Only successfully processed records are forwarded to the indexer.
     
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
@@ -1111,7 +1576,8 @@ def lambda_handler_deleted(event, context):
         
         # Process records if present
         if parsed_event.get('Records'):
-
+            successful_records = []
+            
             try:
                 # Check each record for files that are not folder markers
                 for record in parsed_event.get('Records', []):
@@ -1123,6 +1589,11 @@ def lambda_handler_deleted(event, context):
                     # Extract bucket name and object key
                     bucket_name = record['s3']['bucket']['name']
                     object_key = record['s3']['object']['key']
+                    
+                    # Skip init files entirely (both processing and indexing)
+                    if object_key.endswith('init') or object_key.endswith('init/'):
+                        logger.info(f"Skipping init file: {object_key}")
+                        continue
                     
                     # Skip folder markers (objects ending with '/')
                     if object_key.endswith('/'):
@@ -1164,15 +1635,40 @@ def lambda_handler_deleted(event, context):
                     # Construct the asset base key (prefix + assetId + /)
                     asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
                     
+                    # Get asset data to retrieve database_id for metadata deletion
+                    asset_data = lookup_asset(bucket_id, asset_id)
+                    if asset_data:
+                        database_id_for_asset = asset_data.get('databaseId')
+                        
+                        # Extract relative file path for metadata deletion
+                        relative_file_path = extract_relative_file_path(object_key, prefix, asset_id)
+                        
+                        # Delete metadata and attributes for this file
+                        logger.info(f"Deleting metadata/attributes for file: {relative_file_path}")
+                        delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
+                    
                     # Update asset type based on remaining files
                     logger.info(f"Updating asset type for {asset_id} after file deletion")
                     update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+                    
+                    # Track successfully processed record
+                    successful_records.append(record)
+                    logger.info(f"Successfully processed deletion for {object_key}")
             except Exception as e:
-                logger.exception(f"Error processing deletion event.. continueing with index: {e}")
+                logger.exception(f"Error processing deletion event: {e}")
             
-            # Run OpenSearch indexing
-            logger.info("Running OpenSearch indexing for deletion event")
-            runOpenSearchIndexingLambda(event)
+            # Only publish to SNS if we have successfully processed records
+            if successful_records:
+                # Build filtered event preserving original structure
+                filtered_event = build_filtered_event(event, successful_records)
+                
+                if filtered_event:
+                    logger.info(f"Publishing {len(successful_records)} successful deletion records to file indexer SNS")
+                    publish_to_file_indexer_sns(filtered_event)
+                else:
+                    logger.info("All deletion records filtered out, skipping file indexer SNS publish")
+            else:
+                logger.info("No successful deletion records to publish, skipping file indexer SNS publish")
         else:
             logger.warning("No records found in parsed deletion event, nothing to process")
     except Exception as e:

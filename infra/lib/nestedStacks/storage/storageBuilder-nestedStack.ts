@@ -20,6 +20,18 @@ import * as Config from "../../../config/config";
 import { kmsKeyPolicyStatementPrincipalGenerator } from "../../helper/security";
 import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
 import { createPopulateS3AssetBucketsTableCustomResource } from "./customResources/populateS3AssetBucketsTable";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { Service } from "../../helper/service-helper";
+import {
+    buildSqsBucketSyncFunction,
+    buildFileIndexerSnsQueuingFunction,
+    buildAssetIndexerSnsQueuingFunction,
+    buildDatabaseIndexerSnsQueuingFunction,
+} from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 
 export interface storageResources {
     encryption: {
@@ -31,9 +43,15 @@ export interface storageResources {
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
     };
+    sqs: {
+        workflowAutoExecuteQueue: sqs.Queue;
+    };
     sns: {
         //Created/Deleted notification events are now tracked in s3AssetBuckets.ts global utility for ease of assignment
         eventEmailSubscriptionTopic: sns.Topic;
+        fileIndexerSnsTopic: sns.Topic;
+        assetIndexerSnsTopic: sns.Topic;
+        databaseIndexerSnsTopic: sns.Topic;
     };
     dynamo: {
         appFeatureEnabledStorageTable: dynamodb.Table;
@@ -43,11 +61,15 @@ export interface storageResources {
         assetUploadsStorageTable: dynamodb.Table;
         assetVersionsStorageTable: dynamodb.Table;
         assetFileVersionsStorageTable: dynamodb.Table;
+        assetFileMetadataVersionsStorageTable: dynamodb.Table;
         authEntitiesStorageTable: dynamodb.Table;
         commentStorageTable: dynamodb.Table;
+        constraintsStorageTable: dynamodb.Table;
         databaseStorageTable: dynamodb.Table;
-        metadataSchemaStorageTable: dynamodb.Table;
-        metadataStorageTable: dynamodb.Table;
+        metadataSchemaStorageTableV2: dynamodb.Table;
+        databaseMetadataStorageTable: dynamodb.Table;
+        assetFileMetadataStorageTable: dynamodb.Table;
+        fileAttributeStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         rolesStorageTable: dynamodb.Table;
         s3AssetBucketsStorageTable: dynamodb.Table;
@@ -64,10 +86,23 @@ export interface storageResources {
 export class StorageResourcesBuilderNestedStack extends NestedStack {
     public storageResources: storageResources;
 
-    constructor(parent: Construct, name: string, config: Config.Config) {
+    constructor(
+        parent: Construct,
+        name: string,
+        config: Config.Config,
+        lambdaCommonBaseLayer: LayerVersion,
+        vpc: ec2.IVpc,
+        subnets: ec2.ISubnet[]
+    ) {
         super(parent, name);
 
-        this.storageResources = storageResourcesBuilder(this, config);
+        this.storageResources = storageResourcesBuilder(
+            this,
+            config,
+            lambdaCommonBaseLayer,
+            vpc,
+            subnets
+        );
 
         //Nag supressions
         const reason =
@@ -143,7 +178,13 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
     }
 }
 
-export function storageResourcesBuilder(scope: Construct, config: Config.Config): storageResources {
+export function storageResourcesBuilder(
+    scope: Construct,
+    config: Config.Config,
+    lambdaCommonBaseLayer: LayerVersion,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): storageResources {
     //Import or generate new encryption keys
     let kmsEncryptionKey: kms.IKey | undefined = undefined;
     if (config.app.useKmsCmkEncryption.enabled) {
@@ -311,7 +352,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
     }
 
     /**
-     * Create per-bucket SNS topics for S3 Asset Creation/Deletion
+     * Create SNS topics
      */
 
     // Helper function to create SNS topics with proper policies
@@ -389,10 +430,42 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
     }
 
     // Event Email Subscription Topic
-    const EventEmailSubscriptionTopic = new sns.Topic(scope, "EventEmailSubscriptionTopic", {
-        masterKey: kmsEncryptionKey, //Key undefined if not using KMS
+    const EventEmailSubscriptionTopic = createSNSTopicWithPolicy(
+        scope,
+        "EventEmailSubscriptionTopic",
+        kmsEncryptionKey
+    );
+
+    // Create SNS topics for indexer queuing
+    const FileIndexerSnsTopic = createSNSTopicWithPolicy(
+        scope,
+        "FileIndexerSnsTopic",
+        kmsEncryptionKey
+    );
+
+    const AssetIndexerSnsTopic = createSNSTopicWithPolicy(
+        scope,
+        "AssetIndexerSnsTopic",
+        kmsEncryptionKey
+    );
+
+    const DatabaseIndexerSnsTopic = createSNSTopicWithPolicy(
+        scope,
+        "DatabaseIndexerSnsTopic",
+        kmsEncryptionKey
+    );
+
+    // Create SQS queue for workflow auto-execution
+    const workflowAutoExecuteQueue = new sqs.Queue(scope, "WorkflowAutoExecuteQueue", {
+        queueName: `${config.name}-${config.app.baseStackName}-workflowAutoExecute`,
+        visibilityTimeout: cdk.Duration.minutes(15), // Match Lambda timeout
+        encryption: kmsEncryptionKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: kmsEncryptionKey,
         enforceSSL: true,
     });
+
+    // Grant SNS permission to send messages to the queue
+    workflowAutoExecuteQueue.grantSendMessages(Service("SNS").Principal);
 
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
@@ -539,6 +612,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             name: "databaseId",
             type: dynamodb.AttributeType.STRING,
         },
+        stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
     const pipelineStorageTable = new dynamodb.Table(scope, "PipelineStorageTable", {
@@ -613,7 +687,8 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
-    const metadataStorageTable = new dynamodb.Table(scope, "MetadataStorageTable", {
+    //old
+    new dynamodb.Table(scope, "MetadataStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
             name: "databaseId",
@@ -626,7 +701,125 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
-    const metadataSchemaStorageTable = new dynamodb.Table(scope, "MetadataSchemaStorageTable", {
+    const databaseMetadataStorageTable = new dynamodb.Table(
+        scope,
+        "DatabaseMetadataStorageTableV2",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "metadataKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "databaseId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            stream: dynamodb.StreamViewType.NEW_IMAGE,
+        }
+    );
+
+    // GSI for querying by database
+    databaseMetadataStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "metadataKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const assetFileMetadataStorageTable = new dynamodb.Table(
+        scope,
+        "AssetFileMetadataStorageTableV2",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "metadataKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "databaseId:assetId:filePath",
+                type: dynamodb.AttributeType.STRING,
+            },
+            stream: dynamodb.StreamViewType.NEW_IMAGE,
+        }
+    );
+
+    // GSI for querying by database/asset/file
+    assetFileMetadataStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdAssetIdFilePathIndex",
+        partitionKey: {
+            name: "databaseId:assetId:filePath",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "metadataKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for querying all metadata across an asset (without file path)
+    assetFileMetadataStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdAssetIdIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "metadataKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const fileAttributeStorageTable = new dynamodb.Table(scope, "FileAttributeStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "attributeKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId:assetId:filePath",
+            type: dynamodb.AttributeType.STRING,
+        },
+        stream: dynamodb.StreamViewType.NEW_IMAGE,
+    });
+
+    // GSI for querying by database/asset/file
+    fileAttributeStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdAssetIdFilePathIndex",
+        partitionKey: {
+            name: "databaseId:assetId:filePath",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "attributeKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for querying all attributes across an asset (without file path)
+    fileAttributeStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdAssetIdIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "attributeKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    //Old
+    new dynamodb.Table(scope, "MetadataSchemaStorageTable", {
         ...dynamodbDefaultProps,
 
         partitionKey: {
@@ -637,6 +830,61 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             name: "field",
             type: dynamodb.AttributeType.STRING,
         },
+    });
+
+    const metadataSchemaStorageTableV2 = new dynamodb.Table(scope, "MetadataSchemaStorageTableV2", {
+        ...dynamodbDefaultProps,
+
+        partitionKey: {
+            name: "metadataSchemaId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId:metadataEntityType",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // GSI for querying by database/metadataEntityType
+    metadataSchemaStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdMetadataEntityTypeIndex",
+        partitionKey: {
+            name: "databaseId:metadataEntityType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "metadataSchemaId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for querying by metadataEntityType
+    metadataSchemaStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "MetadataEntityTypeIndex",
+        partitionKey: {
+            name: "metadataEntityType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "metadataSchemaId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for querying by database
+    metadataSchemaStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "metadataSchemaId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
     });
 
     const tagStorageTable = new dynamodb.Table(scope, "TagStorageTable", {
@@ -707,6 +955,58 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
+    // New optimized constraints table with GSIs for efficient querying
+    const constraintsStorageTable = new dynamodb.Table(scope, "ConstraintsStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "constraintId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        // No sort key - simple primary key for direct constraint lookups
+    });
+
+    // GSI for querying constraints by groupId (role-based permissions)
+    constraintsStorageTable.addGlobalSecondaryIndex({
+        indexName: "GroupPermissionsIndex",
+        partitionKey: {
+            name: "groupId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "objectType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for querying constraints by userId (user-specific permissions)
+    constraintsStorageTable.addGlobalSecondaryIndex({
+        indexName: "UserPermissionsIndex",
+        partitionKey: {
+            name: "userId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "objectType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for querying constraints by objectType (admin/management queries)
+    constraintsStorageTable.addGlobalSecondaryIndex({
+        indexName: "ObjectTypeIndex",
+        partitionKey: {
+            name: "objectType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "constraintId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const assetLinksStorageTableV2 = new dynamodb.Table(scope, "AssetLinksStorageTableV2.2", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -768,6 +1068,22 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             },
             sortKey: {
                 name: "fileKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    const assetFileMetadataVersionsStorageTable = new dynamodb.Table(
+        scope,
+        "AssetFileMetadataVersionsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "databaseId:assetId:assetVersionId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "type:filePath:metadataKey",
                 type: dynamodb.AttributeType.STRING,
             },
         }
@@ -865,7 +1181,8 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
     ///DEPRECATED TABLES
 
-    return {
+    //Build storage resources object
+    const storageResources = {
         encryption: {
             kmsKey: kmsEncryptionKey,
         },
@@ -874,8 +1191,14 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             artefactsBucket: artefactsBucket,
             accessLogsBucket: accessLogsBucket,
         },
+        sqs: {
+            workflowAutoExecuteQueue: workflowAutoExecuteQueue,
+        },
         sns: {
             eventEmailSubscriptionTopic: EventEmailSubscriptionTopic,
+            fileIndexerSnsTopic: FileIndexerSnsTopic,
+            assetIndexerSnsTopic: AssetIndexerSnsTopic,
+            databaseIndexerSnsTopic: DatabaseIndexerSnsTopic,
         },
         dynamo: {
             appFeatureEnabledStorageTable: appFeatureEnabledStorageTable,
@@ -884,15 +1207,19 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             assetStorageTable: assetStorageTable,
             assetUploadsStorageTable: assetUploadsStorageTable,
             assetFileVersionsStorageTable: assetFileVersionsStorageTable,
+            assetFileMetadataVersionsStorageTable: assetFileMetadataVersionsStorageTable,
             assetVersionsStorageTable: assetVersionsStorageTable,
             commentStorageTable: commentStorageTable,
+            constraintsStorageTable: constraintsStorageTable,
             pipelineStorageTable: pipelineStorageTable,
             databaseStorageTable: databaseStorageTable,
             workflowStorageTable: workflowStorageTable,
             workflowExecutionsStorageTable: workflowExecutionsStorageTable,
-            metadataStorageTable: metadataStorageTable,
+            metadataSchemaStorageTableV2: metadataSchemaStorageTableV2,
+            databaseMetadataStorageTable: databaseMetadataStorageTable,
+            assetFileMetadataStorageTable: assetFileMetadataStorageTable,
+            fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
-            metadataSchemaStorageTable: metadataSchemaStorageTable,
             tagStorageTable: tagStorageTable,
             tagTypeStorageTable: tagTypeStorageTable,
             s3AssetBucketsStorageTable: s3AssetBucketsStorageTable,
@@ -902,4 +1229,417 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             userStorageTable: userStorageTable,
         },
     };
+
+    /////////////////////////////////////////////////////////////////////////////
+    // Create SNS Queuing Lambdas
+    /////////////////////////////////////////////////////////////////////////////
+
+    // Create file indexer SNS queuing Lambda
+    const fileIndexerSnsQueuingFunction = buildFileIndexerSnsQueuingFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
+
+    // Setup event source mapping for file indexer SNS queuing with GovCloud support
+    if (config.app.govCloud.enabled) {
+        // Subscribe assetFileMetadataStorageTable to fileIndexerSns
+        const esmFileIndexerAssetFileMetadata = new lambda.EventSourceMapping(
+            scope,
+            "FileIndexerSnsQueuingAssetFileMetadataStream",
+            {
+                target: fileIndexerSnsQueuingFunction,
+                eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+        const cfnEsmFileIndexerAssetFileMetadata = esmFileIndexerAssetFileMetadata.node
+            .defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmFileIndexerAssetFileMetadata.addPropertyDeletionOverride("Tags");
+
+        // Subscribe fileAttributeStorageTable to fileIndexerSns
+        const esmFileIndexerFileAttribute = new lambda.EventSourceMapping(
+            scope,
+            "FileIndexerSnsQueuingFileAttributeStream",
+            {
+                target: fileIndexerSnsQueuingFunction,
+                eventSourceArn: fileAttributeStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+        const cfnEsmFileIndexerFileAttribute = esmFileIndexerFileAttribute.node
+            .defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmFileIndexerFileAttribute.addPropertyDeletionOverride("Tags");
+    } else {
+        // Subscribe assetFileMetadataStorageTable to fileIndexerSns
+        const esmFileIndexerAssetFileMetadataNonGov = new lambda.EventSourceMapping(
+            scope,
+            "FileIndexerSnsQueuingAssetFileMetadataStream",
+            {
+                target: fileIndexerSnsQueuingFunction,
+                eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+
+        // Subscribe fileAttributeStorageTable to fileIndexerSns
+        const esmFileIndexerFileAttributeNonGov = new lambda.EventSourceMapping(
+            scope,
+            "FileIndexerSnsQueuingFileAttributeStream",
+            {
+                target: fileIndexerSnsQueuingFunction,
+                eventSourceArn: fileAttributeStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+    }
+
+    // Create asset indexer SNS queuing Lambda
+    const assetIndexerSnsQueuingFunction = buildAssetIndexerSnsQueuingFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
+
+    // Setup event source mappings for asset indexer SNS queuing with GovCloud support
+    // Asset table stream
+    if (config.app.govCloud.enabled) {
+        const esmAssetIndexerAsset = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+        const cfnEsmAssetIndexerAsset = esmAssetIndexerAsset.node
+            .defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmAssetIndexerAsset.addPropertyDeletionOverride("Tags");
+    } else {
+        const esmAssetIndexerAssetNonGov = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+    }
+
+    // Metadata table stream
+    if (config.app.govCloud.enabled) {
+        // Subscribe assetFileMetadataStorageTable to assetIndexerSns
+        const esmAssetIndexerAssetFileMetadata = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetFileMetadataStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+        const cfnEsmAssetIndexerAssetFileMetadata = esmAssetIndexerAssetFileMetadata.node
+            .defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmAssetIndexerAssetFileMetadata.addPropertyDeletionOverride("Tags");
+    } else {
+        // Subscribe assetFileMetadataStorageTable to assetIndexerSns
+        const esmAssetIndexerAssetFileMetadataNonGov = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetFileMetadataStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+    }
+
+    // Asset links table stream
+    if (config.app.govCloud.enabled) {
+        const esmAssetIndexerLinks = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetLinksStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetLinksStorageTableV2.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+        const cfnEsmAssetIndexerLinks = esmAssetIndexerLinks.node
+            .defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmAssetIndexerLinks.addPropertyDeletionOverride("Tags");
+
+        const esmAssetIndexerLinksMetadata = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetLinksStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetLinksMetadataStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+        const cfnEsmAssetIndexerLinksMetadata = esmAssetIndexerLinksMetadata.node
+            .defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmAssetIndexerLinksMetadata.addPropertyDeletionOverride("Tags");
+    } else {
+        const esmAssetIndexerLinksNonGov = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetLinksStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetLinksStorageTableV2.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+
+        const esmAssetIndexerLinksMetadataNonGov = new lambda.EventSourceMapping(
+            scope,
+            "AssetIndexerSnsQueuingAssetLinksMetadataStream",
+            {
+                target: assetIndexerSnsQueuingFunction,
+                eventSourceArn: assetLinksMetadataStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+    }
+
+    // Create database indexer SNS queuing Lambda
+    const databaseIndexerSnsQueuingFunction = buildDatabaseIndexerSnsQueuingFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
+
+    // Setup event source mapping for database indexer SNS queuing with GovCloud support
+    //Database Table + Database Metadata Table
+    if (config.app.govCloud.enabled) {
+        const esmDatabaseTableIndexerSns = new lambda.EventSourceMapping(
+            scope,
+            "DatabaseTableIndexerSnsQueuingDatabaseStreamv2",
+            {
+                target: databaseIndexerSnsQueuingFunction,
+                eventSourceArn: databaseStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+        const cfnEsmDatabaseTableIndexerSns = esmDatabaseTableIndexerSns.node
+            .defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmDatabaseTableIndexerSns.addPropertyDeletionOverride("Tags");
+
+        const esmDatabaseMetadataIndexerSns = new lambda.EventSourceMapping(
+            scope,
+            "DatabaseMetadataIndexerSnsQueuingDatabaseStreamv2",
+            {
+                target: databaseIndexerSnsQueuingFunction,
+                eventSourceArn: databaseMetadataStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+        const cfnEsmDatabaseMetadataIndexerSns = esmDatabaseMetadataIndexerSns.node
+            .defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmDatabaseMetadataIndexerSns.addPropertyDeletionOverride("Tags");
+    } else {
+        const esmDatabaseTableIndexerSnsNonGov = new lambda.EventSourceMapping(
+            scope,
+            "DatabaseTableIndexerSnsQueuingDatabaseStreamv2",
+            {
+                target: databaseIndexerSnsQueuingFunction,
+                eventSourceArn: databaseStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+
+        const esmDatabaseMetadataIndexerSnsNonGov = new lambda.EventSourceMapping(
+            scope,
+            "DatabaseMetadataTableIndexerSnsQueuingDatabaseStreamv2",
+            {
+                target: databaseIndexerSnsQueuingFunction,
+                eventSourceArn: databaseMetadataStorageTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 100,
+            }
+        );
+    }
+
+    /////////////////////////////////////////////////////////////////////////////
+    // Setup S3 bucket sync and indexing (moved from searchBuilder)
+    /////////////////////////////////////////////////////////////////////////////
+
+    // Loop through each asset bucket and setup S3 event notifications sync
+    let bucketSyncIndex = 0;
+    const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+    for (const record of bucketRecords) {
+        // Create SQS queue for S3 object created events
+        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated--" + record.bucket, {
+            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncCreated--${bucketSyncIndex}`,
+            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
+            encryption: kmsEncryptionKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: kmsEncryptionKey,
+            enforceSSL: true,
+        });
+        onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
+
+        // Create Lambda for bucket sync (created events)
+        const sqsBucketSyncFunctionCreated = buildSqsBucketSyncFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            record.bucket.bucketName,
+            record.prefix,
+            record.defaultSyncDatabaseId,
+            "created",
+            bucketSyncIndex,
+            config,
+            vpc,
+            subnets,
+            workflowAutoExecuteQueue
+        );
+
+        // Subscribe SQS queue to SNS topic
+        if (record.snsS3ObjectCreatedTopic) {
+            record.snsS3ObjectCreatedTopic.addSubscription(
+                new SqsSubscription(onS3ObjectCreatedQueue)
+            );
+        }
+
+        onS3ObjectCreatedQueue.grantConsumeMessages(sqsBucketSyncFunctionCreated);
+
+        // Setup event source mapping with GovCloud support
+        if (config.app.govCloud.enabled) {
+            const esmCreated = new lambda.EventSourceMapping(
+                scope,
+                `SQSEventSourceBucketSyncCreated-${bucketSyncIndex}`,
+                {
+                    eventSourceArn: onS3ObjectCreatedQueue.queueArn,
+                    target: sqsBucketSyncFunctionCreated,
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(3),
+                }
+            );
+            const cfnEsm = esmCreated.node.defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsm.addPropertyDeletionOverride("Tags");
+        } else {
+            const esmCreatedNonGov = new lambda.EventSourceMapping(
+                scope,
+                `SQSEventSourceBucketSyncCreated-${bucketSyncIndex}`,
+                {
+                    eventSourceArn: onS3ObjectCreatedQueue.queueArn,
+                    target: sqsBucketSyncFunctionCreated,
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(3),
+                }
+            );
+        }
+
+        bucketSyncIndex = bucketSyncIndex + 1;
+
+        // Create SQS queue for S3 object deleted events
+        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted--" + record.bucket, {
+            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncDeleted--${bucketSyncIndex}`,
+            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
+            encryption: kmsEncryptionKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: kmsEncryptionKey,
+            enforceSSL: true,
+        });
+        onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
+
+        // Create Lambda for bucket sync (deleted events)
+        const sqsBucketSyncFunctionRemoved = buildSqsBucketSyncFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            record.bucket.bucketName,
+            record.prefix,
+            record.defaultSyncDatabaseId,
+            "deleted",
+            bucketSyncIndex,
+            config,
+            vpc,
+            subnets,
+            workflowAutoExecuteQueue
+        );
+
+        // Subscribe SQS queue to SNS topic
+        if (record.snsS3ObjectDeletedTopic) {
+            record.snsS3ObjectDeletedTopic.addSubscription(
+                new SqsSubscription(onS3ObjectDeletedQueue)
+            );
+        }
+
+        onS3ObjectDeletedQueue.grantConsumeMessages(sqsBucketSyncFunctionRemoved);
+
+        // Setup event source mapping with GovCloud support
+        if (config.app.govCloud.enabled) {
+            const esmDeleted = new lambda.EventSourceMapping(
+                scope,
+                `SQSEventSourceBucketSyncDeleted-${bucketSyncIndex}`,
+                {
+                    eventSourceArn: onS3ObjectDeletedQueue.queueArn,
+                    target: sqsBucketSyncFunctionRemoved,
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(3),
+                }
+            );
+            const cfnEsm = esmDeleted.node.defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsm.addPropertyDeletionOverride("Tags");
+        } else {
+            const esmDeletedNonGov = new lambda.EventSourceMapping(
+                scope,
+                `SQSEventSourceBucketSyncDeleted-${bucketSyncIndex}`,
+                {
+                    eventSourceArn: onS3ObjectDeletedQueue.queueArn,
+                    target: sqsBucketSyncFunctionRemoved,
+                    batchSize: 10,
+                    maxBatchingWindow: cdk.Duration.seconds(3),
+                }
+            );
+        }
+
+        bucketSyncIndex = bucketSyncIndex + 1;
+    }
+
+    // Add Nag suppressions for SQS queues
+    NagSuppressions.addResourceSuppressions(
+        scope,
+        [
+            {
+                id: "AwsSolutions-SQS3",
+                reason: "Intended not to use DLQs for these types of SQS events. Files easily redriven based on the logic of assets.",
+            },
+        ],
+        true
+    );
+
+    //Return final storage resource object
+    return storageResources;
 }

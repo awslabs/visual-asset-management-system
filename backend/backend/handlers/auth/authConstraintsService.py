@@ -1,396 +1,708 @@
-#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-#  SPDX-License-Identifier: Apache-2.0
+# Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
 
-import json
-from handlers.auth import request_to_claims
-import boto3
+"""Auth Constraints service handler for VAMS API."""
+
 import os
-from customLogging.logger import safeLogger
-from common.dynamodb import to_update_expr
+import boto3
+import json
+import uuid
+from datetime import datetime
 from boto3.dynamodb.conditions import Key
-from handlers.authz import CasbinEnforcer
-from common.constants import STANDARD_JSON_RESPONSE
+from botocore.config import Config
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.constants import (
+    STANDARD_JSON_RESPONSE,
+    ALLOWED_CONSTRAINT_PERMISSIONS,
+    ALLOWED_CONSTRAINT_PERMISSION_TYPES,
+    ALLOWED_CONSTRAINT_OBJECT_TYPES,
+    ALLOWED_CONSTRAINT_OPERATORS
+)
 from common.validators import validate
+from handlers.authz import CasbinEnforcer
+from handlers.auth import request_to_claims
+from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
+from models.common import (
+    APIGatewayProxyResponseV2, internal_error, success,
+    validation_error, general_error, authorization_error,
+    VAMSGeneralErrorResponse
+)
+from models.roleConstraints import (
+    GetConstraintsRequestModel, CreateConstraintRequestModel,
+    ConstraintResponseModel, ConstraintOperationResponseModel
+)
 
+# Configure AWS clients with retry configuration
+retry_config = Config(
+    retries={
+        'max_attempts': 5,
+        'mode': 'adaptive'
+    }
+)
+
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+logger = safeLogger(service_name="AuthConstraintsService")
+
+# Global variables for claims and roles
 claims_and_roles = {}
 
-logger = safeLogger(service="AuthConstraintsService")
+# Load environment variables with error handling
+try:
+    constraints_table_name = os.environ["CONSTRAINTS_TABLE_NAME"]  # New optimized table
+    roles_table_name = os.environ.get("ROLES_TABLE_NAME")  # Optional for validation
+except Exception as e:
+    logger.exception("Failed loading environment variables")
+    raise e
 
-region = os.environ['AWS_REGION']
-dynamodb = boto3.resource('dynamodb', region_name=region)
-dynamodb_client = boto3.client('dynamodb')
+# Initialize DynamoDB tables
+constraints_table = dynamodb.Table(constraints_table_name)
+roles_table = dynamodb.Table(roles_table_name) if roles_table_name else None
 
-constraintsTableName = os.environ['AUTH_TABLE_NAME']
+#######################
+# Helper Functions for New Table Format
+#######################
 
-table = dynamodb.Table(constraintsTableName)
-
-attrs = "name,groupPermissions,constraintId,description,criteriaAnd,criteriaOr,userPermissions,objectType".split(",")
-keys_attrs = {"#{f}".format(f=f): f for f in attrs}
-
-# Hard-coded allowed values for constraint fields (matching frontend constants)
-ALLOWED_PERMISSIONS = [
-    'GET',
-    'PUT', 
-    'POST',
-    'DELETE'
-]
-
-ALLOWED_PERMISSION_TYPES = [
-    'allow',
-    'deny'
-]
-
-ALLOWED_OBJECT_TYPES = [
-    'database',
-    'asset',
-    'api',
-    'web',
-    'tag',
-    'tagType',
-    'role',
-    'userRole',
-    'pipeline',
-    'workflow',
-    'metadataSchema'
-]
-
-ALLOWED_OPERATORS = [
-    'equals',
-    'contains',
-    'does_not_contain',
-    'starts_with',
-    'ends_with',
-    'is_one_of',
-    'is_not_one_of'
-]
-
-def validate_constraint_fields(constraint):
-    """Validate constraint fields against allowed values"""
+def _transform_to_denormalized_format(constraint_data):
+    """Transform constraint data to denormalized table format
+    Creates one item per UNIQUE group/user for efficient GSI queries
     
-    # Validate objectType
-    if 'objectType' in constraint:
-        if constraint['objectType'] not in ALLOWED_OBJECT_TYPES:
-            raise ValueError(f"Invalid objectType. Allowed values: {', '.join(ALLOWED_OBJECT_TYPES)}")
+    Args:
+        constraint_data: Constraint data in API format
+        
+    Returns:
+        List of items formatted for denormalized ConstraintsStorageTable
+    """
+    items = []
+    base_constraint_id = constraint_data['identifier']
     
-    # Validate groupPermissions
-    if 'groupPermissions' in constraint:
-        for perm in constraint['groupPermissions']:
-            # Validate permission
-            if 'permission' in perm and perm['permission'] not in ALLOWED_PERMISSIONS:
-                raise ValueError(f"Invalid permission. Allowed values: {', '.join(ALLOWED_PERMISSIONS)}")
-            
-            # Validate permissionType
-            if 'permissionType' in perm and perm['permissionType'] not in ALLOWED_PERMISSION_TYPES:
-                raise ValueError(f"Invalid permissionType. Allowed values: {', '.join(ALLOWED_PERMISSION_TYPES)}")
-            
-            # Validate groupId exists (check roles table)
-            if 'groupId' in perm:
-                try:
-                    roles_table_name = os.environ.get("ROLES_TABLE_NAME")
-                    if roles_table_name:
-                        roles_table = dynamodb.Table(roles_table_name)
-                        role_response = roles_table.get_item(Key={'roleName': perm['groupId']})
-                        if 'Item' not in role_response:
-                            raise ValueError(f"Group/Role does not exist")
-                except Exception as e:
-                    logger.warning(f"Could not validate groupId '{perm['groupId']}': {e}")
-    
-    # Validate criteria operators
-    if 'criteriaAnd' in constraint:
-        for criteria in constraint['criteriaAnd']:
-            if 'operator' in criteria and criteria['operator'] not in ALLOWED_OPERATORS:
-                raise ValueError(f"Invalid operator. Allowed values: {', '.join(ALLOWED_OPERATORS)}")
-    
-    if 'criteriaOr' in constraint:
-        for criteria in constraint['criteriaOr']:
-            if 'operator' in criteria and criteria['operator'] not in ALLOWED_OPERATORS:
-                raise ValueError(f"Invalid operator. Allowed values: {', '.join(ALLOWED_OPERATORS)}")
-    
-    return True
-
-
-class ValidationError(Exception):
-    def __init__(self, code: int, resp: object) -> None:
-        self.code = code
-        self.resp = resp
-
-
-def get_constraint(event, response):
-
-    key, constraint = get_constraint_from_event(event)
-
-    response['body'] = table.get_item(
-        Key=key,
-        ExpressionAttributeNames=keys_attrs,
-        ProjectionExpression=",".join(keys_attrs.keys()),
-    )
-    response['body']['constraint'] = response['body']['Item']
-
-
-def get_constraints(event, response, query_params):
-    paginator = dynamodb.meta.client.get_paginator('query')
-
-    #Change KeyCondition for paginiation due to bug: https://github.com/boto/boto3/issues/2300
-    page_iterator = paginator.paginate(
-        TableName=constraintsTableName,
-        ExpressionAttributeNames=keys_attrs,
-        ProjectionExpression=",".join(keys_attrs.keys()),
-        KeyConditionExpression=Key('entityType').eq('constraint') & Key('sk').begins_with('constraint#'),
-        PaginationConfig={
-            'MaxItems': int(query_params['maxItems']),
-            'PageSize': int(query_params['pageSize']),
-            'StartingToken': query_params['startingToken']
-        }
-    ).build_full_result()
-
-    result = {}
-    result['Items'] = page_iterator["Items"]
-
-    if "NextToken" in page_iterator:
-        result["NextToken"] = page_iterator["NextToken"]
-
-    response['body'] = {"message": result}
-
-#
-# {
-#   "identifier": "constraintId",
-#   "name": "user defined name",
-#   "description": "description",
-#   "groupPermissions": [{ ... }]
-#   "created": "utc timestamp",
-#   "updated": "utc timestamp",
-#   "criteria": [
-#     {
-#       "field": "fieldname",
-#       "operator": "contains", # one of contains, does not contain, is one of, is not one of
-#       "value": "value" # or ["value", "value"]
-#     }
-#   ]
-# }
-#
-
-def get_constraint_from_event(event):
-    constraint = None
-    if 'body' in event:
-        if isinstance(event['body'], str):
-            constraint = json.loads(event['body'])
-        else:
-            constraint = event['body']
-
-    pathParameters = event.get('pathParameters', {})
-    if 'constraintId' in pathParameters:
-        constraintId = pathParameters['constraintId']
-    else:
-        constraintId = constraint['identifier']
-
-    key = {
-        'entityType': 'constraint',
-        'sk': 'constraint#' + constraintId,
+    # Base constraint data shared across all denormalized items
+    base_item = {
+        'name': constraint_data.get('name', ''),
+        'description': constraint_data.get('description', ''),
+        'objectType': constraint_data.get('objectType', ''),
+        # Store complex data as JSON strings
+        'criteriaAnd': json.dumps(constraint_data.get('criteriaAnd', [])),
+        'criteriaOr': json.dumps(constraint_data.get('criteriaOr', [])),
+        'groupPermissions': json.dumps(constraint_data.get('groupPermissions', [])),
+        'userPermissions': json.dumps(constraint_data.get('userPermissions', [])),
+        # Metadata
+        'dateCreated': constraint_data.get('dateCreated', datetime.utcnow().isoformat()),
+        'dateModified': datetime.utcnow().isoformat(),
+        'createdBy': constraint_data.get('createdBy', 'SYSTEM_USER'),
+        'modifiedBy': constraint_data.get('modifiedBy', 'SYSTEM_USER'),
     }
-    return key, constraint
-
-
-def update_constraint(event, response):
-    key, constraint = get_constraint_from_event(event)
     
-    # Validate constraint fields against allowed values
-    try:
-        validate_constraint_fields(constraint)
-    except ValueError as e:
-        raise ValidationError(400, str(e))
+    # Create one item per UNIQUE groupId (not per permission)
+    # Multiple permissions for same group are stored in the groupPermissions JSON
+    group_permissions = constraint_data.get('groupPermissions', [])
+    unique_group_ids = set()
+    for group_perm in group_permissions:
+        group_id = group_perm.get('groupId')
+        if group_id and group_id not in unique_group_ids:
+            unique_group_ids.add(group_id)
+            item = base_item.copy()
+            item['constraintId'] = f"{base_constraint_id}#group#{group_id}"
+            item['groupId'] = group_id  # For GroupPermissionsIndex GSI
+            items.append(item)
     
-    keys_map, values_map, expr = to_update_expr(constraint)
-
-    logger.info(msg={
-        "keys_map": keys_map,
-        "values_map": values_map,
-        "expr": expr,
-    })
-
-    #Do validation checks on constraint inputs
-    body = constraint  # Use the constraint object from get_constraint_from_event
-
-    if ('criteriaOr' not in body and 'criteriaAnd' not in body):
-        raise ValidationError(404, "Constraint must include criteriaOr or criteriaAnd statements")
-
-    totalCriteria = 0
-    if 'criteriaOr' in body:
-        totalCriteria += len(body['criteriaOr'])
-
-    if 'criteriaAnd' in body:
-        totalCriteria += len(body['criteriaAnd'])
-
-    if (totalCriteria == 0):
-        raise ValidationError(404, "Constraint must include criteriaOr or criteriaAnd statements")
-
-    if 'criteriaAnd' in body:
-        for criteriaAnd in body['criteriaAnd']:
-            (valid, message) = validate({
-                'criteriaAnd': {
-                    'value': criteriaAnd['value'],
-                    'validator': 'REGEX'
-                }
-            })
-
-            if not valid:
-                raise ValidationError(400, message)
-
-    if 'criteriaOr' in body:
-        for criteriaOr in body['criteriaOr']:
-            (valid, message) = validate({
-                'criteriaOrValue': {
-                    'value': criteriaOr['value'],
-                    'validator': 'REGEX'
-                }
-            })
-
-            if not valid:
-                raise ValidationError(400, message)
-
-    if 'groupPermissions' in body:
-        for groupPermission in body['groupPermissions']:
-            (valid, message) = validate({
-                'roleName': {
-                    'value': groupPermission['groupId'],
-                    'validator': 'OBJECT_NAME'
-                }
-            })
-
-            if not valid:
-                raise ValidationError(400, message)
-
-    if 'userPermissions' in body:
-        for userPermission in body['userPermissions']:
-            (valid, message) = validate({
-                'userId': {
-                    'value': userPermission['userId'],
-                    'validator': 'USERID'
-                }
-            })
-
-            if not valid:
-                raise ValidationError(400, message)
-
-    #Conduct final insert/update
-    table.update_item(
-        Key=key,
-        UpdateExpression=expr,
-        ExpressionAttributeNames=keys_map,
-        ExpressionAttributeValues=values_map,
-        ReturnValues="UPDATED_NEW"
-    )
-
-    response['body'] = {"message": "Constraint created/updated."}
-    response['body']['constraint'] = json.dumps(constraint)
+    # Create one item per UNIQUE userId (not per permission)
+    # Multiple permissions for same user are stored in the userPermissions JSON
+    user_permissions = constraint_data.get('userPermissions', [])
+    unique_user_ids = set()
+    for user_perm in user_permissions:
+        user_id = user_perm.get('userId')
+        if user_id and user_id not in unique_user_ids:
+            unique_user_ids.add(user_id)
+            item = base_item.copy()
+            item['constraintId'] = f"{base_constraint_id}#user#{user_id}"
+            item['userId'] = user_id  # For UserPermissionsIndex GSI
+            items.append(item)
+    
+    # Safety: If no permissions exist, create one base item (shouldn't happen in practice)
+    if len(items) == 0:
+        item = base_item.copy()
+        item['constraintId'] = base_constraint_id
+        items.append(item)
+    
+    return items
 
 
-def delete_constraint(event, response):
-    key, constraint = get_constraint_from_event(event)
-    table.delete_item(
-        Key=key
-    )
-    response['body'] = {"message": "Constraint deleted."}
+def _transform_from_new_format(item):
+    """Transform new table format back to API response format
+    
+    Args:
+        item: Item from new ConstraintsStorageTable
+        
+    Returns:
+        Dictionary in API response format with base constraintId
+    """
+    # Helper function to parse field that might be JSON string or already parsed
+    def parse_field(value, default=[]):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return default
+        elif isinstance(value, list):
+            return value
+        return default
+    
+    # Extract base constraintId (remove #group# or #user# suffix for API response)
+    full_constraint_id = item.get('constraintId', '')
+    base_constraint_id = full_constraint_id.split('#group#')[0].split('#user#')[0]
+    
+    # Parse JSON strings back to objects (handle both string and already-parsed cases)
+    constraint = {
+        'constraintId': base_constraint_id,  # Return base ID without denormalization suffix
+        'name': item.get('name', ''),
+        'description': item.get('description', ''),
+        'objectType': item.get('objectType', ''),
+        'criteriaAnd': parse_field(item.get('criteriaAnd'), []),
+        'criteriaOr': parse_field(item.get('criteriaOr'), []),
+        'groupPermissions': parse_field(item.get('groupPermissions'), []),
+        'userPermissions': parse_field(item.get('userPermissions'), []),
+    }
+    
+    # Add metadata if present
+    if 'dateCreated' in item:
+        constraint['dateCreated'] = item['dateCreated']
+    if 'dateModified' in item:
+        constraint['dateModified'] = item['dateModified']
+    if 'createdBy' in item:
+        constraint['createdBy'] = item['createdBy']
+    if 'modifiedBy' in item:
+        constraint['modifiedBy'] = item['modifiedBy']
+    
+    return constraint
 
 
-def lambda_handler(event, context):
-    global claims_and_roles
-    response = STANDARD_JSON_RESPONSE
+#######################
+# Business Logic Functions
+#######################
+
+def validate_constraint_role_exists(group_id):
+    """Validate that a role/group exists in the roles table
+    
+    Args:
+        group_id: The role/group ID to validate
+        
+    Returns:
+        True if role exists, False otherwise
+    """
+    if not roles_table:
+        logger.warning(f"Roles table not configured, skipping role validation for {group_id}")
+        return True
+    
     try:
+        role_response = roles_table.get_item(Key={'roleName': group_id})
+        return 'Item' in role_response
+    except Exception as e:
+        logger.warning(f"Could not validate groupId '{group_id}': {e}")
+        return True  # Allow if validation fails
 
-        queryParameters = event.get('queryStringParameters', {})
-        validate_pagination_info(queryParameters)
 
-        if 'constraintId' in event.get('pathParameters', {}):
-            constraintId = event.get('pathParameters').get('constraintId')
+def get_constraint_details(constraint_id):
+    """Get constraint details from denormalized DynamoDB table
+    Scans for any item with the base constraintId (may have #group# or #user# suffix)
+    
+    Args:
+        constraint_id: The base constraint ID (without #group# or #user# suffix)
+        
+    Returns:
+        The constraint details or None if not found
+    """
+    try:
+        from boto3.dynamodb.conditions import Attr
+        
+        # Scan for items that start with the base constraintId
+        # This will match both exact IDs and denormalized IDs with suffixes
+        logger.info(f"Scanning for constraint with ID starting with: {constraint_id}")
+        
+        response = constraints_table.scan(
+            FilterExpression=Attr('constraintId').begins_with(constraint_id)
+        )
+        
+        items = response.get('Items', [])
+        logger.info(f"Scan found {len(items)} items for constraint {constraint_id}")
+        
+        if items:
+            logger.debug(f"Retrieved constraint {constraint_id}")
+            return _transform_from_new_format(items[0])
+        
+        logger.warning(f"No items found for constraint {constraint_id}")
+        return None
+    except Exception as e:
+        logger.exception(f"Error getting constraint details: {e}")
+        raise VAMSGeneralErrorResponse("Error retrieving constraint")
 
+
+def get_all_constraints(query_params):
+    """Get all constraints with pagination from denormalized table
+    Deduplicates by base constraintId to return unique constraints
+    
+    Args:
+        query_params: Query parameters for pagination
+        
+    Returns:
+        Dictionary with Items and optional NextToken
+    """
+    try:
+        # Use resource-level scan for automatic deserialization
+        scan_kwargs = {
+            'Limit': int(query_params['pageSize'])
+        }
+        
+        if query_params.get('startingToken'):
+            scan_kwargs['ExclusiveStartKey'] = query_params['startingToken']
+        
+        # Perform scan and collect items
+        response = constraints_table.scan(**scan_kwargs)
+        items = response.get('Items', [])
+        
+        # Deduplicate by base constraintId (remove #group# or #user# suffixes)
+        unique_constraints = {}
+        for item in items:
+            full_constraint_id = item.get('constraintId', '')
+            base_constraint_id = full_constraint_id.split('#group#')[0].split('#user#')[0]
+            
+            # Only keep the first occurrence of each base constraintId
+            if base_constraint_id not in unique_constraints:
+                unique_constraints[base_constraint_id] = item
+        
+        # Transform items from new format to API format
+        formatted_items = [_transform_from_new_format(item) for item in unique_constraints.values()]
+        
+        result = {'Items': formatted_items}
+        
+        # Handle pagination token
+        if 'LastEvaluatedKey' in response:
+            result['NextToken'] = response['LastEvaluatedKey']
+        
+        logger.debug(f"Retrieved {len(formatted_items)} unique constraints from {len(items)} denormalized items")
+        return result
+    except Exception as e:
+        logger.exception(f"Error getting all constraints: {e}")
+        raise VAMSGeneralErrorResponse("Error retrieving constraints")
+
+
+def create_or_update_constraint(constraint_data, claims_and_roles):
+    """Create or update a constraint in denormalized format
+    Creates/updates multiple items (one per group/user permission)
+    
+    Args:
+        constraint_data: Dictionary with constraint data
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        ConstraintOperationResponseModel with operation result
+    """
+    try:
+        # Generate unique constraintId if not provided or empty
+        constraint_id = constraint_data.get('identifier', '').strip()
+        if not constraint_id:
+            constraint_id = str(uuid.uuid4())
+            constraint_data['identifier'] = constraint_id
+            logger.info(f"Generated new constraintId: {constraint_id}")
+        
+        # Note: Constraints don't have object-level authorization in Casbin
+        # Only API-level authorization is checked in the lambda_handler
+        # This is because constraints are configuration objects, not data entities
+        
+        # Validate role existence for groupPermissions
+        for group_perm in constraint_data.get('groupPermissions', []):
+            if not validate_constraint_role_exists(group_perm['groupId']):
+                raise VAMSGeneralErrorResponse(f"Group/Role does not exist")
+        
+        logger.info(f"Creating/updating constraint {constraint_id}")
+        
+        # Add metadata
+        now = datetime.utcnow().isoformat()
+        username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "system"
+        constraint_data['dateModified'] = now
+        constraint_data['modifiedBy'] = username
+        if 'dateCreated' not in constraint_data:
+            constraint_data['dateCreated'] = now
+            constraint_data['createdBy'] = username
+        
+        # Delete existing denormalized items for this constraint (if updating)
+        try:
+            _delete_denormalized_items(constraint_id)
+        except Exception as delete_error:
+            logger.warning(f"Error deleting old denormalized items: {delete_error}")
+        
+        # Transform to denormalized format (returns array of items)
+        denormalized_items = _transform_to_denormalized_format(constraint_data)
+        
+        # Write all denormalized items using batch write for efficiency
+        with constraints_table.batch_writer() as batch:
+            for item in denormalized_items:
+                batch.put_item(Item=item)
+        
+        logger.info(f"Successfully wrote {len(denormalized_items)} denormalized items for constraint {constraint_id}")
+        
+        # Return success response
+        return ConstraintOperationResponseModel(
+            success=True,
+            message=f"Constraint {constraint_id} created/updated successfully",
+            constraintId=constraint_id,
+            operation="create",
+            timestamp=now
+        )
+    except Exception as e:
+        logger.exception(f"Error creating/updating constraint: {e}")
+        if isinstance(e, VAMSGeneralErrorResponse):
+            raise e
+        raise VAMSGeneralErrorResponse("Error creating/updating constraint")
+
+
+def _delete_denormalized_items(base_constraint_id):
+    """Delete all denormalized items for a constraint
+    
+    Args:
+        base_constraint_id: The base constraint ID (without #group# or #user# suffix)
+    """
+    try:
+        from boto3.dynamodb.conditions import Attr
+        
+        logger.info(f"Scanning for items to delete with ID starting with: {base_constraint_id}")
+        
+        # Scan for all items that start with the base constraintId
+        response = constraints_table.scan(
+            FilterExpression=Attr('constraintId').begins_with(base_constraint_id)
+        )
+        
+        items_to_delete = response.get('Items', [])
+        logger.info(f"Found {len(items_to_delete)} items to delete for constraint {base_constraint_id}")
+        
+        # Handle pagination if there are many items
+        while 'LastEvaluatedKey' in response:
+            response = constraints_table.scan(
+                FilterExpression=Attr('constraintId').begins_with(base_constraint_id),
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            items_to_delete.extend(response.get('Items', []))
+        
+        # Delete all denormalized items using batch write
+        if items_to_delete:
+            with constraints_table.batch_writer() as batch:
+                for item in items_to_delete:
+                    logger.debug(f"Deleting item: {item['constraintId']}")
+                    batch.delete_item(Key={'constraintId': item['constraintId']})
+            logger.info(f"Successfully deleted {len(items_to_delete)} denormalized items for constraint {base_constraint_id}")
+        else:
+            logger.warning(f"No items found to delete for constraint {base_constraint_id}")
+    except Exception as e:
+        logger.exception(f"Error deleting denormalized items: {e}")
+        # Don't raise - allow delete to continue even if cleanup fails
+
+
+def delete_constraint(constraint_id, claims_and_roles):
+    """Delete a constraint and all its denormalized items
+    
+    Args:
+        constraint_id: The base constraint ID
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        ConstraintOperationResponseModel with operation result
+    """
+    try:
+        # Note: Constraints don't have object-level authorization in Casbin
+        # Only API-level authorization is checked in the lambda_handler
+        # This is because constraints are configuration objects, not data entities
+        
+        logger.info(f"Deleting constraint {constraint_id} and all denormalized items")
+        
+        # Delete all denormalized items for this constraint
+        # Don't check existence first - just try to delete
+        # This handles eventual consistency issues and is more efficient
+        _delete_denormalized_items(constraint_id)
+        
+        # Check if any items were actually deleted by doing a quick scan
+        from boto3.dynamodb.conditions import Attr
+        check_response = constraints_table.scan(
+            FilterExpression=Attr('constraintId').begins_with(constraint_id),
+            Limit=1
+        )
+        
+        if len(check_response.get('Items', [])) > 0:
+            # Items still exist, deletion may have failed
+            logger.warning(f"Items still exist after deletion attempt for constraint {constraint_id}")
+            raise VAMSGeneralErrorResponse("Error deleting constraint - items may still exist")
+        
+        logger.info(f"Successfully deleted all items for constraint {constraint_id}")
+        
+        # Return success response
+        now = datetime.utcnow().isoformat()
+        return ConstraintOperationResponseModel(
+            success=True,
+            message=f"Constraint {constraint_id} deleted successfully",
+            constraintId=constraint_id,
+            operation="delete",
+            timestamp=now
+        )
+    except Exception as e:
+        logger.exception(f"Error deleting constraint: {e}")
+        if isinstance(e, VAMSGeneralErrorResponse):
+            raise e
+        raise VAMSGeneralErrorResponse("Error deleting constraint")
+
+
+#######################
+# Request Handlers
+#######################
+
+def handle_get_request(event):
+    """Handle GET requests for constraints
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    path_parameters = event.get('pathParameters', {})
+    query_parameters = event.get('queryStringParameters', {}) or {}
+    
+    try:
+        # Case 1: Get a specific constraint
+        if 'constraintId' in path_parameters:
+            constraint_id = path_parameters['constraintId']
+            logger.info(f"Getting constraint {constraint_id}")
+            
+            # Validate constraintId
             (valid, message) = validate({
                 'constraintId': {
-                    'value': constraintId,
+                    'value': constraint_id,
                     'validator': 'OBJECT_NAME'
                 }
             })
-
             if not valid:
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
-
-
-        elif 'body' in event and isinstance(event['body'], str):
+                logger.error(message)
+                return validation_error(body={'message': message})
+            
+            # Get the constraint
+            constraint = get_constraint_details(constraint_id)
+            
+            # Check if constraint exists
+            # Note: Constraints don't have object-level authorization in Casbin
+            # Only API-level authorization is checked in the lambda_handler
+            if constraint:
+                # Convert to ConstraintResponseModel for consistent response format
+                try:
+                    response_model = ConstraintResponseModel(**constraint)
+                    return success(body={"constraint": response_model.dict()})
+                except ValidationError as v:
+                    logger.exception(f"Error converting constraint to response model: {v}")
+                    # Fall back to raw response if conversion fails
+                    return success(body={"constraint": constraint})
+            else:
+                return general_error(body={"message": "Constraint not found"}, status_code=404)
+        
+        # Case 2: List all constraints
+        else:
+            logger.info("Listing all constraints")
+            
+            # Parse and validate query parameters
             try:
-                body = json.loads(event['body'])
+                request_model = parse(query_parameters, model=GetConstraintsRequestModel)
+                query_params = {
+                    'maxItems': request_model.maxItems,
+                    'pageSize': request_model.pageSize,
+                    'startingToken': request_model.startingToken
+                }
+            except ValidationError as v:
+                logger.exception(f"Validation error in query parameters: {v}")
+                # Fall back to default pagination with validation
+                validate_pagination_info(query_parameters)
+                query_params = query_parameters
+            
+            # Get all constraints
+            constraints_result = get_all_constraints(query_params)
+            
+            # Convert to ConstraintResponseModel instances
+            formatted_items = []
+            for item in constraints_result.get('Items', []):
+                try:
+                    constraint_model = ConstraintResponseModel(**item)
+                    formatted_items.append(constraint_model.dict())
+                except ValidationError:
+                    # Fall back to raw item if conversion fails
+                    formatted_items.append(item)
+            
+            # Build response
+            response = {"message": {"Items": formatted_items}}
+            if 'NextToken' in constraints_result:
+                response['message']['NextToken'] = constraints_result['NextToken']
+            
+            return success(body=response)
+    
+    except VAMSGeneralErrorResponse as e:
+        return general_error(body={"message": str(e)})
+    except Exception as e:
+        logger.exception(f"Error handling GET request: {e}")
+        return internal_error()
+
+
+def handle_post_request(event):
+    """Handle POST requests to create/update constraints
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    path_parameters = event.get('pathParameters', {})
+    
+    try:
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                response['statusCode'] = 400
-                response['body'] = json.dumps({"message": "Invalid JSON in request body"})
-                return response
-            if 'identifier' in body:
-                constraintId = body['identifier']
-        elif 'body' in event and isinstance(event['body'], dict) and 'identifier' in event['body']:
-            constraintId = event['body']['identifier']
-
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string or dict")
+            return validation_error(body={'message': "Request body cannot be parsed"})
+        
+        # If constraintId is in path, use it; otherwise use identifier from body
+        if 'constraintId' in path_parameters:
+            constraint_id = path_parameters['constraintId']
+            # Validate constraintId from path
             (valid, message) = validate({
                 'constraintId': {
-                    'value': constraintId,
+                    'value': constraint_id,
                     'validator': 'OBJECT_NAME'
                 }
             })
-
             if not valid:
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
+                logger.error(message)
+                return validation_error(body={'message': message})
+            
+            # Override identifier in body with path parameter
+            body['identifier'] = constraint_id
+        
+        # Parse and validate the request model
+        request_model = parse(body, model=CreateConstraintRequestModel)
+        
+        # Create/update the constraint
+        result = create_or_update_constraint(
+            request_model.dict(exclude_unset=True),
+            claims_and_roles
+        )
+        
+        # Return success response with constraint data
+        response_body = result.dict()
+        response_body['constraint'] = json.dumps(request_model.dict(exclude_unset=True))
+        
+        return success(body=response_body)
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Error handling POST request: {e}")
+        return internal_error()
 
 
-        claims_and_roles = request_to_claims(event)
+def handle_delete_request(event):
+    """Handle DELETE requests for constraints
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    path_parameters = event.get('pathParameters', {})
+    
+    # Validate required path parameters
+    if 'constraintId' not in path_parameters:
+        return validation_error(body={'message': "No constraint ID in API Call"})
+    
+    constraint_id = path_parameters['constraintId']
+    
+    # Validate constraintId
+    (valid, message) = validate({
+        'constraintId': {
+            'value': constraint_id,
+            'validator': 'OBJECT_NAME'
+        }
+    })
+    if not valid:
+        logger.error(message)
+        return validation_error(body={'message': message})
+    
+    try:
+        # Delete the constraint
+        result = delete_constraint(constraint_id, claims_and_roles)
+        
+        # Return success response
+        return success(body=result.dict())
+    
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Error handling DELETE request: {e}")
+        return internal_error()
+
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for auth constraints service APIs"""
+    global claims_and_roles
+    claims_and_roles = request_to_claims(event)
+    
+    try:
+        # Parse request
+        path = event['requestContext']['http']['path']
+        method = event['requestContext']['http']['method']
+        
+        logger.info(f"Processing {method} request for path: {path}")
+        
+        # Check API authorization
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-
+        
         if not method_allowed_on_api:
-            raise ValidationError(403, "Not Authorized")
-
-        method = event['requestContext']['http']['method']
-        pathParameters = event.get('pathParameters', {})
-
-        logger.info(event)
-
-        # For GET requests, retrieve the constraints from the table and return them as a json object
-        if method == 'GET' and 'constraintId' in pathParameters:
-            get_constraint(event, response)
-
-        if method == 'GET' and 'constraintId' not in pathParameters:
-            get_constraints(event, response, queryParameters)
-
-        # For POST requests, add the new constraint to the table and return the new constraint as a json object
-        if method == 'POST':
-            update_constraint(event, response)
-
-        # For DELETE requests, remove the constraint from the table and return the deleted constraint as a json object
-        if method == 'DELETE':
-            delete_constraint(event, response)
-
-        response['body'] = json.dumps(response['body'])
-        return response
-
-    except ValidationError as ex:
-        logger.error(ex)
-        response['statusCode'] = ex.code
-        if isinstance(response['body'], str):
-            response['body'] = {}
-        response['body']['error'] = ex.resp
-        response['body'] = json.dumps(response['body'])
-        return response
-
+            return authorization_error()
+        
+        # Route to appropriate handler
+        if method == 'GET':
+            return handle_get_request(event)
+        elif method == 'POST':
+            return handle_post_request(event)
+        elif method == 'DELETE':
+            return handle_delete_request(event)
+        elif method == 'PUT':
+            # PUT is treated the same as POST for constraints
+            return handle_post_request(event)
+        else:
+            return validation_error(body={'message': "Method not allowed"})
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
     except Exception as e:
-        logger.error(event)
-        logger.error(e)
-        response['statusCode'] = 500
-        if isinstance(response['body'], str):
-            response['body'] = {}
-        response['body']['error'] = "Internal Server Error"
-        response['body'] = json.dumps(response['body'])
-        return response
+        logger.exception(f"Internal error: {e}")
+        return internal_error()

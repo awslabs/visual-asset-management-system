@@ -18,6 +18,7 @@ import {
 } from "@cloudscape-design/components";
 import { SearchExplanation } from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
+import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
 import FilePreviewThumbnailCell from "./SearchPreviewThumbnail/FilePreviewThumbnailCell";
 import AssetPreviewModal from "../filemanager/modals/AssetPreviewModal";
@@ -36,6 +37,8 @@ import { useEffect, useState } from "react";
 import { fetchtagTypes } from "../../services/APIService";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 import { Checkbox } from "@cloudscape-design/components";
+import MapThumbnail from "./SearchResults/MapThumbnail";
+import { Cache } from "aws-amplify";
 
 var tagTypes: any;
 
@@ -87,11 +90,13 @@ const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ expl
     </Popover>
 );
 
-// Helper component to render metadata popover
+// Helper component to render metadata and attributes popover
 const MetadataPopover: React.FC<{
     metadata: Array<{ name: string; type: string; value: any }>;
-}> = ({ metadata }) => {
-    if (metadata.length === 0) {
+    attributes: Array<{ name: string; type: string; value: any }>;
+}> = ({ metadata, attributes }) => {
+    // Don't show popover if both arrays are empty
+    if (metadata.length === 0 && attributes.length === 0) {
         return <span></span>;
     }
 
@@ -103,19 +108,43 @@ const MetadataPopover: React.FC<{
             dismissButton={false}
             content={
                 <SpaceBetween size="s">
-                    <Box variant="h4">Metadata Fields ({metadata.length})</Box>
-                    <Box>
-                        <ul style={{ margin: 0, paddingLeft: "20px" }}>
-                            {metadata.map((field, idx) => (
-                                <li key={idx}>
-                                    <strong>
-                                        {field.name} ({field.type}):
-                                    </strong>{" "}
-                                    {String(field.value)}
-                                </li>
-                            ))}
-                        </ul>
-                    </Box>
+                    {/* Metadata Fields Section - only show if there are metadata fields */}
+                    {metadata.length > 0 && (
+                        <>
+                            <Box variant="h4">Metadata Fields ({metadata.length})</Box>
+                            <Box>
+                                <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                                    {metadata.map((field, idx) => (
+                                        <li key={idx}>
+                                            <strong>
+                                                {field.name} ({field.type}):
+                                            </strong>{" "}
+                                            {String(field.value)}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </Box>
+                        </>
+                    )}
+
+                    {/* Attribute Fields Section - only show if there are attribute fields */}
+                    {attributes.length > 0 && (
+                        <>
+                            <Box variant="h4">Attribute Fields ({attributes.length})</Box>
+                            <Box>
+                                <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                                    {attributes.map((field, idx) => (
+                                        <li key={idx}>
+                                            <strong>
+                                                {field.name} ({field.type}):
+                                            </strong>{" "}
+                                            {String(field.value)}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </Box>
+                        </>
+                    )}
                 </SpaceBetween>
             }
         >
@@ -124,51 +153,74 @@ const MetadataPopover: React.FC<{
     );
 };
 
-// Helper function to extract and format metadata fields with type information
-const extractMetadata = (item: any): Array<{ name: string; type: string; value: any }> => {
-    const metadata: Array<{ name: string; type: string; value: any }> = [];
-
-    // Type mapping for display
-    const typeLabels: Record<string, string> = {
-        str: "String",
-        num: "Number",
-        bool: "Boolean",
-        date: "Date",
-        list: "List",
-        gp: "Geo Point",
-        gs: "Geo Shape",
-    };
-
-    // Find all MD_ fields
-    Object.keys(item).forEach((key) => {
-        if (key.startsWith("MD_")) {
-            // Format: MD_<type>_<fieldname>
-            const parts = key.split("_");
-            if (parts.length >= 3) {
-                // parts[0] = 'MD', parts[1] = type, parts[2+] = field name
-                const fieldType = parts[1];
-                const fieldName = parts.slice(2).join("_");
-                metadata.push({
-                    name: fieldName,
-                    type: typeLabels[fieldType] || fieldType,
-                    value: item[key],
-                });
-            } else {
-                // Fallback: just remove MD_ prefix
-                metadata.push({
-                    name: key.substring(3),
-                    type: "Unknown",
-                    value: item[key],
-                });
-            }
+// Helper function to infer type from value
+const inferType = (value: any): string => {
+    if (value === null || value === undefined) {
+        return "Unknown";
+    }
+    if (typeof value === "number") {
+        return "Number";
+    }
+    if (typeof value === "boolean") {
+        return "Boolean";
+    }
+    if (Array.isArray(value)) {
+        return "List";
+    }
+    if (typeof value === "string") {
+        // Check if it's a date string
+        if (!isNaN(Date.parse(value)) && value.match(/^\d{4}-\d{2}-\d{2}/)) {
+            return "Date";
         }
-    });
+        return "String";
+    }
+    if (typeof value === "object") {
+        return "Object";
+    }
+    return "Unknown";
+};
 
-    return metadata;
+// Helper function to extract and format metadata and attribute fields with type information
+const extractMetadata = (
+    item: any
+): {
+    metadata: Array<{ name: string; type: string; value: any }>;
+    attributes: Array<{ name: string; type: string; value: any }>;
+} => {
+    const metadata: Array<{ name: string; type: string; value: any }> = [];
+    const attributes: Array<{ name: string; type: string; value: any }> = [];
+
+    // Check if MD_ exists as an object (new format)
+    if (item.MD_ && typeof item.MD_ === "object" && !Array.isArray(item.MD_)) {
+        Object.entries(item.MD_).forEach(([key, value]) => {
+            metadata.push({
+                name: key,
+                type: inferType(value),
+                value: value,
+            });
+        });
+    }
+
+    // Check if AB_ exists as an object (new format)
+    if (item.AB_ && typeof item.AB_ === "object" && !Array.isArray(item.AB_)) {
+        Object.entries(item.AB_).forEach(([key, value]) => {
+            attributes.push({
+                name: key,
+                type: inferType(value),
+                value: value,
+            });
+        });
+    }
+
+    return { metadata, attributes };
 };
 
 function columnRender(e: any, name: string, value: any, navigate?: any, isFileMode?: boolean) {
+    // Check if item is archived
+    const isArchived = e.bool_archived === true || e.status === "archived";
+
     if (name === "str_databaseid") {
+        // Database link always remains clickable
         return (
             <Box>
                 <Link href={`#/databases/${e["str_databaseid"]}/assets/`}>{value}</Link>
@@ -176,22 +228,39 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
         );
     }
     if (name === "str_assetname") {
-        return (
-            <Box>
-                <SpaceBetween direction="horizontal" size="xs">
-                    <Link href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}>
+        // Remove hyperlink for archived assets
+        if (isArchived) {
+            return (
+                <Box>
+                    <SpaceBetween direction="horizontal" size="xs">
                         {value}
-                    </Link>
-                    {/* Only show explanation in asset mode, not file mode */}
-                    {e.explanation && !isFileMode && (
-                        <ExplanationPopover explanation={e.explanation} />
-                    )}
-                </SpaceBetween>
-            </Box>
-        );
+                        {/* Only show explanation in asset mode, not file mode */}
+                        {e.explanation && !isFileMode && (
+                            <ExplanationPopover explanation={e.explanation} />
+                        )}
+                    </SpaceBetween>
+                </Box>
+            );
+        } else {
+            return (
+                <Box>
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Link
+                            href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}
+                        >
+                            {value}
+                        </Link>
+                        {/* Only show explanation in asset mode, not file mode */}
+                        {e.explanation && !isFileMode && (
+                            <ExplanationPopover explanation={e.explanation} />
+                        )}
+                    </SpaceBetween>
+                </Box>
+            );
+        }
     } else if (name === "str_key") {
-        // File path - clickable in file mode to navigate to asset with file selected
-        if (isFileMode && navigate) {
+        // File path - remove hyperlink for archived files
+        if (isFileMode && navigate && !isArchived) {
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
@@ -215,11 +284,15 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
                 </Box>
             );
         } else {
-            // Non-file mode - just show as text without explanation (explanation shown on asset name)
+            // Non-file mode or archived - just show as text
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
                         <span>{value}</span>
+                        {/* Show explanation for archived files in file mode */}
+                        {e.explanation && isFileMode && (
+                            <ExplanationPopover explanation={e.explanation} />
+                        )}
                     </SpaceBetween>
                 </Box>
             );
@@ -266,10 +339,11 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
     }
 }
 
-function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
+function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProps) {
     // identify all the names of columns from state.result.hits.hits
     // create a column definition for each column
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showUnarchiveModal, setShowUnarchiveModal] = useState(false);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
     const [previewAsset, setPreviewAsset] = useState<{
         url?: string;
@@ -334,6 +408,17 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
 
     // Determine if we're in file mode
     const isFileMode = state.filters._rectype.value === "file";
+
+    // Determine if unarchive button should be shown (single archived asset selected)
+    const showUnarchiveButton =
+        state?.selectedItems?.length === 1 &&
+        (state?.selectedItems[0]?.bool_archived === true ||
+            state?.selectedItems[0]?.status === "archived");
+
+    // Determine if any archived assets are selected (for delete modal)
+    const hasArchivedAssetSelected = state?.selectedItems?.some(
+        (item: any) => item.bool_archived === true || item.status === "archived"
+    );
 
     // Filter out undefined/null column names and add preview column if showPreviewThumbnails is enabled
     let enhancedColumnDefinitions = orderedColumnNames
@@ -407,12 +492,22 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                               .slice(1)
                               .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
                               .join(" "),
-                cell: (e: any) =>
-                    name === "metadata" ? (
-                        <MetadataPopover metadata={extractMetadata(e)} />
-                    ) : (
-                        columnRender(e, name, e[name], navigate, isFileMode)
-                    ),
+                cell: (e: any) => {
+                    if (name === "metadata") {
+                        const { metadata, attributes } = extractMetadata(e);
+                        console.log("[MetadataDebug] Extracted data:", {
+                            metadata,
+                            attributes,
+                            allKeys: Object.keys(e).filter(
+                                (k) =>
+                                    k.toUpperCase().startsWith("MD_") ||
+                                    k.toUpperCase().startsWith("AB_")
+                            ),
+                        });
+                        return <MetadataPopover metadata={metadata} attributes={attributes} />;
+                    }
+                    return columnRender(e, name, e[name], navigate, isFileMode);
+                },
                 sortingField: name === "metadata" ? undefined : name,
                 isRowHeader: false,
             };
@@ -498,6 +593,58 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         }
     }
 
+    // Add or remove map thumbnail column based on showMapThumbnails toggle
+    // Only for assets when maps are enabled
+    if (state.showMapThumbnails && state.useMapView && state.filters._rectype.value === "asset") {
+        const config = Cache.getItem("config");
+        const mapStyleUrl = config?.locationServiceApiUrl;
+
+        // Remove any existing map thumbnail columns first to avoid duplicates
+        enhancedColumnDefinitions = enhancedColumnDefinitions.filter(
+            (col: any) => col.id !== "mapThumbnail"
+        );
+
+        if (mapStyleUrl) {
+            // Add map thumbnail column after preview column (or at start if no preview)
+            const insertIndex = state.showPreviewThumbnails ? 1 : 0;
+            enhancedColumnDefinitions.splice(insertIndex, 0, {
+                id: "mapThumbnail",
+                header: "Map",
+                cell: (item: any) => (
+                    <MapThumbnail
+                        assetData={item}
+                        mapStyleUrl={mapStyleUrl}
+                        width={200}
+                        height={150}
+                    />
+                ),
+                sortingField: undefined, // Not sortable - client-side column
+                isRowHeader: false,
+            });
+
+            // Add mapThumbnail to visible columns if not already there
+            if (
+                state.tablePreferences?.visibleContent &&
+                !state.tablePreferences.visibleContent.includes("mapThumbnail")
+            ) {
+                const insertIndex = state.showPreviewThumbnails ? 1 : 0;
+                state.tablePreferences.visibleContent.splice(insertIndex, 0, "mapThumbnail");
+            }
+        }
+    } else {
+        // Remove map thumbnail column when toggle is off or not in asset mode
+        enhancedColumnDefinitions = enhancedColumnDefinitions.filter(
+            (col: any) => col.id !== "mapThumbnail"
+        );
+
+        // Remove mapThumbnail from visible columns
+        if (state.tablePreferences?.visibleContent) {
+            state.tablePreferences.visibleContent = state.tablePreferences.visibleContent.filter(
+                (col: string) => col !== "mapThumbnail"
+            );
+        }
+    }
+
     const currentPage = 1 + Math.floor(state?.pagination?.from / state?.tablePreferences?.pageSize);
     const pageCount = Math.ceil(
         state?.result?.hits?.total?.value / state?.tablePreferences?.pageSize
@@ -522,6 +669,8 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         sortingDescending: state?.tableSort?.sortingDescending,
         selectedItems: state?.selectedItems,
         selectedCount: state?.selectedItems?.length,
+        showUnarchiveButton,
+        hasArchivedAssetSelected,
     });
 
     return (
@@ -655,6 +804,15 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                         >
                                             Delete Selected
                                         </Button>
+                                        {showUnarchiveButton && (
+                                            <Button
+                                                onClick={() => {
+                                                    setShowUnarchiveModal(true);
+                                                }}
+                                            >
+                                                Unarchive Selected
+                                            </Button>
+                                        )}
                                         <Button
                                             onClick={(e) => {
                                                 navigate("/upload");
@@ -675,8 +833,52 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                 onDismiss={() => setShowDeleteModal(false)}
                 mode="asset"
                 selectedAssets={state?.selectedItems || []}
+                forceDeleteMode={hasArchivedAssetSelected}
                 onSuccess={(operation) => {
                     setShowDeleteModal(false);
+
+                    // Clear selection
+                    dispatch({
+                        type: "set-selected-items",
+                        selectedItems: [],
+                    });
+
+                    // Show toast notification
+                    if (onShowToast) {
+                        const operationName =
+                            operation === "archive" ? "archived" : "permanently deleted";
+                        onShowToast(
+                            `Asset ${operationName} successfully`,
+                            "Changes may take a few minutes to propagate throughout the system, including search results."
+                        );
+                    }
+
+                    // Refresh the search results
+                    search({}, { state, dispatch });
+                }}
+            />
+
+            <AssetUnarchiveModal
+                visible={showUnarchiveModal}
+                onDismiss={() => setShowUnarchiveModal(false)}
+                selectedAsset={state?.selectedItems?.[0]}
+                onSuccess={() => {
+                    setShowUnarchiveModal(false);
+
+                    // Clear selection
+                    dispatch({
+                        type: "set-selected-items",
+                        selectedItems: [],
+                    });
+
+                    // Show toast notification
+                    if (onShowToast) {
+                        onShowToast(
+                            "Asset unarchived successfully",
+                            "Changes may take a few minutes to propagate throughout the system, including search results."
+                        );
+                    }
+
                     // Refresh the search results
                     search({}, { state, dispatch });
                 }}

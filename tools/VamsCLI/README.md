@@ -94,6 +94,11 @@ vamscli assets create -d my-database --name "My Asset" --description "Asset desc
 # Upload files to an asset
 vamscli file upload -d my-database -a my-asset /path/to/file.gltf
 
+# Execute workflows on assets
+vamscli workflow list -d my-database
+vamscli workflow execute -d my-database -a my-asset -w workflow-123 --workflow-database-id global
+vamscli workflow list-executions -d my-database -a my-asset
+
 # Download files from an asset
 vamscli assets download /local/path -d my-database -a my-asset
 
@@ -115,8 +120,12 @@ vamscli asset-version create -d my-database -a my-asset --comment "Initial versi
 vamscli file upload -d my-database -a my-asset /path/to/updated-file.gltf
 vamscli asset-version create -d my-database -a my-asset --comment "Updated model with fixes"
 
-# List all versions and get version details
+# List all versions with pagination support
 vamscli asset-version list -d my-database -a my-asset
+vamscli asset-version list -d my-database -a my-asset --auto-paginate  # Fetch all versions
+vamscli asset-version list -d my-database -a my-asset --page-size 200  # Manual pagination
+
+# Get version details
 vamscli asset-version get -d my-database -a my-asset -v 1
 
 # Revert to previous version if needed
@@ -125,16 +134,46 @@ vamscli asset-version revert -d my-database -a my-asset -v 1 --comment "Revertin
 # Check metadata schema for validation rules
 vamscli metadata-schema get -d my-database
 
-# Add metadata to assets and files
-vamscli metadata create -d my-database -a my-asset --json-input '{"title": "My 3D Model", "category": "architecture", "properties": {"polygons": 50000}}'
-vamscli metadata create -d my-database -a my-asset --file-path "/models/file.gltf" --json-input '{"lod_level": "high", "optimized": true}'
+# Add metadata to assets (unified v2.2+ API with bulk operations)
+vamscli metadata asset update -d my-database -a my-asset --json-input '[
+  {"metadataKey": "title", "metadataValue": "My 3D Model", "metadataValueType": "string"},
+  {"metadataKey": "category", "metadataValue": "architecture", "metadataValueType": "string"},
+  {"metadataKey": "properties", "metadataValue": "{\"polygons\": 50000}", "metadataValueType": "object"}
+]'
 
-# Get metadata
-vamscli metadata get -d my-database -a my-asset
-vamscli metadata get -d my-database -a my-asset --file-path "/models/file.gltf"
+# Add metadata to files
+vamscli metadata file update -d my-database -a my-asset -f file-uuid --json-input '[
+  {"metadataKey": "lod_level", "metadataValue": "high", "metadataValueType": "string"},
+  {"metadataKey": "optimized", "metadataValue": "true", "metadataValueType": "boolean"}
+]'
 
-# Update metadata
-vamscli metadata update -d my-database -a my-asset --json-input '{"title": "Updated 3D Model", "version": 2}'
+# List metadata
+vamscli metadata asset list -d my-database -a my-asset
+vamscli metadata file list -d my-database -a my-asset -f file-uuid
+
+# Update metadata (upsert mode - keeps existing keys)
+vamscli metadata asset update -d my-database -a my-asset --json-input '[
+  {"metadataKey": "title", "metadataValue": "Updated 3D Model", "metadataValueType": "string"},
+  {"metadataKey": "version", "metadataValue": "2", "metadataValueType": "number"}
+]'
+
+# Replace all metadata (replace mode - removes unlisted keys)
+vamscli metadata asset update -d my-database -a my-asset --update-type replace_all --json-input '[
+  {"metadataKey": "title", "metadataValue": "New Asset", "metadataValueType": "string"}
+]'
+
+# Delete specific metadata keys
+vamscli metadata asset delete -d my-database -a my-asset --json-input '["old_field", "deprecated"]'
+
+# Add metadata to asset links
+vamscli metadata asset-link update --asset-link-id link-uuid --json-input '[
+  {"metadataKey": "relationship_type", "metadataValue": "parent-child", "metadataValueType": "string"}
+]'
+
+# Add metadata to databases
+vamscli metadata database update -d my-database --json-input '[
+  {"metadataKey": "project", "metadataValue": "Downtown Complex", "metadataValueType": "string"}
+]'
 
 # Create relationships between assets
 vamscli asset-links create --from-asset-id my-asset --from-database-id my-database --to-asset-id related-asset --to-database-id my-database --relationship-type related --tags "related-files"
@@ -174,7 +213,7 @@ vamscli industry engineering plm --help
 
 ## Available Commands
 
-VamsCLI provides fifteen main command groups:
+VamsCLI provides sixteen main command groups:
 
 -   **`vamscli setup`** - Configure CLI with API Gateway URL
 -   **`vamscli auth`** - Authentication and session management
@@ -183,8 +222,8 @@ VamsCLI provides fifteen main command groups:
 -   **`vamscli assets`** - Asset creation, updates, management, and comprehensive data export
 -   **`vamscli asset-version`** - Asset version management and tracking
 -   **`vamscli asset-links`** - Asset relationship management and linking
--   **`vamscli asset-links-metadata`** - Metadata management for asset links
 -   **`vamscli file`** - File upload and management operations
+-   **`vamscli workflow`** - Workflow execution and monitoring
 -   **`vamscli metadata`** - Metadata management for assets and files
 -   **`vamscli metadata-schema`** - Metadata schema management and validation rules
 -   **`vamscli database`** - Database creation and management
@@ -234,6 +273,7 @@ VamsCLI provides comprehensive documentation organized by functional area:
 -   **[Search Operations](docs/commands/search-operations.md)** - Search assets and files using OpenSearch
 -   **[Asset Management](docs/commands/asset-management.md)** - Asset operations, versioning, and relationships
 -   **[File Operations](docs/commands/file-operations.md)** - File upload, organization, and management
+-   **[Workflow Management](docs/commands/workflow-management.md)** - Workflow execution and monitoring
 -   **[Metadata Management](docs/commands/metadata-management.md)** - Metadata operations for assets and files
 -   **[Database Administration](docs/commands/database-admin.md)** - Database and bucket management
 -   **[Tag Management](docs/commands/tag-management.md)** - Tag and tag type operations

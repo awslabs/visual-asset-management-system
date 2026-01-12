@@ -1,229 +1,336 @@
+"""Create/Update role handler for VAMS API."""
+
 import os
 import boto3
-import json
 import uuid
-import datetime
+from datetime import datetime
 from botocore.exceptions import ClientError
-
-from common.constants import STANDARD_JSON_RESPONSE
-from common.validators import validate
-from handlers.auth import request_to_claims
+from botocore.config import Config
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from handlers.authz import CasbinEnforcer
+from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from models.common import (
+    APIGatewayProxyResponseV2,
+    internal_error,
+    success,
+    validation_error,
+    authorization_error,
+    VAMSGeneralErrorResponse
+)
+from models.roleConstraints import (
+    CreateRoleRequestModel,
+    UpdateRoleRequestModel,
+    RoleOperationResponseModel
+)
 
+# Configure AWS clients with retry configuration
+retry_config = Config(
+    retries={
+        'max_attempts': 5,
+        'mode': 'adaptive'
+    }
+)
+
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+logger = safeLogger(service_name="CreateRole")
+
+# Global variables for claims and roles
 claims_and_roles = {}
 
-dynamodb = boto3.resource('dynamodb')
-logger = safeLogger(service="CreateRole")
-
-main_rest_response = STANDARD_JSON_RESPONSE
-
-# Hard-coded allowed values for role fields
-ALLOWED_SOURCES = [
-    'INTERNAL_SYSTEM'
-]
-
-def validate_role_fields(body):
-    """Validate role fields against allowed values"""
-    
-    # Validate source if provided
-    if 'source' in body and body['source']:
-        if body['source'] not in ALLOWED_SOURCES:
-            raise ValueError(f"Invalid source. Allowed values: {', '.join(ALLOWED_SOURCES)}")
-    
-    return True
-
+# Load environment variables with error handling
 try:
-    roles_db_table_name = os.environ["ROLES_TABLE_NAME"]
-except:
+    roles_table_name = os.environ["ROLES_TABLE_NAME"]
+except Exception as e:
     logger.exception("Failed loading environment variables")
-    main_rest_response['body']['message'] = "Failed Loading Environment Variables"
+    raise e
 
+# Initialize DynamoDB tables
+roles_table = dynamodb.Table(roles_table_name)
 
-def create_role(body):
-    response = STANDARD_JSON_RESPONSE
-    role_table = dynamodb.Table(roles_db_table_name)
+#######################
+# Business Logic Functions
+#######################
 
-    # Validate role fields against allowed values
+def create_role(role_data, claims_and_roles):
+    """Create a new role
+    
+    Args:
+        role_data: Dictionary with role creation data
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        RoleOperationResponseModel with operation result
+    """
     try:
-        validate_role_fields(body)
-    except ValueError as e:
-        response['statusCode'] = 400
-        response['body'] = json.dumps({"message": str(e)})
-        return response
-
-    try:
-        item = {
-            "id": str(uuid.uuid4()),
-            'roleName': body["roleName"],
-            'description': body["description"],
-            'createdOn': str(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
-            'source': body.get("source"),
-            'sourceIdentifier': body.get("sourceIdentifier"),
-            'mfaRequired': body.get("mfaRequired", False)
+        # Check authorization
+        role_object = {
+            'roleName': role_data['roleName'],
+            'object__type': 'role'
         }
-        role_table.put_item(Item=item, ConditionExpression='attribute_not_exists(roleName)')
-
-        response['statusCode'] = 200
-        response['body'] = json.dumps({"message": "success"})
-        return response
+        
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(role_object, "POST"):
+                raise authorization_error()
+        
+        # Create the role item
+        logger.info(f"Creating role {role_data['roleName']}")
+        
+        item = {
+            'id': str(uuid.uuid4()),
+            'roleName': role_data['roleName'],
+            'description': role_data['description'],
+            'createdOn': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+            'source': role_data.get('source'),
+            'sourceIdentifier': role_data.get('sourceIdentifier'),
+            'mfaRequired': role_data.get('mfaRequired', False)
+        }
+        
+        # Save to database
+        roles_table.put_item(
+            Item=item,
+            ConditionExpression='attribute_not_exists(roleName)'
+        )
+        
+        # Return success response
+        now = datetime.utcnow().isoformat()
+        return RoleOperationResponseModel(
+            success=True,
+            message=f"Role {role_data['roleName']} created successfully",
+            roleName=role_data['roleName'],
+            operation="create",
+            timestamp=now
+        )
+        
     except ClientError as e:
         error_code = e.response['Error']['Code']
         if error_code == 'ConditionalCheckFailedException':
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "Role already exists."})
+            raise VAMSGeneralErrorResponse("Role already exists")
         elif error_code == 'ValidationException':
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "Invalid request parameters."})
+            raise VAMSGeneralErrorResponse("Invalid request parameters")
         else:
-            logger.exception(f"DynamoDB ClientError: {error_code}")
-            response['statusCode'] = 500
-            response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
+            logger.exception(f"DynamoDB error: {error_code}")
+            raise VAMSGeneralErrorResponse("Error creating role")
     except Exception as e:
-        logger.exception(f"Unexpected error in create_role: {e}")
-        response['statusCode'] = 500
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
+        logger.exception(f"Error creating role: {e}")
+        raise VAMSGeneralErrorResponse("Error creating role")
 
 
-def update_role(body):
-    response = STANDARD_JSON_RESPONSE
-    role_table = dynamodb.Table(roles_db_table_name)
-
-    # Validate role fields against allowed values
+def update_role(role_data, claims_and_roles):
+    """Update an existing role
+    
+    Args:
+        role_data: Dictionary with role update data
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        RoleOperationResponseModel with operation result
+    """
     try:
-        validate_role_fields(body)
-    except ValueError as e:
-        response['statusCode'] = 400
-        response['body'] = json.dumps({"message": str(e)})
-        return response
-
-    try:
-        role_table.update_item(
-            Key={
-                'roleName': body["roleName"]
-            },
+        # Check authorization
+        role_object = {
+            'roleName': role_data['roleName'],
+            'object__type': 'role'
+        }
+        
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(role_object, "PUT"):
+                raise authorization_error()
+        
+        # Update the role
+        logger.info(f"Updating role {role_data['roleName']}")
+        
+        roles_table.update_item(
+            Key={'roleName': role_data['roleName']},
             UpdateExpression='SET description = :desc, #source = :source, sourceIdentifier = :sourceIdentifier, mfaRequired = :mfaRequired',
             ExpressionAttributeNames={
                 '#source': 'source'
             },
             ExpressionAttributeValues={
-                ':desc': body["description"],
-                ':source': body.get("source"),
-                ':sourceIdentifier': body.get("sourceIdentifier"),
-                ':mfaRequired': body.get("mfaRequired", False)
+                ':desc': role_data['description'],
+                ':source': role_data.get('source'),
+                ':sourceIdentifier': role_data.get('sourceIdentifier'),
+                ':mfaRequired': role_data.get('mfaRequired', False)
             },
             ConditionExpression='attribute_exists(roleName)'
         )
+        
+        # Return success response
+        now = datetime.utcnow().isoformat()
+        return RoleOperationResponseModel(
+            success=True,
+            message=f"Role {role_data['roleName']} updated successfully",
+            roleName=role_data['roleName'],
+            operation="update",
+            timestamp=now
+        )
+        
     except ClientError as e:
         error_code = e.response['Error']['Code']
         if error_code == 'ConditionalCheckFailedException':
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "Role doesn't exist."})
+            raise VAMSGeneralErrorResponse("Role does not exist")
         elif error_code == 'ValidationException':
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "Invalid request parameters."})
+            raise VAMSGeneralErrorResponse("Invalid request parameters")
         else:
-            logger.exception(f"DynamoDB ClientError: {error_code}")
-            response['statusCode'] = 500
-            response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
+            logger.exception(f"DynamoDB error: {error_code}")
+            raise VAMSGeneralErrorResponse("Error updating role")
     except Exception as e:
-        logger.exception(f"Unexpected error in update_role: {e}")
-        response['statusCode'] = 500
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
-
-    response['statusCode'] = 200
-    response['body'] = json.dumps({"message": "success"})
-    return response
+        logger.exception(f"Error updating role: {e}")
+        raise VAMSGeneralErrorResponse("Error updating role")
 
 
-def lambda_handler(event, context):
-    response = STANDARD_JSON_RESPONSE
+#######################
+# Request Handlers
+#######################
 
-    # Parse request body
-    if not event.get('body'):
-        message = 'Request body is required'
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        logger.error(response)
-        return response
-
-    if isinstance(event['body'], str):
-        try:
-            event['body'] = json.loads(event['body'])
-        except json.JSONDecodeError as e:
-            logger.exception(f"Invalid JSON in request body: {e}")
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
-            return response
-
+def handle_post_request(event):
+    """Handle POST requests to create roles
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
     try:
-        if 'roleName' not in event['body'] or 'description' not in event['body']:
-            message = "roleName and description are required."
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": message})
-            return response
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                import json
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string or dict")
+            return validation_error(body={'message': "Request body cannot be parsed"})
+        
+        # Validate required fields
+        if 'roleName' not in body or 'description' not in body:
+            return validation_error(body={'message': "roleName and description are required"})
+        
+        # Parse and validate the request model
+        request_model = parse(body, model=CreateRoleRequestModel)
+        
+        # Create the role
+        result = create_role(
+            request_model.dict(exclude_unset=True),
+            claims_and_roles
+        )
+        
+        # Return success response
+        return success(body=result.dict())
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return validation_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Error handling POST request: {e}")
+        return internal_error()
 
-        (valid, message) = validate({
-            'roleName': {
-                'value': event['body']['roleName'],
-                'validator': 'OBJECT_NAME'
-            },
-            'description': {
-                'value': event['body']['description'],
-                'validator': 'STRING_256'
-            },
-            'source': {
-                'value': event['body'].get('source'),
-                'validator': 'STRING_256',
-                'optional': True
-            },
-            'sourceIdentifier': {
-                'value': event['body'].get('sourceIdentifier'),
-                'validator': 'STRING_256',
-                'optional': True
-            },
-            'mfaRequired': {
-                'value': str(event['body'].get("mfaRequired", "False")),
-                'validator': 'BOOL'
-            }
-        })
 
-        if not valid:
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
+def handle_put_request(event):
+    """Handle PUT requests to update roles
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    try:
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                import json
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string or dict")
+            return validation_error(body={'message': "Request body cannot be parsed"})
+        
+        # Validate required fields
+        if 'roleName' not in body or 'description' not in body:
+            return validation_error(body={'message': "roleName and description are required"})
+        
+        # Parse and validate the request model
+        request_model = parse(body, model=UpdateRoleRequestModel)
+        
+        # Update the role
+        result = update_role(
+            request_model.dict(exclude_unset=True),
+            claims_and_roles
+        )
+        
+        # Return success response
+        return success(body=result.dict())
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return validation_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Error handling PUT request: {e}")
+        return internal_error()
 
-        global claims_and_roles
-        claims_and_roles = request_to_claims(event)
 
-        httpMethod = event['requestContext']['http']['method']
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for create/update role APIs"""
+    global claims_and_roles
+    claims_and_roles = request_to_claims(event)
+    
+    try:
+        # Parse request
+        method = event['requestContext']['http']['method']
+        
+        # Check API authorization
         method_allowed_on_api = False
-
-        # Add Casbin Enforcer to check if the current user has permissions to POST/PUT the Tag
-        role_object = {
-            "object__type": "role",
-            "roleName": event['body']['roleName']
-        }
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(role_object, httpMethod) and casbin_enforcer.enforceAPI(event):
+            if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-
-        if httpMethod == 'POST' and method_allowed_on_api:
-            return create_role(event['body'])
-        elif httpMethod == 'PUT' and method_allowed_on_api:
-            return update_role(event['body'])
+        
+        if not method_allowed_on_api:
+            return authorization_error()
+        
+        # Route to appropriate handler
+        if method == 'POST':
+            return handle_post_request(event)
+        elif method == 'PUT':
+            return handle_put_request(event)
         else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
-
+            return validation_error(body={'message': "Method not allowed"})
+            
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return validation_error(body={'message': str(v)})
     except Exception as e:
-        logger.exception("Error")
-        response['statusCode'] = 500
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
+        logger.exception(f"Internal error: {e}")
+        return internal_error()

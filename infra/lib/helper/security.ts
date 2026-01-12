@@ -227,6 +227,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("SQS").Principal,
             Service("SNS").Principal,
             Service("ECS").Principal,
+            Service("EKS").Principal,
             Service("ECS_TASKS").Principal,
             Service("LOGS").Principal,
             Service("LAMBDA").Principal,
@@ -239,7 +240,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
     // Add account root principal for custom resource Lambda roles and CloudFormation
     policyStatement.addPrincipals(new iam.AccountRootPrincipal());
 
-    if (!config.app.useAlb.enabled) {
+    if (!config.app.useCloudFront.enabled) {
         policyStatement.addPrincipals(Service("CLOUDFRONT").Principal);
     }
 
@@ -284,6 +285,7 @@ export function generateContentSecurityPolicy(
 
     let scriptSrc = [
         "'self'",
+        "'unsafe-hashes'",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
     ];
 

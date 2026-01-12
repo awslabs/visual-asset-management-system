@@ -25,10 +25,42 @@ const DatabaseSelector = (props) => {
         }
     }, [reload]);
 
+    // Create a map of databaseId to full database object for easy lookup
+    const databaseMap = React.useMemo(() => {
+        const map = {};
+        allItems.forEach((item) => {
+            map[item.databaseId] = item;
+        });
+        return map;
+    }, [allItems]);
+
+    // Wrap the onChange to include the full database object (backwards compatible)
+    const handleChange = (event) => {
+        if (props.onChange) {
+            // For backwards compatibility, check if the consumer expects the enhanced event
+            // If selectedDatabase is accessed, provide it; otherwise, pass through as-is
+            const selectedValue = event.detail.selectedOption.value;
+
+            // Handle GLOBAL option (doesn't have a database object)
+            const selectedDb = selectedValue === "GLOBAL" ? null : databaseMap[selectedValue];
+
+            // Create enhanced event with selectedDatabase (can be null for GLOBAL)
+            const enhancedEvent = {
+                ...event,
+                detail: {
+                    ...event.detail,
+                    selectedDatabase: selectedDb, // Add full database object (or null for GLOBAL)
+                },
+            };
+
+            props.onChange(enhancedEvent);
+        }
+    };
+
     return (
         <Select
             {...restProps}
-            {...restProps}
+            onChange={handleChange}
             options={[
                 ...(showGlobal ? [{ label: "GLOBAL", value: "GLOBAL" }] : []),
                 ...allItems.map((item) => {

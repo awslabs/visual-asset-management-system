@@ -20,11 +20,12 @@ import {
 import { useParams } from "react-router";
 import {
     createAssetVersion,
-    fetchAssetS3Files,
     fetchAssetVersion,
     fetchAssetVersions,
     fetchFileVersions,
 } from "../../../../services/AssetVersionService";
+import { fetchAssetS3Files } from "../../../../services/APIService";
+
 import { FileVersion } from "../AssetVersionManager";
 import { AvailableFilesContainer } from "./AvailableFilesContainer";
 import { SelectedFilesContainer } from "./SelectedFilesContainer";
@@ -159,6 +160,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                 databaseId,
                 assetId,
                 includeArchived: showArchived,
+                basic: false,
             });
 
             if (success && Array.isArray(response)) {
@@ -375,7 +377,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
             const [success, response] = await fetchAssetVersions({
                 databaseId,
                 assetId,
-                maxItems: 100,
+                pageSize: 100,
                 startingToken: null,
             });
 
@@ -723,6 +725,12 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                         ]}
                     />
                 </FormField>
+
+                <Alert type="info">
+                    <strong>Metadata Versioning:</strong> Creating this version will automatically
+                    snapshot the current metadata and attributes of the asset and all selected
+                    files.
+                </Alert>
 
                 {renderCreationModeContent()}
 

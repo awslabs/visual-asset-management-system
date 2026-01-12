@@ -39,17 +39,18 @@ export class VPCBuilderNestedStack extends NestedStack {
 
         //Set how many AZ's we need. Note: GovCloud only has max 3 AZs as of 11/09/2023
         //VisualizerPipelineReqs - 1Az - Private Subnet (Each)
-        //ALBReqs or All Lambdas - 2AZ - Private or PublicSubnet (Each)
+        //ALBReqs or All Lambdas or EKS - 2AZ - Private or PublicSubnet (Each)
         //OpenSearchProvisioned - 3AZ - Private Subnet (Each)
         if (props.config.app.openSearch.useProvisioned.enabled) {
             this.azCount = 3;
         } else if (
             props.config.app.useAlb.enabled ||
-            props.config.app.useGlobalVpc.useForAllLambdas
+            props.config.app.useGlobalVpc.useForAllLambdas ||
+            props.config.app.pipelines.useRapidPipeline.useEks.enabled
         ) {
             this.azCount = 2;
         }
-        //Visualizer pipeline
+        //Visualizer pipeline only
         else this.azCount = 1;
 
         console.log("VPC AZ Count: ", this.azCount);
@@ -339,9 +340,11 @@ export class VPCBuilderNestedStack extends NestedStack {
 
             if (
                 (props.config.app.useAlb.enabled && props.config.app.useAlb.usePublicSubnet) ||
-                props.config.app.pipelines.useRapidPipeline.enabled ||
+                props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+                props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
-                props.config.app.pipelines.useSplatToolbox.enabled
+                props.config.app.pipelines.useSplatToolbox.enabled ||
+                props.config.app.pipelines.useIsaacLabTraining.enabled
             ) {
                 subnetConfigurations.push(subnetPublicConfig);
                 subnetConfigurations.push(subnetPrivateConfig);
@@ -537,9 +540,11 @@ export class VPCBuilderNestedStack extends NestedStack {
             if (
                 props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
                 props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
-                props.config.app.pipelines.useRapidPipeline.enabled ||
+                props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+                props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
-                props.config.app.pipelines.useSplatToolbox.enabled
+                props.config.app.pipelines.useSplatToolbox.enabled ||
+                props.config.app.pipelines.useIsaacLabTraining?.enabled
             ) {
                 // Create VPC endpoint for Batch
                 new ec2.InterfaceVpcEndpoint(this, "BatchEndpoint", {
@@ -596,7 +601,8 @@ export class VPCBuilderNestedStack extends NestedStack {
             // AWS Marketplace Pipeline Required Endpoint on Private Subnet (not isolated)
             if (
                 props.config.app.pipelines.useModelOps.enabled ||
-                props.config.app.pipelines.useRapidPipeline.enabled ||
+                props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+                props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled
             ) {
                 // Create VPC endpoint for ECS
@@ -605,6 +611,36 @@ export class VPCBuilderNestedStack extends NestedStack {
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.ECS,
                     subnets: { subnets: this.privateSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
+            // IsaacLab Pipeline Required Endpoints on Isolated Subnet
+            if (props.config.app.pipelines.useIsaacLabTraining?.enabled) {
+                // Create VPC endpoint for ECS
+                new ec2.InterfaceVpcEndpoint(this, "ECSEndpointIsolated", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.ECS,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+
+                // Create VPC endpoint for ECS Agent
+                new ec2.InterfaceVpcEndpoint(this, "ECSAgentEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.ECS_AGENT,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+
+                // Create VPC endpoint for ECS Telemetry
+                new ec2.InterfaceVpcEndpoint(this, "ECSTelemetryEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.ECS_TELEMETRY,
+                    subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
             }

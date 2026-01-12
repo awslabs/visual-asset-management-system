@@ -18,7 +18,7 @@ This directory contains the custom installation system for the Cesium viewer, wh
 -   Cesium is installed only in this custom install directory
 -   Pre-built Cesium.js bundle is copied to public folder
 -   All Source assets (Workers, Assets, Widgets, etc.) are also copied
--   Dependency manager loads Cesium via script tag (like Potree/Vntana)
+-   Dependency manager loads Cesium via script tag
 -   Component accesses Cesium from window object via wrapper module
 -   No runtime dependency on node_modules
 

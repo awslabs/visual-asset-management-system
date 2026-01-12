@@ -5,9 +5,36 @@ all VamsCLI test files, particularly for ProfileManager and APIClient mocking.
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 from click.testing import CliRunner
 from contextlib import contextmanager
+
+
+@pytest.fixture(autouse=True)
+def mock_logging(request):
+    """Mock logging initialization to prevent file system operations during tests.
+    
+    This fixture is automatically used for all tests to prevent the logging
+    system from creating directories and files during test execution.
+    
+    To disable this fixture for specific tests that need real logging,
+    use the 'no_mock_logging' marker:
+        @pytest.mark.no_mock_logging
+        def test_real_logging():
+            ...
+    """
+    # Check if test is marked to skip logging mock
+    if 'no_mock_logging' in request.keywords:
+        yield None
+        return
+    
+    with patch('vamscli.utils.logging.ensure_log_dir'), \
+         patch('vamscli.utils.logging.initialize_logging'), \
+         patch('vamscli.utils.logging.get_logger') as mock_get_logger:
+        # Return a mock logger that doesn't do anything
+        mock_logger = MagicMock()
+        mock_get_logger.return_value = mock_logger
+        yield mock_logger
 
 
 @pytest.fixture
@@ -30,13 +57,21 @@ def mock_profile_manager():
     Returns:
         Mock: ProfileManager mock with:
             - has_config() returns True
-            - load_config() returns standard API gateway URL
+            - load_config() returns standard API gateway URL with amplify_config
             - profile_name set to 'default'
     """
     mock = Mock()
     mock.has_config.return_value = True
     mock.load_config.return_value = {
-        'api_gateway_url': 'https://api.example.com'
+        'api_gateway_url': 'https://api.example.com',
+        'amplify_config': {
+            'region': 'us-east-1',
+            'api': 'https://api.example.com',
+            'cognitoUserPoolId': 'us-east-1_test123',
+            'cognitoAppClientId': 'test-client-id',
+            'cognitoIdentityPoolId': 'us-east-1:test-identity-pool',
+            'stackName': 'test-stack'
+        }
     }
     mock.profile_name = 'default'
     return mock

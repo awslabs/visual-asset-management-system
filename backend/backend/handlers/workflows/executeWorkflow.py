@@ -1,12 +1,12 @@
 #  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import json
+import os
 import boto3
 import botocore
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.conditions import Attr
-import os
+import json
 from common.validators import validate
 from common.constants import STANDARD_JSON_RESPONSE
 from handlers.auth import request_to_claims
@@ -34,7 +34,7 @@ try:
     workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
     bucket_name_assetAuxiliary = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
-    metadata_read_function = os.environ['METADATA_READ_LAMBDA_FUNCTION_NAME']
+    metadata_service_function = os.environ['METADATA_SERVICE_LAMBDA_FUNCTION_NAME']
 except:
     logger.exception("Failed loading environment variables")
 
@@ -84,8 +84,13 @@ def get_pipelines(databaseId, pipelineId):
     return response['Items']
 
 
-def _metadata_lambda(payload): return client.invoke(FunctionName=metadata_read_function,
-                                           InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
+def _metadata_service_lambda(payload):
+    """Invoke metadata service lambda"""
+    return client.invoke(
+        FunctionName=metadata_service_function,
+        InvocationType='RequestResponse',
+        Payload=json.dumps(payload).encode('utf-8')
+    )
 
 
 def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
@@ -118,117 +123,182 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
+
 def get_asset_metadata(databaseId, assetId, event):
-    """Get base asset metadata (no file prefix)"""
+    """Get asset metadata using new metadata service"""
     try:
+        # Build Lambda event for metadata service GET endpoint
         l_payload = {
-            "pathParameters": {
-                "databaseId": databaseId,
-                "assetId": assetId
-            },
-            "requestContext": {
-                "http": {
-                    "path": event['requestContext']['http']['path'],
-                    "method": event['requestContext']['http']['method']
+            'requestContext': {
+                'http': {
+                    'path': f'/database/{databaseId}/assets/{assetId}/metadata',
+                    'method': 'GET'
                 },
-                "authorizer": event['requestContext']['authorizer']
-            }
+                'authorizer': event['requestContext']['authorizer']
+            },
+            'pathParameters': {
+                'databaseId': databaseId,
+                'assetId': assetId
+            },
+            'queryStringParameters': {}
         }
 
-        logger.info("Fetching base asset metadata:")
+        logger.info("Fetching asset metadata from metadata service")
         logger.info(l_payload)
-        metadata_response = _metadata_lambda(l_payload)
-        logger.info("Base metadata read response:")
-        logger.info(metadata_response)
+        
+        metadata_response = _metadata_service_lambda(l_payload)
+        logger.info("Asset metadata response received")
+        
         stream = metadata_response.get('Payload', "")
         response_body = {}
         if stream:
             json_response = json.loads(stream.read().decode("utf-8"))
-            logger.info("Base metadata payload:", json_response)
-            if "body" in json_response:
+            logger.info(f"Asset metadata payload status: {json_response.get('statusCode')}")
+            if "body" in json_response and json_response.get('statusCode') == 200:
                 response_body = json.loads(json_response['body'])
+        
         return response_body
     except Exception as e:
-        logger.exception("Failed fetching base asset metadata")
-        logger.exception(e)
+        logger.exception(f"Failed fetching asset metadata: {e}")
         return {}
 
 
 def get_file_metadata(databaseId, assetId, filePath, event):
-    """Get file-specific metadata using the file path prefix"""
+    """Get file metadata using new metadata service"""
     try:
-        # Format the prefix as /assetId/path/to/file (matching fileIndexer.py pattern)
-        # The metadata is stored with keys like: assetId/path/to/file or /assetId/path/to/file
-        # We use the /assetId/path/to/file format for the prefix
-        
-        # Ensure filePath starts with /
-        if not filePath.startswith('/'):
-            filePath = '/' + filePath
-        
-        # Create the prefix with leading / before assetId
-        keyPrefix = f"{filePath}"
-        
+        # Build Lambda event for metadata service GET endpoint
         l_payload = {
-            "pathParameters": {
-                "databaseId": databaseId,
-                "assetId": assetId
-            },
-            "queryStringParameters": {
-                "prefix": keyPrefix
-            },
-            "requestContext": {
-                "http": {
-                    "path": event['requestContext']['http']['path'],
-                    "method": event['requestContext']['http']['method']
+            'requestContext': {
+                'http': {
+                    'path': f'/database/{databaseId}/assets/{assetId}/metadata/file',
+                    'method': 'GET'
                 },
-                "authorizer": event['requestContext']['authorizer']
+                'authorizer': event['requestContext']['authorizer']
+            },
+            'pathParameters': {
+                'databaseId': databaseId,
+                'assetId': assetId
+            },
+            'queryStringParameters': {
+                'filePath': filePath,
+                'type': 'metadata'
             }
         }
 
-        logger.info(f"Fetching file-specific metadata with prefix: {keyPrefix}")
+        logger.info(f"Fetching file metadata from metadata service for file: {filePath}")
         logger.info(l_payload)
-        metadata_response = _metadata_lambda(l_payload)
-        logger.info("File metadata read response:")
-        logger.info(metadata_response)
+        
+        metadata_response = _metadata_service_lambda(l_payload)
+        logger.info("File metadata response received")
+        
         stream = metadata_response.get('Payload', "")
         response_body = {}
         if stream:
             json_response = json.loads(stream.read().decode("utf-8"))
-            logger.info("File metadata payload:", json_response)
-            if "body" in json_response:
+            logger.info(f"File metadata payload status: {json_response.get('statusCode')}")
+            if "body" in json_response and json_response.get('statusCode') == 200:
                 response_body = json.loads(json_response['body'])
+        
         return response_body
     except Exception as e:
-        logger.exception("Failed fetching file-specific metadata")
-        logger.exception(e)
+        logger.exception(f"Failed fetching file metadata: {e}")
         return {}
 
 
-def get_separate_metadata(databaseId, assetId, filePath, event):
-    """Get base asset metadata and file-specific metadata separately"""
+def get_file_attributes(databaseId, assetId, filePath, event):
+    """Get file attributes using new metadata service"""
     try:
-        # Always get base asset metadata
-        base_metadata_response = get_asset_metadata(databaseId, assetId, event)
-        base_metadata = base_metadata_response.get("metadata", {})
+        # Build Lambda event for metadata service GET endpoint
+        l_payload = {
+            'requestContext': {
+                'http': {
+                    'path': f'/database/{databaseId}/assets/{assetId}/metadata/file',
+                    'method': 'GET'
+                },
+                'authorizer': event['requestContext']['authorizer']
+            },
+            'pathParameters': {
+                'databaseId': databaseId,
+                'assetId': assetId
+            },
+            'queryStringParameters': {
+                'filePath': filePath,
+                'type': 'attribute'
+            }
+        }
+
+        logger.info(f"Fetching file attributes from metadata service for file: {filePath}")
+        logger.info(l_payload)
         
-        # If a file path is provided, also get file-specific metadata
-        file_metadata = {}
+        metadata_response = _metadata_service_lambda(l_payload)
+        logger.info("File attributes response received")
+        
+        stream = metadata_response.get('Payload', "")
+        response_body = {}
+        if stream:
+            json_response = json.loads(stream.read().decode("utf-8"))
+            logger.info(f"File attributes payload status: {json_response.get('statusCode')}")
+            if "body" in json_response and json_response.get('statusCode') == 200:
+                response_body = json.loads(json_response['body'])
+        
+        return response_body
+    except Exception as e:
+        logger.exception(f"Failed fetching file attributes: {e}")
+        return {}
+
+
+def simplify_metadata_array(metadata_array):
+    """
+    Convert verbose metadata array to simple key-value dictionary.
+    Removes all schema fields and nested structure to reduce size for pipeline input.
+    
+    Args:
+        metadata_array: List of metadata objects with full schema info
+        
+    Returns:
+        Dictionary with metadataKey as key and metadataValue as value
+    """
+    simplified = {}
+    for item in metadata_array:
+        key = item.get('metadataKey', '')
+        value = item.get('metadataValue', '')
+        if key:  # Only add if key exists
+            simplified[key] = value
+    return simplified
+
+
+def get_separate_metadata(databaseId, assetId, filePath, event):
+    """Get asset metadata, file metadata, and file attributes separately using new metadata service"""
+    try:
+        # Always get asset metadata
+        asset_metadata_response = get_asset_metadata(databaseId, assetId, event)
+        
+        # Extract metadata list from response (new format)
+        asset_metadata = asset_metadata_response.get("metadata", [])
+        
+        # If a file path is provided, also get file metadata and attributes
+        file_metadata = []
+        file_attributes = []
         if filePath:
             file_metadata_response = get_file_metadata(databaseId, assetId, filePath, event)
-            file_metadata = file_metadata_response.get("metadata", {})
+            file_metadata = file_metadata_response.get("metadata", [])
+            
+            file_attributes_response = get_file_attributes(databaseId, assetId, filePath, event)
+            file_attributes = file_attributes_response.get("metadata", [])
         
-        logger.info(f"Separate metadata - Asset metadata keys: {list(base_metadata.keys())}, File metadata keys: {list(file_metadata.keys())}")
+        logger.info(f"Retrieved metadata - Asset: {len(asset_metadata)} items, File: {len(file_metadata)} items, Attributes: {len(file_attributes)} items")
         
         return {
-            "assetMetadata": base_metadata,
-            "fileMetadata": file_metadata
+            "assetMetadata": {"metadata": asset_metadata},
+            "fileMetadata": {"metadata": file_metadata},
+            "fileAttributes": {"metadata": file_attributes}
         }
     except Exception as e:
-        logger.exception("Failed fetching separate metadata")
-        logger.exception(e)
+        logger.exception(f"Failed fetching separate metadata: {e}")
         return {
-            "assetMetadata": {},
-            "fileMetadata": {}
+            "assetMetadata": {"metadata": []},
+            "fileMetadata": {"metadata": []},
+            "fileAttributes": {"metadata": []}
         }
 
 
@@ -269,6 +339,7 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
             'workflowDatabaseId': workflow_database_id,
             'workflow_arn': workflow_arn,
             'execution_arn': response['executionArn'],
+            'inputAssetFileKey': inputAssetFileKey,
             'startDate': "",
             'stopDate': "",
             'executionStatus': "NEW"
@@ -316,8 +387,10 @@ def validate_pipelines(workflow):
 
     return (True, '')
 
-def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId):
+def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId, file_key=None):
         logger.info("Getting current executions")
+        if file_key:
+            logger.info(f"Filtering executions by file key: {file_key}")
 
         paginator = dynamodb.meta.client.get_paginator('query')
 
@@ -364,6 +437,13 @@ def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId)
         logger.info(items)
         for item in items:
             try:
+                # If file_key is provided, filter by it
+                if file_key:
+                    item_file_key = item.get('inputAssetFileKey', '')
+                    if item_file_key != file_key:
+                        #logger.info(f"Skipping execution {item.get('executionId')} - file key mismatch: {item_file_key} != {file_key}")
+                        continue
+                
                 workflow_arn = item['workflow_arn']
                 execution_arn = workflow_arn.replace("stateMachine", "execution")
                 execution_arn = execution_arn + ":" + item['executionId']
@@ -518,14 +598,6 @@ def lambda_handler(event, context):
                             else:
                                 logger.info("All pipelines are enabled. Continuing to run workflow")
 
-                            #Get current executions for workflow on asset. If currently one running, error.
-                            executionResults = get_workflow_executions(pathParams['databaseId'], pathParams['assetId'], request_body.get('workflowDatabaseId'), pathParams['workflowId'], )
-                            if len(executionResults['Items']) > 0:
-                                logger.error("Workflow has a currently running execution on the asset")
-                                response['statusCode'] = 400
-                                response['body'] = json.dumps({'message': 'Workflow has a currently running execution on the asset'})
-                                return response
-
                             ##Formulate pipeline input metadata for VAMS
                             #TODO: Implement additional user input fields on execute (from a new UX popup?)
                             
@@ -547,27 +619,42 @@ def lambda_handler(event, context):
                             else:
                                 logger.info(f"Using asset's base prefix key (no particular file): {file_key}")
                             
-                            # Get separate metadata (base asset + file-specific separately)
+                            #Get current executions for workflow on asset with file key filter. If currently one running, error.
+                            executionResults = get_workflow_executions(pathParams['databaseId'], pathParams['assetId'], request_body.get('workflowDatabaseId'), pathParams['workflowId'], file_key)
+                            if len(executionResults['Items']) > 0:
+                                logger.error(f"Workflow has a currently running execution on the file: {file_key}")
+                                response['statusCode'] = 400
+                                response['body'] = json.dumps({'message': f'Workflow has a currently running execution on this file'})
+                                return response
+                            
+                            # Get separate metadata (asset, file metadata, file attributes) using new metadata service
                             metadata_result = get_separate_metadata(pathParams['databaseId'], pathParams['assetId'], relative_file_path, event)
                             
-                            asset_metadata = metadata_result.get("assetMetadata", {})
-                            file_metadata = metadata_result.get("fileMetadata", {})
-
-                            # Remove databaseId/assetId from both metadata dictionaries if they exist
-                            asset_metadata.pop('databaseId', None)
-                            asset_metadata.pop('assetId', None)
-                            file_metadata.pop('databaseId', None)
-                            file_metadata.pop('assetId', None)
-
+                            # Simplify metadata arrays to reduce JSON size for pipeline input
+                            # This removes verbose schema fields and converts to simple key-value dictionaries
+                            simplified_asset_metadata = simplify_metadata_array(
+                                metadata_result.get("assetMetadata", {}).get("metadata", [])
+                            )
+                            simplified_file_metadata = simplify_metadata_array(
+                                metadata_result.get("fileMetadata", {}).get("metadata", [])
+                            )
+                            simplified_file_attributes = simplify_metadata_array(
+                                metadata_result.get("fileAttributes", {}).get("metadata", [])
+                            )
+                            
+                            logger.info(f"Simplified metadata - Asset: {len(simplified_asset_metadata)} keys, File: {len(simplified_file_metadata)} keys, Attributes: {len(simplified_file_attributes)} keys")
+                            
+                            # Build input metadata structure with simplified format
                             inputMetadata = {
                                 "VAMS": {
                                     "assetData": {
-                                        "assetName":asset.get("assetName", ""),
+                                        "assetName": asset.get("assetName", ""),
                                         "description": asset.get("description", ""),
                                         "tags": asset.get("tags", [])
                                     },
-                                    "assetMetadata": asset_metadata,
-                                    "fileMetadata": file_metadata
+                                    "assetMetadata": simplified_asset_metadata,
+                                    "fileMetadata": simplified_file_metadata,
+                                    "fileAttributes": simplified_file_attributes
                                 },
                                 #"User": {}
                             }

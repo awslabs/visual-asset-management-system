@@ -277,6 +277,11 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         updatePreferences({ showThumbnails: newValue });
     };
 
+    const handleMapThumbnailToggle = () => {
+        const newValue = !preferences.showMapThumbnails;
+        updatePreferences({ showMapThumbnails: newValue });
+    };
+
     const handlePreferencesChange = async (newPreferences: any) => {
         updatePreferences(newPreferences);
         if (newPreferences.pageSize !== preferences.pageSize) {
@@ -360,11 +365,14 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         // When switching TO map view, add location metadata filters
         if (view === "map" && previousView !== "map" && recordType === "asset") {
             // Add location metadata filters (disabled from editing)
+            // Include both lowercase and capitalized versions to handle different capitalizations
             const locationFilters: MetadataFilter[] = [
-                { key: "location", value: "*", operator: "=", type: "string", fieldType: "gp" },
-                { key: "location", value: "*", operator: "=", type: "string", fieldType: "gs" },
-                { key: "latitude", value: "*", operator: "=", type: "string", fieldType: "str" },
-                { key: "longitude", value: "*", operator: "=", type: "string", fieldType: "str" },
+                { key: "location", value: "*", operator: "=", type: "string" },
+                { key: "Location", value: "*", operator: "=", type: "string" },
+                { key: "latitude", value: "*", operator: "=", type: "string" },
+                { key: "Latitude", value: "*", operator: "=", type: "string" },
+                { key: "longitude", value: "*", operator: "=", type: "string" },
+                { key: "Longitude", value: "*", operator: "=", type: "string" },
             ];
 
             // Add these filters to existing metadata filters
@@ -377,14 +385,12 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
 
         // When switching FROM map view, remove location metadata filters
         if (previousView === "map" && view !== "map") {
-            // Remove the location filters we added
+            // Remove the location filters we added (both lowercase and capitalized versions)
             const filteredMetadata = searchState.metadataFilters.filter((filter) => {
-                // Remove filters that match our location filter pattern
+                // Remove filters that match our location filter pattern (case-insensitive)
+                const keyLower = filter.key.toLowerCase();
                 const isLocationFilter =
-                    (filter.key === "location" &&
-                        (filter.fieldType === "gp" || filter.fieldType === "gs")) ||
-                    (filter.key === "latitude" && filter.fieldType === "str") ||
-                    (filter.key === "longitude" && filter.fieldType === "str");
+                    keyLower === "location" || keyLower === "latitude" || keyLower === "longitude";
                 return !isLocationFilter;
             });
             searchState.setMetadataFilters(filteredMetadata);
@@ -504,7 +510,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                         : preferences.fileTableColumns,
                             },
                             showPreviewThumbnails: preferences.showThumbnails,
+                            showMapThumbnails: preferences.showMapThumbnails,
+                            useMapView: useMapView,
                         }}
+                        onShowToast={showSuccess}
                         dispatch={(action: any) => {
                             // Handle dispatch actions from SearchPageListView
                             switch (action.type) {
@@ -625,7 +634,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                         : preferences.fileTableColumns,
                             },
                             showPreviewThumbnails: preferences.showThumbnails,
+                            showMapThumbnails: preferences.showMapThumbnails,
+                            useMapView: useMapView,
                         }}
+                        onShowToast={showSuccess}
                         dispatch={(action: any) => {
                             // Handle dispatch actions from SearchPageListView
                             switch (action.type) {
@@ -776,7 +788,6 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                 operator: "=",
                                 value: "",
                                 type: "string",
-                                fieldType: "str",
                             })
                         }
                         metadataSearchMode={metadataSearchMode}
@@ -796,6 +807,9 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                         databaseLocked={databaseLocked}
                         showThumbnails={preferences.showThumbnails}
                         onThumbnailToggle={handleThumbnailToggle}
+                        showMapThumbnails={preferences.showMapThumbnails}
+                        onMapThumbnailToggle={handleMapThumbnailToggle}
+                        useMapView={useMapView}
                         isMapView={currentView === "map"}
                     />
                 }

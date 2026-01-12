@@ -443,6 +443,8 @@ export function AssetLinksDetailsPanel({
                         assetLinkId={selectedNode.assetData.assetLinkId}
                         selectedNode={selectedNode}
                         mode={state.showChildrenSubTree !== undefined ? "view" : "upload"} // Detect mode based on showChildrenSubTree property
+                        databaseId={selectedNode.assetData.databaseId}
+                        restrictMetadataOutsideSchemas={state.restrictMetadataOutsideSchemas}
                         initialMetadata={selectedNode.assetData.metadata || []}
                         onMetadataChange={(metadata) => {
                             // Handle metadata changes if needed

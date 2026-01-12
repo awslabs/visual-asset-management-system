@@ -60,13 +60,14 @@ TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'  # Prefix for temporary uploads
 PREVIEW_PREFIX = 'previews/'
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
-MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 10
+MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
 LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
 allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
 
 # Load environment variables
 try:
     s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
@@ -149,6 +150,58 @@ def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token
         ExpiresIn=expiration
     )
     return url
+
+def get_database_details(databaseId):
+    """Get database details from DynamoDB including file upload restrictions
+    
+    Args:
+        databaseId: The database ID
+        
+    Returns:
+        Database details dictionary with restrictFileUploadsToExtensions field
+    """
+    try:
+        database_table = dynamodb.Table(database_storage_table_name)
+        response = database_table.get_item(
+            Key={'databaseId': databaseId}
+        )
+        return response.get('Item')
+    except Exception as e:
+        logger.exception(f"Error getting database details: {e}")
+        raise VAMSGeneralErrorResponse("Error retrieving database configuration")
+
+def validate_file_extension_against_database(file_path: str, allowed_extensions: str) -> tuple:
+    """Validate file extension against database restrictions
+    
+    Args:
+        file_path: The file path to validate
+        allowed_extensions: Comma-delimited list of allowed extensions (e.g., ".pdf,.jpg,.png")
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+        - is_valid: True if extension is allowed, False otherwise
+        - error_message: Error message if validation fails, None otherwise
+    """
+    # Handle empty or None allowed_extensions (no restrictions)
+    if not allowed_extensions or allowed_extensions.strip() == "":
+        return True, None
+    
+    # Parse comma-delimited extensions and normalize to lowercase
+    allowed_list = [ext.strip().lower() for ext in allowed_extensions.split(',') if ext.strip()]
+    
+    # Check for ".all" bypass
+    if ".all" in allowed_list:
+        return True, None
+    
+    # Extract file extension (case-insensitive)
+    file_extension = os.path.splitext(file_path)[1].lower()
+    
+    # Validate extension
+    if file_extension not in allowed_list:
+        error_message = f"Database does not allow this file extension. Allowed extensions: {', '.join(allowed_list)}"
+        return False, error_message
+    
+    return True, None
 
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
@@ -907,6 +960,26 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     asset = get_asset_details(databaseId, assetId)
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found")
+    
+    # Get database details to check file upload restrictions
+    database = get_database_details(databaseId)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    
+    allowed_extensions = database.get('restrictFileUploadsToExtensions', '')
+    
+    # Validate file extensions if restrictions are configured
+    # Only apply to regular asset files, not asset previews or file preview files
+    if allowed_extensions and allowed_extensions.strip() != "" and uploadType == "assetFile":
+        for file in request_model.files:
+            # Skip validation for .previewFile. files (they have their own extension restrictions)
+            if not is_preview_file(file.relativeKey):
+                is_valid, error_message = validate_file_extension_against_database(
+                    file.relativeKey, 
+                    allowed_extensions
+                )
+                if not is_valid:
+                    raise VAMSGeneralErrorResponse(error_message)
         
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
@@ -1089,6 +1162,13 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
+    # Get database details to check file upload restrictions
+    database = get_database_details(databaseId)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    
+    allowed_extensions = database.get('restrictFileUploadsToExtensions', '')
+    
     # Track file completion results
     file_results = []
     successful_files = []
@@ -1097,6 +1177,25 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     # Process each file in the request
     for file in request_model.files:
         try:
+            # Validate file extension if restrictions are configured
+            # Only apply to regular asset files, not asset previews or file preview files
+            if allowed_extensions and allowed_extensions.strip() != "" and uploadType == "assetFile":
+                # Skip validation for .previewFile. files (they have their own extension restrictions)
+                if not is_preview_file(file.relativeKey):
+                    is_valid, error_message = validate_file_extension_against_database(
+                        file.relativeKey, 
+                        allowed_extensions
+                    )
+                    if not is_valid:
+                        file_results.append(FileCompletionResult(
+                            relativeKey=file.relativeKey,
+                            uploadIdS3="external",
+                            success=False,
+                            error=error_message
+                        ))
+                        has_failures = True
+                        continue
+            
             # Verify the temporary key starts with the expected prefix
             if not file.tempKey.startswith(upload_details['temporaryPrefix']):
                 file_results.append(FileCompletionResult(
@@ -1501,6 +1600,13 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
+    # Get database details to check file upload restrictions
+    database = get_database_details(databaseId)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    
+    allowed_extensions = database.get('restrictFileUploadsToExtensions', '')
+    
     # Track file completion results
     file_results = []
     successful_files = []
@@ -1509,6 +1615,42 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     # Complete multipart uploads for each file
     for file in request_model.files:
         try:
+            # Validate file extension if restrictions are configured
+            # Only apply to regular asset files, not asset previews or file preview files
+            if allowed_extensions and allowed_extensions.strip() != "" and uploadType == "assetFile":
+                # Skip validation for .previewFile. files (they have their own extension restrictions)
+                if not is_preview_file(file.relativeKey):
+                    is_valid, error_message = validate_file_extension_against_database(
+                        file.relativeKey, 
+                        allowed_extensions
+                    )
+                    if not is_valid:
+                        # Mark this file as failed
+                        file_results.append(FileCompletionResult(
+                            relativeKey=file.relativeKey,
+                            uploadIdS3=file.uploadIdS3,
+                            success=False,
+                            error=error_message
+                        ))
+                        has_failures = True
+                        
+                        # Abort the multipart upload if it exists
+                        if file.uploadIdS3 != "zero-byte":
+                            try:
+                                # Construct temp key to abort the upload
+                                asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+                                final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                                temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+                                
+                                s3.abort_multipart_upload(
+                                    Bucket=bucket_name,
+                                    Key=temp_s3_key,
+                                    UploadId=file.uploadIdS3
+                                )
+                            except Exception as abort_error:
+                                logger.warning(f"Error aborting multipart upload for invalid extension: {abort_error}")
+                        continue
+            
             # Construct the temporary S3 key directly (same logic as initialization)
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation

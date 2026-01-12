@@ -18,6 +18,9 @@ interface ModeSelectorProps {
     onRecordTypeChange: (type: "asset" | "file") => void;
     showThumbnails: boolean;
     onThumbnailToggle: () => void;
+    showMapThumbnails?: boolean;
+    onMapThumbnailToggle?: () => void;
+    useMapView?: boolean;
     disabled?: boolean;
 }
 
@@ -26,6 +29,9 @@ const ModeSelector: React.FC<ModeSelectorProps> = ({
     onRecordTypeChange,
     showThumbnails,
     onThumbnailToggle,
+    showMapThumbnails = false,
+    onMapThumbnailToggle,
+    useMapView = false,
     disabled = false,
 }) => {
     return (
@@ -67,6 +73,17 @@ const ModeSelector: React.FC<ModeSelectorProps> = ({
                     >
                         Show preview thumbnails
                     </Toggle>
+
+                    {/* Show map thumbnail toggle only for assets when maps are enabled */}
+                    {useMapView && recordType === "asset" && onMapThumbnailToggle && (
+                        <Toggle
+                            onChange={onMapThumbnailToggle}
+                            checked={showMapThumbnails}
+                            disabled={disabled}
+                        >
+                            Show map thumbnails
+                        </Toggle>
+                    )}
                 </SpaceBetween>
             </FormField>
         </Box>

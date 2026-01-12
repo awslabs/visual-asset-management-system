@@ -28,7 +28,7 @@ export function buildTagService(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "tagService";
-    const tagService = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.tags.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -47,19 +47,21 @@ export function buildTagService(
             TAGS_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
-    storageResources.dynamo.tagStorageTable.grantReadWriteData(tagService);
-    storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(tagService);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(tagService);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(tagService);
-    storageResources.dynamo.rolesStorageTable.grantReadData(tagService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(tagService, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(tagService, config);
-    return tagService;
+    storageResources.dynamo.tagStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildCreateTagFunction(
@@ -71,7 +73,7 @@ export function buildCreateTagFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "createTag";
-    const createTagFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.tags.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -90,20 +92,19 @@ export function buildCreateTagFunction(
             TAGS_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
-    storageResources.dynamo.tagStorageTable.grantReadWriteData(createTagFunction);
-    storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(createTagFunction);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(createTagFunction);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(createTagFunction);
-    storageResources.dynamo.rolesStorageTable.grantReadData(createTagFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        createTagFunction,
-        storageResources.encryption.kmsKey
-    );
-    globalLambdaEnvironmentsAndPermissions(createTagFunction, config);
-    return createTagFunction;
+    storageResources.dynamo.tagStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }

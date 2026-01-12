@@ -13,22 +13,19 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
 } from "../helper/security";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
 export function buildAddCommentLambdaFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    commentStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table,
-    userRolesStorageTable: dynamodb.Table,
-    authEntitiesStorageTable: dynamodb.Table,
-    rolesStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "addComment";
-    const addCommentFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.comments.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -44,38 +41,36 @@ export function buildAddCommentLambdaFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            COMMENT_STORAGE_TABLE_NAME: commentStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: rolesStorageTable.tableName,
+            COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    commentStorageTable.grantReadWriteData(addCommentFunction);
-    assetStorageTable.grantReadWriteData(addCommentFunction);
-    authEntitiesStorageTable.grantReadWriteData(addCommentFunction);
-    userRolesStorageTable.grantReadWriteData(addCommentFunction);
-    rolesStorageTable.grantReadData(addCommentFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(addCommentFunction, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(addCommentFunction, config);
-    return addCommentFunction;
+    storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildEditCommentLambdaFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    commentStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table,
-    userRolesStorageTable: dynamodb.Table,
-    authEntitiesStorageTable: dynamodb.Table,
-    rolesStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "editComment";
-    const editCommentFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.comments.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -91,38 +86,36 @@ export function buildEditCommentLambdaFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            COMMENT_STORAGE_TABLE_NAME: commentStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: rolesStorageTable.tableName,
+            COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    commentStorageTable.grantReadWriteData(editCommentFunction);
-    assetStorageTable.grantReadWriteData(editCommentFunction);
-    authEntitiesStorageTable.grantReadWriteData(editCommentFunction);
-    userRolesStorageTable.grantReadWriteData(editCommentFunction);
-    rolesStorageTable.grantReadData(editCommentFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(editCommentFunction, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(editCommentFunction, config);
-    return editCommentFunction;
+    storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildCommentService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    commentStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table,
-    userRolesStorageTable: dynamodb.Table,
-    authEntitiesStorageTable: dynamodb.Table,
-    rolesStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "commentService";
-    const commentService = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.comments.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -138,22 +131,24 @@ export function buildCommentService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            COMMENT_STORAGE_TABLE_NAME: commentStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: rolesStorageTable.tableName,
+            COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    assetStorageTable.grantReadWriteData(commentService);
-    authEntitiesStorageTable.grantReadWriteData(commentService);
-    userRolesStorageTable.grantReadWriteData(commentService);
-    commentStorageTable.grantReadWriteData(commentService);
-    rolesStorageTable.grantReadData(commentService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(commentService, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(commentService, config);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
-    return commentService;
+    return fun;
 }

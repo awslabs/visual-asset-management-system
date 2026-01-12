@@ -22,6 +22,7 @@ import { VAMS_APP_FEATURES } from "../common/vamsAppFeatures";
 import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBuilder-nestedStack";
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
+import { AddonBuilderNestedStack } from "./nestedStacks/addon/addonBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
 import { LogRetentionAspect } from "./aspects/log-retention.aspect";
 import * as s3AssetBuckets from "./helper/s3AssetBuckets";
@@ -128,11 +129,17 @@ export class CoreVAMSStack extends cdk.Stack {
             });
         }
 
+        //Deploy Lambda Layers (nested stack)
+        const lambdaLayers = new LambdaLayersBuilderNestedStack(this, "LambdaLayers", {});
+
         //Deploy Storage Resources (nested stack)
         const storageResourcesNestedStack = new StorageResourcesBuilderNestedStack(
             this,
             "StorageResourcesBuilder",
-            props.config
+            props.config,
+            lambdaLayers.lambdaCommonBaseLayer,
+            this.vpc,
+            this.subnetsIsolated
         );
 
         //Setup cloud trail and log groups (if enabled)
@@ -160,9 +167,6 @@ export class CoreVAMSStack extends cdk.Stack {
             trail.logAllLambdaDataEvents();
             trail.logAllS3DataEvents();
         }
-
-        //Deploy Lambda Layers (nested stack)
-        const lambdaLayers = new LambdaLayersBuilderNestedStack(this, "LambdaLayers", {});
 
         //See if we have enabled SAML settings
         if (props.config.app.authProvider.useCognito.useSaml) {
@@ -195,18 +199,51 @@ export class CoreVAMSStack extends cdk.Stack {
             apiNestedStack.addDependency(storageResourcesNestedStack);
 
             //Deploy Static Website and any API proxies (nested stack)
-            const staticWebBuilderNestedStack = new StaticWebBuilderNestedStack(this, "StaticWeb", {
-                config: props.config,
-                vpc: this.vpc,
-                subnetsIsolated: this.subnetsIsolated,
-                subnetsPublic: this.subnetsPublic,
-                webAppBuildPath: this.webAppBuildPath,
-                apiUrl: apiNestedStack.apiEndpoint,
-                storageResources: storageResourcesNestedStack.storageResources,
-                ssmWafArn: props.ssmWafArn,
-                authResources: authBuilderNestedStack.authResources,
-            });
-            staticWebBuilderNestedStack.addDependency(storageResourcesNestedStack);
+            if (props.config.app.useAlb.enabled || props.config.app.useCloudFront.enabled) {
+                const staticWebBuilderNestedStack = new StaticWebBuilderNestedStack(
+                    this,
+                    "StaticWeb",
+                    {
+                        config: props.config,
+                        vpc: this.vpc,
+                        subnetsIsolated: this.subnetsIsolated,
+                        subnetsPublic: this.subnetsPublic,
+                        webAppBuildPath: this.webAppBuildPath,
+                        apiUrl: apiNestedStack.apiEndpoint,
+                        storageResources: storageResourcesNestedStack.storageResources,
+                        ssmWafArn: props.ssmWafArn,
+                        authResources: authBuilderNestedStack.authResources,
+                    }
+                );
+                staticWebBuilderNestedStack.addDependency(storageResourcesNestedStack);
+
+                //Write final output configurations (pulling forward from static web nested stacks)
+                const endPointURLParamsOutput = new cdk.CfnOutput(
+                    this,
+                    "WebsiteEndpointURLOutput",
+                    {
+                        value: staticWebBuilderNestedStack.endpointURL,
+                        description: "Website endpoint URL",
+                    }
+                );
+
+                const webAppS3BucketNameParamsOutput = new cdk.CfnOutput(
+                    this,
+                    "WebAppS3BucketNameOutput",
+                    {
+                        value: staticWebBuilderNestedStack.webAppBucket.bucketName,
+                        description: "S3 Bucket for static web app files",
+                    }
+                );
+
+                if (props.config.app.useAlb.enabled) {
+                    const albEndpointOutput = new cdk.CfnOutput(this, "AlbEndpointOutput", {
+                        value: staticWebBuilderNestedStack.albEndpoint,
+                        description:
+                            "ALB DNS Endpoint to use for primary domain host DNS routing to static web site",
+                    });
+                }
+            }
 
             //Deploy Backend API framework (nested stack)
             const apiBuilderNestedStack = new ApiBuilderNestedStack(
@@ -262,29 +299,19 @@ export class CoreVAMSStack extends cdk.Stack {
             );
             pipelineBuilderNestedStack.addDependency(storageResourcesNestedStack);
 
-            //Write final output configurations (pulling forward from nested stacks)
-            const endPointURLParamsOutput = new cdk.CfnOutput(this, "WebsiteEndpointURLOutput", {
-                value: staticWebBuilderNestedStack.endpointURL,
-                description: "Website endpoint URL",
+            ///Optional Addons (Nested Stack)
+            const addonBuilderNestedStack = new AddonBuilderNestedStack(this, "AddonBuilder", {
+                ...props,
+                config: props.config,
+                storageResources: storageResourcesNestedStack.storageResources,
+                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                vpc: this.vpc,
+                isolatedSubnets: this.subnetsIsolated,
+                privateSubnets: this.subnetsPrivate,
             });
+            addonBuilderNestedStack.addDependency(storageResourcesNestedStack);
 
-            const webAppS3BucketNameParamsOutput = new cdk.CfnOutput(
-                this,
-                "WebAppS3BucketNameOutput",
-                {
-                    value: staticWebBuilderNestedStack.webAppBucket.bucketName,
-                    description: "S3 Bucket for static web app files",
-                }
-            );
-
-            if (props.config.app.useAlb.enabled) {
-                const albEndpointOutput = new cdk.CfnOutput(this, "AlbEndpointOutput", {
-                    value: staticWebBuilderNestedStack.albEndpoint,
-                    description:
-                        "ALB DNS Endpoint to use for primary domain host DNS routing to static web site",
-                });
-            }
-
+            //Write final output configurations (pulling forward from nested stacks)
             const gatewayURLParamsOutput = new cdk.CfnOutput(this, "APIGatewayEndpointOutput", {
                 value: `${apiNestedStack.apiEndpoint}`,
                 description: "API Gateway endpoint",

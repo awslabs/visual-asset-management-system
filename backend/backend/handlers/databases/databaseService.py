@@ -3,6 +3,7 @@
 
 import json
 import os
+import base64
 import boto3
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -15,7 +16,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse
-from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
+from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
 # Configure AWS clients
 dynamodb = boto3.resource('dynamodb')
@@ -114,7 +115,7 @@ def get_database(database_id, show_deleted=False, claims_and_roles=None):
                     bucket_name = bucket.get('bucketName')
                     base_assets_prefix = bucket.get('baseAssetsPrefix')
                 
-                # Convert to model with bucket information
+                # Convert to model with bucket information and new config fields
                 return GetDatabaseResponseModel(
                     databaseId=database.get('databaseId'),
                     description=database.get('description', ''),
@@ -123,6 +124,8 @@ def get_database(database_id, show_deleted=False, claims_and_roles=None):
                     defaultBucketId=database.get('defaultBucketId'),
                     bucketName=bucket_name,
                     baseAssetsPrefix=base_assets_prefix,
+                    restrictMetadataOutsideSchemas=database.get('restrictMetadataOutsideSchemas', False),
+                    restrictFileUploadsToExtensions=database.get('restrictFileUploadsToExtensions', ''),
                 )
             
         return None
@@ -135,13 +138,13 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
     try:
         # Parse query parameters
         request_model = GetDatabasesRequestModel(
-            maxItems=int(query_params.get('maxItems', 1000)),
-            pageSize=int(query_params.get('pageSize', 1000)),
+            maxItems=int(query_params.get('maxItems', 10000)),
+            pageSize=int(query_params.get('pageSize', 3000)),
             startingToken=query_params.get('startingToken'),
             showDeleted=show_deleted
         )
         
-        paginator = dbClient.get_paginator('scan')
+        # Build scan parameters
         operator = "NOT_CONTAINS"
         if show_deleted:
             operator = "CONTAINS"
@@ -153,18 +156,26 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
             }
         }
         
-        page_iterator = paginator.paginate(
-            TableName=db_database,
-            ScanFilter=db_filter,
-            PaginationConfig={
-                'MaxItems': request_model.maxItems,
-                'PageSize': request_model.pageSize,
-                'StartingToken': request_model.startingToken
-            }
-        ).build_full_result()
+        scan_params = {
+            'TableName': db_database,
+            'ScanFilter': db_filter,
+            'Limit': request_model.pageSize
+        }
+        
+        # Add ExclusiveStartKey if startingToken provided
+        if request_model.startingToken:
+            try:
+                decoded_token = base64.b64decode(request_model.startingToken).decode('utf-8')
+                scan_params['ExclusiveStartKey'] = json.loads(decoded_token)
+            except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+                logger.exception(f"Invalid startingToken format: {e}")
+                raise VAMSGeneralErrorResponse("Invalid pagination token")
+        
+        # Single scan call with pagination
+        response = dbClient.scan(**scan_params)
 
         items = []
-        for item in page_iterator.get('Items', []):
+        for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
 
             # Add Casbin Enforcer to check if the current user has permissions to GET the database
@@ -189,7 +200,7 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
                         bucket_name = bucket.get('bucketName')
                         base_assets_prefix = bucket.get('baseAssetsPrefix')
                     
-                    # Convert to model with bucket information
+                    # Convert to model with bucket information and new config fields
                     database_model = GetDatabaseResponseModel(
                         databaseId=deserialized_document.get('databaseId'),
                         description=deserialized_document.get('description', ''),
@@ -198,18 +209,95 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
                         defaultBucketId=deserialized_document.get('defaultBucketId'),
                         bucketName=bucket_name,
                         baseAssetsPrefix=base_assets_prefix,
+                        restrictMetadataOutsideSchemas=deserialized_document.get('restrictMetadataOutsideSchemas', False),
+                        restrictFileUploadsToExtensions=deserialized_document.get('restrictFileUploadsToExtensions', ''),
                     )
                     items.append(database_model)
 
-        response = GetDatabasesResponseModel(
-            Items=items,
-            NextToken=page_iterator.get('NextToken')
-        )
+        # Build response with nextToken
+        result = GetDatabasesResponseModel(Items=items)
         
-        return response
+        # Return LastEvaluatedKey as nextToken if present (base64 encoded)
+        if 'LastEvaluatedKey' in response:
+            json_str = json.dumps(response['LastEvaluatedKey'])
+            result.NextToken = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+        
+        return result
     except Exception as e:
         logger.exception(f"Error getting databases: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting databases.")
+
+def update_database(database_id, update_data, claims_and_roles=None):
+    """Update an existing database with new data
+    
+    Args:
+        database_id: The database ID
+        update_data: Dictionary with fields to update
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        UpdateDatabaseResponseModel with operation result
+    """
+    try:
+        # Get the existing database
+        table = dynamodb.Table(db_database)
+        db_response = table.get_item(Key={'databaseId': database_id})
+        database = db_response.get("Item", {})
+        
+        if not database:
+            raise VAMSGeneralErrorResponse("Database not found")
+        
+        # Check authorization
+        database.update({"object__type": "database"})
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(database, "PUT"):
+                raise VAMSGeneralErrorResponse("Access denied")
+        
+        # If defaultBucketId is being updated, verify it exists
+        if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
+            buckets_table = dynamodb.Table(s3_asset_buckets_table)
+            bucket_response = buckets_table.query(
+                KeyConditionExpression=Key('bucketId').eq(update_data['defaultBucketId'])
+            )
+            if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
+                raise VAMSGeneralErrorResponse("Bucket ID not found")
+        
+        # Update the fields
+        logger.info(f"Updating database {database_id}")
+        
+        # Update only the provided fields
+        if 'description' in update_data and update_data['description'] is not None:
+            database['description'] = update_data['description']
+        
+        if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
+            database['defaultBucketId'] = update_data['defaultBucketId']
+        
+        if 'restrictMetadataOutsideSchemas' in update_data and update_data['restrictMetadataOutsideSchemas'] is not None:
+            database['restrictMetadataOutsideSchemas'] = update_data['restrictMetadataOutsideSchemas']
+        
+        if 'restrictFileUploadsToExtensions' in update_data and update_data['restrictFileUploadsToExtensions'] is not None:
+            database['restrictFileUploadsToExtensions'] = update_data['restrictFileUploadsToExtensions']
+        
+        # Save the updated database
+        table.put_item(Item=database)
+        
+        # Create response
+        from datetime import datetime
+        timestamp = datetime.utcnow().isoformat()
+        
+        return UpdateDatabaseResponseModel(
+            success=True,
+            message=f"Database {database_id} updated successfully",
+            databaseId=database_id,
+            operation="update",
+            timestamp=timestamp
+        )
+    except VAMSGeneralErrorResponse as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"Error updating database: {e}")
+        raise VAMSGeneralErrorResponse("Error updating database")
 
 def delete_database(database_id, claims_and_roles=None):
     """Delete a database by ID"""
@@ -341,6 +429,43 @@ def get_databases_handler(query_parameters, claims_and_roles):
         logger.exception(f"Error in get_databases_handler: {e}")
         return internal_error()
 
+def update_database_handler(path_parameters, body, claims_and_roles):
+    """Handler for PUT /databases/{databaseId}"""
+    try:
+        # Validate database ID
+        database_id = path_parameters.get('databaseId')
+        if not database_id:
+            return validation_error(body={'message': 'No database ID in API Call'})
+            
+        (valid, message) = validate({
+            'databaseId': {
+                'value': database_id,
+                'validator': 'ID'
+            },
+        })
+
+        if not valid:
+            logger.error(message)
+            return validation_error(body={'message': message})
+
+        # Parse and validate request body
+        try:
+            request_model = parse(body, model=UpdateDatabaseRequestModel)
+        except ValidationError as v:
+            logger.exception(f"Validation error: {v}")
+            return validation_error(body={'message': str(v)})
+        
+        # Update database
+        result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles)
+        return success(body=result.dict())
+        
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Error in update_database_handler: {e}")
+        return internal_error()
+
 def delete_database_handler(path_parameters, claims_and_roles):
     """Handler for DELETE /databases/{databaseId}"""
     try:
@@ -383,23 +508,31 @@ def get_buckets(query_params, claims_and_roles=None):
     try:
         # Parse query parameters
         request_model = GetBucketsRequestModel(
-            maxItems=int(query_params.get('maxItems', 1000)),
-            pageSize=int(query_params.get('pageSize', 1000)),
+            maxItems=int(query_params.get('maxItems', 10000)),
+            pageSize=int(query_params.get('pageSize', 3000)),
             startingToken=query_params.get('startingToken')
         )
         
-        paginator = dbClient.get_paginator('scan')
-        page_iterator = paginator.paginate(
-            TableName=s3_asset_buckets_table,
-            PaginationConfig={
-                'MaxItems': request_model.maxItems,
-                'PageSize': request_model.pageSize,
-                'StartingToken': request_model.startingToken
-            }
-        ).build_full_result()
+        # Build scan parameters
+        scan_params = {
+            'TableName': s3_asset_buckets_table,
+            'Limit': request_model.pageSize
+        }
+        
+        # Add ExclusiveStartKey if startingToken provided
+        if request_model.startingToken:
+            try:
+                decoded_token = base64.b64decode(request_model.startingToken).decode('utf-8')
+                scan_params['ExclusiveStartKey'] = json.loads(decoded_token)
+            except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+                logger.exception(f"Invalid startingToken format: {e}")
+                raise VAMSGeneralErrorResponse("Invalid pagination token")
+        
+        # Single scan call with pagination
+        response = dbClient.scan(**scan_params)
 
         items = []
-        for item in page_iterator.get('Items', []):
+        for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
             
             # # Add object type for authorization
@@ -418,12 +551,15 @@ def get_buckets(query_params, claims_and_roles=None):
             )
             items.append(bucket_model)
 
-        response = GetBucketsResponseModel(
-            Items=items,
-            NextToken=page_iterator.get('NextToken')
-        )
+        # Build response with nextToken
+        result = GetBucketsResponseModel(Items=items)
         
-        return response
+        # Return LastEvaluatedKey as nextToken if present (base64 encoded)
+        if 'LastEvaluatedKey' in response:
+            json_str = json.dumps(response['LastEvaluatedKey'])
+            result.NextToken = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+        
+        return result
     except Exception as e:
         logger.exception(f"Error getting buckets: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting buckets.")
@@ -485,6 +621,26 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Route: /database/{databaseId}
             if http_method == 'GET':
                 return get_database_handler(path_parameters, query_parameters, claims_and_roles)
+            elif http_method == 'PUT':
+                # Parse request body for PUT
+                body = event.get('body')
+                if not body:
+                    return validation_error(body={'message': "Request body is required"})
+                
+                # Parse JSON body safely
+                if isinstance(body, str):
+                    try:
+                        body = json.loads(body)
+                    except json.JSONDecodeError as e:
+                        logger.exception(f"Invalid JSON in request body: {e}")
+                        return validation_error(body={'message': "Invalid JSON in request body"})
+                elif isinstance(body, dict):
+                    body = body
+                else:
+                    logger.error("Request body is not a string")
+                    return validation_error(body={'message': "Request body cannot be parsed"})
+                
+                return update_database_handler(path_parameters, body, claims_and_roles)
             elif http_method == 'DELETE':
                 return delete_database_handler(path_parameters, claims_and_roles)
             else:
