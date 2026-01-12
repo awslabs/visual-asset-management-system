@@ -131,7 +131,7 @@
                 "keepWarmInstance": false
             }
         },
-        "addons": { 
+        "addons": {
             "useGarnetFramework": {
                 "enabled": false,
                 "garnetApiEndpoint": "",

@@ -61,14 +61,19 @@ export class IsaacLabTrainingConstruct extends Construct {
             ),
             platform: Platform.LINUX_AMD64,
             buildArgs: {
-                ACCEPT_EULA: props.config.app.pipelines.useIsaacLabTraining.acceptNvidiaEula ? "Y" : "N",
+                ACCEPT_EULA: props.config.app.pipelines.useIsaacLabTraining.acceptNvidiaEula
+                    ? "Y"
+                    : "N",
             },
         });
 
         // EFS for training checkpoints - use isolated subnets (no internet access needed for EFS)
         const trainingEfs = new efs.FileSystem(this, "TrainingEfs", {
             vpc: props.vpc,
-            vpcSubnets: props.pipelineSubnetsIsolated.length > 0 ? { subnets: props.pipelineSubnetsIsolated } : undefined,
+            vpcSubnets:
+                props.pipelineSubnetsIsolated.length > 0
+                    ? { subnets: props.pipelineSubnetsIsolated }
+                    : undefined,
             securityGroup: props.pipelineSecurityGroups[0],
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
@@ -102,7 +107,10 @@ export class IsaacLabTrainingConstruct extends Construct {
             "GpuComputeEnv",
             {
                 vpc: props.vpc,
-                vpcSubnets: props.pipelineSubnets.length > 0 ? { subnets: props.pipelineSubnets } : undefined,
+                vpcSubnets:
+                    props.pipelineSubnets.length > 0
+                        ? { subnets: props.pipelineSubnets }
+                        : undefined,
                 securityGroups: props.pipelineSecurityGroups,
                 instanceTypes: [
                     // Priority 1: G6 instances (L4 GPU - best price/performance for Isaac Lab)
@@ -126,36 +134,32 @@ export class IsaacLabTrainingConstruct extends Construct {
 
         // Enable Container Insights on the ECS cluster created by Batch
         // First, we need to get the ECS cluster ARN from the Batch compute environment
-        const getEcsClusterArn = new cr.AwsCustomResource(
-            this,
-            "GetEcsClusterArn",
-            {
-                onCreate: {
-                    service: "Batch",
-                    action: "describeComputeEnvironments",
-                    parameters: {
-                        computeEnvironments: [computeEnvironment.computeEnvironmentName],
-                    },
-                    physicalResourceId: cr.PhysicalResourceId.of("EcsClusterArn"),
+        const getEcsClusterArn = new cr.AwsCustomResource(this, "GetEcsClusterArn", {
+            onCreate: {
+                service: "Batch",
+                action: "describeComputeEnvironments",
+                parameters: {
+                    computeEnvironments: [computeEnvironment.computeEnvironmentName],
                 },
-                onUpdate: {
-                    service: "Batch",
-                    action: "describeComputeEnvironments",
-                    parameters: {
-                        computeEnvironments: [computeEnvironment.computeEnvironmentName],
-                    },
-                    physicalResourceId: cr.PhysicalResourceId.of("EcsClusterArn"),
+                physicalResourceId: cr.PhysicalResourceId.of("EcsClusterArn"),
+            },
+            onUpdate: {
+                service: "Batch",
+                action: "describeComputeEnvironments",
+                parameters: {
+                    computeEnvironments: [computeEnvironment.computeEnvironmentName],
                 },
-                policy: cr.AwsCustomResourcePolicy.fromStatements([
-                    new iam.PolicyStatement({
-                        actions: ["batch:DescribeComputeEnvironments"],
-                        resources: [
-                            `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:compute-environment/*`,
-                        ],
-                    }),
-                ]),
-            }
-        );
+                physicalResourceId: cr.PhysicalResourceId.of("EcsClusterArn"),
+            },
+            policy: cr.AwsCustomResourcePolicy.fromStatements([
+                new iam.PolicyStatement({
+                    actions: ["batch:DescribeComputeEnvironments"],
+                    resources: [
+                        `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:compute-environment/*`,
+                    ],
+                }),
+            ]),
+        });
         getEcsClusterArn.node.addDependency(computeEnvironment);
 
         const ecsClusterArn = getEcsClusterArn.getResponseField(
@@ -163,48 +167,44 @@ export class IsaacLabTrainingConstruct extends Construct {
         );
 
         // Now enable Container Insights on the ECS cluster
-        const enableContainerInsights = new cr.AwsCustomResource(
-            this,
-            "EnableContainerInsights",
-            {
-                onCreate: {
-                    service: "ECS",
-                    action: "updateClusterSettings",
-                    parameters: {
-                        cluster: ecsClusterArn,
-                        settings: [
-                            {
-                                name: "containerInsights",
-                                value: "enabled",
-                            },
-                        ],
-                    },
-                    physicalResourceId: cr.PhysicalResourceId.of("ContainerInsights"),
+        const enableContainerInsights = new cr.AwsCustomResource(this, "EnableContainerInsights", {
+            onCreate: {
+                service: "ECS",
+                action: "updateClusterSettings",
+                parameters: {
+                    cluster: ecsClusterArn,
+                    settings: [
+                        {
+                            name: "containerInsights",
+                            value: "enabled",
+                        },
+                    ],
                 },
-                onUpdate: {
-                    service: "ECS",
-                    action: "updateClusterSettings",
-                    parameters: {
-                        cluster: ecsClusterArn,
-                        settings: [
-                            {
-                                name: "containerInsights",
-                                value: "enabled",
-                            },
-                        ],
-                    },
-                    physicalResourceId: cr.PhysicalResourceId.of("ContainerInsights"),
+                physicalResourceId: cr.PhysicalResourceId.of("ContainerInsights"),
+            },
+            onUpdate: {
+                service: "ECS",
+                action: "updateClusterSettings",
+                parameters: {
+                    cluster: ecsClusterArn,
+                    settings: [
+                        {
+                            name: "containerInsights",
+                            value: "enabled",
+                        },
+                    ],
                 },
-                policy: cr.AwsCustomResourcePolicy.fromStatements([
-                    new iam.PolicyStatement({
-                        actions: ["ecs:UpdateClusterSettings"],
-                        resources: [
-                            `arn:${ServiceHelper.Partition()}:ecs:${region}:${account}:cluster/*`,
-                        ],
-                    }),
-                ]),
-            }
-        );
+                physicalResourceId: cr.PhysicalResourceId.of("ContainerInsights"),
+            },
+            policy: cr.AwsCustomResourcePolicy.fromStatements([
+                new iam.PolicyStatement({
+                    actions: ["ecs:UpdateClusterSettings"],
+                    resources: [
+                        `arn:${ServiceHelper.Partition()}:ecs:${region}:${account}:cluster/*`,
+                    ],
+                }),
+            ]),
+        });
         enableContainerInsights.node.addDependency(getEcsClusterArn);
 
         // Batch job queue
@@ -234,10 +234,12 @@ export class IsaacLabTrainingConstruct extends Construct {
         jobRole.addToPolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
-                actions: ["states:SendTaskSuccess", "states:SendTaskFailure", "states:SendTaskHeartbeat"],
-                resources: [
-                    `arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`,
+                actions: [
+                    "states:SendTaskSuccess",
+                    "states:SendTaskFailure",
+                    "states:SendTaskHeartbeat",
                 ],
+                resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
             })
         );
 
@@ -265,20 +267,16 @@ export class IsaacLabTrainingConstruct extends Construct {
         });
 
         // Lambda functions
-        const lambdaFunctions = new IsaacLabTrainingFunctions(
-            this,
-            "LambdaFunctions",
-            {
-                config: props.config,
-                vpc: props.vpc,
-                pipelineSubnets: props.pipelineSubnets,
-                pipelineSecurityGroups: props.pipelineSecurityGroups,
-                storageResources: props.storageResources,
-                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                batchJobQueue: jobQueue,
-                batchJobDefinition: jobDefinition,
-            }
-        );
+        const lambdaFunctions = new IsaacLabTrainingFunctions(this, "LambdaFunctions", {
+            config: props.config,
+            vpc: props.vpc,
+            pipelineSubnets: props.pipelineSubnets,
+            pipelineSecurityGroups: props.pipelineSecurityGroups,
+            storageResources: props.storageResources,
+            lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+            batchJobQueue: jobQueue,
+            batchJobDefinition: jobDefinition,
+        });
 
         // Step Functions state machine
         const openPipelineState = new tasks.LambdaInvoke(this, "OpenPipelineState", {
@@ -306,7 +304,7 @@ export class IsaacLabTrainingConstruct extends Construct {
             lambdaFunction: lambdaFunctions.executeBatchJobFunction,
             integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
             payload: sfn.TaskInput.fromObject({
-                "taskToken": sfn.JsonPath.taskToken,
+                taskToken: sfn.JsonPath.taskToken,
                 "jobName.$": "$.jobName",
                 "definition.$": "$.definition",
                 "numNodes.$": "$.numNodes",
@@ -375,8 +373,7 @@ export class IsaacLabTrainingConstruct extends Construct {
         );
 
         // Set output
-        this.pipelineVamsLambdaFunctionName =
-            lambdaFunctions.vamsExecuteFunction.functionName;
+        this.pipelineVamsLambdaFunctionName = lambdaFunctions.vamsExecuteFunction.functionName;
 
         // Register pipeline with VAMS if autoRegisterWithVAMS is enabled
         if (props.config.app.pipelines.useIsaacLabTraining?.autoRegisterWithVAMS === true) {
@@ -386,7 +383,9 @@ export class IsaacLabTrainingConstruct extends Construct {
             const importFunction = lambda.Function.fromFunctionArn(
                 this,
                 "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
+                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
+                    props.importGlobalPipelineWorkflowFunctionName
+                }`
             );
 
             const importProvider = new cr.Provider(this, "ImportProvider", {
@@ -477,10 +476,25 @@ export class IsaacLabTrainingConstruct extends Construct {
         NagSuppressions.addResourceSuppressions(
             this,
             [
-                { id: "AwsSolutions-IAM5", reason: "Wildcard permissions required for S3 bucket access and Batch job operations" },
-                { id: "AwsSolutions-IAM4", reason: "AWS managed policy required for ECS/EC2 integration with Batch", appliesTo: ["Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"] },
-                { id: "AwsSolutions-SF1", reason: "CloudWatch logging will be added in future iteration" },
-                { id: "AwsSolutions-SF2", reason: "X-Ray tracing will be added in future iteration" },
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Wildcard permissions required for S3 bucket access and Batch job operations",
+                },
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "AWS managed policy required for ECS/EC2 integration with Batch",
+                    appliesTo: [
+                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
+                    ],
+                },
+                {
+                    id: "AwsSolutions-SF1",
+                    reason: "CloudWatch logging will be added in future iteration",
+                },
+                {
+                    id: "AwsSolutions-SF2",
+                    reason: "X-Ray tracing will be added in future iteration",
+                },
             ],
             true
         );

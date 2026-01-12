@@ -62,16 +62,12 @@ export class IsaacLabTrainingFunctions extends Construct {
         const stackIdentifier = `${props.config.name}-${props.config.app.baseStackName}`;
 
         // OpenPipeline - builds job config, reads config from S3
-        this.openPipelineFunction = new lambda.Function(
-            this,
-            "OpenPipelineFunction",
-            {
-                ...commonProps,
-                functionName: `${stackIdentifier}-isaaclab-open`,
-                handler: "openPipeline.lambda_handler",
-                code: lambda.Code.fromAsset(lambdaPath),
-            }
-        );
+        this.openPipelineFunction = new lambda.Function(this, "OpenPipelineFunction", {
+            ...commonProps,
+            functionName: `${stackIdentifier}-isaaclab-open`,
+            handler: "openPipeline.lambda_handler",
+            code: lambda.Code.fromAsset(lambdaPath),
+        });
 
         // Grant S3 read access to openPipeline for reading config files from all asset buckets
         s3AssetBuckets.getS3AssetBucketRecords().forEach((record) => {
@@ -96,8 +92,12 @@ export class IsaacLabTrainingFunctions extends Construct {
                 effect: iam.Effect.ALLOW,
                 actions: ["batch:SubmitJob", "batch:DescribeJobs"],
                 resources: [
-                    `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-queue/${props.batchJobQueue.jobQueueName}`,
-                    `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${props.batchJobDefinition.jobDefinitionName}*`,
+                    `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-queue/${
+                        props.batchJobQueue.jobQueueName
+                    }`,
+                    `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${
+                        props.batchJobDefinition.jobDefinitionName
+                    }*`,
                 ],
             })
         );
@@ -123,9 +123,7 @@ export class IsaacLabTrainingFunctions extends Construct {
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-                resources: [
-                    `arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`,
-                ],
+                resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
             })
         );
 

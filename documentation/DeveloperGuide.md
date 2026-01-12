@@ -2767,9 +2767,9 @@ NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback 
 
 ![Isaac Lab Training Pipeline Architecture](./diagrams/pipeline_usecase_isaacLab.png)
 
-| Input File Types Supported | Base Lambda Function Name     |
-| :------------------------- | :---------------------------- |
-| JSON (configuration file)  | vamsExecuteIsaacLabPipeline   |
+| Input File Types Supported | Base Lambda Function Name   |
+| :------------------------- | :-------------------------- |
+| JSON (configuration file)  | vamsExecuteIsaacLabPipeline |
 
 See the [Isaac Lab Pipeline User Guide](../backendPipelines/simulation/isaacLabTraining/USER_GUIDE.md) for detailed configuration options, custom environment setup, and usage examples.
 

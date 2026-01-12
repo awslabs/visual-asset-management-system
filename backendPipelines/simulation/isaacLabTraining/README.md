@@ -5,8 +5,9 @@ GPU-accelerated reinforcement learning training and evaluation for robotic asset
 ## Overview
 
 This pipeline enables VAMS users to:
-- **Train** RL policies for robots using GPU-accelerated simulation
-- **Evaluate** trained policies and generate video recordings
+
+-   **Train** RL policies for robots using GPU-accelerated simulation
+-   **Evaluate** trained policies and generate video recordings
 
 It leverages AWS Batch for scalable GPU compute with automatic checkpoint management and S3 integration.
 
@@ -38,9 +39,9 @@ It leverages AWS Batch for scalable GPU compute with automatic checkpoint manage
 
 ## Prerequisites
 
-- VAMS deployed with VPC enabled (`useGlobalVpc.enabled: true`)
-- AWS account with GPU instance quota (g5 or g6e instances)
-- Docker installed locally (for container development)
+-   VAMS deployed with VPC enabled (`useGlobalVpc.enabled: true`)
+-   AWS account with GPU instance quota (g5 or g6e instances)
+-   Docker installed locally (for container development)
 
 ---
 
@@ -77,18 +78,18 @@ Simple balancing task - good for testing the pipeline:
 
 ```json
 {
-  "name": "Cartpole Training Job",
-  "description": "Train a PPO policy for the Isaac-Cartpole-Direct-v0 environment",
-  "trainingConfig": {
-    "mode": "train",
-    "task": "Isaac-Cartpole-Direct-v0",
-    "numEnvs": 4096,
-    "maxIterations": 500,
-    "rlLibrary": "rsl_rl"
-  },
-  "computeConfig": {
-    "numNodes": 1
-  }
+    "name": "Cartpole Training Job",
+    "description": "Train a PPO policy for the Isaac-Cartpole-Direct-v0 environment",
+    "trainingConfig": {
+        "mode": "train",
+        "task": "Isaac-Cartpole-Direct-v0",
+        "numEnvs": 4096,
+        "maxIterations": 500,
+        "rlLibrary": "rsl_rl"
+    },
+    "computeConfig": {
+        "numNodes": 1
+    }
 }
 ```
 
@@ -98,33 +99,33 @@ Quadruped locomotion - more complex task:
 
 ```json
 {
-  "name": "Ant Training Job",
-  "description": "Train a PPO policy for the Isaac-Ant-Direct-v0 environment",
-  "trainingConfig": {
-    "mode": "train",
-    "task": "Isaac-Ant-Direct-v0",
-    "numEnvs": 4096,
-    "maxIterations": 1000,
-    "rlLibrary": "rsl_rl"
-  },
-  "computeConfig": {
-    "numNodes": 1
-  }
+    "name": "Ant Training Job",
+    "description": "Train a PPO policy for the Isaac-Ant-Direct-v0 environment",
+    "trainingConfig": {
+        "mode": "train",
+        "task": "Isaac-Ant-Direct-v0",
+        "numEnvs": 4096,
+        "maxIterations": 1000,
+        "rlLibrary": "rsl_rl"
+    },
+    "computeConfig": {
+        "numNodes": 1
+    }
 }
 ```
 
 #### Training Parameters Guide
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `name` | string | Yes | Display name for the job shown in VAMS UI and logs |
-| `description` | string | Yes | Human-readable description of the training job purpose |
-| `trainingConfig.mode` | string | Yes | Must be `"train"` for training jobs |
-| `trainingConfig.task` | string | Yes | Isaac Lab task/environment name (e.g., `"Isaac-Ant-Direct-v0"`, `"Isaac-Cartpole-Direct-v0"`) |
-| `trainingConfig.numEnvs` | number | Yes | Number of parallel simulation environments. Higher values = faster training but more GPU memory. Recommended: 1024-8192 |
-| `trainingConfig.maxIterations` | number | Yes | Number of policy update iterations. More iterations = longer training, potentially better policy. Recommended: 500-5000 depending on task complexity |
-| `trainingConfig.rlLibrary` | string | Yes | Reinforcement learning library to use. Options: `"rsl_rl"` (recommended for locomotion), `"rl_games"`, `"skrl"` |
-| `computeConfig.numNodes` | number | Yes | Number of GPU nodes for distributed training. Use `1` for single-node training |
+| Parameter                      | Type   | Required | Description                                                                                                                                          |
+| ------------------------------ | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                         | string | Yes      | Display name for the job shown in VAMS UI and logs                                                                                                   |
+| `description`                  | string | Yes      | Human-readable description of the training job purpose                                                                                               |
+| `trainingConfig.mode`          | string | Yes      | Must be `"train"` for training jobs                                                                                                                  |
+| `trainingConfig.task`          | string | Yes      | Isaac Lab task/environment name (e.g., `"Isaac-Ant-Direct-v0"`, `"Isaac-Cartpole-Direct-v0"`)                                                        |
+| `trainingConfig.numEnvs`       | number | Yes      | Number of parallel simulation environments. Higher values = faster training but more GPU memory. Recommended: 1024-8192                              |
+| `trainingConfig.maxIterations` | number | Yes      | Number of policy update iterations. More iterations = longer training, potentially better policy. Recommended: 500-5000 depending on task complexity |
+| `trainingConfig.rlLibrary`     | string | Yes      | Reinforcement learning library to use. Options: `"rsl_rl"` (recommended for locomotion), `"rl_games"`, `"skrl"`                                      |
+| `computeConfig.numNodes`       | number | Yes      | Number of GPU nodes for distributed training. Use `1` for single-node training                                                                       |
 
 ---
 
@@ -158,14 +159,16 @@ Evaluation configs are used to evaluate trained policies and generate video reco
 The pipeline supports three methods to specify the checkpoint file (in priority order):
 
 1. **`checkpointPath`** (recommended): Relative path within the asset directory
-   ```json
-   "checkpointPath": "checkpoints/model_300.pt"
-   ```
+
+    ```json
+    "checkpointPath": "checkpoints/model_300.pt"
+    ```
 
 2. **`policyS3Uri`**: Full S3 URI to the checkpoint
-   ```json
-   "policyS3Uri": "s3://bucket/path/to/model.pt"
-   ```
+
+    ```json
+    "policyS3Uri": "s3://bucket/path/to/model.pt"
+    ```
 
 3. **Auto-discovery** (legacy): Place a `.pt` file in the same directory as the evaluation config
 
@@ -173,20 +176,20 @@ The pipeline supports three methods to specify the checkpoint file (in priority 
 
 ```json
 {
-  "name": "Cartpole Evaluation Job",
-  "description": "Evaluate a trained PPO policy for the Isaac-Cartpole-Direct-v0 environment",
-  "trainingConfig": {
-    "mode": "evaluate",
-    "task": "Isaac-Cartpole-Direct-v0",
-    "checkpointPath": "checkpoints/model_499.pt",
-    "numEnvs": 4,
-    "numEpisodes": 10,
-    "stepsPerEpisode": 500,
-    "rlLibrary": "rsl_rl"
-  },
-  "computeConfig": {
-    "numNodes": 1
-  }
+    "name": "Cartpole Evaluation Job",
+    "description": "Evaluate a trained PPO policy for the Isaac-Cartpole-Direct-v0 environment",
+    "trainingConfig": {
+        "mode": "evaluate",
+        "task": "Isaac-Cartpole-Direct-v0",
+        "checkpointPath": "checkpoints/model_499.pt",
+        "numEnvs": 4,
+        "numEpisodes": 10,
+        "stepsPerEpisode": 500,
+        "rlLibrary": "rsl_rl"
+    },
+    "computeConfig": {
+        "numNodes": 1
+    }
 }
 ```
 
@@ -194,20 +197,20 @@ The pipeline supports three methods to specify the checkpoint file (in priority 
 
 ```json
 {
-  "name": "Ant Evaluation Job",
-  "description": "Evaluate a trained PPO policy for the Isaac-Ant-Direct-v0 environment. Videos are automatically generated and uploaded.",
-  "trainingConfig": {
-    "mode": "evaluate",
-    "task": "Isaac-Ant-Direct-v0",
-    "checkpointPath": "checkpoints/model_1000.pt",
-    "numEnvs": 4,
-    "numEpisodes": 5,
-    "stepsPerEpisode": 900,
-    "rlLibrary": "rsl_rl"
-  },
-  "computeConfig": {
-    "numNodes": 1
-  }
+    "name": "Ant Evaluation Job",
+    "description": "Evaluate a trained PPO policy for the Isaac-Ant-Direct-v0 environment. Videos are automatically generated and uploaded.",
+    "trainingConfig": {
+        "mode": "evaluate",
+        "task": "Isaac-Ant-Direct-v0",
+        "checkpointPath": "checkpoints/model_1000.pt",
+        "numEnvs": 4,
+        "numEpisodes": 5,
+        "stepsPerEpisode": 900,
+        "rlLibrary": "rsl_rl"
+    },
+    "computeConfig": {
+        "numNodes": 1
+    }
 }
 ```
 
@@ -217,52 +220,52 @@ This example uses auto-discovery - place a `.pt` file in the same directory as t
 
 ```json
 {
-  "name": "Cartpole Evaluation Job",
-  "description": "Evaluate a trained PPO policy for the Isaac-Cartpole-Direct-v0 environment. Videos are automatically generated and uploaded.",
-  "trainingConfig": {
-    "mode": "evaluate",
-    "task": "Isaac-Cartpole-Direct-v0",
-    "numEnvs": 4,
-    "numEpisodes": 10,
-    "stepsPerEpisode": 500,
-    "rlLibrary": "rsl_rl"
-  },
-  "computeConfig": {
-    "numNodes": 1
-  }
+    "name": "Cartpole Evaluation Job",
+    "description": "Evaluate a trained PPO policy for the Isaac-Cartpole-Direct-v0 environment. Videos are automatically generated and uploaded.",
+    "trainingConfig": {
+        "mode": "evaluate",
+        "task": "Isaac-Cartpole-Direct-v0",
+        "numEnvs": 4,
+        "numEpisodes": 10,
+        "stepsPerEpisode": 500,
+        "rlLibrary": "rsl_rl"
+    },
+    "computeConfig": {
+        "numNodes": 1
+    }
 }
 ```
 
 #### Evaluation Parameters Guide
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `name` | string | Yes | Display name for the job shown in VAMS UI and logs |
-| `description` | string | Yes | Human-readable description of the evaluation job purpose |
-| `trainingConfig.mode` | string | Yes | Must be `"evaluate"` for evaluation jobs |
-| `trainingConfig.task` | string | Yes | Isaac Lab task/environment name. Must match the task used during training |
-| `trainingConfig.checkpointPath` | string | Recommended | Relative path to the trained model checkpoint within the asset (e.g., `"checkpoints/model_499.pt"`) |
-| `trainingConfig.policyS3Uri` | string | Optional | Full S3 URI to checkpoint file. Use for cross-asset or external checkpoints |
-| `trainingConfig.numEnvs` | number | Yes | Number of parallel environments. **Keep low (1-16) for video recording to avoid out-of-memory errors** |
-| `trainingConfig.numEpisodes` | number | Yes | Number of evaluation episodes to run. Each episode generates video frames |
-| `trainingConfig.stepsPerEpisode` | number | Yes | Simulation steps per episode. Task-dependent: Cartpole ~500, Ant ~900, Humanoid ~1000 |
-| `trainingConfig.rlLibrary` | string | Yes | RL library used during training. Must match the training configuration |
-| `computeConfig.numNodes` | number | Yes | Always `1` for evaluation jobs |
+| Parameter                        | Type   | Required    | Description                                                                                            |
+| -------------------------------- | ------ | ----------- | ------------------------------------------------------------------------------------------------------ |
+| `name`                           | string | Yes         | Display name for the job shown in VAMS UI and logs                                                     |
+| `description`                    | string | Yes         | Human-readable description of the evaluation job purpose                                               |
+| `trainingConfig.mode`            | string | Yes         | Must be `"evaluate"` for evaluation jobs                                                               |
+| `trainingConfig.task`            | string | Yes         | Isaac Lab task/environment name. Must match the task used during training                              |
+| `trainingConfig.checkpointPath`  | string | Recommended | Relative path to the trained model checkpoint within the asset (e.g., `"checkpoints/model_499.pt"`)    |
+| `trainingConfig.policyS3Uri`     | string | Optional    | Full S3 URI to checkpoint file. Use for cross-asset or external checkpoints                            |
+| `trainingConfig.numEnvs`         | number | Yes         | Number of parallel environments. **Keep low (1-16) for video recording to avoid out-of-memory errors** |
+| `trainingConfig.numEpisodes`     | number | Yes         | Number of evaluation episodes to run. Each episode generates video frames                              |
+| `trainingConfig.stepsPerEpisode` | number | Yes         | Simulation steps per episode. Task-dependent: Cartpole ~500, Ant ~900, Humanoid ~1000                  |
+| `trainingConfig.rlLibrary`       | string | Yes         | RL library used during training. Must match the training configuration                                 |
+| `computeConfig.numNodes`         | number | Yes         | Always `1` for evaluation jobs                                                                         |
 
 #### Steps Per Episode by Task
 
-| Task | Typical Steps/Episode | Notes |
-|------|----------------------|-------|
-| Isaac-Cartpole-Direct-v0 | 500 | Short episodes |
-| Isaac-Ant-Direct-v0 | 900 | Medium episodes |
-| Isaac-Humanoid-Direct-v0 | 1000 | Longer episodes |
+| Task                     | Typical Steps/Episode | Notes           |
+| ------------------------ | --------------------- | --------------- |
+| Isaac-Cartpole-Direct-v0 | 500                   | Short episodes  |
+| Isaac-Ant-Direct-v0      | 900                   | Medium episodes |
+| Isaac-Humanoid-Direct-v0 | 1000                  | Longer episodes |
 
 #### Video Recording
 
-- Videos are **automatically generated** during evaluation
-- Video length = `numEpisodes × stepsPerEpisode` frames
-- Videos are uploaded to S3 alongside evaluation results
-- **Important**: Keep `numEnvs` low (1-16) to avoid out-of-memory errors during video recording
+-   Videos are **automatically generated** during evaluation
+-   Video length = `numEpisodes × stepsPerEpisode` frames
+-   Videos are uploaded to S3 alongside evaluation results
+-   **Important**: Keep `numEnvs` low (1-16) to avoid out-of-memory errors during video recording
 
 ---
 
@@ -287,13 +290,14 @@ This example uses auto-discovery - place a `.pt` file in the same directory as t
 
 The pipeline supports three methods to locate the checkpoint file:
 
-| Method | Config Field | Example | Use Case |
-|--------|--------------|---------|----------|
-| Relative path | `checkpointPath` | `"checkpoints/model_300.pt"` | **Recommended** - reference checkpoints within the same asset |
-| Full S3 URI | `policyS3Uri` | `"s3://bucket/path/model.pt"` | Cross-asset or external checkpoints |
-| Auto-discovery | (none) | Place `.pt` in config directory | Legacy - backward compatibility |
+| Method         | Config Field     | Example                         | Use Case                                                      |
+| -------------- | ---------------- | ------------------------------- | ------------------------------------------------------------- |
+| Relative path  | `checkpointPath` | `"checkpoints/model_300.pt"`    | **Recommended** - reference checkpoints within the same asset |
+| Full S3 URI    | `policyS3Uri`    | `"s3://bucket/path/model.pt"`   | Cross-asset or external checkpoints                           |
+| Auto-discovery | (none)           | Place `.pt` in config directory | Legacy - backward compatibility                               |
 
 **Asset Directory Structure Example:**
+
 ```
 my-training-asset/
 ├── training/
@@ -350,30 +354,30 @@ Add the IsaacLab training pipeline configuration to `infra/config/config.json`:
 
 ```json
 {
-  "app": {
-    "useGlobalVpc": {
-      "enabled": true,
-      "useForAllLambdas": false,
-      "addVpcEndpoints": true
-    },
-    "pipelines": {
-      "useIsaacLabTraining": {
-        "enabled": true,
-        "acceptNvidiaEula": true,
-        "autoRegisterWithVAMS": true,
-        "keepWarmInstance": false
-      }
+    "app": {
+        "useGlobalVpc": {
+            "enabled": true,
+            "useForAllLambdas": false,
+            "addVpcEndpoints": true
+        },
+        "pipelines": {
+            "useIsaacLabTraining": {
+                "enabled": true,
+                "acceptNvidiaEula": true,
+                "autoRegisterWithVAMS": true,
+                "keepWarmInstance": false
+            }
+        }
     }
-  }
 }
 ```
 
-| Setting | Description |
-|---------|-------------|
-| `enabled` | Enable/disable the pipeline |
-| `acceptNvidiaEula` | Accept NVIDIA Software License Agreement (required) |
-| `autoRegisterWithVAMS` | Auto-register pipelines with VAMS on deployment |
-| `keepWarmInstance` | Keep 1 GPU instance warm to avoid cold starts |
+| Setting                | Description                                         |
+| ---------------------- | --------------------------------------------------- |
+| `enabled`              | Enable/disable the pipeline                         |
+| `acceptNvidiaEula`     | Accept NVIDIA Software License Agreement (required) |
+| `autoRegisterWithVAMS` | Auto-register pipelines with VAMS on deployment     |
+| `keepWarmInstance`     | Keep 1 GPU instance warm to avoid cold starts       |
 
 ### Optimizing Container Pull Times
 
@@ -389,22 +393,22 @@ Note: ECR pull-through cache is **not supported** for NVIDIA NGC (nvcr.io).
 
 ## Supported Tasks
 
-| Task | Description | Complexity | Training Time (1 GPU) |
-|------|-------------|------------|----------------------|
-| Isaac-Cartpole-Direct-v0 | Cartpole balancing | Low | 2-5 min |
-| Isaac-Ant-Direct-v0 | Quadruped locomotion | Medium | 15-30 min |
-| Isaac-Humanoid-Direct-v0 | Humanoid locomotion | High | 1-2 hrs |
-| Isaac-Velocity-Flat-Anymal-D-v0 | Anymal quadruped (flat) | Medium | 10-15 min |
-| Isaac-Velocity-Rough-Anymal-D-v0 | Anymal quadruped (rough) | High | 1-2 hrs |
+| Task                             | Description              | Complexity | Training Time (1 GPU) |
+| -------------------------------- | ------------------------ | ---------- | --------------------- |
+| Isaac-Cartpole-Direct-v0         | Cartpole balancing       | Low        | 2-5 min               |
+| Isaac-Ant-Direct-v0              | Quadruped locomotion     | Medium     | 15-30 min             |
+| Isaac-Humanoid-Direct-v0         | Humanoid locomotion      | High       | 1-2 hrs               |
+| Isaac-Velocity-Flat-Anymal-D-v0  | Anymal quadruped (flat)  | Medium     | 10-15 min             |
+| Isaac-Velocity-Rough-Anymal-D-v0 | Anymal quadruped (rough) | High       | 1-2 hrs               |
 
 ## Instance Types
 
-| Instance | GPUs | VRAM | Cost/hr | Use Case |
-|----------|------|------|---------|----------|
-| g5.2xlarge | 1x A10G | 24GB | ~$1.20 | Development, evaluation |
-| g5.4xlarge | 1x A10G | 24GB | ~$1.60 | Single-node training |
-| g6e.2xlarge | 1x L40S | 48GB | ~$1.50 | Large-scale training |
-| g6e.12xlarge | 4x L40S | 192GB | ~$6.00 | Multi-GPU training |
+| Instance     | GPUs    | VRAM  | Cost/hr | Use Case                |
+| ------------ | ------- | ----- | ------- | ----------------------- |
+| g5.2xlarge   | 1x A10G | 24GB  | ~$1.20  | Development, evaluation |
+| g5.4xlarge   | 1x A10G | 24GB  | ~$1.60  | Single-node training    |
+| g6e.2xlarge  | 1x L40S | 48GB  | ~$1.50  | Large-scale training    |
+| g6e.12xlarge | 4x L40S | 192GB | ~$6.00  | Multi-GPU training      |
 
 ---
 
@@ -418,13 +422,13 @@ Note: ECR pull-through cache is **not supported** for NVIDIA NGC (nvcr.io).
 
 ### Container fails to start
 
-- Verify NVIDIA drivers are available on Batch compute instances
-- Check CloudWatch logs: `/aws/batch/job`
+-   Verify NVIDIA drivers are available on Batch compute instances
+-   Check CloudWatch logs: `/aws/batch/job`
 
 ### Training job times out
 
-- Default timeout is 6 hours
-- Consider using more GPUs or reducing `maxIterations`
+-   Default timeout is 6 hours
+-   Consider using more GPUs or reducing `maxIterations`
 
 ---
 
@@ -452,7 +456,7 @@ isaacLabTraining/
 
 ## References
 
-- [User Guide](./USER_GUIDE.md)
-- [Isaac Lab Documentation](https://isaac-sim.github.io/IsaacLab/)
-- [Isaac Lab Docker Guide](https://isaac-sim.github.io/IsaacLab/main/source/deployment/docker.html)
-- [AWS Batch Multi-Node Parallel Jobs](https://docs.aws.amazon.com/batch/latest/userguide/multi-node-parallel-jobs.html)
+-   [User Guide](./USER_GUIDE.md)
+-   [Isaac Lab Documentation](https://isaac-sim.github.io/IsaacLab/)
+-   [Isaac Lab Docker Guide](https://isaac-sim.github.io/IsaacLab/main/source/deployment/docker.html)
+-   [AWS Batch Multi-Node Parallel Jobs](https://docs.aws.amazon.com/batch/latest/userguide/multi-node-parallel-jobs.html)

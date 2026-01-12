@@ -100,7 +100,7 @@ Various AWS partners, ISVs, or other external solutions that VAMS significantly 
 -   [CADQuery](https://github.com/CadQuery/cadquery): Use-case pipeline for open standard CAD conversion and metadata extraction (TriMesh-OpenSource)
 -   [Blender](https://www.blender.org/): Use-case pipeline for preview file generation and metadata generation (Blender-OpenSource)
 -   [Garnet Framework](https://garnet-framework.dev/): Data syncing integration for pushing VAMS data to a external knowledge graph solution (AWS-OpenSource)
--   [NVIDIA IsaacSim](https://github.com/isaac-sim/IsaacSim): Use-case pipeline for data training and evaluation using NVIDIA IsaacSim (NVIDIA-OpenSource)
+-   [NVIDIA IsaacSim](https://github.com/isaac-sim/IsaacSim): Use-case pipeline for reinforcement learning training and evaluation using NVIDIA IsaacSim (NVIDIA-OpenSource)
 
 -   [RapidPipeline (licensed)](https://rapidpipeline.com/): Use-case pipeline for Spatial data conversions and optimizations (paid)
 -   [VNTANA (licensed)](https://www.vntana.com/): 3D viewer and use-case pipeline (ModelOps) for Spatial data conversations, optimizations, and web viewing (paid)

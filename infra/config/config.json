@@ -26,7 +26,7 @@
             "il6Compliant": false
         },
         "useGlobalVpc": {
-            "enabled": true,
+            "enabled": false,
             "useForAllLambdas": false,
             "addVpcEndpoints": true,
             "optionalExternalVpcId": null,
@@ -48,7 +48,7 @@
             "reindexOnCdkDeploy": false
         },
         "useLocationService": {
-            "enabled": false
+            "enabled": true
         },
         "useAlb": {
             "enabled": false,
@@ -125,13 +125,13 @@
                 "autoRegisterWithVAMS": true
             },
             "useIsaacLabTraining": {
-                "enabled": true,
-                "acceptNvidiaEula": true,
+                "enabled": false,
+                "acceptNvidiaEula": false,
                 "autoRegisterWithVAMS": true,
-                "keepWarmInstance": true
+                "keepWarmInstance": false
             }
         },
-        "addons": { 
+        "addons": {
             "useGarnetFramework": {
                 "enabled": false,
                 "garnetApiEndpoint": "",

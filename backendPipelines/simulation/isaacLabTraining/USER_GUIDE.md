@@ -25,16 +25,16 @@ Train a new policy from scratch:
 
 ```json
 {
-  "trainingConfig": {
-    "mode": "train",
-    "task": "Isaac-Ant-v0",
-    "numEnvs": 4096,
-    "maxIterations": 1500,
-    "rlLibrary": "rsl_rl"
-  },
-  "computeConfig": {
-    "numNodes": 1
-  }
+    "trainingConfig": {
+        "mode": "train",
+        "task": "Isaac-Ant-v0",
+        "numEnvs": 4096,
+        "maxIterations": 1500,
+        "rlLibrary": "rsl_rl"
+    },
+    "computeConfig": {
+        "numNodes": 1
+    }
 }
 ```
 
@@ -48,15 +48,15 @@ Reference a checkpoint within the same asset using a relative path:
 
 ```json
 {
-  "trainingConfig": {
-    "mode": "evaluate",
-    "task": "Isaac-Cartpole-Direct-v0",
-    "checkpointPath": "checkpoints/model_300.pt",
-    "numEnvs": 100,
-    "numEpisodes": 50,
-    "recordVideo": true,
-    "rlLibrary": "rsl_rl"
-  }
+    "trainingConfig": {
+        "mode": "evaluate",
+        "task": "Isaac-Cartpole-Direct-v0",
+        "checkpointPath": "checkpoints/model_300.pt",
+        "numEnvs": 100,
+        "numEpisodes": 50,
+        "recordVideo": true,
+        "rlLibrary": "rsl_rl"
+    }
 }
 ```
 
@@ -66,14 +66,14 @@ Specify the complete S3 path to any checkpoint:
 
 ```json
 {
-  "trainingConfig": {
-    "mode": "evaluate",
-    "task": "Isaac-Ant-v0",
-    "policyS3Uri": "s3://vams-assets/policies/ant_trained.pt",
-    "numEnvs": 100,
-    "numEpisodes": 50,
-    "rlLibrary": "rsl_rl"
-  }
+    "trainingConfig": {
+        "mode": "evaluate",
+        "task": "Isaac-Ant-v0",
+        "policyS3Uri": "s3://vams-assets/policies/ant_trained.pt",
+        "numEnvs": 100,
+        "numEpisodes": 50,
+        "rlLibrary": "rsl_rl"
+    }
 }
 ```
 
@@ -82,19 +82,22 @@ Specify the complete S3 path to any checkpoint:
 Place a `.pt` file in the same directory as the evaluation config. The pipeline will automatically discover and use it.
 
 **Key Differences:**
-- **Training**: Produces a trained policy (`.pt` file)
-- **Evaluation**: Requires an existing policy, produces metrics and optional videos
+
+-   **Training**: Produces a trained policy (`.pt` file)
+-   **Evaluation**: Requires an existing policy, produces metrics and optional videos
 
 ### Available Built-in Environments
 
 Common environments include:
-- `Isaac-Cartpole-v0` - Classic cart-pole balancing
-- `Isaac-Ant-v0` - Quadruped locomotion
-- `Isaac-Humanoid-v0` - Humanoid walking
-- `Isaac-Reach-Franka-v0` - Robot arm reaching
-- `Isaac-Lift-Cube-Franka-v0` - Object manipulation
+
+-   `Isaac-Cartpole-v0` - Classic cart-pole balancing
+-   `Isaac-Ant-v0` - Quadruped locomotion
+-   `Isaac-Humanoid-v0` - Humanoid walking
+-   `Isaac-Reach-Franka-v0` - Robot arm reaching
+-   `Isaac-Lift-Cube-Franka-v0` - Object manipulation
 
 **List all environments:**
+
 ```bash
 python scripts/environments/list_envs.py
 ```
@@ -113,11 +116,13 @@ cd /path/to/IsaacLab
 ```
 
 **Configuration options:**
-- **Location**: Choose "External" (for standalone package)
-- **Workflow**: Choose "Direct" (simpler) or "Manager" (modular)
-- **Framework**: Select RL libraries (rsl_rl, skrl, rl_games)
+
+-   **Location**: Choose "External" (for standalone package)
+-   **Workflow**: Choose "Direct" (simpler) or "Manager" (modular)
+-   **Framework**: Select RL libraries (rsl_rl, skrl, rl_games)
 
 This creates a project structure:
+
 ```
 my_custom_env/
 ├── setup.py
@@ -140,19 +145,19 @@ class MyCustomEnv(DirectRLEnv):
     def __init__(self, cfg: DirectRLEnvCfg, **kwargs):
         super().__init__(cfg, **kwargs)
         # Initialize your environment
-    
+
     def _pre_physics_step(self, actions):
         # Apply actions
         pass
-    
+
     def _get_observations(self):
         # Return observations
         pass
-    
+
     def _get_rewards(self):
         # Calculate rewards
         pass
-    
+
     def _get_dones(self):
         # Determine episode termination
         pass
@@ -216,16 +221,18 @@ This creates `dist/my_custom_env-0.1.0.tar.gz`
 ### Step 2: Upload to VAMS
 
 **Via Web UI:**
+
 1. Navigate to **Assets** in VAMS
 2. Click **Upload Asset**
 3. Select your package file (`my_custom_env.tar.gz`)
 4. Add metadata:
-   - **Name**: `my-custom-isaaclab-env`
-   - **Type**: `isaaclab-environment`
-   - **Description**: Brief description of your environment
+    - **Name**: `my-custom-isaaclab-env`
+    - **Type**: `isaaclab-environment`
+    - **Description**: Brief description of your environment
 5. Click **Upload**
 
 **Via VAMS CLI:**
+
 ```bash
 # Upload custom environment package to an existing asset
 vamscli files upload \
@@ -247,21 +254,22 @@ After upload, note the S3 URI (e.g., `s3://vams-assets-bucket/asset-123/`)
 
 ```json
 {
-  "trainingConfig": {
-    "task": "MyCustom-Robot-v0",
-    "numEnvs": 4096,
-    "maxIterations": 5000,
-    "rlLibrary": "rsl_rl",
-    "seed": 42
-  },
-  "computeConfig": {
-    "numNodes": 1
-  },
-  "inputS3AssetFilePath": "s3://vams-assets-bucket/asset-123/"
+    "trainingConfig": {
+        "task": "MyCustom-Robot-v0",
+        "numEnvs": 4096,
+        "maxIterations": 5000,
+        "rlLibrary": "rsl_rl",
+        "seed": 42
+    },
+    "computeConfig": {
+        "numNodes": 1
+    },
+    "inputS3AssetFilePath": "s3://vams-assets-bucket/asset-123/"
 }
 ```
 
 **What happens:**
+
 1. Pipeline downloads your custom environment package from S3
 2. Installs it in the container: `pip install -e my_custom_env.tar.gz`
 3. Your environment registers with Gymnasium
@@ -274,13 +282,13 @@ For larger environments, use multiple GPUs:
 
 ```json
 {
-  "trainingConfig": {
-    "task": "MyCustom-Robot-v0",
-    "numEnvs": 16384
-  },
-  "computeConfig": {
-    "numNodes": 2
-  }
+    "trainingConfig": {
+        "task": "MyCustom-Robot-v0",
+        "numEnvs": 16384
+    },
+    "computeConfig": {
+        "numNodes": 2
+    }
 }
 ```
 
@@ -293,12 +301,14 @@ For larger environments, use multiple GPUs:
 If you have a pre-trained policy to continue training or evaluate:
 
 **Via VAMS Web UI:**
+
 1. Navigate to your asset in VAMS
 2. Click **Upload Files**
 3. Select your policy checkpoint file (`my_policy.pt`)
 4. Upload to a `checkpoints/` folder for organization
 
 **Via VAMS CLI:**
+
 ```bash
 # Upload policy checkpoint to an existing asset
 vamscli files upload \
@@ -312,12 +322,12 @@ vamscli files upload \
 
 ```json
 {
-  "trainingConfig": {
-    "task": "Isaac-Ant-v0",
-    "numEnvs": 4096,
-    "maxIterations": 5000,
-    "resumeCheckpoint": "s3://vams-assets-bucket/policies/my_policy.pt"
-  }
+    "trainingConfig": {
+        "task": "Isaac-Ant-v0",
+        "numEnvs": 4096,
+        "maxIterations": 5000,
+        "resumeCheckpoint": "s3://vams-assets-bucket/policies/my_policy.pt"
+    }
 }
 ```
 
@@ -327,12 +337,12 @@ To evaluate a trained policy without training:
 
 ```json
 {
-  "trainingConfig": {
-    "task": "Isaac-Ant-v0",
-    "mode": "play",
-    "policyPath": "s3://vams-assets-bucket/policies/my_policy.pt",
-    "numEnvs": 100
-  }
+    "trainingConfig": {
+        "task": "Isaac-Ant-v0",
+        "mode": "play",
+        "policyPath": "s3://vams-assets-bucket/policies/my_policy.pt",
+        "numEnvs": 100
+    }
 }
 ```
 
@@ -342,64 +352,64 @@ To evaluate a trained policy without training:
 
 ### Training Configuration
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `mode` | string | `train` | Execution mode: `train` or `evaluate` |
-| `task` | string | `Isaac-Cartpole-v0` | Environment task name |
-| `rlLibrary` | string | `rsl_rl` | RL framework: `rsl_rl`, `skrl`, `rl_games` |
-| `seed` | integer | null | Random seed for reproducibility |
+| Parameter   | Type    | Default             | Description                                |
+| ----------- | ------- | ------------------- | ------------------------------------------ |
+| `mode`      | string  | `train`             | Execution mode: `train` or `evaluate`      |
+| `task`      | string  | `Isaac-Cartpole-v0` | Environment task name                      |
+| `rlLibrary` | string  | `rsl_rl`            | RL framework: `rsl_rl`, `skrl`, `rl_games` |
+| `seed`      | integer | null                | Random seed for reproducibility            |
 
 **Training Mode Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `numEnvs` | integer | 4096 | Number of parallel environments |
-| `maxIterations` | integer | 1500 | Training iterations |
+| Parameter       | Type    | Default | Description                     |
+| --------------- | ------- | ------- | ------------------------------- |
+| `numEnvs`       | integer | 4096    | Number of parallel environments |
+| `maxIterations` | integer | 1500    | Training iterations             |
 
 **Evaluation Mode Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `checkpointPath` | string | - | Relative path to checkpoint within asset (e.g., `checkpoints/model_300.pt`) |
-| `policyS3Uri` | string | - | Full S3 URI to trained policy (`.pt` file) |
-| `numEnvs` | integer | 100 | Number of parallel environments |
-| `numEpisodes` | integer | 50 | Number of episodes to evaluate |
-| `recordVideo` | boolean | false | Record evaluation videos |
+| Parameter        | Type    | Default | Description                                                                 |
+| ---------------- | ------- | ------- | --------------------------------------------------------------------------- |
+| `checkpointPath` | string  | -       | Relative path to checkpoint within asset (e.g., `checkpoints/model_300.pt`) |
+| `policyS3Uri`    | string  | -       | Full S3 URI to trained policy (`.pt` file)                                  |
+| `numEnvs`        | integer | 100     | Number of parallel environments                                             |
+| `numEpisodes`    | integer | 50      | Number of episodes to evaluate                                              |
+| `recordVideo`    | boolean | false   | Record evaluation videos                                                    |
 
 > **Note:** Specify either `checkpointPath` (recommended) or `policyS3Uri`. If neither is provided, the pipeline auto-discovers `.pt` files in the config directory.
 
 ### Compute Configuration
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `numNodes` | integer | 1 | Number of compute nodes (multi-node training) |
+| Parameter  | Type    | Default | Description                                   |
+| ---------- | ------- | ------- | --------------------------------------------- |
+| `numNodes` | integer | 1       | Number of compute nodes (multi-node training) |
 
 ### Input/Output Paths
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `inputS3AssetFilePath` | string | S3 path to custom environment package |
-| `outputS3Path` | string | S3 path for trained policy and logs (auto-generated) |
+| Parameter              | Type   | Description                                          |
+| ---------------------- | ------ | ---------------------------------------------------- |
+| `inputS3AssetFilePath` | string | S3 path to custom environment package                |
+| `outputS3Path`         | string | S3 path for trained policy and logs (auto-generated) |
 
 ### Output Files
 
 After training completes, the following files are uploaded to the output S3 path, organized under the job UUID for easy identification:
 
-| Path | Description |
-|------|-------------|
+| Path                            | Description                                     |
+| ------------------------------- | ----------------------------------------------- |
 | `{uuid}/checkpoints/model_*.pt` | Training checkpoints saved at regular intervals |
-| `{uuid}/metrics.csv` | Training metrics exported from TensorBoard |
-| `{uuid}/training-config.json` | Copy of input configuration |
-| `{uuid}/*.txt` | Converted log files (e.g., git diff files) |
+| `{uuid}/metrics.csv`            | Training metrics exported from TensorBoard      |
+| `{uuid}/training-config.json`   | Copy of input configuration                     |
+| `{uuid}/*.txt`                  | Converted log files (e.g., git diff files)      |
 
 For evaluation jobs:
 
-| Path | Description |
-|------|-------------|
-| `{uuid}/metrics.csv` | Evaluation metrics exported from TensorBoard |
-| `{uuid}/evaluation-config.json` | Copy of input configuration |
-| `{uuid}/videos/*.mp4` | Recorded evaluation videos |
-| `{uuid}/*.txt` | Converted log files |
+| Path                            | Description                                  |
+| ------------------------------- | -------------------------------------------- |
+| `{uuid}/metrics.csv`            | Evaluation metrics exported from TensorBoard |
+| `{uuid}/evaluation-config.json` | Copy of input configuration                  |
+| `{uuid}/videos/*.mp4`           | Recorded evaluation videos                   |
+| `{uuid}/*.txt`                  | Converted log files                          |
 
 The `{uuid}` prefix matches the job execution UUID, making it easy to identify and organize outputs from multiple jobs within the same asset.
 
@@ -424,6 +434,7 @@ The `{uuid}` prefix matches the job execution UUID, making it easy to identify a
 ### Package Structure
 
 Ensure your package includes:
+
 ```
 my_custom_env/
 ├── setup.py              # Package metadata and dependencies
@@ -446,16 +457,19 @@ my_custom_env/
 **Error:** `gymnasium.error.UnregisteredEnv: No registered env with id: MyCustom-Robot-v0`
 
 **Solution:**
-- Verify `gym.register()` is called in `__init__.py`
-- Check task name matches exactly (case-sensitive)
-- Ensure package installed successfully (check container logs)
+
+-   Verify `gym.register()` is called in `__init__.py`
+-   Check task name matches exactly (case-sensitive)
+-   Ensure package installed successfully (check container logs)
 
 ### Import Errors
 
 **Error:** `ModuleNotFoundError: No module named 'my_dependency'`
 
 **Solution:**
-- Add missing dependencies to `setup.py`:
+
+-   Add missing dependencies to `setup.py`:
+
 ```python
 setup(
     name="my_custom_env",
@@ -471,18 +485,20 @@ setup(
 **Error:** `CUDA out of memory`
 
 **Solution:**
-- Reduce `numEnvs` (try 2048 or 1024)
-- Simplify environment (fewer objects, lower resolution)
-- Use multi-node training to distribute load
+
+-   Reduce `numEnvs` (try 2048 or 1024)
+-   Simplify environment (fewer objects, lower resolution)
+-   Use multi-node training to distribute load
 
 ### Package Installation Failed
 
 **Error:** `Failed to install custom environment package`
 
 **Solution:**
-- Verify package structure is correct
-- Test installation locally: `pip install -e my_custom_env.tar.gz`
-- Check container logs for detailed error messages
+
+-   Verify package structure is correct
+-   Test installation locally: `pip install -e my_custom_env.tar.gz`
+-   Check container logs for detailed error messages
 
 ---
 
@@ -501,7 +517,7 @@ class MyCartpoleEnvCfg(CartpoleEnvCfg):
 
 class MyCartpoleEnv(CartpoleEnv):
     cfg: MyCartpoleEnvCfg
-    
+
     def __init__(self, cfg: MyCartpoleEnvCfg, **kwargs):
         super().__init__(cfg, **kwargs)
 ```
@@ -513,13 +529,13 @@ def _get_rewards(self):
     # Custom reward: penalize cart velocity more heavily
     pole_angle = self.joint_pos[:, self.pole_dof_idx]
     cart_vel = self.joint_vel[:, self.cart_dof_idx]
-    
+
     rewards = {
         "pole_upright": -torch.abs(pole_angle),
         "cart_stationary": -torch.abs(cart_vel) * 2.0,  # Increased penalty
         "alive": 1.0,
     }
-    
+
     return sum(rewards.values())
 ```
 
@@ -527,20 +543,20 @@ def _get_rewards(self):
 
 ```json
 {
-  "workflowName": "isaac-lab-training",
-  "parameters": {
-    "trainingConfig": {
-      "task": "MyCartpole-v0",
-      "numEnvs": 8192,
-      "maxIterations": 3000,
-      "rlLibrary": "rsl_rl",
-      "seed": 123
-    },
-    "computeConfig": {
-      "numNodes": 1
-    },
-    "inputS3AssetFilePath": "s3://vams-assets-bucket/my-cartpole-env/"
-  }
+    "workflowName": "isaac-lab-training",
+    "parameters": {
+        "trainingConfig": {
+            "task": "MyCartpole-v0",
+            "numEnvs": 8192,
+            "maxIterations": 3000,
+            "rlLibrary": "rsl_rl",
+            "seed": 123
+        },
+        "computeConfig": {
+            "numNodes": 1
+        },
+        "inputS3AssetFilePath": "s3://vams-assets-bucket/my-cartpole-env/"
+    }
 }
 ```
 
@@ -548,16 +564,17 @@ def _get_rewards(self):
 
 ## Additional Resources
 
-- [Isaac Lab Documentation](https://isaac-sim.github.io/IsaacLab/main/)
-- [Isaac Lab Quickstart](https://isaac-sim.github.io/IsaacLab/main/source/setup/quickstart.html)
-- [Creating Custom Environments Tutorial](https://isaac-sim.github.io/IsaacLab/main/source/tutorials/03_envs/create_direct_rl_env.html)
-- [VAMS Documentation](../../../README.md)
+-   [Isaac Lab Documentation](https://isaac-sim.github.io/IsaacLab/main/)
+-   [Isaac Lab Quickstart](https://isaac-sim.github.io/IsaacLab/main/source/setup/quickstart.html)
+-   [Creating Custom Environments Tutorial](https://isaac-sim.github.io/IsaacLab/main/source/tutorials/03_envs/create_direct_rl_env.html)
+-   [VAMS Documentation](../../../README.md)
 
 ---
 
 ## Support
 
 For issues or questions:
+
 1. Check CloudWatch logs for detailed error messages
 2. Review Isaac Lab documentation for environment development
 3. Verify package structure matches template generator output

@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [2.4.0] (2026-01-16)
 
+### Major Change Summary:
+
+• New Partner/Solution Integrations - Veerum 3D Viewer for 3D Tiles and Point-Clouds (licensed), NVIDIA IsaacSim use-case pipeline (reinforcement training/evaluation), Garnet Framework (knowledge graph) external data indexing
+• Metadata Schema System Overhaul - Database-specific and global schemas, multi-schema overlay support with validation, new field value types, optional CDK-deployable default schemas
+• Metadata System Overhaul - Multi-entity type metadata support (databases, assets, files, asset links), bulk editing with CSV import/export, separate file metadata and attributes storage, asset metadata versioning, enhanced metadata validations
+• Enhanced Backend Infrastructure - Refactored data queues for easy indexing expansions and performance (ie. Garnet Framework), auto-workflow triggering on file upload, EKS deployment option for RapidPipeline, improved file streaming APIs
+• Advanced Asset Management - Asset unarchiving, file renaming, database-level file upload restrictions option, asset search location mini-maps, concurrent workflow execution support for single asset
+• Performance & Scale - Refactored UI/API/Storage for large/many file uploads and overall performance/security improvements, UI lazy loading, optimizations to support hundreds to thousands of files per asset, fine-tuned data caching, enhanced load times
+• CLI & CDK Deployment - CLI workflow execution commands, CLI metadata operations, CLI BOM industry query example, custom CloudFront DNS/TLS configuration, API-only deployment option (no website)
+
 ### ⚠ BREAKING CHANGES
 
 Permission authorization constraints now use a dedicated DynamoDB table (no longer shared with authEntities) to improve permission lookup performance. Existing custom constraints must be migrated. VAMS default constructs (Admin/RO) will be re-added automatically.
@@ -16,16 +26,6 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 
 ### Features
 
--   **Isaac Lab Training Pipeline** New reinforcement learning training pipeline using NVIDIA Isaac Lab on AWS Batch with GPU acceleration. Train and evaluate RL policies for robotics simulation directly from VAMS assets.
-    -   Supports training mode with configurable tasks, environments, and iterations using RSL-RL library
-    -   Supports evaluation mode for testing trained policies with metrics export
-    -   Uses AWS Batch with GPU instances (g6e.2xlarge/g5.xlarge) for compute
-    -   EFS-backed checkpoint storage for training persistence
-    -   Step Functions orchestration with async task token callbacks
-    -   Auto-registers `isaaclab-training` and `isaaclab-evaluation` workflows when enabled
-    -   Configurable warm instance option to reduce cold start times
-    -   Outputs training logs (.txt), metrics (.csv), and model checkpoints (.pt) to VAMS
-    -   Requires explicit NVIDIA EULA acceptance in config.json (`acceptNvidiaEula: true`)
 -   (Breaking Change) Overhauled metadata schema to support multiple schemas per database (including "GLOBAL" database schemas) and entity types (database, asset links, assets, asset files). Asset files can be further restricted by file extension. File metadata and attributes are now supported; file attributes only support "string" field type.
     -   Support for both database specific and GLOBAL (all database) schemas. All schemas apply that are relevant.
     -   Supported field types for schemas and metadata across all entities: STRING, MULTILINE_STRING, INLINE_CONTROLLED_LIST, NUMBER, BOOLEAN, DATE, XYZ, WXYZ, MATRIX4X4, GEOPOINT, GEOJSON, LLA, JSON
@@ -42,7 +42,7 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
     -   Updated workflow executions and return formats for metadata (and updated applicable use-case pipelines) to support new entity types and field value types
     -   Updated OpenSearch indexing to catalog new DynamoDB tables for metadata. File attributes are now stored separately in the file index as `AB_` fields. This creates new OpenSearch v2 indexes with a new name as new index schemas need to be applied. `MD_*` and `AB_*` fields are now flat object fields.
     -   Limit of 500 metadata and attributes per metadata entity type
-    -   Updated relevant use-case pipelines that relied on metadata to properly funciton with the new system; the CAD3D metadata extraction pipeline now writes to file attributes instead of metadata
+    -   Updated relevant use-case pipelines that relied on metadata to properly function with the new system; the CAD3D metadata extraction pipeline now writes to file attributes instead of metadata
     -   **Web** Updated to support new fields and APIs. Web currently doesn't support displaying/updating database metadata (API/CLI functionality only).
     -   **CLI** Updated to support new fields and APIs.
     -   Data migration scripts added to migrate old asset and file metadata to new DynamoDB tables
@@ -59,6 +59,16 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 -   **Web** Added Veerum 3D Model licensed viewer to the viewer plugin system for `e57, las, laz, ply, and json (3D Tile)` files. Visit [veerum.com](https://www.veerum.com/) for license purchasing, then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
     -   Note: This viewer requires the Potree Auto-Processing pipeline to be enabled for PointCloud file loading.
 -   Added new Amazon EKS pipeline option for RapidPipeline use-case pipeline (complementing existing Amazon ECS). This provides a pattern example for other use-case pipelines implementing Kubernetes (EKS) versus Elastic Container Service (ECS).
+-   New reinforcement learning training use-case pipeline using NVIDIA Isaac Lab on AWS Batch with GPU acceleration. Train and evaluate RL policies for robotics simulation directly from VAMS assets.
+    -   Supports training mode with configurable tasks, environments, and iterations using RSL-RL library
+    -   Supports evaluation mode for testing trained policies with metrics export
+    -   Uses AWS Batch with GPU instances (g6e.2xlarge/g5.xlarge) for compute
+    -   EFS-backed checkpoint storage for training persistence
+    -   Step Functions orchestration with async task token callbacks
+    -   Auto-registers `isaaclab-training` and `isaaclab-evaluation` workflows when enabled
+    -   Configurable warm instance option to reduce cold start times
+    -   Outputs training logs (.txt), metrics (.csv), and model checkpoints (.pt) to VAMS
+    -   Requires explicit NVIDIA EULA acceptance in config.json (`acceptNvidiaEula: true`)
 -   **Web** Added API (`/database/{databaseId}/assets/{assetId}/unarchiveAsset`) and UI on Asset and File search for Unarchive Asset. Cleaned up UI logic for archived asset elements.
 -   **Web** Added Rename File operation in asset details file manager when selecting single files. Uses existing file move API.
 -   Added new CDK deployment configuration support for disabling both CloudFront and ALB static website deployment options to enable API-only VAMS deployments
@@ -107,9 +117,9 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 -   **Web** Fixed error when building/installing Potree Viewer and Pipeline on some OS build versions (e.g., Linux)
 -   **Web** Fixed bug in "Execute Workflow" modal that prevented user from selecting the entire asset as input (previously required selecting an individual file)
 -   Added back-off retries to OpenSearch file and asset indexing lambdas when 429 `too many requests` errors happens; this helps prevent files and assets from not getting indexed properly during heavy load or re-indexing operations
--   Workflow pipelines that output files to be written back to the asset now properly keep the relative key path how of they should be stored in the asset (verses just storing all at the asset root currently)
+-   Workflow pipelines that output files to be written back to the asset now properly keep the relative key path how they should be stored in the asset (verses just storing all at the asset root currently)
 -   **Web** Fixed asset version component / tab data paging issue and column sorting not working
--   **Web** Fix constraints editing form to allow selecting individual crtieria (or/and) items to remove; it only allowed select all or nothing
+-   **Web** Fix constraints editing form to allow selecting individual criteria (or/and) items to remove; it only allowed select all or nothing
 -   Fixed default RO role constraint permission examples that get loaded during cdk deploy to work with changes that happened to APIs in v2.2+
 
 ### Chores
@@ -127,7 +137,7 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 -   Updated all lambda memory to 5308 from 3003, increasing vCPU from 2 to 4 and improving API response performance
 -   Updated authz criteria builder on backend to ignore fields in criteria that are not in the current constants file (e.g., deprecated authz fields)
 -   Added warning on OS reindex utility when the lambda function times-outs that it doesn't return an error code. It returns a warning that the lambda may still be running and to check cloudwatch logs.
--   **Web** Added a note on the web navigation bar if no items show up that the user doens't have permissions to view any web navigation pages
+-   **Web** Added a note on the web navigation bar if no items show up that the user doesn't have permissions to view any web navigation pages
 -   Updated the custom lambda authorizer for cognito to use `joserfc` library from jose to overcome critical security findings on the jose library
 
 ### Known Outstanding Issues

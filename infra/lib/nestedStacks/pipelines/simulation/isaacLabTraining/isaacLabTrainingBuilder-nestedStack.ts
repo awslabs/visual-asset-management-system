@@ -26,22 +26,13 @@ export interface IsaacLabTrainingBuilderNestedStackProps extends cdk.StackProps 
 export class IsaacLabTrainingBuilderNestedStack extends NestedStack {
     public pipelineVamsLambdaFunctionName: string;
 
-    constructor(
-        parent: Construct,
-        name: string,
-        props: IsaacLabTrainingBuilderNestedStackProps
-    ) {
+    constructor(parent: Construct, name: string, props: IsaacLabTrainingBuilderNestedStackProps) {
         super(parent, name);
 
-        const isaacLabTraining = new IsaacLabTrainingConstruct(
-            this,
-            "IsaacLabTrainingConstruct",
-            {
-                ...props,
-            }
-        );
+        const isaacLabTraining = new IsaacLabTrainingConstruct(this, "IsaacLabTrainingConstruct", {
+            ...props,
+        });
 
-        this.pipelineVamsLambdaFunctionName =
-            isaacLabTraining.pipelineVamsLambdaFunctionName;
+        this.pipelineVamsLambdaFunctionName = isaacLabTraining.pipelineVamsLambdaFunctionName;
     }
 }

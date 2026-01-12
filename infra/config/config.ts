@@ -173,7 +173,12 @@ export function getConfig(app: cdk.App): Config {
     }
 
     if (config.app.pipelines.useIsaacLabTraining == undefined) {
-        config.app.pipelines.useIsaacLabTraining = { enabled: false, acceptNvidiaEula: false, autoRegisterWithVAMS: true, keepWarmInstance: false };
+        config.app.pipelines.useIsaacLabTraining = {
+            enabled: false,
+            acceptNvidiaEula: false,
+            autoRegisterWithVAMS: true,
+            keepWarmInstance: false,
+        };
     }
 
     if (config.app.pipelines.useIsaacLabTraining.enabled == undefined) {
@@ -185,12 +190,15 @@ export function getConfig(app: cdk.App): Config {
     }
 
     // Validate NVIDIA EULA acceptance when Isaac Lab Training is enabled
-    if (config.app.pipelines.useIsaacLabTraining.enabled && !config.app.pipelines.useIsaacLabTraining.acceptNvidiaEula) {
+    if (
+        config.app.pipelines.useIsaacLabTraining.enabled &&
+        !config.app.pipelines.useIsaacLabTraining.acceptNvidiaEula
+    ) {
         throw new Error(
             "Configuration Error: Isaac Lab Training requires accepting the NVIDIA EULA. " +
-            "Please review the NVIDIA Software License Agreement at " +
-            "https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license " +
-            "and set 'useIsaacLabTraining.acceptNvidiaEula' to true in your config.json."
+                "Please review the NVIDIA Software License Agreement at " +
+                "https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license " +
+                "and set 'useIsaacLabTraining.acceptNvidiaEula' to true in your config.json."
         );
     }
 

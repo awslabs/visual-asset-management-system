@@ -200,14 +200,14 @@ This software includes third party software subject to the following copyrights:
 
 **Isaac Lab Training Pipeline Dependencies**
 
-| Name                   | Version        | License            | Notes                                      |
-| :--------------------- | :------------- | :----------------- | :----------------------------------------- |
-| NVIDIA Isaac Lab       | 2.0+           | Apache-2.0         | Robot learning framework                   |
-| RSL-RL                 | 2.3.0+         | BSD-3-Clause       | Reinforcement learning library from ETH Zurich |
-| NVIDIA Isaac Sim       | 4.5+           | NVIDIA Proprietary | Base container image (NVIDIA EULA)         |
-| PyTorch                | 2.0+           | BSD-3-Clause       | Deep learning framework                    |
-| aws-lambda-powertools  | ^3.2.0         | MIT-0              | Lambda utilities                           |
-| boto3                  | ^1.34.0        | Apache-2.0         | AWS SDK for Python                         |
+| Name                  | Version | License            | Notes                                          |
+| :-------------------- | :------ | :----------------- | :--------------------------------------------- |
+| NVIDIA Isaac Lab      | 2.0+    | Apache-2.0         | Robot learning framework                       |
+| RSL-RL                | 2.3.0+  | BSD-3-Clause       | Reinforcement learning library from ETH Zurich |
+| NVIDIA Isaac Sim      | 4.5+    | NVIDIA Proprietary | Base container image (NVIDIA EULA)             |
+| PyTorch               | 2.0+    | BSD-3-Clause       | Deep learning framework                        |
+| aws-lambda-powertools | ^3.2.0  | MIT-0              | Lambda utilities                               |
+| boto3                 | ^1.34.0 | Apache-2.0         | AWS SDK for Python                             |
 
 **Container Base Image**
 
