@@ -147,6 +147,13 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 -   Pipeline metadata inputs have a limit when sending to ECS pipelines. Assets and/or files with extensive metadata may exceed the ECS limit for JSON metadata input (8k characters). Future pipeline overhauls will convert metadata input to a file to resolve this.
 -   When dealing with hundreds to thousands of files per asset or very large files (TB-size), some API asset/file operations may time-out on the request (after 29 seconds) however the lambda may still be processing the request and successfully complete the operation (up to 15 minutes). This also goes for OpenSearch indexing when there are hundreds of thousands to millions of files to re-index. The re-index may actually not finish after the 15 minute lambda time-out with millions of files and require different re-indexing technique locally or in a container. Asynchronous methods and optional containerized processing are being evaluated for the future for all API requests to prevent this.
 
+## [2.3.2] (2026-01-12)
+
+### Bug Fixes
+
+-   **CLI** Fixed documentation issues with the CLI
+-   Updated solution root and infrastructure NPM package dependency version (npm audit fix)
+
 ## [2.3.1] (2025-11-21)
 
 ### Bug Fixes
