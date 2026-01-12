@@ -123,6 +123,12 @@
                 "enabled": false,
                 "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
                 "autoRegisterWithVAMS": true
+            },
+            "useIsaacLabTraining": {
+                "enabled": false,
+                "acceptNvidiaEula": false,
+                "autoRegisterWithVAMS": true,
+                "keepWarmInstance": false
             }
         },
         "addons": { 

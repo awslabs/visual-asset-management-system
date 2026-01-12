@@ -2753,6 +2753,26 @@ NOTE: This pipeline is very large and requires signifnant build time during the 
 
 See [AWS documentation](https://aws-solutions-library-samples.github.io/compute/open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.html#deploy-the-guidance) for all configurations.
 
+### Simulation Type - Isaac Lab Reinforcement Learning Training Pipeline (Asynchronous)
+
+The Isaac Lab Training Pipeline enables reinforcement learning (RL) training and evaluation for robotics and simulation tasks using NVIDIA Isaac Lab on AWS Batch with GPU instances.
+
+If you wish to trigger this pipeline additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
+
+The pipeline uses NVIDIA Isaac Lab (built on Isaac Sim) for GPU-accelerated parallel simulation environments. This requires acceptance of the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license) via the `acceptNvidiaEula` configuration option.
+
+The pipeline accepts JSON configuration files that specify training or evaluation parameters. Two workflows are automatically registered when `autoRegisterWithVAMS` is enabled: `isaaclab-training` for training new policies and `isaaclab-evaluation` for evaluating trained policies with optional video recording.
+
+NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
+
+![Isaac Lab Training Pipeline Architecture](./diagrams/pipeline_usecase_isaacLab.png)
+
+| Input File Types Supported | Base Lambda Function Name     |
+| :------------------------- | :---------------------------- |
+| JSON (configuration file)  | vamsExecuteIsaacLabPipeline   |
+
+See the [Isaac Lab Pipeline User Guide](../backendPipelines/simulation/isaacLabTraining/USER_GUIDE.md) for detailed configuration options, custom environment setup, and usage examples.
+
 ## OpenSearch Reindexing
 
 VAMS v2.3 introduces a Lambda-based reindexing system that allows you to rebuild OpenSearch indexes either automatically during CDK deployment or manually via Lambda invocation.

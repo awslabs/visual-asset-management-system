@@ -26,7 +26,7 @@
             "il6Compliant": false
         },
         "useGlobalVpc": {
-            "enabled": false,
+            "enabled": true,
             "useForAllLambdas": false,
             "addVpcEndpoints": true,
             "optionalExternalVpcId": null,
@@ -48,7 +48,7 @@
             "reindexOnCdkDeploy": false
         },
         "useLocationService": {
-            "enabled": true
+            "enabled": false
         },
         "useAlb": {
             "enabled": false,
@@ -123,6 +123,12 @@
                 "enabled": false,
                 "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
                 "autoRegisterWithVAMS": true
+            },
+            "useIsaacLabTraining": {
+                "enabled": true,
+                "acceptNvidiaEula": true,
+                "autoRegisterWithVAMS": true,
+                "keepWarmInstance": true
             }
         },
         "addons": { 

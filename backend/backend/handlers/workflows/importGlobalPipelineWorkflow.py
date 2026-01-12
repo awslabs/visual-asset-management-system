@@ -1535,6 +1535,15 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> Dict[str, A
         
         logger.info(f"Processing {operation_type} operation")
         
+        # Determine physical resource ID
+        # For CREATE: use pipelineId as stable identifier
+        # For UPDATE/DELETE: preserve existing physical resource ID from event
+        if operation_type == 'Create':
+            physical_resource_id = resource_properties.get('pipelineId', context.log_stream_name)
+        else:
+            # Preserve existing physical resource ID to prevent CloudFormation from treating as replacement
+            physical_resource_id = event.get('PhysicalResourceId', resource_properties.get('pipelineId', context.log_stream_name))
+        
         # Route to appropriate operation handler
         if operation_type == 'Create':
             result = handle_create_operation(resource_properties)
@@ -1551,6 +1560,7 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> Dict[str, A
             context, 
             'SUCCESS', 
             result,
+            physical_resource_id=physical_resource_id,
             reason=f"{operation_type} operation completed successfully"
         )
         
@@ -1559,44 +1569,53 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> Dict[str, A
         
     except ValidationError as e:
         logger.exception(f"Validation error: {e}")
+        # Use existing physical resource ID from event if available
+        error_physical_id = event.get('PhysicalResourceId', context.log_stream_name)
         send_cfn_response(
             event, 
             context, 
             'FAILED', 
             {},
+            physical_resource_id=error_physical_id,
             reason=f"Validation error: {str(e)}"
         )
         return {"statusCode": 400, "body": json.dumps({"error": str(e)})}
         
     except ServiceError as e:
         logger.exception(f"Service error: {e}")
+        error_physical_id = event.get('PhysicalResourceId', context.log_stream_name)
         send_cfn_response(
             event, 
             context, 
             'FAILED', 
             {},
+            physical_resource_id=error_physical_id,
             reason=f"Service error: {str(e)}"
         )
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
         
     except AuthorizationError as e:
         logger.exception(f"Authorization error: {e}")
+        error_physical_id = event.get('PhysicalResourceId', context.log_stream_name)
         send_cfn_response(
             event, 
             context, 
             'FAILED', 
             {},
+            physical_resource_id=error_physical_id,
             reason=f"Authorization error: {str(e)}"
         )
         return {"statusCode": 403, "body": json.dumps({"error": str(e)})}
         
     except Exception as e:
         logger.exception(f"Unexpected error: {e}")
+        error_physical_id = event.get('PhysicalResourceId', context.log_stream_name)
         send_cfn_response(
             event, 
             context, 
             'FAILED', 
             {},
+            physical_resource_id=error_physical_id,
             reason=f"Unexpected error: {str(e)}"
         )
         return {"statusCode": 500, "body": json.dumps({"error": "Internal server error"})}
