@@ -36,8 +36,6 @@
         "@types/aws-lambda": "^8.10.152",
         "@types/aws4": "^1.11.6",
         "aws-cdk-lib": "^2.215.0",
-        "aws-lambda": "^1.0.7",
-        "aws-sdk": "^2.1692.0",
         "aws4": "^1.13.2",
         "cdk-nag": "^2.37.29",
         "constructs": "^10.4.2",
