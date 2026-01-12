@@ -16,6 +16,16 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 
 ### Features
 
+-   **Isaac Lab Training Pipeline** New reinforcement learning training pipeline using NVIDIA Isaac Lab on AWS Batch with GPU acceleration. Train and evaluate RL policies for robotics simulation directly from VAMS assets.
+    -   Supports training mode with configurable tasks, environments, and iterations using RSL-RL library
+    -   Supports evaluation mode for testing trained policies with metrics export
+    -   Uses AWS Batch with GPU instances (g6e.2xlarge/g5.xlarge) for compute
+    -   EFS-backed checkpoint storage for training persistence
+    -   Step Functions orchestration with async task token callbacks
+    -   Auto-registers `isaaclab-training` and `isaaclab-evaluation` workflows when enabled
+    -   Configurable warm instance option to reduce cold start times
+    -   Outputs training logs (.txt), metrics (.csv), and model checkpoints (.pt) to VAMS
+    -   Requires explicit NVIDIA EULA acceptance in config.json (`acceptNvidiaEula: true`)
 -   (Breaking Change) Overhauled metadata schema to support multiple schemas per database (including "GLOBAL" database schemas) and entity types (database, asset links, assets, asset files). Asset files can be further restricted by file extension. File metadata and attributes are now supported; file attributes only support "string" field type.
     -   Support for both database specific and GLOBAL (all database) schemas. All schemas apply that are relevant.
     -   Supported field types for schemas and metadata across all entities: STRING, MULTILINE_STRING, INLINE_CONTROLLED_LIST, NUMBER, BOOLEAN, DATE, XYZ, WXYZ, MATRIX4X4, GEOPOINT, GEOJSON, LLA, JSON

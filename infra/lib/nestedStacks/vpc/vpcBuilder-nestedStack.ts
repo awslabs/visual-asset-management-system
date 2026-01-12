@@ -343,7 +343,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
-                props.config.app.pipelines.useSplatToolbox.enabled
+                props.config.app.pipelines.useSplatToolbox.enabled ||
+                props.config.app.pipelines.useIsaacLabTraining.enabled
             ) {
                 subnetConfigurations.push(subnetPublicConfig);
                 subnetConfigurations.push(subnetPrivateConfig);
@@ -542,7 +543,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
-                props.config.app.pipelines.useSplatToolbox.enabled
+                props.config.app.pipelines.useSplatToolbox.enabled ||
+                props.config.app.pipelines.useIsaacLabTraining?.enabled
             ) {
                 // Create VPC endpoint for Batch
                 new ec2.InterfaceVpcEndpoint(this, "BatchEndpoint", {
@@ -609,6 +611,36 @@ export class VPCBuilderNestedStack extends NestedStack {
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.ECS,
                     subnets: { subnets: this.privateSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
+            // IsaacLab Pipeline Required Endpoints on Isolated Subnet
+            if (props.config.app.pipelines.useIsaacLabTraining?.enabled) {
+                // Create VPC endpoint for ECS
+                new ec2.InterfaceVpcEndpoint(this, "ECSEndpointIsolated", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.ECS,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+
+                // Create VPC endpoint for ECS Agent
+                new ec2.InterfaceVpcEndpoint(this, "ECSAgentEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.ECS_AGENT,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+
+                // Create VPC endpoint for ECS Telemetry
+                new ec2.InterfaceVpcEndpoint(this, "ECSTelemetryEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.ECS_TELEMETRY,
+                    subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
             }

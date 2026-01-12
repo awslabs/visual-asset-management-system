@@ -18,6 +18,7 @@ import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipel
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
 import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
+import { IsaacLabTrainingBuilderNestedStack } from "./simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -135,7 +136,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
             props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
-            props.config.app.pipelines.useModelOps.enabled
+            props.config.app.pipelines.useModelOps.enabled ||
+            props.config.app.pipelines.useIsaacLabTraining.enabled
         ) {
             //Create nested stack for each turned on pipeline
             if (props.config.app.pipelines.usePreviewPcPotreeViewer.enabled) {
@@ -242,6 +244,32 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
                     rapidPipelineEKSNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            if (props.config.app.pipelines.useIsaacLabTraining.enabled) {
+                const isaacLabTrainingNestedStack = new IsaacLabTrainingBuilderNestedStack(
+                    this,
+                    "IsaacLabTrainingNestedStack",
+                    {
+                        ...props,
+                        config: props.config,
+                        storageResources: props.storageResources,
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        vpc: props.vpc,
+                        // Use private subnets for compute - requires NAT Gateway for
+                        // internet access to download assets from Omniverse content server
+                        pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
+                        // Use isolated subnets for EFS - no internet access needed
+                        pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        importGlobalPipelineWorkflowFunctionName:
+                            props.importGlobalPipelineWorkflowFunctionName,
+                    }
+                );
+                //Add function name to array for stack output
+                this.pipelineVamsLambdaFunctionNames.push(
+                    isaacLabTrainingNestedStack.pipelineVamsLambdaFunctionName
                 );
             }
         }

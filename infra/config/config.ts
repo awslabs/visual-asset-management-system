@@ -172,6 +172,28 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useModelOps.enabled = false;
     }
 
+    if (config.app.pipelines.useIsaacLabTraining == undefined) {
+        config.app.pipelines.useIsaacLabTraining = { enabled: false, acceptNvidiaEula: false, autoRegisterWithVAMS: true, keepWarmInstance: false };
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining.enabled == undefined) {
+        config.app.pipelines.useIsaacLabTraining.enabled = false;
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining.keepWarmInstance == undefined) {
+        config.app.pipelines.useIsaacLabTraining.keepWarmInstance = false;
+    }
+
+    // Validate NVIDIA EULA acceptance when Isaac Lab Training is enabled
+    if (config.app.pipelines.useIsaacLabTraining.enabled && !config.app.pipelines.useIsaacLabTraining.acceptNvidiaEula) {
+        throw new Error(
+            "Configuration Error: Isaac Lab Training requires accepting the NVIDIA EULA. " +
+            "Please review the NVIDIA Software License Agreement at " +
+            "https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license " +
+            "and set 'useIsaacLabTraining.acceptNvidiaEula' to true in your config.json."
+        );
+    }
+
     if (config.app.addons.useGarnetFramework.enabled == undefined) {
         config.app.addons.useGarnetFramework.enabled = false;
     }
@@ -333,6 +355,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useRapidPipeline.useEcs.enabled ||
         config.app.pipelines.useRapidPipeline.useEks.enabled ||
         config.app.pipelines.useModelOps.enabled ||
+        config.app.pipelines.useIsaacLabTraining.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
@@ -856,6 +879,12 @@ export interface ConfigPublic {
                 enabled: boolean;
                 ecrContainerImageURI: string;
                 autoRegisterWithVAMS: boolean;
+            };
+            useIsaacLabTraining: {
+                enabled: boolean;
+                acceptNvidiaEula: boolean;
+                autoRegisterWithVAMS: boolean;
+                keepWarmInstance: boolean;
             };
         };
         addons: {
