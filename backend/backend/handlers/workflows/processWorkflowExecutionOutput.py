@@ -268,13 +268,37 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
 
 
 def filter_metadata_files(objects_list):
-    """Filter S3 objects to only include files ending with .metadata.json"""
-    return [obj for obj in objects_list if obj['Key'].endswith('.metadata.json') and '/' != obj['Key'][-1]]
+    """Filter S3 objects to only include files ending with .metadata.json
+    
+    Excludes directory markers (keys ending with /) and includes files in subdirectories.
+    """
+    filtered = []
+    for obj in objects_list:
+        key = obj['Key']
+        # Exclude directory markers (keys ending with /)
+        if key.endswith('/'):
+            continue
+        # Include files ending with .metadata.json
+        if key.endswith('.metadata.json'):
+            filtered.append(obj)
+    return filtered
 
 
 def filter_attribute_files(objects_list):
-    """Filter S3 objects to only include files ending with .attribute.json"""
-    return [obj for obj in objects_list if obj['Key'].endswith('.attribute.json') and '/' != obj['Key'][-1]]
+    """Filter S3 objects to only include files ending with .attribute.json
+    
+    Excludes directory markers (keys ending with /) and includes files in subdirectories.
+    """
+    filtered = []
+    for obj in objects_list:
+        key = obj['Key']
+        # Exclude directory markers (keys ending with /)
+        if key.endswith('/'):
+            continue
+        # Include files ending with .attribute.json
+        if key.endswith('.attribute.json'):
+            filtered.append(obj)
+    return filtered
 
 
 def extract_file_path_from_metadata_filename(s3_key, metadata_path_key):
@@ -505,10 +529,20 @@ def lambda_handler(event, context):
         logger.info(asset)
 
         operation_allowed_on_asset = False
-        if len(claims_and_roles["tokens"]) > 0:
+        
+        # Special handling for SYSTEM_USER (pipeline executions)
+        if event.get('executingUserName') == 'SYSTEM_USER':
+            logger.info("SYSTEM_USER detected - bypassing authorization for pipeline execution")
+            operation_allowed_on_asset = True
+        elif len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(asset, "PUT"):
                 operation_allowed_on_asset = True
+                logger.info("Authorization check passed for user")
+            else:
+                logger.warning("Authorization check failed for user")
+        else:
+            logger.warning("No tokens found in claims_and_roles")
         
         if operation_allowed_on_asset:
             # Get bucket details from asset's bucketId
@@ -518,12 +552,14 @@ def lambda_handler(event, context):
             #Handle preview outputs
             if ('previewPathKey' in event):
                 previewPathKey = event['previewPathKey']
+                logger.info(f"Processing preview outputs from: {previewPathKey}")
 
                 objectsFound = {}
                 try:
                     objectsFound = verify_get_path_objects(bucket_name, previewPathKey)
+                    logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in preview path")
                 except Exception as e:
-                    logger.error(e)
+                    logger.exception(f"Error listing preview objects: {e}")
 
                 if 'Contents' in objectsFound:
                     files = [x['Key'] for x in objectsFound['Contents'] if '/' != x['Key'][-1]]
@@ -579,12 +615,14 @@ def lambda_handler(event, context):
             #Handle asset file outputs
             if('filesPathKey' in event):
                 filesPathKey = event['filesPathKey']
+                logger.info(f"Processing asset file outputs from: {filesPathKey}")
 
                 objectsFound = {}
                 try:
                     objectsFound = verify_get_path_objects(bucket_name, filesPathKey)
+                    logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in files path")
                 except Exception as e:
-                    logger.error(e)
+                    logger.exception(f"Error listing file objects: {e}")
 
                 assets = []
                 if 'Contents' in objectsFound:
@@ -636,19 +674,33 @@ def lambda_handler(event, context):
             #Handle metadata outputs (needs to happen after S3 file processing)
             if('metadataPathKey' in event):
                 metadataPathKey = event['metadataPathKey']
+                logger.info(f"Processing metadata outputs from: {metadataPathKey}")
 
                 objectsFound = {}
                 try:
                     objectsFound = verify_get_path_objects(bucket_name, metadataPathKey)
+                    logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in metadata path")
                 except Exception as e:
-                    logger.error(e)
+                    logger.exception(f"Error listing metadata objects: {e}")
 
                 if 'Contents' in objectsFound:
+                    # Log all objects found for debugging
+                    all_keys = [obj['Key'] for obj in objectsFound['Contents']]
+                    logger.info(f"All objects in metadata path: {all_keys}")
+                    
                     # Filter to metadata and attribute JSON files
                     metadata_files = filter_metadata_files(objectsFound['Contents'])
                     attribute_files = filter_attribute_files(objectsFound['Contents'])
                     
                     logger.info(f"Found {len(metadata_files)} metadata files and {len(attribute_files)} attribute files")
+                    
+                    # Log filtered files for debugging
+                    if metadata_files:
+                        metadata_keys = [obj['Key'] for obj in metadata_files]
+                        logger.info(f"Metadata files: {metadata_keys}")
+                    if attribute_files:
+                        attribute_keys = [obj['Key'] for obj in attribute_files]
+                        logger.info(f"Attribute files: {attribute_keys}")
                     
                     # Check for asset-level metadata (asset.metadata.json)
                     asset_metadata_file = None
