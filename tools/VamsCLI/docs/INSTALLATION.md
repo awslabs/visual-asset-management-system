@@ -11,6 +11,8 @@ This guide provides detailed instructions for installing and setting up VamsCLI 
 
 ## Installation Methods
 
+> **⚠️ NOTICE**: VamsCLI is NOT available on PyPI. Only install from trusted organizational sources using the methods below.
+
 ### Method 1: Install from Source
 
 If you want to install from the source code:
@@ -33,9 +35,19 @@ pip install -e ".[dev]"
 
 This installs VamsCLI in "editable" mode with development dependencies.
 
-### Method 3: Build and install from wheel
+### Method 3: Install from Pre-built Wheel
 
-See see the [Installation Guide](docs/INSTALLATION.md).##Building Distribution Packages below for more information
+Organizations can distribute pre-built wheel files. To install from a wheel file:
+
+```bash
+# Install from local wheel file
+pip install path/to/vamscli-X.X.X-py3-none-any.whl
+
+# Or install from a remote wheel file
+pip install https://example.com/path/to/vamscli-X.X.X-py3-none-any.whl
+```
+
+See the [Building Distribution Packages](#building-distribution-packages) section below for information on creating wheel files.
 
 ## Verify Installation
 
@@ -175,17 +187,19 @@ This creates files in the `dist/` directory:
 -   `vamscli-X.X.X-py3-none-any.whl` (wheel file)
 -   `vamscli-X.X.X.tar.gz` (source distribution)
 
-### Install from Wheel File
+### Distribute and Install from Wheel File
 
-Once you have the wheel file, you can install it on any system:
+Once you have the wheel file, you can distribute it to users who can install it:
 
 ```bash
 # Install from local wheel file
-pip install dist/vamscli-X.X.X-py3-none-any.whl
+pip install path/to/vamscli-X.X.X-py3-none-any.whl
 
-# Or install from a remote wheel file
-pip install https://example.com/path/to/vamscli-X.X.X-py3-none-any.whl
+# Or install from a remote wheel file (if hosted on internal server)
+pip install https://your-internal-server.com/path/to/vamscli-X.X.X-py3-none-any.whl
 ```
+
+> **Note**: Replace `X.X.X` with the actual version number of the wheel file.
 
 ### Alternative Build Methods
 
@@ -225,8 +239,12 @@ vamscli-env\Scripts\activate
 # On macOS/Linux:
 source vamscli-env/bin/activate
 
-# Install VamsCLI
-pip install vamscli
+# Install VamsCLI from source
+cd path/to/visual-asset-management-system/tools/VamsCLI
+pip install .
+
+# Or install from wheel file
+pip install path/to/vamscli-X.X.X-py3-none-any.whl
 
 # Verify installation
 vamscli --version
@@ -241,8 +259,12 @@ conda create -n vamscli python=3.9
 # Activate environment
 conda activate vamscli
 
-# Install VamsCLI
-pip install vamscli
+# Install VamsCLI from source
+cd path/to/visual-asset-management-system/tools/VamsCLI
+pip install .
+
+# Or install from wheel file
+pip install path/to/vamscli-X.X.X-py3-none-any.whl
 
 # Verify installation
 vamscli --version
@@ -250,10 +272,11 @@ vamscli --version
 
 ## Upgrading VamsCLI
 
-### From PyPI
+### From Wheel File
 
 ```bash
-pip install --upgrade vamscli
+# Upgrade from a new wheel file
+pip install --upgrade path/to/vamscli-X.X.X-py3-none-any.whl
 ```
 
 ### From Source
@@ -294,14 +317,14 @@ rm -rf ~/Library/Application\ Support/vamscli
 
 ### Common Issues
 
-**Issue**: `pip install vamscli` fails with permission errors
-**Solution**: Use `pip install --user vamscli` or install in a virtual environment
+**Issue**: Installation fails with permission errors
+**Solution**: Use `pip install --user .` when installing from source, or install in a virtual environment
 
 **Issue**: `vamscli` command not found after installation
 **Solution**: Ensure Python's script directory is in your PATH, or use `python -m vamscli`
 
 **Issue**: Import errors when running VamsCLI
-**Solution**: Ensure all dependencies are installed: `pip install --upgrade vamscli`
+**Solution**: Reinstall VamsCLI: `pip uninstall vamscli && pip install .` (from source directory) or reinstall from wheel file
 
 **Issue**: SSL certificate errors during setup
 **Solution**: Ensure your system has up-to-date certificates and can access HTTPS URLs
