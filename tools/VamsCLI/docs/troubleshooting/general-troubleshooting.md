@@ -348,10 +348,15 @@ If VamsCLI is completely broken:
     rm -rf ~/Library/Application\ Support/vamscli
     ```
 
-3. **Reinstall:**
+3. **Reinstall from source or wheel:**
 
     ```bash
-    pip install vamscli
+    # From source
+    cd path/to/visual-asset-management-system/tools/VamsCLI
+    pip install .
+
+    # Or from wheel file
+    pip install path/to/vamscli-X.X.X-py3-none-any.whl
     ```
 
 4. **Reconfigure:**
@@ -662,8 +667,12 @@ Steps: 1. Run setup, 2. Login, 3. Wait 1 hour, 4. Run command
 python -m venv vamscli-test
 source vamscli-test/bin/activate  # Windows: vamscli-test\Scripts\activate
 
-# Install VamsCLI in isolated environment
-pip install vamscli
+# Install VamsCLI in isolated environment from source
+cd path/to/visual-asset-management-system/tools/VamsCLI
+pip install .
+
+# Or from wheel file
+# pip install path/to/vamscli-X.X.X-py3-none-any.whl
 
 # Test in isolated environment
 vamscli --version
@@ -731,10 +740,10 @@ time vamscli file upload --parallel-uploads 10 -d my-db -a my-asset files/
 
 **Solutions:**
 
-1. Ensure VamsCLI is installed: `pip install vamscli`
+1. Ensure VamsCLI is installed from source or wheel file
 2. Check if you're in the correct Python environment
 3. Verify Python path: `python -c "import sys; print(sys.path)"`
-4. Reinstall if necessary: `pip uninstall vamscli && pip install vamscli`
+4. Reinstall if necessary: `pip uninstall vamscli` then reinstall from source or wheel
 
 ### Path and Environment Issues
 
@@ -746,7 +755,7 @@ time vamscli file upload --parallel-uploads 10 -d my-db -a my-asset files/
 
 **Solutions:**
 
-1. Ensure VamsCLI is installed: `pip install vamscli`
+1. Ensure VamsCLI is installed from source or wheel file
 2. Check if pip install location is in PATH
 3. Try running with full path: `python -m vamscli`
 4. Verify Python scripts directory is in PATH

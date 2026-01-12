@@ -368,16 +368,22 @@ vamscli setup <your-api-gateway-url>
 
 If you're behind a corporate proxy:
 
-1. Configure pip to use your proxy:
+1. Set environment variables for proxy:
 
-    ```bash
-    pip install --proxy http://proxy.company.com:8080 vamscli
-    ```
-
-2. Set environment variables:
     ```bash
     export HTTP_PROXY=http://proxy.company.com:8080
     export HTTPS_PROXY=http://proxy.company.com:8080
+    ```
+
+2. Install VamsCLI from source or wheel file with proxy settings:
+
+    ```bash
+    # From source
+    cd path/to/visual-asset-management-system/tools/VamsCLI
+    pip install --proxy http://proxy.company.com:8080 .
+
+    # Or from wheel file
+    pip install --proxy http://proxy.company.com:8080 path/to/vamscli-X.X.X-py3-none-any.whl
     ```
 
 ## Debug Mode
@@ -459,10 +465,15 @@ If VamsCLI is completely broken:
     rm -rf ~/.config/vamscli
     ```
 
-3. **Reinstall:**
+3. **Reinstall from source or wheel:**
 
     ```bash
-    pip install vamscli
+    # From source
+    cd path/to/visual-asset-management-system/tools/VamsCLI
+    pip install .
+
+    # Or from wheel file
+    pip install path/to/vamscli-X.X.X-py3-none-any.whl
     ```
 
 4. **Reconfigure:**
