@@ -16,6 +16,7 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import * as Service from "../../lib/helper/service-helper";
 import * as Config from "../../config/config";
@@ -30,7 +31,7 @@ export function buildSendEmailFunction(
 ): lambda.Function {
     const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
     const name = "sendEmail";
-    const sendEmailFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.sendEmail.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -51,18 +52,16 @@ export function buildSendEmailFunction(
         },
     });
 
-    sendEmailFunction.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["sns:Publish"],
             resources: [assetTopicWildcardArn],
         })
     );
 
-    storageResources.dynamo.assetStorageTable.grantReadData(sendEmailFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        sendEmailFunction,
-        storageResources.encryption.kmsKey
-    );
-    globalLambdaEnvironmentsAndPermissions(sendEmailFunction, config);
-    return sendEmailFunction;
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    return fun;
 }

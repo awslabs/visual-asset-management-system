@@ -143,6 +143,43 @@ export function globalLambdaEnvironmentsAndPermissions(
     }
 }
 
+/**
+ * Sets up common security and logging environment variables and permissions for Lambda functions.
+ * This includes authentication and authorization tables required for all Lambda functions to perform
+ * global authorization and authentication operations.
+ *
+ * @param lambdaFunction The Lambda function to configure
+ * @param storageResources The storage resources object containing DynamoDB table references
+ */
+export function setupSecurityAndLoggingEnvironmentAndPermissions(
+    lambdaFunction: lambda.Function,
+    storageResources: storageResources
+): void {
+    // Add authentication and authorization environment variables
+    lambdaFunction.addEnvironment(
+        "AUTH_TABLE_NAME",
+        storageResources.dynamo.authEntitiesStorageTable.tableName
+    );
+    lambdaFunction.addEnvironment(
+        "CONSTRAINTS_TABLE_NAME",
+        storageResources.dynamo.constraintsStorageTable.tableName
+    );
+    lambdaFunction.addEnvironment(
+        "USER_ROLES_TABLE_NAME",
+        storageResources.dynamo.userRolesStorageTable.tableName
+    );
+    lambdaFunction.addEnvironment(
+        "ROLES_TABLE_NAME",
+        storageResources.dynamo.rolesStorageTable.tableName
+    );
+
+    // Grant read permissions to authentication and authorization tables
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(lambdaFunction);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(lambdaFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(lambdaFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(lambdaFunction);
+}
+
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
     bucket: s3.IBucket,
     config: Config.Config

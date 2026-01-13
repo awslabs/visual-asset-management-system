@@ -12,6 +12,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
@@ -43,19 +44,12 @@ export function buildAddCommentLambdaFunction(
         environment: {
             COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     return fun;
 }
@@ -88,19 +82,12 @@ export function buildEditCommentLambdaFunction(
         environment: {
             COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     return fun;
 }
@@ -133,19 +120,12 @@ export function buildCommentService(
         environment: {
             COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);

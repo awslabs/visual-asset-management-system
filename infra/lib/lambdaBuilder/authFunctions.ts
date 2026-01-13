@@ -19,6 +19,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     kmsKeyPolicyStatementGenerator,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
@@ -92,18 +93,12 @@ export function buildAuthConstraintsFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     storageResources.dynamo.constraintsStorageTable.grantReadWriteData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     return fun;
 }
@@ -134,10 +129,6 @@ export function buildAuthLoginProfile(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
             EXTERNAL_OATH_IDP_URL: config.app.authProvider.useExternalOAuthIdp.enabled
                 ? config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl
@@ -146,12 +137,10 @@ export function buildAuthLoginProfile(
         },
     });
 
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     storageResources.dynamo.userStorageTable.grantReadWriteData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;
@@ -183,19 +172,12 @@ export function buildRoutesService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ...environment,
         },
     });
 
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;

@@ -22,6 +22,7 @@ import * as s3AssetBuckets from "../helper/s3AssetBuckets";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
     kmsKeyPolicyStatementGenerator,
     generateUniqueNameHash,
 } from "../helper/security";
@@ -60,19 +61,12 @@ export function buildWorkflowService(
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -116,18 +110,10 @@ export function buildListWorkflowExecutionsFunction(
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
                 storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun); //Needs write permission to update execution status after a SFN fetch
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -139,6 +125,7 @@ export function buildListWorkflowExecutionsFunction(
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;
@@ -193,20 +180,12 @@ export function buildCreateWorkflowFunction(
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
                 processWorkflowExecutionOutputFunction.functionName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             VAMS_STACK_NAME: stackName,
             LAMBDA_ROLE_ARN: role.roleArn,
             LOG_GROUP_ARN: logGroupWorkflows.logGroupArn,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -226,6 +205,7 @@ export function buildCreateWorkflowFunction(
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
@@ -264,12 +244,8 @@ export function buildExecuteWorkflowFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
                 storageResources.dynamo.workflowExecutionsStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -278,15 +254,12 @@ export function buildExecuteWorkflowFunction(
     storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     metadataServiceFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
@@ -339,10 +312,6 @@ export function buildSqsAutoExecuteWorkflowFunction(
             S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             EXECUTE_WORKFLOW_LAMBDA_FUNCTION_NAME: executeWorkflowFunction.functionName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -351,10 +320,6 @@ export function buildSqsAutoExecuteWorkflowFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant invoke permission to executeWorkflow Lambda
     executeWorkflowFunction.grantInvoke(fun);
@@ -364,6 +329,7 @@ export function buildSqsAutoExecuteWorkflowFunction(
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -406,10 +372,6 @@ export function buildProcessWorkflowExecutionOutputFunction(
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -417,17 +379,14 @@ export function buildProcessWorkflowExecutionOutputFunction(
     metadataServiceFunction.grantInvoke(fun);
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
@@ -584,12 +543,6 @@ export function buildImportGlobalPipelineWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            // Standard VAMS environment variables
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-
             // Service function names - set directly from function parameters
             CREATE_PIPELINE_FUNCTION_NAME: createPipelineFunction.functionName,
             PIPELINE_SERVICE_FUNCTION_NAME: pipelineServiceFunction.functionName,
@@ -597,12 +550,6 @@ export function buildImportGlobalPipelineWorkflowFunction(
             WORKFLOW_SERVICE_FUNCTION_NAME: workflowServiceFunction.functionName,
         },
     });
-
-    // Grant DynamoDB read permissions for auth and role tables
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant invoke permissions to the service functions directly
     createPipelineFunction.grantInvoke(fun);
@@ -612,6 +559,7 @@ export function buildImportGlobalPipelineWorkflowFunction(
 
     // Apply standard security helper functions
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 

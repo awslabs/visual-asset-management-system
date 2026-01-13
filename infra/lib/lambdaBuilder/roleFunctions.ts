@@ -10,6 +10,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import * as Config from "../../config/config";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
@@ -39,19 +40,14 @@ export function buildRoleService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-        },
+        environment: {},
     });
 
     storageResources.dynamo.rolesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     return fun;
 }
@@ -81,19 +77,14 @@ export function buildCreateRoleFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-        },
+        environment: {},
     });
 
     storageResources.dynamo.rolesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     return fun;
 }

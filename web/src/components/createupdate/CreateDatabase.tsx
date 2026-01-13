@@ -50,7 +50,7 @@ function validateDatabaseNameLowercase(name: string) {
 
 // when a string is between 4 and 64 characters, return null, otherwise return the string "Between 3 and 64 characters"
 function validateDatabaseNameLength(name: string) {
-    return name.length >= 3 && name.length <= 64 ? null : "Between 3 and 64 characters";
+    return name.length >= 4 && name.length <= 64 ? null : "Between 3 and 64 characters";
 }
 
 // databaseId cannot be named "GLOBAL" (case insenstive)
@@ -277,7 +277,7 @@ export default function CreateDatabase({
                         <FormField
                             label="Database Name"
                             errorText={validateDatabaseName(formState.databaseId)}
-                            constraintText="Required. No special chars or spaces except - and _ min 3 and max 64"
+                            constraintText="Required. No special chars or spaces except - and 4 and max 64"
                         >
                             <Input
                                 value={formState.databaseId}

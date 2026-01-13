@@ -25,6 +25,7 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
 export function buildSearchFunction(
@@ -69,10 +70,6 @@ export function buildSearchFunction(
             AUTH_ENTITIES_TABLE: storageResources.dynamo.authEntitiesStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -84,13 +81,10 @@ export function buildSearchFunction(
         })
     );
 
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;
@@ -136,10 +130,6 @@ export function buildFileIndexingFunction(
             OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
                 ? "provisioned"
                 : "serverless",
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -156,16 +146,13 @@ export function buildFileIndexingFunction(
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant S3 read permissions
     grantReadPermissionsToAllAssetBuckets(fun);
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
@@ -214,10 +201,6 @@ export function buildAssetIndexingFunction(
             OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
                 ? "provisioned"
                 : "serverless",
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -235,10 +218,6 @@ export function buildAssetIndexingFunction(
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant stream read permissions
     storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
@@ -248,6 +227,7 @@ export function buildAssetIndexingFunction(
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
@@ -331,6 +311,7 @@ export function buildSqsBucketSyncFunction(
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
 }
@@ -396,6 +377,7 @@ export function buildReindexerFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
     return fun;
@@ -440,6 +422,7 @@ export function buildFileIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;
 }
@@ -485,6 +468,7 @@ export function buildAssetIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;
 }
@@ -528,6 +512,7 @@ export function buildDatabaseIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;
 }

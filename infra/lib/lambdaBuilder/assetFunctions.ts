@@ -29,6 +29,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
 export function buildCreateAssetFunction(
@@ -64,10 +65,6 @@ export function buildCreateAssetFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
             TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ASSET_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetVersionsStorageTable.tableName,
         },
@@ -78,14 +75,11 @@ export function buildCreateAssetFunction(
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun); //update asset counts on a DB
     storageResources.dynamo.tagStorageTable.grantReadData(fun);
     storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     fun.addToRolePolicy(
@@ -133,10 +127,6 @@ export function buildAssetService(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             ASSET_LINKS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetLinksStorageTableV2.tableName,
@@ -161,10 +151,6 @@ export function buildAssetService(
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
@@ -185,6 +171,7 @@ export function buildAssetService(
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -227,11 +214,7 @@ export function buildAssetFiles(
                 storageResources.dynamo.assetFileMetadataStorageTable.tableName,
             FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
                 storageResources.dynamo.fileAttributeStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
         },
     });
@@ -242,14 +225,11 @@ export function buildAssetFiles(
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     sendEmailFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -291,10 +271,6 @@ export function buildUploadFileFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
             LARGE_FILE_PROCESSING_QUEUE_URL: largeFileProcessingQueue.queueUrl,
@@ -306,14 +282,11 @@ export function buildUploadFileFunction(
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     sendEmailFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -347,22 +320,15 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
         environment: {
             ASSET_AUXILIARY_BUCKET_NAME: storageResources.s3.assetAuxiliaryBucket.bucketName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
         },
     });
     storageResources.s3.assetAuxiliaryBucket.grantRead(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -397,24 +363,17 @@ export function buildDownloadAssetFunction(
             S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -462,10 +421,6 @@ export function buildAssetVersionsFunction(
                 storageResources.dynamo.assetFileMetadataStorageTable.tableName,
             FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
                 storageResources.dynamo.fileAttributeStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
         },
@@ -478,15 +433,12 @@ export function buildAssetVersionsFunction(
     storageResources.dynamo.assetFileMetadataVersionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     sendEmailFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -522,10 +474,6 @@ export function buildStreamAssetFunction(
             S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
         },
@@ -533,13 +481,10 @@ export function buildStreamAssetFunction(
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -574,23 +519,16 @@ export function buildSqsUploadFileLargeFunction(
         environment: {
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
     // Grant same permissions as uploadFile Lambda
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     sendEmailFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -632,25 +570,18 @@ export function buildIngestAssetFunction(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             CREATE_ASSET_LAMBDA_FUNCTION_NAME: createAssetLambdaFunction.functionName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: uploadFileLambdaFunction.functionName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     uploadFileLambdaFunction.grantInvoke(fun);
     createAssetLambdaFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -703,10 +634,6 @@ export function buildAssetExportService(
             ASSET_LINKS_FUNCTION_NAME: assetLinksFunction.functionName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -719,10 +646,6 @@ export function buildAssetExportService(
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant invoke permission for asset links lambda
     assetLinksFunction.grantInvoke(fun);
@@ -732,6 +655,7 @@ export function buildAssetExportService(
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 

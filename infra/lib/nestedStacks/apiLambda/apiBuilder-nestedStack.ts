@@ -109,7 +109,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         const createConfigFunction = buildConfigService(
             this,
             lambdaCommonBaseLayer,
-            storageResources.dynamo.appFeatureEnabledStorageTable,
+            storageResources,
             config,
             vpc,
             subnets,

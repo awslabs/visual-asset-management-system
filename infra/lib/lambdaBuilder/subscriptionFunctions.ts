@@ -19,6 +19,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import * as Service from "../../lib/helper/service-helper";
 import * as Config from "../../config/config";
@@ -54,11 +55,7 @@ export function buildSubscriptionService(
             SUBSCRIPTIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.subscriptionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -81,11 +78,9 @@ export function buildSubscriptionService(
     storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     storageResources.dynamo.userStorageTable.grantReadWriteData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     return fun;
 }
@@ -119,19 +114,13 @@ export function buildCheckSubscriptionFunction(
             SUBSCRIPTIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.subscriptionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     return fun;
 }
@@ -166,10 +155,6 @@ export function buildUnSubscribeFunction(
             SUBSCRIPTIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.subscriptionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -191,10 +176,8 @@ export function buildUnSubscribeFunction(
     storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     return fun;
 }

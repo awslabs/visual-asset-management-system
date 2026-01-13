@@ -18,6 +18,7 @@ import {
     suppressCdkNagErrorsByGrantReadWrite,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
@@ -68,10 +69,6 @@ export function buildMetadataService(
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             METADATA_SCHEMA_STORAGE_TABLE_V2_NAME:
                 storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -85,10 +82,6 @@ export function buildMetadataService(
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.metadataSchemaStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant S3 read permissions for file existence checks
     const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
@@ -98,6 +91,7 @@ export function buildMetadataService(
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
