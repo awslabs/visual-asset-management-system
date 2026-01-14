@@ -594,4 +594,4 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
     except Exception as e:
         logger.exception(f"Internal error in SQS auto-execute workflow: {e}")
-        return internal_error()
+        return internal_error(event=event)

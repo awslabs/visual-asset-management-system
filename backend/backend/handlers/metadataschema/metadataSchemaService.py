@@ -584,7 +584,7 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
             
             # Get the schema
             schema = get_metadata_schema_details(path_parameters['metadataSchemaId'])
@@ -619,7 +619,7 @@ def handle_get_request(event):
                     logger.exception(f"Error converting schema to response model: {v}")
                     return success(body={"message": schema})
             else:
-                return general_error(body={"message": "Metadata schema not found"}, status_code=404)
+                return general_error(body={"message": "Metadata schema not found"}, status_code=404, event=event)
         
         # Case 2: List metadata schemas with filters
         else:
@@ -635,7 +635,7 @@ def handle_get_request(event):
                 }
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)})
+                return validation_error(body={'message': str(v)}, event=event)
             
             # Determine which query to use based on filters
             if request_model.databaseId and request_model.metadataEntityType:
@@ -675,10 +675,10 @@ def handle_get_request(event):
             return success(body=response)
             
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_post_request(event):
     """Handle POST requests to create metadata schema
@@ -693,7 +693,7 @@ def handle_post_request(event):
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -701,12 +701,12 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=CreateMetadataSchemaRequestModel)
@@ -722,13 +722,13 @@ def handle_post_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_put_request(event):
     """Handle PUT requests to update metadata schema
@@ -743,7 +743,7 @@ def handle_put_request(event):
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -751,12 +751,12 @@ def handle_put_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate the request model
         update_model = parse(body, model=UpdateMetadataSchemaRequestModel)
@@ -773,13 +773,13 @@ def handle_put_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_delete_request(event):
     """Handle DELETE requests for metadata schemas
@@ -794,10 +794,10 @@ def handle_delete_request(event):
     
     # Validate required path parameters
     if 'databaseId' not in path_parameters:
-        return validation_error(body={'message': "No database ID in API Call"})
+        return validation_error(body={'message': "No database ID in API Call"}, event=event)
     
     if 'metadataSchemaId' not in path_parameters:
-        return validation_error(body={'message': "No metadata schema ID in API Call"})
+        return validation_error(body={'message': "No metadata schema ID in API Call"}, event=event)
     
     # Validate path parameters
     (valid, message) = validate({
@@ -813,13 +813,13 @@ def handle_delete_request(event):
     })
     if not valid:
         logger.error(message)
-        return validation_error(body={'message': message})
+        return validation_error(body={'message': message}, event=event)
     
     try:
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -827,12 +827,12 @@ def handle_delete_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate the request model
         delete_model = parse(body, model=DeleteMetadataSchemaRequestModel)
@@ -848,13 +848,13 @@ def handle_delete_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for metadata schema service APIs"""
@@ -886,14 +886,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

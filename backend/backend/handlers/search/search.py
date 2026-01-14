@@ -1775,10 +1775,10 @@ def handle_get_request(event: Dict[str, Any], search_manager: DualIndexSearchMan
         return success(body={"mappings": mappings})
         
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 
                        query_builder: DualIndexQueryBuilder, response_processor: DualIndexResponseProcessor,
@@ -1794,7 +1794,7 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1802,12 +1802,12 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate request model
         request_model = parse(body, model=SearchRequestModel)
@@ -1829,13 +1829,13 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 
                               simple_query_builder: SimpleSearchQueryBuilder, response_processor: DualIndexResponseProcessor,
@@ -1851,7 +1851,7 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1859,12 +1859,12 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate simple search request model
         request_model = parse(body, model=SimpleSearchRequestModel)
@@ -1897,13 +1897,13 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling simple POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 #######################
 # Lambda Handler
@@ -1942,7 +1942,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if path == '/search':
                 return handle_get_request(event, search_manager)
             else:
-                return validation_error(body={'message': "GET method only supported on /search endpoint"})
+                return validation_error(body={'message': "GET method only supported on /search endpoint"}, event=event)
         
         elif method == 'POST':
             if path == '/search':
@@ -1956,17 +1956,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_simple_post_request(event, search_manager, simple_query_builder, response_processor, claims_and_roles)
             
             else:
-                return validation_error(body={'message': f"POST method not supported on path: {path}"})
+                return validation_error(body={'message': f"POST method not supported on path: {path}"}, event=event)
         
         else:
-            return validation_error(body={'message': f"Method {method} not allowed"})
+            return validation_error(body={'message': f"Method {method} not allowed"}, event=event)
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

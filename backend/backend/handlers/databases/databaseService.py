@@ -378,7 +378,7 @@ def delete_database(database_id, claims_and_roles=None):
 # API Handlers
 #######################
 
-def get_database_handler(path_parameters, query_parameters, claims_and_roles):
+def get_database_handler(event, path_parameters, query_parameters, claims_and_roles):
     """Handler for GET /databases/{databaseId}"""
     try:
         # Validate database ID
@@ -392,7 +392,7 @@ def get_database_handler(path_parameters, query_parameters, claims_and_roles):
 
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
 
         # Get show_deleted parameter
         show_deleted = query_parameters.get('showDeleted', 'false').lower() == 'true'
@@ -402,15 +402,15 @@ def get_database_handler(path_parameters, query_parameters, claims_and_roles):
         if database:
             return success(body=database.dict())
         else:
-            return validation_error(status_code=404, body={'message': 'Database not found'})
+            return validation_error(status_code=404, body={'message': 'Database not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error in get_database_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
-def get_databases_handler(query_parameters, claims_and_roles):
+def get_databases_handler(event, query_parameters, claims_and_roles):
     """Handler for GET /databases"""
     try:
         # Validate pagination parameters
@@ -424,18 +424,18 @@ def get_databases_handler(query_parameters, claims_and_roles):
         return success(body=databases.dict())
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error in get_databases_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
-def update_database_handler(path_parameters, body, claims_and_roles):
+def update_database_handler(event, path_parameters, body, claims_and_roles):
     """Handler for PUT /databases/{databaseId}"""
     try:
         # Validate database ID
         database_id = path_parameters.get('databaseId')
         if not database_id:
-            return validation_error(body={'message': 'No database ID in API Call'})
+            return validation_error(body={'message': 'No database ID in API Call'}, event=event)
             
         (valid, message) = validate({
             'databaseId': {
@@ -446,14 +446,14 @@ def update_database_handler(path_parameters, body, claims_and_roles):
 
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
 
         # Parse and validate request body
         try:
             request_model = parse(body, model=UpdateDatabaseRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Update database
         result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles)
@@ -461,18 +461,18 @@ def update_database_handler(path_parameters, body, claims_and_roles):
         
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error in update_database_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
-def delete_database_handler(path_parameters, claims_and_roles):
+def delete_database_handler(event, path_parameters, claims_and_roles):
     """Handler for DELETE /databases/{databaseId}"""
     try:
         # Validate database ID
         database_id = path_parameters.get('databaseId')
         if not database_id:
-            return validation_error(body={'message': 'No database ID in API Call'})
+            return validation_error(body={'message': 'No database ID in API Call'}, event=event)
             
         (valid, message) = validate({
             'databaseId': {
@@ -483,7 +483,7 @@ def delete_database_handler(path_parameters, claims_and_roles):
 
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
 
         # Delete database
         result = delete_database(database_id, claims_and_roles)
@@ -498,12 +498,12 @@ def delete_database_handler(path_parameters, claims_and_roles):
         )
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error in delete_database_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
-def get_buckets(query_params, claims_and_roles=None):
+def get_buckets(event, query_params, claims_and_roles=None):
     """Get all S3 bucket configurations with pagination"""
     try:
         # Parse query parameters
@@ -564,7 +564,7 @@ def get_buckets(query_params, claims_and_roles=None):
         logger.exception(f"Error getting buckets: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting buckets.")
 
-def get_buckets_handler(query_parameters, claims_and_roles):
+def get_buckets_handler(event, query_parameters, claims_and_roles):
     """Handler for GET /buckets"""
     try:
         # Validate pagination parameters
@@ -575,10 +575,10 @@ def get_buckets_handler(query_parameters, claims_and_roles):
         return success(body=buckets.dict())
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error in get_buckets_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 #######################
 # Lambda Handler
@@ -614,18 +614,18 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if path.endswith('/database'):
             # Route: /database
             if http_method == 'GET':
-                return get_databases_handler(query_parameters, claims_and_roles)
+                return get_databases_handler(event, query_parameters, claims_and_roles)
             else:
                 return authorization_error(body={'message': 'Method not allowed for this route'})
         elif '/database/' in path and path_parameters.get('databaseId'):
             # Route: /database/{databaseId}
             if http_method == 'GET':
-                return get_database_handler(path_parameters, query_parameters, claims_and_roles)
+                return get_database_handler(event, path_parameters, query_parameters, claims_and_roles)
             elif http_method == 'PUT':
                 # Parse request body for PUT
                 body = event.get('body')
                 if not body:
-                    return validation_error(body={'message': "Request body is required"})
+                    return validation_error(body={'message': "Request body is required"}, event=event)
                 
                 # Parse JSON body safely
                 if isinstance(body, str):
@@ -633,29 +633,29 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         body = json.loads(body)
                     except json.JSONDecodeError as e:
                         logger.exception(f"Invalid JSON in request body: {e}")
-                        return validation_error(body={'message': "Invalid JSON in request body"})
+                        return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
                 elif isinstance(body, dict):
                     body = body
                 else:
                     logger.error("Request body is not a string")
-                    return validation_error(body={'message': "Request body cannot be parsed"})
+                    return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
                 
-                return update_database_handler(path_parameters, body, claims_and_roles)
+                return update_database_handler(event, path_parameters, body, claims_and_roles)
             elif http_method == 'DELETE':
-                return delete_database_handler(path_parameters, claims_and_roles)
+                return delete_database_handler(event, path_parameters, claims_and_roles)
             else:
                 return authorization_error(body={'message': 'Method not allowed for this route'})
         elif path.endswith('/buckets'):
             # Route: /buckets
             if http_method == 'GET':
-                return get_buckets_handler(query_parameters, claims_and_roles)
+                return get_buckets_handler(event, query_parameters, claims_and_roles)
             else:
                 return authorization_error(body={'message': 'Method not allowed for this route'})
         else:
             # Not a route handled by this function
             logger.error(f"Unsupported route: {http_method} {path}")
-            return validation_error(status_code=404, body={'message': 'Route not found'})
+            return validation_error(status_code=404, body={'message': 'Route not found'}, event=event)
             
     except Exception as e:
         logger.exception(f"Unhandled error in lambda_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)

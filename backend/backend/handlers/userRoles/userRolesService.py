@@ -14,6 +14,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_auth_changes
 from models.common import (
     APIGatewayProxyResponseV2,
     internal_error,
@@ -489,12 +490,12 @@ def handle_get_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error in query parameters: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_post_request(event):
@@ -510,7 +511,7 @@ def handle_post_request(event):
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -518,7 +519,7 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=CreateUserRolesRequestModel)
@@ -526,18 +527,25 @@ def handle_post_request(event):
         # Create user roles
         result = create_user_roles(request_model, claims_and_roles)
         
+        # AUDIT LOG: User roles created
+        log_auth_changes(event, "userRoleCreate", {
+            "userId": result.userId,
+            "operation": "create",
+            "roleNames": request_model.roleName
+        })
+        
         # Return success response
         return success(body=result.dict())
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_put_request(event):
@@ -553,7 +561,7 @@ def handle_put_request(event):
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -561,7 +569,7 @@ def handle_put_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=UpdateUserRolesRequestModel)
@@ -569,18 +577,25 @@ def handle_put_request(event):
         # Update user roles
         result = update_user_roles(request_model, claims_and_roles)
         
+        # AUDIT LOG: User roles updated
+        log_auth_changes(event, "userRoleUpdate", {
+            "userId": result.userId,
+            "operation": "update",
+            "roleNames": request_model.roleName
+        })
+        
         # Return success response
         return success(body=result.dict())
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_delete_request(event):
@@ -596,7 +611,7 @@ def handle_delete_request(event):
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -604,7 +619,7 @@ def handle_delete_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=DeleteUserRolesRequestModel)
@@ -612,18 +627,24 @@ def handle_delete_request(event):
         # Delete user roles
         result = delete_user_roles(request_model, claims_and_roles)
         
+        # AUDIT LOG: User roles deleted
+        log_auth_changes(event, "userRoleDelete", {
+            "userId": result.userId,
+            "operation": "delete"
+        })
+        
         # Return success response
         return success(body=result.dict())
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
@@ -655,14 +676,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

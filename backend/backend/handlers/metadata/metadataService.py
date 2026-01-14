@@ -1251,7 +1251,7 @@ def handle_asset_link_metadata_get(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Parse query parameters
         try:
@@ -1262,7 +1262,7 @@ def handle_asset_link_metadata_get(event):
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Get metadata
         response = get_asset_link_metadata(path_request_model.assetLinkId, query_params, claims_and_roles)
@@ -1272,10 +1272,10 @@ def handle_asset_link_metadata_get(event):
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_asset_link_metadata_post(event):
@@ -1288,24 +1288,24 @@ def handle_asset_link_metadata_post(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=CreateAssetLinkMetadataRequestModel)
@@ -1316,15 +1316,15 @@ def handle_asset_link_metadata_post(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_asset_link_metadata_put(event):
@@ -1337,24 +1337,24 @@ def handle_asset_link_metadata_put(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=UpdateAssetLinkMetadataRequestModel)
@@ -1365,15 +1365,15 @@ def handle_asset_link_metadata_put(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_asset_link_metadata_delete(event):
@@ -1386,24 +1386,24 @@ def handle_asset_link_metadata_delete(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=DeleteAssetLinkMetadataRequestModel)
@@ -1414,15 +1414,15 @@ def handle_asset_link_metadata_delete(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 #######################
@@ -2312,7 +2312,7 @@ def handle_asset_metadata_get(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Parse query parameters
         try:
@@ -2323,7 +2323,7 @@ def handle_asset_metadata_get(event):
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Get metadata
         response = get_asset_metadata(path_request_model.databaseId, path_request_model.assetId, query_params, claims_and_roles)
@@ -2333,10 +2333,10 @@ def handle_asset_metadata_get(event):
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_asset_metadata_post(event):
@@ -2349,24 +2349,24 @@ def handle_asset_metadata_post(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=CreateAssetMetadataRequestModel)
@@ -2377,15 +2377,15 @@ def handle_asset_metadata_post(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_asset_metadata_put(event):
@@ -2398,24 +2398,24 @@ def handle_asset_metadata_put(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=UpdateAssetMetadataRequestModel)
@@ -2426,15 +2426,15 @@ def handle_asset_metadata_put(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_asset_metadata_delete(event):
@@ -2447,24 +2447,24 @@ def handle_asset_metadata_delete(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=DeleteAssetMetadataRequestModel)
@@ -2475,15 +2475,15 @@ def handle_asset_metadata_delete(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 #######################
@@ -3438,14 +3438,14 @@ def handle_file_metadata_get(event):
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_file_metadata_post(event):
@@ -3458,14 +3458,14 @@ def handle_file_metadata_post(event):
         
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=CreateFileMetadataRequestModel)
@@ -3478,14 +3478,14 @@ def handle_file_metadata_post(event):
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_file_metadata_put(event):
@@ -3498,14 +3498,14 @@ def handle_file_metadata_put(event):
         
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=UpdateFileMetadataRequestModel)
@@ -3518,14 +3518,14 @@ def handle_file_metadata_put(event):
         response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_file_metadata_delete(event):
@@ -3538,14 +3538,14 @@ def handle_file_metadata_delete(event):
         
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=DeleteFileMetadataRequestModel)
@@ -3558,14 +3558,14 @@ def handle_file_metadata_delete(event):
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 #######################
@@ -4346,10 +4346,10 @@ def handle_database_metadata_get(event):
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_database_metadata_post(event):
@@ -4362,27 +4362,27 @@ def handle_database_metadata_post(event):
         
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         request_model = parse(body, model=CreateDatabaseMetadataRequestModel)
         response = create_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_database_metadata_put(event):
@@ -4395,27 +4395,27 @@ def handle_database_metadata_put(event):
         
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         request_model = parse(body, model=UpdateDatabaseMetadataRequestModel)
         response = update_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_database_metadata_delete(event):
@@ -4428,27 +4428,27 @@ def handle_database_metadata_delete(event):
         
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         if isinstance(body, str):
             try:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         request_model = parse(body, model=DeleteDatabaseMetadataRequestModel)
         response = delete_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 #######################
@@ -4521,14 +4521,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_database_metadata_delete(event)
         
         # If no route matched
-        return validation_error(body={'message': "Route not found"})
+        return validation_error(body={'message': "Route not found"}, event=event)
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

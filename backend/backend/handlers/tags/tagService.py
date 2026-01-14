@@ -271,10 +271,10 @@ def handle_get_request(event):
         return success(body={"message": response})
         
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_delete_request(event):
     """Handle DELETE requests for tags
@@ -292,7 +292,7 @@ def handle_delete_request(event):
         tag_name = path_parameters.get("tagId")
         
         if not tag_name or len(tag_name) == 0:
-            return validation_error(body={'message': "Tag name is required"})
+            return validation_error(body={'message': "Tag name is required"}, event=event)
         
         # Delete the tag
         result = delete_tag(tag_name, claims_and_roles)
@@ -301,10 +301,10 @@ def handle_delete_request(event):
         return success(body=result.dict())
         
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for tag service APIs"""
@@ -332,14 +332,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

@@ -274,10 +274,10 @@ def handle_get_request(event):
         
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, status_code=v.status_code)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_delete_request(event):
     """Handle DELETE requests to delete tag types
@@ -295,7 +295,7 @@ def handle_delete_request(event):
         tag_type_name = path_parameters.get("tagTypeId")
         
         if not tag_type_name or len(tag_type_name) == 0:
-            return validation_error(body={'message': "TagTypeName is a required path parameter"})
+            return validation_error(body={'message': "TagTypeName is a required path parameter"}, event=event)
         
         # Validate tag type name format
         from common.validators import validate
@@ -308,7 +308,7 @@ def handle_delete_request(event):
         
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Delete tag type
         result = delete_tag_type(tag_type_name, claims_and_roles)
@@ -317,10 +317,10 @@ def handle_delete_request(event):
         
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, status_code=v.status_code)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for tag type service operations (GET, DELETE)"""
@@ -352,14 +352,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, status_code=v.status_code)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

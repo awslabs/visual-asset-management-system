@@ -257,7 +257,7 @@ class TestSearchHandler:
 
                 assert response['statusCode'] == 403
 
-    def test_validation_error(self, mock_environment, mock_claims_and_roles):
+    def test_validation_error(self, mock_environment, mock_claims_and_roles, event=event):
         """Test validation error handling."""
         with patch('handlers.search.search.request_to_claims') as mock_claims:
             mock_claims.return_value = mock_claims_and_roles

@@ -317,7 +317,7 @@ def handle_post_request(event):
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -325,18 +325,18 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Validate required fields
         required_fields = ['fromAssetId', 'fromAssetDatabaseId', 'toAssetId', 'toAssetDatabaseId', 'relationshipType']
         for field in required_fields:
             if field not in body:
-                return validation_error(body={'message': f"Missing required field: {field}"})
+                return validation_error(body={'message': f"Missing required field: {field}"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=CreateAssetLinkRequestModel)
@@ -362,7 +362,7 @@ def handle_post_request(event):
         })
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         logger.info(f"Creating asset link from {request_model.fromAssetId} to {request_model.toAssetId}")
         
@@ -372,15 +372,15 @@ def handle_post_request(event):
         
     except ValueError as v:
         logger.warning(f"Validation error in asset link creation: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error in asset link creation: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 #######################
 # Lambda Handler
@@ -410,14 +410,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if method == 'POST':
             return handle_post_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

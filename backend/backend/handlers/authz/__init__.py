@@ -11,6 +11,7 @@ from casbin import model
 from casbin.persist.adapters import string_adapter
 from simpleeval import AttributeDoesNotExist
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_authorization, log_authorization_api
 from handlers.auth import request_to_claims
 from datetime import datetime, timedelta
 from common.constants import PERMISSION_CONSTRAINT_FIELDS, PERMISSION_CONSTRAINT_POLICY
@@ -69,6 +70,7 @@ class CasbinEnforcer:
         global casbin_user_enforcer_map
         global casbin_user_policy_map
         self.service_object = None
+        self.claims_and_roles = claims_and_roles  # Store for audit logging
         user_id = claims_and_roles["tokens"][0]
         mfaEnabled = is_mfa_enabled(claims_and_roles)
         
@@ -99,9 +101,24 @@ class CasbinEnforcer:
         casbin_user_enforcer_map[user_id] = self.service_object
 
     def enforce(self, obj, act):
-        return self.service_object.enforce(obj, act)
+        result = self.service_object.enforce(obj, act)
+        
+        #Send audit log on a data check if it fails ONLY, for performance reasons
+        if result == False:
+            # AUDIT LOG: Log authorization result with full obj details
+            try:
+                audit_data = {
+                    "action": act,
+                    "obj": obj  # Pass full obj with all details
+                }
+                log_authorization(self.claims_and_roles, result, audit_data)
+            except Exception as audit_error:
+                logger.exception(f"Failed to log failed authorization audit: {audit_error}")
+        
+        return result
 
     def enforceAPI(self, lambdaEvent, apiMethodOverrideValue = ''):
+        """Enforce API authorization with audit logging"""
         claims_and_roles = request_to_claims(lambdaEvent)
 
         if 'lambdaCrossCall' in lambdaEvent:
@@ -127,7 +144,19 @@ class CasbinEnforcer:
                 "route__path": lambdaEvent['requestContext']['http']['path'] #"/" + event['requestContext']['http']['path'].split("/")[1]
             }
 
-            return self.service_object.enforce(request_object, http_method)
+            result = self.service_object.enforce(request_object, http_method)
+            
+            # AUDIT LOG: Log API authorization result with full request_object
+            try:
+                audit_data = {
+                    "action": http_method,
+                    "obj": request_object  # Pass full request_object with all details
+                }
+                log_authorization_api(lambdaEvent, result, audit_data)
+            except Exception as audit_error:
+                logger.exception(f"Failed to log API authorization audit: {audit_error}")
+            
+            return result
         else:
             #This is not a normal structered call so automatiacally fail
             return False
@@ -551,6 +580,16 @@ class CasbinEnforcerService:
         return _enforcer
 
     def enforce(self, obj, act):
+        """
+        Enforce authorization (audit logging handled by wrapper).
+        
+        Args:
+            obj: The object being accessed
+            act: The action being performed
+            
+        Returns:
+            Boolean indicating if access is authorized
+        """
         sub = f"user::{self._user_id}"
 
         # If the internal Casbin module is not functioning, then immediately deny all access

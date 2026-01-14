@@ -184,7 +184,7 @@ def handle_post_request(event):
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -192,7 +192,7 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         # Parse and validate with Pydantic
         request_model = parse(body, model=CreateTagTypeRequestModel)
@@ -204,13 +204,13 @@ def handle_post_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, status_code=v.status_code)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_put_request(event):
     """Handle PUT requests to update tag types
@@ -225,7 +225,7 @@ def handle_put_request(event):
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -233,7 +233,7 @@ def handle_put_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         # Parse and validate with Pydantic
         request_model = parse(body, model=UpdateTagTypeRequestModel)
@@ -245,13 +245,13 @@ def handle_put_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, status_code=v.status_code)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for tag type create/update operations"""
@@ -278,14 +278,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'PUT':
             return handle_put_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, status_code=v.status_code)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

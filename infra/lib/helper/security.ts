@@ -173,11 +173,68 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
         storageResources.dynamo.rolesStorageTable.tableName
     );
 
+    // Add CloudWatch audit log group environment variables
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_AUTHENTICATION",
+        storageResources.cloudWatchAuditLogGroups.authentication.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_AUTHORIZATION",
+        storageResources.cloudWatchAuditLogGroups.authorization.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_FILEUPLOAD",
+        storageResources.cloudWatchAuditLogGroups.fileUpload.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_FILEDOWNLOAD",
+        storageResources.cloudWatchAuditLogGroups.fileDownload.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_FILEDOWNLOAD_STREAMED",
+        storageResources.cloudWatchAuditLogGroups.fileDownloadStreamed.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_AUTHOTHER",
+        storageResources.cloudWatchAuditLogGroups.authOther.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_AUTHCHANGES",
+        storageResources.cloudWatchAuditLogGroups.authChanges.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_ACTIONS",
+        storageResources.cloudWatchAuditLogGroups.actions.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_ERRORS",
+        storageResources.cloudWatchAuditLogGroups.errors.logGroupName
+    );
+
     // Grant read permissions to authentication and authorization tables
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.constraintsStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.rolesStorageTable.grantReadData(lambdaFunction);
+
+    // Grant CloudWatch Logs permissions for audit logging
+    lambdaFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+            resources: [
+                `${storageResources.cloudWatchAuditLogGroups.authentication.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.authorization.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.fileUpload.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.fileDownload.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.fileDownloadStreamed.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.authOther.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.authChanges.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.actions.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.errors.logGroupArn}:*`,
+            ],
+        })
+    );
 }
 
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(

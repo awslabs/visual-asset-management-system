@@ -11,6 +11,7 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_auth_changes
 from models.common import (
     APIGatewayProxyResponseV2,
     internal_error,
@@ -199,7 +200,7 @@ def handle_post_request(event):
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -208,16 +209,16 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Validate required fields
         if 'roleName' not in body or 'description' not in body:
-            return validation_error(body={'message': "roleName and description are required"})
+            return validation_error(body={'message': "roleName and description are required"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=CreateRoleRequestModel)
@@ -228,18 +229,26 @@ def handle_post_request(event):
             claims_and_roles
         )
         
+        # AUDIT LOG: Role created
+        log_auth_changes(event, "roleCreate", {
+            "roleName": result.roleName,
+            "operation": "create",
+            "description": request_model.description,
+            "mfaRequired": request_model.mfaRequired
+        })
+        
         # Return success response
         return success(body=result.dict())
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_put_request(event):
@@ -255,7 +264,7 @@ def handle_put_request(event):
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -264,16 +273,16 @@ def handle_put_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Validate required fields
         if 'roleName' not in body or 'description' not in body:
-            return validation_error(body={'message': "roleName and description are required"})
+            return validation_error(body={'message': "roleName and description are required"}, event=event)
         
         # Parse and validate the request model
         request_model = parse(body, model=UpdateRoleRequestModel)
@@ -284,18 +293,26 @@ def handle_put_request(event):
             claims_and_roles
         )
         
+        # AUDIT LOG: Role updated
+        log_auth_changes(event, "roleUpdate", {
+            "roleName": result.roleName,
+            "operation": "update",
+            "description": request_model.description,
+            "mfaRequired": request_model.mfaRequired
+        })
+        
         # Return success response
         return success(body=result.dict())
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
@@ -323,14 +340,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'PUT':
             return handle_put_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

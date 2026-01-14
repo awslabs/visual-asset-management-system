@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file. See [standa
 • Enhanced Backend Infrastructure - Refactored data queues for easy indexing expansions and performance (ie. Garnet Framework), auto-workflow triggering on file upload, EKS deployment option for RapidPipeline, improved file streaming APIs
 • Advanced Asset Management - Asset unarchiving, file renaming, database-level file upload restrictions option, asset search location mini-maps, concurrent workflow execution support for single asset
 • Performance & Scale - Refactored UI/API/Storage for large/many file uploads and overall performance/security improvements, UI lazy loading, optimizations to support hundreds to thousands of files per asset, fine-tuned data caching, enhanced load times
+• New Audit Logging - Amazon Cloudwatch separate audit logging for authorizations, VAMS actions, and errors/validations
 • CLI & CDK Deployment - CLI workflow execution commands, CLI metadata operations, CLI BOM industry query example, custom CloudFront DNS/TLS configuration, API-only deployment option (no website)
 
 ### ⚠ BREAKING CHANGES
@@ -94,6 +95,9 @@ OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now f
 -   **Web** Asset Search now has a search mode option to show map thumbnails, similar to preview thumbnails, displaying a mini-map for each asset record in the regular search listing that has location or lat/long metadata defined. This is in addition to the existing map view for all assets with this data. Only shown if location services are enabled on the backend.
 -   OpenSearch (OS) no longer indexes metadata fields as individual OS fields but instead groups metadata (and the new attributes) under single `MD_` and `AB_` flat-object fields for asset and file indexes. This may reduce future functionality to be able to do advanced searching on these fields but provides both better performance and prevents future errors when hitting OS max field limits.
 -   **Web** Ability to now navigate directly to a file via URL path (to allow outside static references) `#/databases/<databaseId>/assets/<assetId>/file/<relative file path>`; previously file was passed only via web state
+-   Added new CloudWatch event logs for specific VAMS audit logging. Currently Authorization (API-All, Data-UnauthorizedOnly), AuthOther, AuthChanges, FileUpload, FileDownload, FileDownload-Streamed, and Errors are logged to the special audit event logs.
+    -   Note: Some errors may not be logged if the API still uses the non-refactored old patterns. These will be updated in the future.
+    -   Note: Authentication events are handled through Cognito or external IDP event logs currently. See [AuditLoggingGuide.md](./documentation/AuditLoggingGuide.md) for more details.
 
 ### Bug Fixes
 

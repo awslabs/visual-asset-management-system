@@ -10,11 +10,15 @@ import * as sns from "aws-cdk-lib/aws-sns";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3not from "aws-cdk-lib/aws-s3-notifications";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
-import { requireTLSAndAdditionalPolicyAddToResourcePolicy } from "../../helper/security";
+import {
+    requireTLSAndAdditionalPolicyAddToResourcePolicy,
+    generateUniqueNameHash,
+} from "../../helper/security";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import { kmsKeyPolicyStatementPrincipalGenerator } from "../../helper/security";
@@ -52,6 +56,17 @@ export interface storageResources {
         fileIndexerSnsTopic: sns.Topic;
         assetIndexerSnsTopic: sns.Topic;
         databaseIndexerSnsTopic: sns.Topic;
+    };
+    cloudWatchAuditLogGroups: {
+        authentication: logs.LogGroup;
+        authorization: logs.LogGroup;
+        fileUpload: logs.LogGroup;
+        fileDownload: logs.LogGroup;
+        fileDownloadStreamed: logs.LogGroup;
+        authOther: logs.LogGroup;
+        authChanges: logs.LogGroup;
+        actions: logs.LogGroup;
+        errors: logs.LogGroup;
     };
     dynamo: {
         appFeatureEnabledStorageTable: dynamodb.Table;
@@ -466,6 +481,129 @@ export function storageResourcesBuilder(
 
     // Grant SNS permission to send messages to the queue
     workflowAutoExecuteQueue.grantSendMessages(Service("SNS").Principal);
+
+    /**
+     * Create CloudWatch Log Groups for Audit Logging
+     */
+    const auditLogGroups = {
+        authentication: new logs.LogGroup(scope, "AuthenticationAuditLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSAuditAuthentication-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSAuditAuthentication",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }),
+        authorization: new logs.LogGroup(scope, "AuthorizationAuditLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSAuditAuthorization-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSAuditAuthorization",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }),
+        fileUpload: new logs.LogGroup(scope, "FileUploadAuditLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSAuditFileUpload-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSAuditFileUpload",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }),
+        fileDownload: new logs.LogGroup(scope, "FileDownloadAuditLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSAuditFileDownload-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSAuditFileDownload",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }),
+        fileDownloadStreamed: new logs.LogGroup(scope, "FileDownloadStreamedAuditLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSAuditFileDownloadStreamed-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSAuditFileDownloadStreamed",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }),
+        authOther: new logs.LogGroup(scope, "AuthOtherAuditLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSAuditAuthOther-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSAuditAuthOther",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }),
+        authChanges: new logs.LogGroup(scope, "AuthChangesAuditLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSAuditAuthChanges-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSAuditAuthChanges",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }),
+        actions: new logs.LogGroup(scope, "ActionsAuditLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSAuditActions-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSAuditActions",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }),
+        errors: new logs.LogGroup(scope, "ErrorsAuditLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSAuditErrors-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSAuditErrors",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }),
+    };
 
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
@@ -1200,6 +1338,7 @@ export function storageResourcesBuilder(
             assetIndexerSnsTopic: AssetIndexerSnsTopic,
             databaseIndexerSnsTopic: DatabaseIndexerSnsTopic,
         },
+        cloudWatchAuditLogGroups: auditLogGroups,
         dynamo: {
             appFeatureEnabledStorageTable: appFeatureEnabledStorageTable,
             assetLinksStorageTableV2: assetLinksStorageTableV2,

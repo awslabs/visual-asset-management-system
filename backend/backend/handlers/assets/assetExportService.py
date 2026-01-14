@@ -1042,10 +1042,10 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -1060,7 +1060,7 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling (Pattern 2: Optional Body)
         body = event.get('body', {})
@@ -1073,12 +1073,12 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
                     body = json.loads(body)
                 except json.JSONDecodeError as e:
                     logger.exception(f"Invalid JSON in request body: {e}")
-                    return validation_error(body={'message': "Invalid JSON in request body"})
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
             elif isinstance(body, dict):
                 body = body
             else:
                 logger.error("Request body is not a string or dict")
-                return validation_error(body={'message': "Request body cannot be parsed"})
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Now body is always a dict (either parsed or empty)
         # Parse request model (works with both empty and populated body)
@@ -1106,13 +1106,13 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 #######################
 # Lambda Handler
@@ -1145,14 +1145,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if method == 'POST' and '/export' in path:
             return handle_post_export(event, context)
         else:
-            return validation_error(body={'message': "Invalid API path or method"})
+            return validation_error(body={'message': "Invalid API path or method"}, event=event)
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Unhandled error in lambda_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)

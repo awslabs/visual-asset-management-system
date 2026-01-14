@@ -15,6 +15,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_file_download_streamed
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 
@@ -111,7 +112,7 @@ def handle_head_request(event, claims_and_roles):
     if not object_key or object_key == None or object_key == "":
         message = "No Auxiliary Preview File Object Key Provided in Path"
         logger.error(message)
-        return validation_error(body={'message': message})
+        return validation_error(body={'message': message}, event=event)
     
     logger.info("Validating parameters for HEAD request")
     (valid, message) = validate({
@@ -130,14 +131,14 @@ def handle_head_request(event, claims_and_roles):
     })
     if not valid:
         logger.error(message)
-        return validation_error(body={'message': message})
+        return validation_error(body={'message': message}, event=event)
     
     # Get asset details and check if it exists
     asset_object = get_asset_details(databaseId, assetId)
     if not asset_object:
         message = f"Asset not found in database"
         logger.error(message)
-        return general_error(body={'message': message}, status_code=404)
+        return general_error(body={'message': message}, status_code=404, event=event)
     
     asset_object.update({"object__type": "asset"})
     
@@ -157,7 +158,7 @@ def handle_head_request(event, claims_and_roles):
     if not assetLocationKey:
         message = "Asset location not found"
         logger.error(message)
-        return general_error(body={'message': message}, status_code=404)
+        return general_error(body={'message': message}, status_code=404, event=event)
     
     # Resolve the full S3 key
     object_key = resolve_asset_file_path(assetLocationKey, object_key)
@@ -174,7 +175,7 @@ def handle_head_request(event, claims_and_roles):
         if not validateUnallowedFileExtensionAndContentType(object_key, content_type):
             message = "Unallowed file extension or content type in auxiliary preview file"
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Build response headers following HTTP best practices
         response_headers = {
@@ -210,10 +211,10 @@ def handle_head_request(event, claims_and_roles):
         error_code = e.response['Error']['Code']
         if error_code == '404' or error_code == 'NoSuchKey':
             logger.error(f"File not found: {object_key}")
-            return general_error(body={'message': 'File not found'}, status_code=404)
+            return general_error(body={'message': 'File not found'}, status_code=404, event=event)
         else:
             logger.exception(f"S3 ClientError during HEAD request: {e}")
-            return internal_error()
+            return internal_error(event=event)
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for auxiliary preview asset streaming APIs"""
@@ -260,7 +261,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 'Access-Control-Allow-Origin': '*',
                 'Cache-Control': 'no-cache, no-store',
             }
-            error_response = validation_error(body={'message': message})
+            error_response = validation_error(body={'message': message}, event=event)
             error_response['headers'].update(streaming_headers)
             return error_response
 
@@ -281,7 +282,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         })
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
 
         operation_allowed_on_asset = False
 
@@ -295,7 +296,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 'Access-Control-Allow-Headers': 'Range',
                 'Access-Control-Allow-Origin': '*',
             }
-            error_response = general_error(body={"message": message}, status_code=404)
+            error_response = general_error(body={"message": message}, status_code=404, event=event)
             error_response['headers'].update(streaming_headers)
             return error_response
 
@@ -324,7 +325,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         'Access-Control-Allow-Headers': 'Range',
                         'Access-Control-Allow-Origin': '*',
                     }
-                    error_response = general_error(body={"message": message}, status_code=404)
+                    error_response = general_error(body={"message": message}, status_code=404, event=event)
                     error_response['headers'].update(streaming_headers)
                     return error_response
 
@@ -354,7 +355,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         'Access-Control-Allow-Headers': 'Range',
                         'Access-Control-Allow-Origin': '*',
                     }
-                    error_response = validation_error(body={"message": message})
+                    error_response = validation_error(body={"message": message}, event=event)
                     error_response['headers'].update(streaming_headers)
                     return error_response
 
@@ -375,6 +376,19 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         ExpiresIn=int(token_timeout)
                     )
                     
+                    # AUDIT LOG: Auxiliary preview stream (presigned URL redirect)
+                    log_file_download_streamed(
+                        event,
+                        databaseId,
+                        assetId,
+                        object_key,
+                        {
+                            "streamType": "auxiliary_preview_presigned_url_redirect",
+                            "fileSize": content_length,
+                            "rangeHeader": range_header if range_header else None
+                        }
+                    )
+                    
                     # Return 307 redirect to presigned URL
                     return {
                         'statusCode': 307,
@@ -388,6 +402,19 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     }
 
                 # For files 4MB and under, stream with base64 encoding
+                # AUDIT LOG: Auxiliary preview stream (direct streaming)
+                log_file_download_streamed(
+                    event,
+                    databaseId,
+                    assetId,
+                    object_key,
+                    {
+                        "streamType": "auxiliary_preview_direct_stream",
+                        "fileSize": content_length,
+                        "rangeHeader": range_header if range_header else None
+                    }
+                )
+                
                 # Extract the file data
                 file_data = s3_response['Body'].read()
 
@@ -443,7 +470,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     'Access-Control-Allow-Origin': '*',
                     'Cache-Control': 'no-cache, no-store',
                 }
-                error_response = general_error(body={"message": message})
+                error_response = general_error(body={"message": message}, event=event)
                 error_response['headers'].update(streaming_headers)
                 return error_response
         else:
@@ -451,10 +478,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

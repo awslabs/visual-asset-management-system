@@ -19,6 +19,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
@@ -1112,7 +1113,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         message="Upload initialized successfully"
     )
 
-def complete_external_upload(uploadId: str, request_model: CompleteExternalUploadRequestModel, claims_and_roles):
+def complete_external_upload(uploadId: str, request_model: CompleteExternalUploadRequestModel, event):
     """Complete an external upload and update the asset"""
     assetId = request_model.assetId
     databaseId = request_model.databaseId
@@ -1552,13 +1553,33 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         largeFileAsynchronousHandling=has_async_files
     )
     
+    # AUDIT LOG: Upload completed - log all successful files
+    if successful_files:
+        successful_file_paths = [f['relativeKey'] for f in successful_files]
+        log_file_upload(
+            event,
+            databaseId,
+            assetId,
+            ", ".join(successful_file_paths),
+            False,  # Not denied
+            None,
+            {
+                "uploadId": uploadId,
+                "uploadType": uploadType,
+                "status": "completed",
+                "successfulFiles": len(successful_files),
+                "totalFiles": len(request_model.files),
+                "hasFailures": has_failures
+            }
+        )
+    
     # Return 409 status if all files failed, otherwise return 200
     if all_files_failed:
-        return general_error(status_code=409, body=response.dict())
+        return general_error(status_code=409, body=response.dict(), event=event)
     else:
         return response
 
-def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, claims_and_roles):
+def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, event):
     """Complete a multipart upload and update the asset"""
     assetId = request_model.assetId
     databaseId = request_model.databaseId
@@ -1940,6 +1961,20 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 # Delete the uploaded file
                 delete_s3_object(bucket_name, temp_s3_key)
                 
+                # AUDIT LOG: Malicious file detected and upload denied
+                log_file_upload(
+                    event,
+                    databaseId,
+                    assetId,
+                    file.relativeKey,
+                    True,  # Upload denied
+                    "File contains potentially malicious executable type",
+                    {
+                        "uploadId": uploadId,
+                        "uploadType": uploadType
+                    }
+                )
+                
                 file_results.append(FileCompletionResult(
                     relativeKey=file.relativeKey,
                     uploadIdS3=file.uploadIdS3,
@@ -2213,9 +2248,29 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         largeFileAsynchronousHandling=has_async_files
     )
     
+    # AUDIT LOG: Upload completed - log all successful files
+    if successful_files:
+        successful_file_paths = [f['relativeKey'] for f in successful_files]
+        log_file_upload(
+            event,
+            databaseId,
+            assetId,
+            ", ".join(successful_file_paths),
+            False,  # Not denied
+            None,
+            {
+                "uploadId": uploadId,
+                "uploadType": uploadType,
+                "status": "completed",
+                "successfulFiles": len(successful_files),
+                "totalFiles": len(request_model.files),
+                "hasFailures": has_failures
+            }
+        )
+    
     # Return 409 status if all files failed, otherwise return 200
     if all_files_failed:
-        return general_error(status_code=409, body=response.dict())
+        return general_error(status_code=409, body=response.dict(), event=event)
     else:
         return response
 
@@ -2232,7 +2287,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2240,12 +2295,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Get API path and method
         path = event['requestContext']['http']['path']
@@ -2259,7 +2314,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
             if not asset:
-                return validation_error(body={'message': "Asset not found"})
+                return validation_error(body={'message': "Asset not found"}, event=event)
             
             asset["object__type"] = "asset"
             
@@ -2270,12 +2325,29 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             # Process request
             response = initialize_upload(request_model, claims_and_roles)
+            
+            # AUDIT LOG: Upload initialized
+            log_file_upload(
+                event,
+                request_model.databaseId,
+                request_model.assetId,
+                f"{len(request_model.files)} files",
+                False,  # Not denied
+                None,
+                {
+                    "uploadId": response.uploadId,
+                    "uploadType": request_model.uploadType,
+                    "status": "initialized",
+                    "fileCount": len(request_model.files)
+                }
+            )
+            
             return success(body=response.dict())
             
         elif method == 'POST' and '/uploads/' in path and path.endswith('/complete/external'):
             # External Complete Upload API - Extract uploadId from path parameters
             if not event.get('pathParameters') or not event['pathParameters'].get('uploadId'):
-                return validation_error(body={'message': "Missing uploadId in path parameters"})
+                return validation_error(body={'message': "Missing uploadId in path parameters"}, event=event)
                 
             uploadId = event['pathParameters']['uploadId']
             
@@ -2285,7 +2357,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
             if not asset:
-                return validation_error(body={'message': "Asset not found"})
+                return validation_error(body={'message': "Asset not found"}, event=event)
             
             asset["object__type"] = "asset"
             
@@ -2295,7 +2367,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     return authorization_error()
             
             # Process request
-            response = complete_external_upload(uploadId, request_model, claims_and_roles)
+            response = complete_external_upload(uploadId, request_model, event)
             # Check if response is already an APIGatewayProxyResponseV2 (error case)
             if isinstance(response, dict) and 'statusCode' in response and 'body' in response:
                 return response
@@ -2305,7 +2377,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'POST' and '/uploads/' in path and path.endswith('/complete'):
             # Complete Upload API - Extract uploadId from path parameters
             if not event.get('pathParameters') or not event['pathParameters'].get('uploadId'):
-                return validation_error(body={'message': "Missing uploadId in path parameters"})
+                return validation_error(body={'message': "Missing uploadId in path parameters"}, event=event)
                 
             uploadId = event['pathParameters']['uploadId']
             
@@ -2315,7 +2387,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
             if not asset:
-                return validation_error(body={'message': "Asset not found"})
+                return validation_error(body={'message': "Asset not found"}, event=event)
             
             asset["object__type"] = "asset"
             
@@ -2325,7 +2397,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     return authorization_error()
             
             # Process request
-            response = complete_upload(uploadId, request_model, claims_and_roles)
+            response = complete_upload(uploadId, request_model, event)
             # Check if response is already an APIGatewayProxyResponseV2 (error case)
             if isinstance(response, dict) and 'statusCode' in response and 'body' in response:
                 return response
@@ -2333,14 +2405,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return success(body=response.dict())
             
         else:
-            return validation_error(body={'message': "Invalid API path or method"})
+            return validation_error(body={'message': "Invalid API path or method"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         
@@ -2356,7 +2428,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 'body': json.dumps({'message': str(v)})
             }
         else:
-            return general_error(body={'message': str(v)})
+            return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

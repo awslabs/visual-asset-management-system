@@ -11,6 +11,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_auth_changes
 from common.dynamodb import validate_pagination_info
 from models.common import (
     APIGatewayProxyResponseV2, 
@@ -190,10 +191,10 @@ def handle_get_request(event):
             return success(body={"message": response_data})
         
     except VAMSGeneralErrorResponse as e:
-        return validation_error(body={"message": str(e)})
+        return validation_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_delete_request(event):
@@ -212,7 +213,7 @@ def handle_delete_request(event):
         role_name = path_parameters.get('roleId')
         
         if not role_name or len(role_name) == 0:
-            return validation_error(body={'message': "Role name is required"})
+            return validation_error(body={'message': "Role name is required"}, event=event)
         
         # Validate role name
         (valid, message) = validate({
@@ -224,7 +225,7 @@ def handle_delete_request(event):
         
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Check authorization
         role_object = {
@@ -271,16 +272,22 @@ def handle_delete_request(event):
                 ConditionExpression='attribute_exists(roleName)'
             )
             
+            # AUDIT LOG: Role deleted
+            log_auth_changes(event, "roleDelete", {
+                "roleName": role_name,
+                "operation": "delete"
+            })
+            
             return success(body={"message": "success"})
             
         except dynamodb_client.exceptions.ConditionalCheckFailedException:
-            return validation_error(body={"message": "Role does not exist"})
+            return validation_error(body={"message": "Role does not exist"}, event=event)
         
     except VAMSGeneralErrorResponse as e:
-        return validation_error(body={"message": str(e)})
+        return validation_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
@@ -308,14 +315,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

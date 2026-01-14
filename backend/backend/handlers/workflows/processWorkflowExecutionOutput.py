@@ -384,7 +384,7 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
                         'path': path,
                         'method': 'PUT'
                     },
-                    'authorizer': request_context['authorizer']
+                    #'authorizer': request_context['authorizer']
                 },
                 'pathParameters': {
                     'databaseId': database_id,

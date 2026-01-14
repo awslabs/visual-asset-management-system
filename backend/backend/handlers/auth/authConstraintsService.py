@@ -23,6 +23,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_auth_changes
 from common.dynamodb import validate_pagination_info
 from models.common import (
     APIGatewayProxyResponseV2, internal_error, success,
@@ -342,12 +343,15 @@ def create_or_update_constraint(constraint_data, claims_and_roles):
         
         logger.info(f"Successfully wrote {len(denormalized_items)} denormalized items for constraint {constraint_id}")
         
+        # Determine if this was a create or update operation
+        operation = "update" if 'dateCreated' in constraint_data and constraint_data['dateCreated'] != now else "create"
+        
         # Return success response
         return ConstraintOperationResponseModel(
             success=True,
             message=f"Constraint {constraint_id} created/updated successfully",
             constraintId=constraint_id,
-            operation="create",
+            operation=operation,
             timestamp=now
         )
     except Exception as e:
@@ -481,7 +485,7 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
             
             # Get the constraint
             constraint = get_constraint_details(constraint_id)
@@ -499,7 +503,7 @@ def handle_get_request(event):
                     # Fall back to raw response if conversion fails
                     return success(body={"constraint": constraint})
             else:
-                return general_error(body={"message": "Constraint not found"}, status_code=404)
+                return general_error(body={"message": "Constraint not found"}, status_code=404, event=event)
         
         # Case 2: List all constraints
         else:
@@ -540,10 +544,10 @@ def handle_get_request(event):
             return success(body=response)
     
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_post_request(event):
@@ -561,7 +565,7 @@ def handle_post_request(event):
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -569,12 +573,12 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # If constraintId is in path, use it; otherwise use identifier from body
         if 'constraintId' in path_parameters:
@@ -588,7 +592,7 @@ def handle_post_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
             
             # Override identifier in body with path parameter
             body['identifier'] = constraint_id
@@ -602,6 +606,15 @@ def handle_post_request(event):
             claims_and_roles
         )
         
+        # AUDIT LOG: Constraint created/updated
+        log_auth_changes(event, "constraintCreateUpdate", {
+            "constraintId": result.constraintId,
+            "operation": result.operation,
+            "objectType": request_model.objectType,
+            "groupPermissions": request_model.groupPermissions,
+            "userPermissions": request_model.userPermissions
+        })
+        
         # Return success response with constraint data
         response_body = result.dict()
         response_body['constraint'] = json.dumps(request_model.dict(exclude_unset=True))
@@ -610,13 +623,13 @@ def handle_post_request(event):
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def handle_delete_request(event):
@@ -632,7 +645,7 @@ def handle_delete_request(event):
     
     # Validate required path parameters
     if 'constraintId' not in path_parameters:
-        return validation_error(body={'message': "No constraint ID in API Call"})
+        return validation_error(body={'message': "No constraint ID in API Call"}, event=event)
     
     constraint_id = path_parameters['constraintId']
     
@@ -645,21 +658,27 @@ def handle_delete_request(event):
     })
     if not valid:
         logger.error(message)
-        return validation_error(body={'message': message})
+        return validation_error(body={'message': message}, event=event)
     
     try:
         # Delete the constraint
         result = delete_constraint(constraint_id, claims_and_roles)
+        
+        # AUDIT LOG: Constraint deleted
+        log_auth_changes(event, "constraintDelete", {
+            "constraintId": result.constraintId,
+            "operation": "delete"
+        })
         
         # Return success response
         return success(body=result.dict())
     
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
@@ -695,14 +714,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # PUT is treated the same as POST for constraints
             return handle_post_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

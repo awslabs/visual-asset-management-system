@@ -387,13 +387,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 ### **Rule 2: Pydantic Models MUST Follow assetsV3.py Patterns**
@@ -504,7 +504,7 @@ def handle_get_request(event):
         })
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
 
         # Get the resource
         resource = get_resource_details(path_parameters['databaseId'], path_parameters['assetId'])
@@ -525,13 +525,13 @@ def handle_get_request(event):
                 logger.exception(f"Error converting to response model: {v}")
                 return success(body={"message": resource})
         else:
-            return general_error(body={"message": "Resource not found"}, status_code=404)
+            return general_error(body={"message": "Resource not found"}, status_code=404, event=event)
 
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
@@ -896,7 +896,7 @@ class Test[Domain]Handler:
                 body = json.loads(response['body'])
                 assert 'message' in body or '[expectedField]' in body
 
-    def test_[operation]_validation_error(self, mock_environment, mock_claims_and_roles):
+    def test_[operation]_validation_error(self, mock_environment, mock_claims_and_roles, event=event):
         """Test [operation] with validation error."""
         with patch('handlers.[domain].[handler].request_to_claims') as mock_claims:
             mock_claims.return_value = mock_claims_and_roles
@@ -1090,12 +1090,12 @@ def handle_get_request(event):
                     body = json.loads(body)
                 except json.JSONDecodeError as e:
                     logger.exception(f"Invalid JSON in request body: {e}")
-                    return validation_error(body={'message': "Invalid JSON in request body"})
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
             elif isinstance(body, dict):
                 body = body
             else:
                 logger.error("Request body is not a string or dict")
-                return validation_error(body={'message': "Request body cannot be parsed"})
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
         # Case 1: Get a specific [domain]
         if '[domain]Id' in path_parameters:
@@ -1110,14 +1110,14 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
 
             # Parse query parameters if needed
             try:
                 request_model = parse(query_parameters, model=[Domain]RequestModel)
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)})
+                return validation_error(body={'message': str(v)}, event=event)
 
             # Get the [domain]
             [domain] = get_[domain]_details(path_parameters['[domain]Id'])
@@ -1138,7 +1138,7 @@ def handle_get_request(event):
                     logger.exception(f"Error converting [domain] to response model: {v}")
                     return success(body={"message": [domain]})
             else:
-                return general_error(body={"message": "[Domain] not found"}, status_code=404)
+                return general_error(body={"message": "[Domain] not found"}, status_code=404, event=event)
 
         # Case 2: List all [domain]s
         else:
@@ -1176,10 +1176,10 @@ def handle_get_request(event):
             return success(body=response)
 
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_post_request(event):
     """Handle POST requests to create [domain]
@@ -1194,7 +1194,7 @@ def handle_post_request(event):
         # Parse request body with enhanced error handling (Pattern 1: Required Body)
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
 
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1202,12 +1202,12 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
         # Parse and validate the request model
         request_model = parse(body, model=[Domain]CreateRequestModel)
@@ -1223,13 +1223,13 @@ def handle_post_request(event):
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for [domain] service APIs"""
@@ -1261,17 +1261,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 ### **New Pydantic Models Template**
@@ -1692,7 +1692,7 @@ class Test[Domain]Handler:
 
                 assert response['statusCode'] == 403
 
-    def test_validation_error(self, mock_environment, mock_claims_and_roles):
+    def test_validation_error(self, mock_environment, mock_claims_and_roles, event=event):
         """Test validation error handling."""
         with patch('handlers.[domain].[handler].request_to_claims') as mock_claims:
             mock_claims.return_value = mock_claims_and_roles
@@ -1786,7 +1786,7 @@ def handle_post_request(event):
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
 
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1794,18 +1794,18 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
         # Optional: Validate required fields in the request body
         required_fields = ['databaseId', 'assetName', 'description', 'isDistributable']
         for field in required_fields:
             if field not in body:
-                return validation_error(body={'message': f"Missing required field: {field}"})
+                return validation_error(body={'message': f"Missing required field: {field}"}, event=event)
 
         # Parse and validate the request model
         request_model = parse(body, model=CreateAssetRequestModel)
@@ -1814,10 +1814,10 @@ def handle_post_request(event):
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 #### **Pattern 2: Optional Event Body (GET operations or optional body)**
@@ -1838,12 +1838,12 @@ def handle_get_request(event):
                     body = json.loads(body)
                 except json.JSONDecodeError as e:
                     logger.exception(f"Invalid JSON in request body: {e}")
-                    return validation_error(body={'message': "Invalid JSON in request body"})
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
             elif isinstance(body, dict):
                 body = body
             else:
                 logger.error("Request body is not a string or dict")
-                return validation_error(body={'message': "Request body cannot be parsed"})
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
         # Now body is always a dict (either parsed or empty)
         # Parse request model (works with both empty and populated body)
@@ -1853,10 +1853,10 @@ def handle_get_request(event):
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 #### **Key Validation Rules:**
@@ -2099,6 +2099,144 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 
 # IMPORTANT: Only use this pattern when you genuinely need ALL items for internal processing.
 # For API responses that return lists to users, always use the LastEvaluatedKey pattern above.
+```
+
+### **Action Logging Pattern**
+
+```python
+# Pattern for logging general user actions for audit trail and compliance tracking
+# Use this in any handler function that receives an 'event' parameter and performs significant user actions
+
+from customLogging.auditLogging import log_actions
+
+# Function signature:
+# log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None)
+
+# Example 1: Log asset creation
+def create_asset(event, asset_data):
+    """Create a new asset with audit logging"""
+    try:
+        # ... business logic to create asset ...
+
+        # Log the action after successful creation
+        log_actions(event, "assetCreate", {
+            "assetId": asset_data['assetId'],
+            "databaseId": asset_data['databaseId'],
+            "assetName": asset_data['assetName']
+        })
+
+        return success_response
+    except Exception as e:
+        logger.exception(f"Error creating asset: {e}")
+        raise
+
+# Example 2: Log database deletion
+def delete_database(event, database_id):
+    """Delete a database with audit logging"""
+    try:
+        # ... business logic to delete database ...
+
+        log_actions(event, "databaseDelete", {
+            "databaseId": database_id,
+            "deletedAt": datetime.utcnow().isoformat()
+        })
+
+        return success_response
+    except Exception as e:
+        logger.exception(f"Error deleting database: {e}")
+        raise
+
+# Example 3: Log workflow execution
+def execute_workflow(event, workflow_id, parameters):
+    """Execute a workflow with audit logging"""
+    try:
+        # ... business logic to execute workflow ...
+
+        log_actions(event, "workflowExecute", {
+            "workflowId": workflow_id,
+            "parameters": parameters,
+            "executionId": execution_id
+        })
+
+        return success_response
+    except Exception as e:
+        logger.exception(f"Error executing workflow: {e}")
+        raise
+
+# Example 4: Log pipeline creation
+def create_pipeline(event, pipeline_data):
+    """Create a pipeline with audit logging"""
+    try:
+        # ... business logic to create pipeline ...
+
+        log_actions(event, "pipelineCreate", {
+            "pipelineId": pipeline_data['pipelineId'],
+            "pipelineType": pipeline_data['pipelineType'],
+            "databaseId": pipeline_data['databaseId']
+        })
+
+        return success_response
+    except Exception as e:
+        logger.exception(f"Error creating pipeline: {e}")
+        raise
+```
+
+#### **When to Use Action Logging:**
+
+1. **Track significant user operations** - Create, update, delete, execute operations
+2. **Log business-critical actions** - Operations that need audit trails for compliance
+3. **Record general actions** - Operations that don't fit other specific logging categories (auth, file ops, errors)
+
+#### **Parameters:**
+
+-   `event` (required): The API Gateway event - used for automatic user context extraction
+-   `secondary_type` (required): Descriptive action type using clear naming conventions
+    -   Format: `resourceAction` (e.g., "assetCreate", "databaseDelete", "workflowExecute")
+    -   Use consistent, descriptive names across the application
+-   `custom_data` (optional): Additional context as a dictionary
+    -   Include resource identifiers (IDs)
+    -   Include operation-specific details
+    -   Include operation results or status
+
+#### **Best Practices:**
+
+1. **Call after successful operations** - Only log when the action completes successfully
+2. **Use descriptive secondary_type** - Use clear, consistent naming (e.g., "resourceAction" format)
+3. **Include relevant IDs** - Always include resource identifiers in custom_data
+4. **Keep custom_data focused** - Include only operation-relevant information
+5. **Silent failure** - Function won't disrupt lambda execution if logging fails
+6. **Import at module level** - Import `log_actions` at the top of your handler file
+
+#### **Security Notes:**
+
+-   **Never include sensitive data** - No passwords, tokens, credentials, or PII in custom_data
+-   **User context is automatic** - User, roles, and MFA status are extracted from event automatically
+-   **Data masking is automatic** - All data is automatically masked via `mask_sensitive_data()`
+-   **Silent failure pattern** - Logging failures are logged locally but don't disrupt execution
+
+#### **Common secondary_type Values:**
+
+```python
+# Asset operations
+"assetCreate", "assetUpdate", "assetDelete", "assetRestore"
+
+# Database operations
+"databaseCreate", "databaseUpdate", "databaseDelete"
+
+# Pipeline operations
+"pipelineCreate", "pipelineUpdate", "pipelineDelete", "pipelineExecute"
+
+# Workflow operations
+"workflowCreate", "workflowUpdate", "workflowDelete", "workflowExecute"
+
+# Metadata operations
+"metadataUpdate", "metadataDelete"
+
+# Tag operations
+"tagCreate", "tagUpdate", "tagDelete"
+
+# Comment operations
+"commentCreate", "commentUpdate", "commentDelete"
 ```
 
 ## 🔍 **Code Review Checklist**

@@ -1399,7 +1399,7 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
             
             # Parse and validate query parameters using GetAssetRequestModel
             try:
@@ -1413,13 +1413,13 @@ def handle_get_request(event):
                             query_parameters['showArchived'] = False
                         else:
                             logger.error(f"Invalid showArchived parameter: {show_archived_value}")
-                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"})
+                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"}, event=event)
                 
                 request_model = parse(query_parameters, model=GetAssetRequestModel)
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)})
+                return validation_error(body={'message': str(v)}, event=event)
             
             # Get the asset
             asset = get_asset_details(path_parameters['databaseId'], path_parameters['assetId'], show_archived)
@@ -1448,7 +1448,7 @@ def handle_get_request(event):
                     # Fall back to raw response if conversion fails
                     return success(body={"message": enhanced_asset})
             else:
-                return general_error(body={"message": "Asset not found"}, status_code=404)
+                return general_error(body={"message": "Asset not found"}, status_code=404, event=event)
         
         # Case 2: Get assets for a specific database
         elif 'databaseId' in path_parameters:
@@ -1463,7 +1463,7 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
             
             # Parse and validate query parameters using GetAssetsRequestModel
             try:
@@ -1477,7 +1477,7 @@ def handle_get_request(event):
                             query_parameters['showArchived'] = False
                         else:
                             logger.error(f"Invalid showArchived parameter: {show_archived_value}")
-                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"})
+                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"}, event=event)
                 
                 request_model = parse(query_parameters, model=GetAssetsRequestModel)
                 # Extract validated parameters for the query
@@ -1490,7 +1490,7 @@ def handle_get_request(event):
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
                 error_msg = str(v)
-                return validation_error(body={'message': f"Invalid parameter: {error_msg}"})
+                return validation_error(body={'message': f"Invalid parameter: {error_msg}"}, event=event)
                 # # Fall back to default pagination with validation
                 # validate_pagination_info(query_parameters)
                 # query_params = query_parameters
@@ -1545,7 +1545,7 @@ def handle_get_request(event):
                             query_parameters['showArchived'] = False
                         else:
                             logger.error(f"Invalid showArchived parameter: {show_archived_value}")
-                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"})
+                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"}, event=event)
                 
                 request_model = parse(query_parameters, model=GetAssetsRequestModel)
                 # Extract validated parameters for the query
@@ -1558,7 +1558,7 @@ def handle_get_request(event):
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
                 error_msg = str(v)
-                return validation_error(body={'message': f"Invalid parameter: {error_msg}"})
+                return validation_error(body={'message': f"Invalid parameter: {error_msg}"}, event=event)
                 # # Fall back to default pagination with validation
                 # validate_pagination_info(query_parameters)
                 # query_params = query_parameters
@@ -1598,10 +1598,10 @@ def handle_get_request(event):
             return success(body=response)
             
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_put_request(event):
     """Handle PUT requests to update assets
@@ -1617,10 +1617,10 @@ def handle_put_request(event):
     
     # Validate required path parameters
     if 'databaseId' not in path_parameters:
-        return validation_error(body={'message': "No database ID in API Call"})
+        return validation_error(body={'message': "No database ID in API Call"}, event=event)
     
     if 'assetId' not in path_parameters:
-        return validation_error(body={'message': "No asset ID in API Call"})
+        return validation_error(body={'message': "No asset ID in API Call"}, event=event)
     
     # Normalize databaseId for validation - remove #deleted suffix if present
     normalized_database_id = path_parameters['databaseId'].replace("#deleted", "")
@@ -1638,13 +1638,13 @@ def handle_put_request(event):
     })
     if not valid:
         logger.error(message)
-        return validation_error(body={'message': message})
+        return validation_error(body={'message': message}, event=event)
     
     try:
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1652,12 +1652,12 @@ def handle_put_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Check if this is an unarchive request
         if path.endswith('/unarchiveAsset'):
@@ -1686,13 +1686,13 @@ def handle_put_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_delete_request(event):
     """Handle DELETE requests for assets
@@ -1708,10 +1708,10 @@ def handle_delete_request(event):
     
     # Validate required path parameters
     if 'databaseId' not in path_parameters:
-        return validation_error(body={'message': "No database ID in API Call"})
+        return validation_error(body={'message': "No database ID in API Call"}, event=event)
     
     if 'assetId' not in path_parameters:
-        return validation_error(body={'message': "No asset ID in API Call"})
+        return validation_error(body={'message': "No asset ID in API Call"}, event=event)
     
     # Validate path parameters
     (valid, message) = validate({
@@ -1726,13 +1726,13 @@ def handle_delete_request(event):
     })
     if not valid:
         logger.error(message)
-        return validation_error(body={'message': message})
+        return validation_error(body={'message': message}, event=event)
     
     try:
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1740,12 +1740,12 @@ def handle_delete_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Determine which operation to perform based on the path
         if path.endswith('/archiveAsset'):
@@ -1783,13 +1783,13 @@ def handle_delete_request(event):
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset service APIs"""
@@ -1819,14 +1819,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

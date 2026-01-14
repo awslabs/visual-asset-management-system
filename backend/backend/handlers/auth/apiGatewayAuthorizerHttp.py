@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 import base64
+from customLogging.auditLogging import log_authorization_gateway
 
 # Configure AWS Lambda Powertools logger
 logger = Logger()
@@ -82,6 +83,8 @@ def lambda_handler(event, context):
         # Validate IP ranges first (before authentication for performance)
         if not is_ip_authorized(source_ip):
             logger.info(f"IP {source_ip} not in allowed ranges")
+            # AUDIT LOG: IP address not authorized
+            log_authorization_gateway(event, False, "IP address not authorized")
             return {"isAuthorized": False}
         
         # Check if path should be ignored
@@ -94,6 +97,8 @@ def lambda_handler(event, context):
         token = extract_token_from_header(event)
         if not token:
             logger.info("Token not found in Authorization header")
+            # AUDIT LOG: Token missing or invalid format
+            log_authorization_gateway(event, False, "Token missing or invalid format")
             return {"isAuthorized": False}
         
         if AUTH_MODE == 'cognito':
@@ -102,10 +107,14 @@ def lambda_handler(event, context):
             claims = verify_external_jwt(token)
         else:
             logger.error(f"Invalid AUTH_MODE: {AUTH_MODE}")
+            # AUDIT LOG: Invalid auth mode configuration
+            log_authorization_gateway(event, False, "Token verification failed")
             return {"isAuthorized": False}
         
         if not claims:
             logger.error("Token verification failed")
+            # AUDIT LOG: Token verification failed (generic reason for security)
+            log_authorization_gateway(event, False, "Token verification failed")
             return {"isAuthorized": False}
         
         logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
@@ -120,10 +129,16 @@ def lambda_handler(event, context):
             if value is not None:
                 context[key] = str(value)
         
-        return {
+        # Build response with context for audit logging
+        response = {
             "isAuthorized": True,
             "context": context
         }
+        
+        # # AUDIT LOG: Authorization successful (with verified user context) - Captured in casbin checks instead
+        # log_authorization_gateway(response, True, None)
+    
+        return response
         
     except Exception as e:
         logger.error(f"Authorizer error: {str(e)}")

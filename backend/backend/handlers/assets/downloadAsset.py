@@ -14,6 +14,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_file_download
 from common.s3 import validateS3AssetExtensionsAndContentType
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.assetsV3 import (
@@ -366,7 +367,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -374,17 +375,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Get path parameters
         path_parameters = event.get('pathParameters', {})
         if not path_parameters or 'databaseId' not in path_parameters or 'assetId' not in path_parameters:
-            return validation_error(body={'message': "Missing databaseId or assetId in path parameters"})
+            return validation_error(body={'message': "Missing databaseId or assetId in path parameters"}, event=event)
             
         database_id = path_parameters['databaseId']
         asset_id = path_parameters['assetId']
@@ -403,19 +404,19 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request model
         try:
             request_model = parse(body, model=DownloadAssetRequestModel)
         except ValidationError as v:
             logger.error(f"Validation error: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Check authorization
         asset = get_asset_details(database_id, asset_id)
         if not asset:
-            return validation_error(body={'message': "Asset not found"})
+            return validation_error(body={'message': "Asset not found"}, event=event)
         
         asset["object__type"] = "asset"
         
@@ -430,24 +431,36 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 response = download_asset_file(database_id, asset_id, request_model)
             else:  # assetPreview
                 response = download_asset_preview(database_id, asset_id, request_model)
-                
+            
+            # AUDIT LOG: File download - log before returning presigned URL
+            log_file_download(
+                event,
+                database_id,
+                asset_id,
+                request_model.key if request_model.key else "asset_root",
+                {
+                    "downloadType": request_model.downloadType,
+                    "versionId": request_model.versionId
+                }
+            )
+            
             return success(body=response.dict())
         except VAMSGeneralErrorResponse as e:
             # Extract status code if provided
             status_code = getattr(e, 'status_code', 400)
-            return general_error(status_code=status_code, body={'message': str(e)})
+            return general_error(status_code=status_code, body={'message': str(e)}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         # Extract status code if provided
         status_code = getattr(v, 'status_code', 400)
-        return general_error(status_code=status_code, body={'message': str(v)})
+        return general_error(status_code=status_code, body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

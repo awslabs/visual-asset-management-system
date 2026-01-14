@@ -2691,10 +2691,10 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2709,12 +2709,12 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2722,12 +2722,12 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
     
         # Parse request model
@@ -2747,13 +2747,13 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /unarchiveFile requests
@@ -2778,10 +2778,10 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2796,12 +2796,12 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2809,12 +2809,12 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=UnarchiveFileRequestModel)
@@ -2831,13 +2831,13 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle DELETE /archiveFile requests
@@ -2862,10 +2862,10 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2880,12 +2880,12 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2893,12 +2893,12 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=ArchiveFileRequestModel)
@@ -2916,13 +2916,13 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /copyFile requests
@@ -2947,10 +2947,10 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2965,12 +2965,12 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2978,12 +2978,12 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=CopyFileRequestModel)
@@ -3002,13 +3002,13 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /moveFile requests
@@ -3033,10 +3033,10 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3051,12 +3051,12 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -3064,12 +3064,12 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=MoveFileRequestModel)
@@ -3087,13 +3087,13 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     """Handle GET /fileInfo requests
@@ -3118,10 +3118,10 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3136,7 +3136,7 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Get query parameters
         query_params = event.get('queryStringParameters', {}) or {}
@@ -3153,19 +3153,19 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
                     body = json.loads(body)
                 except json.JSONDecodeError as e:
                     logger.exception(f"Invalid JSON in request body: {e}")
-                    return validation_error(body={'message': "Invalid JSON in request body"})
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
             elif isinstance(body, dict):
                 body = body
             else:
                 logger.error("Request body is not a string")
-                return validation_error(body={'message': "Request body cannot be parsed"})
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
                 
             # Parse request model
             request_model = parse(body, model=FileInfoRequestModel)
         else:
             # If no body, require filePath in query parameters
             if 'filePath' not in query_params:
-                return validation_error(body={'message': "filePath is required in query parameters or request body"})
+                return validation_error(body={'message': "filePath is required in query parameters or request body"}, event=event)
             
             # Create request model from query parameters
             request_model = FileInfoRequestModel(
@@ -3186,13 +3186,13 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /revertVersion requests
@@ -3217,13 +3217,13 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         if 'versionId' not in path_params:
-            return validation_error(body={'message': "No version ID in API Call"})
+            return validation_error(body={'message': "No version ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3242,12 +3242,12 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -3255,12 +3255,12 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=RevertFileVersionRequestModel)
@@ -3278,13 +3278,13 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /createFolder requests
@@ -3309,10 +3309,10 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3327,12 +3327,12 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -3340,12 +3340,12 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=CreateFolderRequestModel)
@@ -3362,13 +3362,13 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_path: str, claims_and_roles: Dict) -> DeleteAuxiliaryPreviewAssetFilesResponseModel:
     """Delete auxiliary preview asset files for a specific file path
@@ -3495,10 +3495,10 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3513,7 +3513,7 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Process request
         response = delete_asset_preview(
@@ -3526,13 +3526,13 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayProxyResponseV2:
     """Handle DELETE /deleteAuxiliaryPreviewAssetFiles requests
@@ -3557,10 +3557,10 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3575,12 +3575,12 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -3588,12 +3588,12 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=DeleteAuxiliaryPreviewAssetFilesRequestModel)
@@ -3610,13 +3610,13 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle PUT /setPrimaryFile requests
@@ -3641,10 +3641,10 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3659,12 +3659,12 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -3672,12 +3672,12 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=SetPrimaryFileRequestModel)
@@ -3696,13 +3696,13 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     """Handle GET /listFiles requests
@@ -3727,10 +3727,10 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3745,7 +3745,7 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Get query parameters
         query_params = event.get('queryStringParameters', {}) or {}
@@ -3781,13 +3781,13 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 #######################
 # Lambda Handler
@@ -3834,8 +3834,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'PUT' and path.endswith('/setPrimaryFile'):
             return handle_set_primary_file(event, context)
         else:
-            return validation_error(body={'message': "Invalid API path or method"})
+            return validation_error(body={'message': "Invalid API path or method"}, event=event)
     
     except Exception as e:
         logger.exception(f"Unhandled error in lambda_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)

@@ -1551,7 +1551,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 results.append(result)
             except ValidationError as v:
                 logger.exception(f"Validation error: {v}")
-                return validation_error(body={'message': str(v)})
+                return validation_error(body={'message': str(v)}, event=event)
         
         # Summarize results
         successful = sum(1 for r in results if r.success)
@@ -1566,10 +1566,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error in file indexer: {e}")
-        return internal_error()
+        return internal_error(event=event)
