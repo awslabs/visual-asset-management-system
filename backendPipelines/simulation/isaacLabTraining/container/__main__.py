@@ -211,13 +211,12 @@ def run_pipeline():
 
     s3 = S3Client()
 
-    # Download custom assets from VAMS if provided (for custom environments)
-    if config.input_s3_path:
-        print(f"Downloading custom environment from VAMS: {config.input_s3_path}")
-        s3.download_directory(config.input_s3_path, "/tmp/assets")
-        install_custom_environments("/tmp/assets")
+    # Download and install custom environment if provided
+    if config.custom_environment_s3_uri:
+        print(f"Downloading custom environment: {config.custom_environment_s3_uri}")
+        download_and_install_custom_environment(s3, config.custom_environment_s3_uri)
     else:
-        print("Using built-in Isaac Lab environment (no custom assets)")
+        print("Using built-in Isaac Lab environment (no custom environment specified)")
 
     # Execute based on mode
     if config.mode == "train":
@@ -331,33 +330,35 @@ def setup_checkpoint_dir(config: PipelineConfig) -> str:
     return checkpoint_dir
 
 
-def install_custom_environments(asset_dir: str):
-    """Install custom Isaac Lab environment packages from downloaded assets."""
-    print("Checking for custom environment packages...")
+def download_and_install_custom_environment(s3: S3Client, s3_uri: str):
+    """Download a custom environment package from S3 and install it.
     
-    package_patterns = ["*.tar.gz", "*.zip", "*.whl"]
-    packages = []
+    Args:
+        s3: S3Client instance
+        s3_uri: Full S3 URI to the environment package (.tar.gz, .zip, or .whl)
+    """
+    from urllib.parse import urlparse
     
-    for pattern in package_patterns:
-        packages.extend(glob.glob(f"{asset_dir}/**/{pattern}", recursive=True))
+    parsed = urlparse(s3_uri)
+    bucket = parsed.netloc
+    key = parsed.path.lstrip("/")
+    filename = os.path.basename(key)
+    local_path = f"/tmp/{filename}"
     
-    if not packages:
-        print("No custom environment packages found")
-        return
+    print(f"Downloading {filename} from s3://{bucket}/{key}")
+    s3.client.download_file(bucket, key, local_path)
     
-    for package in packages:
-        print(f"Installing custom environment: {package}")
-        result = subprocess.run(
-            ["/isaac-sim/python.sh", "-m", "pip", "install", "-e", package],
-            capture_output=True,
-            text=True
-        )
-        
-        if result.returncode == 0:
-            print(f"Successfully installed {os.path.basename(package)}")
-        else:
-            print(f"Warning: Failed to install {package}")
-            print(result.stderr)
+    print(f"Installing custom environment: {local_path}")
+    result = subprocess.run(
+        ["/isaac-sim/python.sh", "-m", "pip", "install", "-e", local_path],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode == 0:
+        print(f"Successfully installed {filename}")
+    else:
+        raise RuntimeError(f"Failed to install custom environment {filename}: {result.stderr}")
 
 
 def build_training_command(

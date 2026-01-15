@@ -15,8 +15,9 @@ class PipelineConfig:
     rl_library: str
     
     # VAMS S3 paths
-    input_s3_path: str  # Input assets from VAMS
+    input_s3_path: str  # Input assets from VAMS (config file location)
     output_s3_path: str  # Output destination in VAMS asset bucket (outputS3AssetFilesPath)
+    custom_environment_s3_uri: str = ""  # Custom environment package S3 URI
     
     # Training-specific
     num_envs: int = 4096
@@ -49,6 +50,7 @@ class PipelineConfig:
             # VAMS S3 paths - use outputS3AssetFilesPath (asset bucket)
             input_s3_path=data.get("inputS3AssetFilePath", ""),
             output_s3_path=data.get("outputS3AssetFilesPath", ""),
+            custom_environment_s3_uri=data.get("customEnvironmentS3Uri", ""),
             # Training params
             num_envs=config.get("numEnvs", default_num_envs),
             max_iterations=config.get("maxIterations", 1500),

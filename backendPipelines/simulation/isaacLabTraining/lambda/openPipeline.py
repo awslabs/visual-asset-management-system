@@ -140,6 +140,59 @@ def merge_configs(base: dict, override: dict) -> dict:
     return result
 
 
+def resolve_relative_path(input_s3_path: str, relative_path: str) -> str:
+    """Resolve a relative path to a full S3 URI based on the asset root.
+    
+    Args:
+        input_s3_path: S3 URI of the input config file
+        relative_path: Relative path within the asset (e.g., "environments/my_env.tar.gz")
+        
+    Returns:
+        Full S3 URI to the file
+    """
+    parsed = urlparse(input_s3_path)
+    bucket = parsed.netloc
+    key = parsed.path.lstrip("/")
+    
+    # Get asset root directory (go up from config file location)
+    # e.g., "assetId/training/config.json" -> "assetId/"
+    path_parts = key.split("/")
+    if len(path_parts) >= 2:
+        asset_root = "/".join(path_parts[:-2]) + "/" if len(path_parts) > 2 else ""
+    else:
+        asset_root = ""
+    
+    return f"s3://{bucket}/{asset_root}{relative_path.lstrip('/')}"
+
+
+def resolve_custom_environment_path(event, training_config) -> str:
+    """Resolve custom environment path - supports relative or absolute S3 paths.
+    
+    Priority order:
+    1. customEnvironmentPath - relative path within asset (e.g., "environments/my_env.tar.gz")
+    2. customEnvironmentS3Uri - explicit full S3 URI
+    
+    Returns:
+        Full S3 URI to the custom environment package, or empty string if not specified
+    """
+    input_s3_path = event.get("inputS3AssetFilePath", "")
+    
+    # 1. Check for relative customEnvironmentPath (preferred)
+    custom_env_path = training_config.get("customEnvironmentPath")
+    if custom_env_path:
+        resolved = resolve_relative_path(input_s3_path, custom_env_path)
+        logger.info(f"Using customEnvironmentPath: {resolved}")
+        return resolved
+    
+    # 2. Check for explicit customEnvironmentS3Uri
+    custom_env_uri = training_config.get("customEnvironmentS3Uri")
+    if custom_env_uri:
+        logger.info(f"Using customEnvironmentS3Uri: {custom_env_uri}")
+        return custom_env_uri
+    
+    return ""
+
+
 def build_training_config(event, training_config, compute_config, task, rl_library):
     """Build configuration for training mode."""
     num_envs = training_config.get("numEnvs", DEFAULT_NUM_ENVS_TRAIN)
@@ -149,6 +202,9 @@ def build_training_config(event, training_config, compute_config, task, rl_libra
 
     # Use VAMS standard output path (asset bucket)
     output_path = event.get("outputS3AssetFilesPath", "")
+    
+    # Resolve custom environment path (relative or absolute)
+    custom_env_s3_uri = resolve_custom_environment_path(event, training_config)
 
     return {
         "jobName": job_name,
@@ -164,6 +220,7 @@ def build_training_config(event, training_config, compute_config, task, rl_libra
             "numNodes": num_nodes,
         },
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
+        "customEnvironmentS3Uri": custom_env_s3_uri,
         "outputS3AssetFilesPath": output_path,
         "inputMetadata": event.get("inputMetadata", ""),
         "inputParameters": event.get("inputParameters", ""),
@@ -191,22 +248,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
     # 1. Check for relative checkpointPath (preferred method)
     checkpoint_path = training_config.get("checkpointPath")
     if checkpoint_path:
-        # Build full S3 URI from relative path
-        # Input path is the config file, get the asset directory (parent of config file's parent)
-        parsed = urlparse(input_s3_path)
-        bucket = parsed.netloc
-        key = parsed.path.lstrip("/")
-        # Get asset root directory (go up from config file location)
-        # e.g., "assetId/evaluation/config.json" -> "assetId/"
-        path_parts = key.split("/")
-        if len(path_parts) >= 2:
-            asset_root = "/".join(path_parts[:-2]) + "/" if len(path_parts) > 2 else ""
-        else:
-            asset_root = ""
-        
-        # Remove leading slash from checkpoint_path if present
-        checkpoint_path = checkpoint_path.lstrip("/")
-        policy_s3_uri = f"s3://{bucket}/{asset_root}{checkpoint_path}"
+        policy_s3_uri = resolve_relative_path(input_s3_path, checkpoint_path)
         logger.info(f"Using checkpointPath: {policy_s3_uri}")
     
     # 2. Check for explicit policyS3Uri
@@ -230,6 +272,9 @@ def build_evaluation_config(event, training_config, task, rl_library):
 
     job_name = event.get("jobName") or "unknown"
     output_path = event.get("outputS3AssetFilesPath", "")
+    
+    # Resolve custom environment path (relative or absolute)
+    custom_env_s3_uri = resolve_custom_environment_path(event, training_config)
 
     return {
         "jobName": job_name,
@@ -247,6 +292,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
             "numNodes": 1,  # Evaluation always single node
         },
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
+        "customEnvironmentS3Uri": custom_env_s3_uri,
         "outputS3AssetFilesPath": output_path,
         "inputMetadata": event.get("inputMetadata", ""),
         "inputParameters": event.get("inputParameters", ""),
