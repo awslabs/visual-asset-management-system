@@ -64,7 +64,8 @@ Training configs are used to train new RL policies from scratch.
     "task": "string",         // Isaac Lab task name (e.g., "Isaac-Ant-Direct-v0")
     "numEnvs": number,        // Number of parallel environments (typically 1024-8192)
     "maxIterations": number,  // Training iterations (policy updates)
-    "rlLibrary": "string"     // RL library: "rsl_rl" or "rl_games"
+    "rlLibrary": "string",    // RL library: "rsl_rl" or "rl_games"
+    "customEnvironmentPath": "string" // Optional: relative path to custom env package
   },
   "computeConfig": {
     "numNodes": number        // Number of GPU nodes (1 for single-node training)
