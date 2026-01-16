@@ -22,7 +22,7 @@ const MapThumbnail: React.FC<MapThumbnailProps> = ({
     mapStyleUrl,
     width = 200,
     height = 150,
-    defaultZoom = 13,
+    defaultZoom = 2,
 }) => {
     const mapRef = useRef<MapRef>(null);
     const [isLoaded, setIsLoaded] = useState(false);

@@ -13,6 +13,7 @@ import {
     Modal,
     Box,
     Textarea,
+    Alert,
 } from "@cloudscape-design/components";
 import { MetadataRowState, MetadataValueType } from "./types/metadata.types";
 import {
@@ -46,6 +47,7 @@ interface MetadataRowProps {
     onKeyChange: (key: string) => void;
     onTypeChange: (type: MetadataValueType) => void;
     onValueChange: (value: string) => void;
+    onValidationError?: (error: string | undefined) => void;
     readOnly?: boolean;
     isFileAttribute?: boolean;
 }
@@ -60,6 +62,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
     onKeyChange,
     onTypeChange,
     onValueChange,
+    onValidationError,
     readOnly = false,
     isFileAttribute = false,
     rows,
@@ -67,6 +70,9 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
     const [showRawEditor, setShowRawEditor] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [showComplexEditor, setShowComplexEditor] = useState(false);
+    const [modalValidationErrors, setModalValidationErrors] = useState<string[]>([]);
+    const [isModalValueValid, setIsModalValueValid] = useState(true);
+    const [modalOriginalValue, setModalOriginalValue] = useState<string>("");
 
     const isSchema = isSchemaField(row);
     // Keys can only be edited for new rows (not yet saved)
@@ -157,11 +163,50 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
             case "lla":
                 return <LLAInput {...commonProps} />;
             case "geopoint":
-                return <JSONTextInput {...commonProps} type="GEOPOINT" />;
+                return (
+                    <JSONTextInput
+                        {...commonProps}
+                        type="GEOPOINT"
+                        onValidationChange={(isValid, errors) => {
+                            // Update the row's validation error state via callback
+                            if (onValidationError) {
+                                onValidationError(
+                                    !isValid && errors.length > 0 ? errors[0] : undefined
+                                );
+                            }
+                        }}
+                    />
+                );
             case "geojson":
-                return <JSONTextInput {...commonProps} type="GEOJSON" />;
+                return (
+                    <JSONTextInput
+                        {...commonProps}
+                        type="GEOJSON"
+                        onValidationChange={(isValid, errors) => {
+                            // Update the row's validation error state via callback
+                            if (onValidationError) {
+                                onValidationError(
+                                    !isValid && errors.length > 0 ? errors[0] : undefined
+                                );
+                            }
+                        }}
+                    />
+                );
             case "json":
-                return <JSONTextInput {...commonProps} type="JSON" />;
+                return (
+                    <JSONTextInput
+                        {...commonProps}
+                        type="JSON"
+                        onValidationChange={(isValid, errors) => {
+                            // Update the row's validation error state via callback
+                            if (onValidationError) {
+                                onValidationError(
+                                    !isValid && errors.length > 0 ? errors[0] : undefined
+                                );
+                            }
+                        }}
+                    />
+                );
             case "date":
                 return <DateInput {...commonProps} />;
             case "boolean":
@@ -354,7 +399,11 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                                     </div>
                                     <div style={{ display: "inline-block" }} tabIndex={-1}>
                                         <Button
-                                            onClick={() => setShowComplexEditor(true)}
+                                            onClick={() => {
+                                                // Save the original value when opening the modal
+                                                setModalOriginalValue(row.editValue);
+                                                setShowComplexEditor(true);
+                                            }}
                                             disabled={readOnly || !areDependenciesMet}
                                             ariaLabel="Edit value"
                                         >
@@ -433,7 +482,13 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
             {/* Complex Value Editor Modal (XYZ, WXYZ, Matrix4x4, LLA) */}
             <Modal
                 visible={showComplexEditor}
-                onDismiss={() => setShowComplexEditor(false)}
+                onDismiss={() => {
+                    // Restore the original value when dismissing (X button clicked)
+                    onValueChange(modalOriginalValue);
+                    setShowComplexEditor(false);
+                    setModalValidationErrors([]);
+                    setIsModalValueValid(true);
+                }}
                 header={`Edit ${row.editType.toUpperCase()} Value`}
                 size="large"
                 footer={
@@ -443,52 +498,94 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                                 onClick={() => {
                                     onValueChange("");
                                     setShowComplexEditor(false);
+                                    setModalValidationErrors([]);
+                                    setIsModalValueValid(true);
                                 }}
                                 disabled={readOnly}
                             >
                                 Clear
                             </Button>
-                            <Button variant="primary" onClick={() => setShowComplexEditor(false)}>
+                            <Button
+                                variant="primary"
+                                onClick={() => {
+                                    setShowComplexEditor(false);
+                                    setModalValidationErrors([]);
+                                    setIsModalValueValid(true);
+                                }}
+                                disabled={!isModalValueValid}
+                            >
                                 Done
                             </Button>
                         </SpaceBetween>
                     </Box>
                 }
             >
-                <Box padding={{ vertical: "m" }}>
-                    {row.editType === "xyz" && (
-                        <XYZInput
-                            value={row.editValue}
-                            onChange={onValueChange}
-                            disabled={readOnly}
-                            ariaLabel={`${row.editKey} value`}
-                        />
+                <SpaceBetween direction="vertical" size="m">
+                    {modalValidationErrors.length > 0 && (
+                        <Alert type="error" dismissible={false}>
+                            <SpaceBetween direction="vertical" size="xs">
+                                <Box variant="p">
+                                    Please correct the following validation errors:
+                                </Box>
+                                <ul style={{ margin: "4px 0", paddingLeft: "20px" }}>
+                                    {modalValidationErrors.map((error, idx) => (
+                                        <li key={idx}>{error}</li>
+                                    ))}
+                                </ul>
+                            </SpaceBetween>
+                        </Alert>
                     )}
-                    {row.editType === "wxyz" && (
-                        <WXYZInput
-                            value={row.editValue}
-                            onChange={onValueChange}
-                            disabled={readOnly}
-                            ariaLabel={`${row.editKey} value`}
-                        />
-                    )}
-                    {row.editType === "matrix4x4" && (
-                        <Matrix4x4Input
-                            value={row.editValue}
-                            onChange={onValueChange}
-                            disabled={readOnly}
-                            ariaLabel={`${row.editKey} value`}
-                        />
-                    )}
-                    {row.editType === "lla" && (
-                        <LLAInput
-                            value={row.editValue}
-                            onChange={onValueChange}
-                            disabled={readOnly}
-                            ariaLabel={`${row.editKey} value`}
-                        />
-                    )}
-                </Box>
+                    <Box padding={{ vertical: "m" }}>
+                        {row.editType === "xyz" && (
+                            <XYZInput
+                                value={row.editValue}
+                                onChange={onValueChange}
+                                disabled={readOnly}
+                                ariaLabel={`${row.editKey} value`}
+                                onValidationChange={(isValid, errors) => {
+                                    setIsModalValueValid(isValid);
+                                    setModalValidationErrors(errors);
+                                }}
+                            />
+                        )}
+                        {row.editType === "wxyz" && (
+                            <WXYZInput
+                                value={row.editValue}
+                                onChange={onValueChange}
+                                disabled={readOnly}
+                                ariaLabel={`${row.editKey} value`}
+                                onValidationChange={(isValid, errors) => {
+                                    setIsModalValueValid(isValid);
+                                    setModalValidationErrors(errors);
+                                }}
+                            />
+                        )}
+                        {row.editType === "matrix4x4" && (
+                            <Matrix4x4Input
+                                value={row.editValue}
+                                onChange={onValueChange}
+                                disabled={readOnly}
+                                ariaLabel={`${row.editKey} value`}
+                                onValidationChange={(isValid, errors) => {
+                                    setIsModalValueValid(isValid);
+                                    setModalValidationErrors(errors);
+                                }}
+                            />
+                        )}
+                        {row.editType === "lla" && (
+                            <LLAInput
+                                value={row.editValue}
+                                onChange={onValueChange}
+                                disabled={readOnly}
+                                ariaLabel={`${row.editKey} value`}
+                                onValidationChange={(isValid, errors) => {
+                                    setIsModalValueValid(isValid);
+                                    setModalValidationErrors(errors);
+                                }}
+                            />
+                        )}
+                    </Box>
+                </SpaceBetween>
             </Modal>
 
             {/* Raw Value Editor Modal */}

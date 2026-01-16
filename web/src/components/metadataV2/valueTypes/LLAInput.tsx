@@ -14,6 +14,7 @@ interface LLAInputProps {
     invalid?: boolean;
     ariaLabel?: string;
     error?: string;
+    onValidationChange?: (isValid: boolean, errors: string[]) => void;
 }
 
 interface LLADisplayValue {
@@ -30,6 +31,7 @@ export const LLAInput: React.FC<LLAInputProps> = ({
     invalid = false,
     ariaLabel = "LLA coordinates",
     error,
+    onValidationChange,
 }) => {
     const [llaValues, setLlaValues] = useState<LLADisplayValue>({ lat: "", long: "", alt: "" });
 
@@ -80,6 +82,32 @@ export const LLAInput: React.FC<LLAInputProps> = ({
     const handleValueChange = (field: "lat" | "long" | "alt", newValue: string) => {
         const updatedValues = { ...llaValues, [field]: newValue };
         setLlaValues(updatedValues);
+
+        // Validate the values
+        const validationErrors: string[] = [];
+        let allFieldsFilled = true;
+
+        if (updatedValues.lat === "" || updatedValues.long === "" || updatedValues.alt === "") {
+            allFieldsFilled = false;
+        }
+
+        if (updatedValues.lat !== "" && !isValidLatitude(updatedValues.lat)) {
+            validationErrors.push("Latitude must be between -90 and 90");
+        }
+
+        if (updatedValues.long !== "" && !isValidLongitude(updatedValues.long)) {
+            validationErrors.push("Longitude must be between -180 and 180");
+        }
+
+        if (updatedValues.alt !== "" && !isValidNumber(updatedValues.alt)) {
+            validationErrors.push("Altitude must be a valid number");
+        }
+
+        // Notify parent of validation state
+        if (onValidationChange) {
+            const isValid = allFieldsFilled && validationErrors.length === 0;
+            onValidationChange(isValid, validationErrors);
+        }
 
         // Only create JSON if all values are provided and valid
         if (updatedValues.lat !== "" && updatedValues.long !== "" && updatedValues.alt !== "") {

@@ -438,6 +438,22 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
         [updateRow, rows]
     );
 
+    // Handle validation error change from inline components
+    const handleValidationError = useCallback(
+        (index: number, error: string | undefined) => {
+            console.log(
+                "[MetadataContainer] handleValidationError called - index:",
+                index,
+                "error:",
+                error
+            );
+            updateRow(index, {
+                validationError: error,
+            });
+        },
+        [updateRow]
+    );
+
     // Handle commit changes
     const handleCommitChanges = useCallback(async () => {
         // Validate all rows
@@ -692,6 +708,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             onKeyChange={handleKeyChange}
                                             onTypeChange={handleTypeChange}
                                             onValueChange={handleValueChange}
+                                            onValidationError={handleValidationError}
                                             onToggleEditMode={() => setEditMode("bulk")}
                                             onCommitChanges={handleCommitChanges}
                                             onCancelAllChanges={handleCancelAllChanges}
@@ -733,6 +750,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             onKeyChange={handleKeyChange}
                                             onTypeChange={handleTypeChange}
                                             onValueChange={handleValueChange}
+                                            onValidationError={handleValidationError}
                                             onToggleEditMode={() => setEditMode("bulk")}
                                             onCommitChanges={handleCommitChanges}
                                             onCancelAllChanges={handleCancelAllChanges}
@@ -802,6 +820,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                         onKeyChange={handleKeyChange}
                         onTypeChange={handleTypeChange}
                         onValueChange={handleValueChange}
+                        onValidationError={handleValidationError}
                         onToggleEditMode={() => setEditMode("bulk")}
                         onCommitChanges={handleCommitChanges}
                         onCancelAllChanges={handleCancelAllChanges}

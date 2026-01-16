@@ -14,6 +14,7 @@ interface XYZInputProps {
     invalid?: boolean;
     ariaLabel?: string;
     error?: string;
+    onValidationChange?: (isValid: boolean, errors: string[]) => void;
 }
 
 interface XYZDisplayValue {
@@ -30,6 +31,7 @@ export const XYZInput: React.FC<XYZInputProps> = ({
     invalid = false,
     ariaLabel = "XYZ coordinates",
     error,
+    onValidationChange,
 }) => {
     const [xyzValues, setXyzValues] = useState<XYZDisplayValue>({ x: "", y: "", z: "" });
 
@@ -80,6 +82,32 @@ export const XYZInput: React.FC<XYZInputProps> = ({
     const handleValueChange = (axis: "x" | "y" | "z", newValue: string) => {
         const updatedValues = { ...xyzValues, [axis]: newValue };
         setXyzValues(updatedValues);
+
+        // Validate the values
+        const validationErrors: string[] = [];
+        let allFieldsFilled = true;
+
+        if (updatedValues.x === "" || updatedValues.y === "" || updatedValues.z === "") {
+            allFieldsFilled = false;
+        }
+
+        if (updatedValues.x !== "" && !isValidNumber(updatedValues.x)) {
+            validationErrors.push("X coordinate must be a valid number");
+        }
+
+        if (updatedValues.y !== "" && !isValidNumber(updatedValues.y)) {
+            validationErrors.push("Y coordinate must be a valid number");
+        }
+
+        if (updatedValues.z !== "" && !isValidNumber(updatedValues.z)) {
+            validationErrors.push("Z coordinate must be a valid number");
+        }
+
+        // Notify parent of validation state
+        if (onValidationChange) {
+            const isValid = allFieldsFilled && validationErrors.length === 0;
+            onValidationChange(isValid, validationErrors);
+        }
 
         // Only create JSON if all values are provided and valid
         if (updatedValues.x !== "" && updatedValues.y !== "" && updatedValues.z !== "") {

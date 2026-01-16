@@ -15,6 +15,7 @@ interface JSONTextInputProps {
     invalid?: boolean;
     ariaLabel?: string;
     error?: string;
+    onValidationChange?: (isValid: boolean, errors: string[]) => void;
 }
 
 export const JSONTextInput: React.FC<JSONTextInputProps> = ({
@@ -26,6 +27,7 @@ export const JSONTextInput: React.FC<JSONTextInputProps> = ({
     invalid = false,
     ariaLabel,
     error,
+    onValidationChange,
 }) => {
     const [inputValue, setInputValue] = useState(value);
     const [validationError, setValidationError] = useState<string | null>(null);
@@ -60,8 +62,19 @@ export const JSONTextInput: React.FC<JSONTextInputProps> = ({
 
     useEffect(() => {
         setInputValue(value);
-        setValidationError(null);
-    }, [value]);
+
+        // Validate the new value and notify parent
+        const validationErr = validateJSON(value);
+        setValidationError(validationErr);
+
+        // Notify parent of validation state when value changes from parent
+        if (onValidationChange) {
+            const isValid = !validationErr;
+            const errors = validationErr ? [validationErr] : [];
+            onValidationChange(isValid, errors);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value, type]);
 
     const validateJSON = (jsonString: string): string | null => {
         if (!jsonString.trim()) {
@@ -130,10 +143,16 @@ export const JSONTextInput: React.FC<JSONTextInputProps> = ({
         const validationErr = validateJSON(newValue);
         setValidationError(validationErr);
 
-        // Only call onChange if JSON is valid or empty
-        if (!validationErr) {
-            onChange(newValue);
+        // Notify parent of validation state
+        if (onValidationChange) {
+            const isValid = !validationErr;
+            const errors = validationErr ? [validationErr] : [];
+            onValidationChange(isValid, errors);
         }
+
+        // Always call onChange to update the value, even if invalid
+        // This allows the parent to track the current state
+        onChange(newValue);
     };
 
     const formatJSON = () => {

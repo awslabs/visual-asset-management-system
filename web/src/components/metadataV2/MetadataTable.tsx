@@ -32,6 +32,7 @@ interface MetadataTableProps {
     onKeyChange: (index: number, key: string) => void;
     onTypeChange: (index: number, type: MetadataValueType) => void;
     onValueChange: (index: number, value: string) => void;
+    onValidationError?: (index: number, error: string | undefined) => void;
     onToggleEditMode: () => void;
     onCommitChanges: () => void;
     onCancelAllChanges: () => void;
@@ -57,6 +58,7 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
         onKeyChange,
         onTypeChange,
         onValueChange,
+        onValidationError,
         onToggleEditMode,
         onCommitChanges,
         onCancelAllChanges,
@@ -430,6 +432,12 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                                             onTypeChange={(type) => onTypeChange(actualIndex, type)}
                                             onValueChange={(value) =>
                                                 onValueChange(actualIndex, value)
+                                            }
+                                            onValidationError={
+                                                onValidationError
+                                                    ? (error) =>
+                                                          onValidationError(actualIndex, error)
+                                                    : undefined
                                             }
                                             readOnly={readOnly}
                                             isFileAttribute={isFileAttribute}

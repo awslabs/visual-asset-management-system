@@ -14,6 +14,7 @@ interface Matrix4x4InputProps {
     invalid?: boolean;
     ariaLabel?: string;
     error?: string;
+    onValidationChange?: (isValid: boolean, errors: string[]) => void;
 }
 
 type Matrix4x4Values = string[][];
@@ -26,6 +27,7 @@ export const Matrix4x4Input: React.FC<Matrix4x4InputProps> = ({
     invalid = false,
     ariaLabel = "4x4 transformation matrix",
     error,
+    onValidationChange,
 }) => {
     const [matrixValues, setMatrixValues] = useState<Matrix4x4Values>(() =>
         Array(4)
@@ -72,6 +74,27 @@ export const Matrix4x4Input: React.FC<Matrix4x4InputProps> = ({
             r.map((c, j) => (i === row && j === col ? newValue : c))
         );
         setMatrixValues(updatedMatrix);
+
+        // Validate the values
+        const validationErrors: string[] = [];
+        let allFieldsFilled = true;
+
+        // Check if all cells are filled
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                if (updatedMatrix[i][j] === "") {
+                    allFieldsFilled = false;
+                } else if (!isValidNumber(updatedMatrix[i][j])) {
+                    validationErrors.push(`Cell [${i + 1}][${j + 1}] must be a valid number`);
+                }
+            }
+        }
+
+        // Notify parent of validation state
+        if (onValidationChange) {
+            const isValid = allFieldsFilled && validationErrors.length === 0;
+            onValidationChange(isValid, validationErrors);
+        }
 
         // Check if all values are provided and valid
         const allFilled = updatedMatrix.every((row) =>

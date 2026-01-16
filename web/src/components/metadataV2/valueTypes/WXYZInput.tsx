@@ -14,6 +14,7 @@ interface WXYZInputProps {
     invalid?: boolean;
     ariaLabel?: string;
     error?: string;
+    onValidationChange?: (isValid: boolean, errors: string[]) => void;
 }
 
 interface WXYZDisplayValue {
@@ -31,6 +32,7 @@ export const WXYZInput: React.FC<WXYZInputProps> = ({
     invalid = false,
     ariaLabel = "WXYZ quaternion",
     error,
+    onValidationChange,
 }) => {
     const [wxyzValues, setWxyzValues] = useState<WXYZDisplayValue>({ w: "", x: "", y: "", z: "" });
 
@@ -85,6 +87,41 @@ export const WXYZInput: React.FC<WXYZInputProps> = ({
     const handleValueChange = (axis: "w" | "x" | "y" | "z", newValue: string) => {
         const updatedValues = { ...wxyzValues, [axis]: newValue };
         setWxyzValues(updatedValues);
+
+        // Validate the values
+        const validationErrors: string[] = [];
+        let allFieldsFilled = true;
+
+        if (
+            updatedValues.w === "" ||
+            updatedValues.x === "" ||
+            updatedValues.y === "" ||
+            updatedValues.z === ""
+        ) {
+            allFieldsFilled = false;
+        }
+
+        if (updatedValues.w !== "" && !isValidNumber(updatedValues.w)) {
+            validationErrors.push("W component must be a valid number");
+        }
+
+        if (updatedValues.x !== "" && !isValidNumber(updatedValues.x)) {
+            validationErrors.push("X component must be a valid number");
+        }
+
+        if (updatedValues.y !== "" && !isValidNumber(updatedValues.y)) {
+            validationErrors.push("Y component must be a valid number");
+        }
+
+        if (updatedValues.z !== "" && !isValidNumber(updatedValues.z)) {
+            validationErrors.push("Z component must be a valid number");
+        }
+
+        // Notify parent of validation state
+        if (onValidationChange) {
+            const isValid = allFieldsFilled && validationErrors.length === 0;
+            onValidationChange(isValid, validationErrors);
+        }
 
         // Only create JSON if all values are provided and valid
         if (
