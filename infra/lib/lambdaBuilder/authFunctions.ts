@@ -186,6 +186,7 @@ export function buildRoutesService(
 export function buildApiGatewayAuthorizerHttpFunction(
     scope: Construct,
     lambdaAuthorizerLayer: LayerVersion,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -223,7 +224,7 @@ export function buildApiGatewayAuthorizerHttpFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
     }
 
-    const authorizerFunc = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -242,17 +243,19 @@ export function buildApiGatewayAuthorizerHttpFunction(
     });
 
     // Grant API Gateway invoke permissions
-    authorizerFunc.grantInvoke(Service("APIGATEWAY").Principal);
+    fun.grantInvoke(Service("APIGATEWAY").Principal);
 
     // Add global permissions
-    globalLambdaEnvironmentsAndPermissions(authorizerFunc, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
-    return authorizerFunc;
+    return fun;
 }
 
 export function buildApiGatewayAuthorizerWebsocketFunction(
     scope: Construct,
     lambdaAuthorizerLayer: LayerVersion,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -289,7 +292,7 @@ export function buildApiGatewayAuthorizerWebsocketFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
     }
 
-    const authorizerFunc = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -308,10 +311,11 @@ export function buildApiGatewayAuthorizerWebsocketFunction(
     });
 
     // Grant API Gateway invoke permissions
-    authorizerFunc.grantInvoke(Service("APIGATEWAY").Principal);
+    fun.grantInvoke(Service("APIGATEWAY").Principal);
 
     // Add global permissions
-    globalLambdaEnvironmentsAndPermissions(authorizerFunc, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
-    return authorizerFunc;
+    return fun;
 }
