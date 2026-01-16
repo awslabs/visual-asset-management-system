@@ -15,11 +15,11 @@ import { region_info } from "aws-cdk-lib";
 dotenv.config();
 
 //Top level configurations
-export const VAMS_VERSION = "2.3.2";
+export const VAMS_VERSION = "2.4.0";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
-export const LAMBDA_MEMORY_SIZE = 3003;
+export const LAMBDA_MEMORY_SIZE = 5308;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
 
 export const STACK_WAF_DESCRIPTION =
@@ -72,14 +72,14 @@ export function getConfig(app: cdk.App): Config {
 
     config.app.adminEmailAddress = <string>(
         (app.node.tryGetContext("adminEmailAddress") ||
-            config.app.adminEmailAddress ||
-            process.env.ADMIN_EMAIL_ADDRESS)
+            process.env.ADMIN_EMAIL_ADDRESS ||
+            config.app.adminEmailAddress)
     );
     config.app.adminUserId = <string>(app.node.tryGetContext("adminUserId") ||
         app.node.tryGetContext("adminEmailAddress") || //user email in this case for ENV backwards compatibility
-        config.app.adminUserId ||
+        process.env.ADMIN_USER_ID ||
         process.env.ADMIN_EMAIL_ADDRESS || //user email in this case for ENV backwards compatibility
-        process.env.ADMIN_USER_ID);
+        config.app.adminUserId);
 
     config.app.authProvider.useCognito.credTokenTimeoutSeconds = <number>(
         (app.node.tryGetContext("credTokenTimeoutSeconds") ||
@@ -117,8 +117,8 @@ export function getConfig(app: cdk.App): Config {
     );
 
     //OpenSearch Variables - Dual Index Configuration
-    config.openSearchAssetIndexName = "vams-assets-v1";
-    config.openSearchFileIndexName = "vams-files-v1";
+    config.openSearchAssetIndexName = "vams-assets-v2";
+    config.openSearchFileIndexName = "vams-files-v2";
     config.openSearchAssetIndexNameSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "aos", "assetIndexName"].join("/");
     config.openSearchFileIndexNameSSMParam =
@@ -129,6 +129,10 @@ export function getConfig(app: cdk.App): Config {
     //Location Service Variables
     config.locationServiceApiKeyArnSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "location", "apiKeyArn"].join("/");
+
+    //Website URL Param Variables
+    config.webUrlDeploymentSSMParam =
+        "/" + [config.name + "-" + config.app.baseStackName, "web", "deployedUrl"].join("/");
 
     //Fill in some basic values to false if blank
     //Note: usually added for backwards compatabibility of an old config file that hasn't had the newest elements added
@@ -156,12 +160,50 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
     }
 
-    if (config.app.pipelines.useRapidPipeline.enabled == undefined) {
-        config.app.pipelines.useRapidPipeline.enabled = false;
+    if (config.app.pipelines.useRapidPipeline.useEcs.enabled == undefined) {
+        config.app.pipelines.useRapidPipeline.useEcs.enabled = false;
+    }
+
+    if (config.app.pipelines.useRapidPipeline.useEks.enabled == undefined) {
+        config.app.pipelines.useRapidPipeline.useEks.enabled = false;
     }
 
     if (config.app.pipelines.useModelOps.enabled == undefined) {
         config.app.pipelines.useModelOps.enabled = false;
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining == undefined) {
+        config.app.pipelines.useIsaacLabTraining = {
+            enabled: false,
+            acceptNvidiaEula: false,
+            autoRegisterWithVAMS: true,
+            keepWarmInstance: false,
+        };
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining.enabled == undefined) {
+        config.app.pipelines.useIsaacLabTraining.enabled = false;
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining.keepWarmInstance == undefined) {
+        config.app.pipelines.useIsaacLabTraining.keepWarmInstance = false;
+    }
+
+    // Validate NVIDIA EULA acceptance when Isaac Lab Training is enabled
+    if (
+        config.app.pipelines.useIsaacLabTraining.enabled &&
+        !config.app.pipelines.useIsaacLabTraining.acceptNvidiaEula
+    ) {
+        throw new Error(
+            "Configuration Error: Isaac Lab Training requires accepting the NVIDIA EULA. " +
+                "Please review the NVIDIA Software License Agreement at " +
+                "https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license " +
+                "and set 'useIsaacLabTraining.acceptNvidiaEula' to true in your config.json."
+        );
+    }
+
+    if (config.app.addons.useGarnetFramework.enabled == undefined) {
+        config.app.addons.useGarnetFramework.enabled = false;
     }
 
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
@@ -220,6 +262,38 @@ export function getConfig(app: cdk.App): Config {
         config.app.api.globalBurstLimit = 100;
     }
 
+    // Initialize CloudFront custom domain configuration if undefined (backward compatibility)
+    if (config.app.useCloudFront == undefined) {
+        config.app.useCloudFront = {
+            enabled: true,
+            customDomain: {
+                enabled: false,
+                domainHost: "",
+                certificateArn: "",
+                optionalHostedZoneId: "",
+            },
+        };
+    }
+
+    if (config.app.useCloudFront.customDomain == undefined) {
+        config.app.useCloudFront.customDomain = {
+            enabled: false,
+            domainHost: "",
+            certificateArn: "",
+            optionalHostedZoneId: "",
+        };
+    }
+
+    // Initialize metadataSchema configuration if undefined (backward compatibility)
+    if (config.app.metadataSchema == undefined) {
+        config.app.metadataSchema = {
+            autoLoadDefaultAssetLinksSchema: true,
+            autoLoadDefaultDatabaseSchema: true,
+            autoLoadDefaultAssetSchema: true,
+            autoLoadDefaultAssetFileSchema: true,
+        };
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -245,9 +319,9 @@ export function getConfig(app: cdk.App): Config {
             );
         }
 
-        if (!config.app.useAlb.enabled) {
+        if (config.app.useCloudFront.enabled) {
             throw new Error(
-                "Configuration Error: GovCloud must have app.useAlb.enabled set to true"
+                "Configuration Error: GovCloud does not support Cloudfront deployments, use the ALB configuration if a VAMS front-end website deployment is desired. "
             );
         }
 
@@ -286,8 +360,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
         config.app.pipelines.useSplatToolbox.enabled ||
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
-        config.app.pipelines.useRapidPipeline.enabled ||
+        config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+        config.app.pipelines.useRapidPipeline.useEks.enabled ||
         config.app.pipelines.useModelOps.enabled ||
+        config.app.pipelines.useIsaacLabTraining.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
@@ -387,7 +463,8 @@ export function getConfig(app: cdk.App): Config {
         config.app.useGlobalVpc.optionalExternalVpcId != ""
     ) {
         if (
-            config.app.pipelines.useRapidPipeline.enabled ||
+            config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+            config.app.pipelines.useRapidPipeline.useEks.enabled ||
             config.app.pipelines.useModelOps.enabled
         ) {
             if (
@@ -401,10 +478,49 @@ export function getConfig(app: cdk.App): Config {
             }
         }
     }
+    //Cloudfront + ALB check (not more than 1)
+    if (config.app.useCloudFront.enabled && config.app.useAlb.enabled) {
+        console.warn(
+            "Configuration Warning: YOU HAVE DISABLED DEPLOYING ANY VAMS FRONT-END WITH CLOUDFRONT OR ALB. THIS WILL BE A API-DRIVEN SOLUTION-ONLY DEPLOYMENT."
+        );
+    }
+
+    //Cloudfront + ALB neither warning check
+    if (!config.app.useCloudFront.enabled && !config.app.useAlb.enabled) {
+        throw new Error(
+            "Configuration Error: Must choose either only Cloufront or ALB for static website deployment use (or neither), cannot have both enabled."
+        );
+    }
+
+    // CloudFront Custom Domain Configuration Validation
+    if (config.app.useCloudFront.customDomain.enabled) {
+        if (
+            !config.app.useCloudFront.customDomain.certificateArn ||
+            config.app.useCloudFront.customDomain.certificateArn == "UNDEFINED" ||
+            config.app.useCloudFront.customDomain.certificateArn == "" ||
+            !config.app.useCloudFront.customDomain.domainHost ||
+            config.app.useCloudFront.customDomain.domainHost == "UNDEFINED" ||
+            config.app.useCloudFront.customDomain.domainHost == ""
+        ) {
+            throw new Error(
+                "Configuration Error: Cannot use CloudFront custom domain without specifying a valid domain hostname and a ACM Certificate ARN to use for SSL/TLS security!"
+            );
+        }
+
+        // Validate certificate ARN format
+        const certArnPattern = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
+        if (!certArnPattern.test(config.app.useCloudFront.customDomain.certificateArn)) {
+            throw new Error(
+                "Configuration Warning: CloudFront custom domain certificate ARN should be in us-east-1 region. CloudFront requires certificates to be in us-east-1 regardless of deployment region. Provided ARN: " +
+                    config.app.useCloudFront.customDomain.certificateArn
+            );
+        }
+    }
 
     if (
         ((config.app.useAlb.enabled && config.app.useAlb.usePublicSubnet) ||
-            config.app.pipelines.useRapidPipeline.enabled ||
+            config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+            config.app.pipelines.useRapidPipeline.useEks.enabled ||
             config.app.pipelines.useModelOps.enabled) &&
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
@@ -571,6 +687,66 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // Garnet Framework Configuration Validation
+    if (config.app.addons.useGarnetFramework.enabled) {
+        if (
+            !config.app.addons.useGarnetFramework.garnetApiEndpoint ||
+            config.app.addons.useGarnetFramework.garnetApiEndpoint === "UNDEFINED" ||
+            config.app.addons.useGarnetFramework.garnetApiEndpoint === ""
+        ) {
+            throw new Error(
+                "Configuration Error: Garnet Framework requires garnetApiEndpoint when enabled"
+            );
+        }
+
+        if (
+            !config.app.addons.useGarnetFramework.garnetApiToken ||
+            config.app.addons.useGarnetFramework.garnetApiToken === "UNDEFINED" ||
+            config.app.addons.useGarnetFramework.garnetApiToken === ""
+        ) {
+            throw new Error(
+                "Configuration Error: Garnet Framework requires garnetApiToken when enabled"
+            );
+        }
+
+        if (
+            !config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl ||
+            config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl === "UNDEFINED" ||
+            config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl === ""
+        ) {
+            throw new Error(
+                "Configuration Error: Garnet Framework requires garnetIngestionQueueSqsUrl when enabled"
+            );
+        }
+
+        // Validate API endpoint URL format
+        try {
+            new URL(config.app.addons.useGarnetFramework.garnetApiEndpoint);
+        } catch (e) {
+            throw new Error(
+                `Configuration Error: Garnet Framework garnetApiEndpoint must be a valid URL. Got: ${config.app.addons.useGarnetFramework.garnetApiEndpoint}`
+            );
+        }
+
+        // Validate SQS URL format (basic validation)
+        const sqsUrlPattern = /^https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com\/\d+\/[a-zA-Z0-9_-]+$/;
+        if (!sqsUrlPattern.test(config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl)) {
+            throw new Error(
+                `Configuration Error: Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL. Expected format: https://sqs.region.amazonaws.com/account/queue-name. Got: ${config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl}`
+            );
+        }
+
+        // Warn if OpenSearch is not enabled (Garnet works independently but this might be unintended)
+        if (
+            !config.app.openSearch.useServerless.enabled &&
+            !config.app.openSearch.useProvisioned.enabled
+        ) {
+            console.warn(
+                "Configuration Warning: Garnet Framework is enabled but OpenSearch is disabled. Garnet indexing will work independently of VAMS search functionality."
+            );
+        }
+    }
+
     return config;
 }
 
@@ -645,6 +821,15 @@ export interface ConfigPublic {
             certificateArn: string;
             optionalHostedZoneId: string;
         };
+        useCloudFront: {
+            enabled: boolean;
+            customDomain: {
+                enabled: boolean;
+                domainHost: string;
+                certificateArn: string;
+                optionalHostedZoneId: string;
+            };
+        };
         pipelines: {
             useConversion3dBasic: {
                 enabled: boolean;
@@ -653,10 +838,12 @@ export interface ConfigPublic {
             useConversionCadMeshMetadataExtraction: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
             };
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
                 sqsAutoRunOnAssetModified: boolean;
             };
             useSplatToolbox: {
@@ -668,16 +855,52 @@ export interface ConfigPublic {
                 enabled: boolean;
                 bedrockModelId: string;
                 autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
             };
             useRapidPipeline: {
-                enabled: boolean;
-                ecrContainerImageURI: string;
-                autoRegisterWithVAMS: boolean;
+                useEcs: {
+                    enabled: boolean;
+                    ecrContainerImageURI: string;
+                    autoRegisterWithVAMS: boolean;
+                };
+                useEks: {
+                    enabled: boolean;
+                    ecrContainerImageURI: string;
+                    autoRegisterWithVAMS: boolean;
+                    eksClusterVersion: string;
+                    nodeInstanceType: string;
+                    minNodes: number;
+                    maxNodes: number;
+                    desiredNodes: number;
+                    jobTimeout: number;
+                    jobMemory: string;
+                    jobCpu: string;
+                    jobBackoffLimit: number;
+                    jobTTLSecondsAfterFinished: number;
+                    observability: {
+                        enableControlPlaneLogs: boolean;
+                        enableContainerInsights: boolean;
+                    };
+                };
             };
             useModelOps: {
                 enabled: boolean;
                 ecrContainerImageURI: string;
                 autoRegisterWithVAMS: boolean;
+            };
+            useIsaacLabTraining: {
+                enabled: boolean;
+                acceptNvidiaEula: boolean;
+                autoRegisterWithVAMS: boolean;
+                keepWarmInstance: boolean;
+            };
+        };
+        addons: {
+            useGarnetFramework: {
+                enabled: boolean;
+                garnetApiEndpoint: string;
+                garnetApiToken: string;
+                garnetIngestionQueueSqsUrl: string;
             };
         };
         authProvider: {
@@ -713,6 +936,12 @@ export interface ConfigPublic {
             globalRateLimit: number;
             globalBurstLimit: number;
         };
+        metadataSchema: {
+            autoLoadDefaultAssetLinksSchema: boolean;
+            autoLoadDefaultDatabaseSchema: boolean;
+            autoLoadDefaultAssetSchema: boolean;
+            autoLoadDefaultAssetFileSchema: boolean;
+        };
     };
 }
 
@@ -727,4 +956,5 @@ export interface Config extends ConfigPublic {
     openSearchFileIndexNameSSMParam: string;
     openSearchDomainEndpointSSMParam: string;
     locationServiceApiKeyArnSSMParam: string; // Location Service API key SSM parameter
+    webUrlDeploymentSSMParam: string; // Web URL Deployment SSM parameter
 }

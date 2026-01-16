@@ -363,7 +363,7 @@ paths:
     /asset-links/{assetLinkId}/metadata:
         get:
             summary: "Get metadata for an asset link."
-            description: "Retrieve all metadata associated with a specific asset link."
+            description: "Retrieve all metadata associated with a specific asset link with pagination support."
             responses:
                 "200":
                     description: Metadata retrieved successfully.
@@ -372,7 +372,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/getAssetLinkMetadataResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or pagination token.
                     content:
                         application/json:
                             schema:
@@ -402,11 +402,14 @@ paths:
                 required: true
                 schema:
                     $ref: "#/components/schemas/uuid_regex"
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
         post:
-            summary: "Create metadata for an asset link."
-            description: "Add new metadata to a specific asset link."
+            summary: "Create metadata for an asset link (bulk operation)."
+            description: "Add new metadata items to a specific asset link. Supports bulk creation of multiple metadata items in a single request. Returns partial success information if some items fail."
             requestBody:
                 required: true
                 content:
@@ -415,13 +418,13 @@ paths:
                             $ref: "#/components/schemas/createAssetLinkMetadataRequest"
             responses:
                 "200":
-                    description: Metadata created successfully.
+                    description: Metadata creation completed (may include partial failures).
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/createAssetLinkMetadataResponse"
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or metadata key already exists.
+                    description: Invalid parameters or validation error.
                     content:
                         application/json:
                             schema:
@@ -453,10 +456,9 @@ paths:
                     $ref: "#/components/schemas/uuid_regex"
             security:
               - DefaultCognitoAuthorizer: []
-    /asset-links/{assetLinkId}/metadata/{metadataKey}:
         put:
-            summary: "Update metadata for an asset link."
-            description: "Update existing metadata for a specific asset link."
+            summary: "Update metadata for an asset link (bulk operation)."
+            description: "Update existing metadata items for a specific asset link. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -465,13 +467,13 @@ paths:
                             $ref: "#/components/schemas/updateAssetLinkMetadataRequest"
             responses:
                 "200":
-                    description: Metadata updated successfully.
+                    description: Metadata update completed (may include partial failures).
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/updateAssetLinkMetadataResponse"
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or validation error.
                     content:
                         application/json:
                             schema:
@@ -483,7 +485,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset link or metadata key not found.
+                    description: Asset link not found.
                     content:
                         application/json:
                             schema:
@@ -501,26 +503,26 @@ paths:
                 required: true
                 schema:
                     $ref: "#/components/schemas/uuid_regex"
-              - name: "metadataKey"
-                in: "path"
-                description: "Metadata key to update."
-                required: true
-                schema:
-                    type: string
             security:
               - DefaultCognitoAuthorizer: []
         delete:
-            summary: "Delete metadata for an asset link."
-            description: "Remove specific metadata from an asset link."
+            summary: "Delete metadata for an asset link (bulk operation)."
+            description: "Remove metadata items from an asset link. Supports bulk deletion of multiple metadata items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteAssetLinkMetadataRequest"
             responses:
                 "200":
-                    description: Metadata deleted successfully.
+                    description: Metadata deletion completed (may include partial failures).
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/deleteAssetLinkMetadataResponse"
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or validation error.
                     content:
                         application/json:
                             schema:
@@ -532,7 +534,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset link or metadata key not found.
+                    description: Asset link not found.
                     content:
                         application/json:
                             schema:
@@ -550,20 +552,31 @@ paths:
                 required: true
                 schema:
                     $ref: "#/components/schemas/uuid_regex"
-              - name: "metadataKey"
-                in: "path"
-                description: "Metadata key to delete."
-                required: true
-                schema:
-                    type: string
             security:
               - DefaultCognitoAuthorizer: []
     /auth/constraints:
         get:
             summary: "List all constraints."
+            description: "Retrieve a paginated list of all authorization constraints. Constraints define fine-grained access control rules based on object attributes and user/group permissions."
             responses:
                 "200":
-                    description: OK
+                    description: Constraints retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/getConstraintsResponse'
+                "400":
+                    description: Invalid pagination parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to list constraints.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -578,12 +591,29 @@ paths:
             - DefaultCognitoAuthorizer: []    
     /auth/constraints/{constraintId}/:
         get:
-            summary: "Get constraint."
+            summary: "Get a specific constraint."
+            description: "Retrieve details of a specific authorization constraint by its ID."
             responses:
                 "200":
-                    description: OK
+                    description: Constraint retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/getConstraintResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid constraint ID.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view this constraint.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Constraint not found.
                     content:
                         application/json:
                             schema:
@@ -595,9 +625,6 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: "constraintId"
                 in: "path"
                 description: "Unique identifier for constraint."
@@ -607,28 +634,36 @@ paths:
             security:
             -   DefaultCognitoAuthorizer: []
         post:
-            summary: "Update constraint."
+            summary: "Create or update a constraint."
+            description: "Create a new constraint or update an existing one. Constraints define fine-grained access control rules with criteria (AND/OR logic) and permissions for groups/users. At least one criteria (criteriaAnd or criteriaOr) must be provided."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/constraint'
+                            $ref: '#/components/schemas/createConstraintRequest'
             parameters:
-            - $ref: '#/components/parameters/maxItemsParam'
-            - $ref: '#/components/parameters/pageSizeParam'
-            - $ref: '#/components/parameters/startingTokenParam'            
             - name: "constraintId"
               in: "path"
-              description: "Unique identifier for constraint."
+              description: "Unique identifier for constraint. If provided in path, overrides identifier in request body."
               required: true
               schema:
                 $ref: '#/components/schemas/object_name_pattern_regex'
             responses:
                 "200":
-                    description: OK
+                    description: Constraint created/updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, missing required criteria, or role does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create/update constraints.
                     content:
                         application/json:
                             schema:
@@ -642,28 +677,36 @@ paths:
             security:
             -   DefaultCognitoAuthorizer: []
         put:
-            summary: "Create constraint."
+            summary: "Create or update a constraint."
+            description: "Create a new constraint or update an existing one. Constraints define fine-grained access control rules with criteria (AND/OR logic) and permissions for groups/users. At least one criteria (criteriaAnd or criteriaOr) must be provided. PUT method is treated the same as POST for constraints."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/constraint'
+                            $ref: '#/components/schemas/createConstraintRequest'
             parameters:
-            - $ref: '#/components/parameters/maxItemsParam'
-            - $ref: '#/components/parameters/pageSizeParam'
-            - $ref: '#/components/parameters/startingTokenParam'            
             - name: "constraintId"
               in: "path"
-              description: "Unique identifier for constraint."
+              description: "Unique identifier for constraint. If provided in path, overrides identifier in request body."
               required: true
               schema:
                 $ref: '#/components/schemas/object_name_pattern_regex'
             responses:
                 "200":
-                    description: OK
+                    description: Constraint created/updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, missing required criteria, or role does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create/update constraints.
                     content:
                         application/json:
                             schema:
@@ -677,12 +720,29 @@ paths:
             security:
             -   DefaultCognitoAuthorizer: []
         delete: 
-            summary: "Delete constraint."
+            summary: "Delete a constraint."
+            description: "Delete a constraint by its ID. This operation cannot be undone."
             responses:
                 "200":
-                    description: OK
+                    description: Constraint deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid constraint ID.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete constraints.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Constraint not found.
                     content:
                         application/json:
                             schema:
@@ -694,9 +754,6 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: "constraintId"
                 in: "path"
                 description: "Unique identifier for constraint."
@@ -1098,6 +1155,55 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+        put:
+            summary: "Update a database."
+            description: "Update an existing database's description, default bucket, or configuration options. At least one field must be provided for update."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateDatabaseRequest"
+            responses:
+                "200":
+                    description: Database updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/updateDatabaseResponse"
+                "400":
+                    description: Invalid parameters or bucket ID not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
     /buckets:
         get:
             summary: "List all S3 bucket configurations."
@@ -1445,7 +1551,7 @@ paths:
                                     minimum: 1
                                     maximum: 1000
                                     description: "Maximum number of assets to return per page"
-                                nextToken:
+                                startingToken:
                                     type: string
                                     description: "Pagination token from previous response for retrieving next page"
             responses:
@@ -1541,7 +1647,7 @@ paths:
                                                     type: string
                                                 metadata:
                                                     type: object
-                                    nextToken:
+                                    NextToken:
                                         type: string
                                         description: "Pagination token for retrieving next page of assets"
                                     totalAssetsInTree:
@@ -1713,9 +1819,308 @@ paths:
                       example: "bytes=200-1023"
             security:
                 - DefaultCognitoAuthorizer: []
+        head:
+            summary: "Check asset file availability and permissions without downloading content."
+            description: "Check if an asset file exists and retrieve metadata headers without downloading file content. Uses S3 head_object for efficient metadata retrieval. Returns the same headers as GET but with empty body. Does not check file size thresholds or generate redirects. Requires asset to be distributable."
+            responses:
+                "200":
+                    description: File exists and user has permission to access it.
+                    headers:
+                        Accept-Ranges:
+                            description: "Indicates that the server supports range requests"
+                            schema:
+                                type: string
+                                example: "bytes"
+                        Content-Type:
+                            description: "MIME type of the file"
+                            schema:
+                                type: string
+                        Content-Length:
+                            description: "Size of the content in bytes"
+                            schema:
+                                type: string
+                        Last-Modified:
+                            description: "Last modification date"
+                            schema:
+                                type: string
+                                format: date-time
+                        ETag:
+                            description: "Entity tag for cache validation"
+                            schema:
+                                type: string
+                        x-amz-version-id:
+                            description: "S3 version ID if versioned"
+                            schema:
+                                type: string
+                        x-amz-storage-class:
+                            description: "S3 storage class"
+                            schema:
+                                type: string
+                        Cache-Control:
+                            description: "Cache control directive"
+                            schema:
+                                type: string
+                                example: "no-cache, no-store"
+                "400":
+                    description: Invalid parameters or unallowed file type.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to access this asset or asset not distributable.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, asset, or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: "path"
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "assetId"
+                  in: "path"
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "proxy+"
+                  in: "path"
+                  description: "File path within the asset to check. Can include subdirectories and filename."
+                  required: true
+                  schema:
+                    type: "string"
+            security:
+                - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}:
+        get:
+            summary: "Stream auxiliary preview asset files with HTTP range support."
+            description: "Stream auxiliary preview asset files (e.g., converted formats, thumbnails) directly with HTTP range support. These are preview files stored in the auxiliary bucket. Supports partial content requests via Range headers for efficient streaming of large files."
+            responses:
+                "200":
+                    description: Auxiliary preview file content streamed successfully.
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                        text/plain:
+                            schema:
+                                type: string
+                        image/*:
+                            schema:
+                                type: string
+                                format: binary
+                        video/*:
+                            schema:
+                                type: string
+                                format: binary
+                        audio/*:
+                            schema:
+                                type: string
+                                format: binary
+                    headers:
+                        Accept-Ranges:
+                            description: "Indicates that the server supports range requests"
+                            schema:
+                                type: string
+                                example: "bytes"
+                        Content-Type:
+                            description: "MIME type of the file"
+                            schema:
+                                type: string
+                        Content-Length:
+                            description: "Size of the content in bytes"
+                            schema:
+                                type: string
+                        Content-Range:
+                            description: "Range of bytes being returned (for partial content)"
+                            schema:
+                                type: string
+                                example: "bytes 200-1023/2048"
+                        Content-Encoding:
+                            description: "Content encoding if applicable"
+                            schema:
+                                type: string
+                "206":
+                    description: Partial content returned (when Range header is used).
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                    headers:
+                        Content-Range:
+                            description: "Range of bytes being returned"
+                            schema:
+                                type: string
+                                example: "bytes 200-1023/2048"
+                        Content-Type:
+                            description: "MIME type of the file"
+                            schema:
+                                type: string
+                        Content-Length:
+                            description: "Size of the partial content in bytes"
+                            schema:
+                                type: string
+                "400":
+                    description: Invalid parameters, file too large for streaming, or unallowed file type.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to stream this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, asset, or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: "path"
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "assetId"
+                  in: "path"
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "proxy+"
+                  in: "path"
+                  description: "File path within the auxiliary preview bucket to stream. Can include subdirectories and filename."
+                  required: true
+                  schema:
+                    type: "string"
+                - name: "Range"
+                  in: "header"
+                  description: "HTTP Range header for partial content requests (e.g., 'bytes=200-1023')."
+                  required: false
+                  schema:
+                      type: string
+                      pattern: ^bytes=\d+-\d*$
+                      example: "bytes=200-1023"
+            security:
+                - DefaultCognitoAuthorizer: []
+        head:
+            summary: "Check auxiliary preview file availability and permissions without downloading content."
+            description: "Check if an auxiliary preview file exists and retrieve metadata headers without downloading file content. Uses S3 head_object for efficient metadata retrieval. Returns the same headers as GET but with empty body. Does not check file size thresholds or generate redirects."
+            responses:
+                "200":
+                    description: File exists and user has permission to access it.
+                    headers:
+                        Accept-Ranges:
+                            description: "Indicates that the server supports range requests"
+                            schema:
+                                type: string
+                                example: "bytes"
+                        Content-Type:
+                            description: "MIME type of the file"
+                            schema:
+                                type: string
+                        Content-Length:
+                            description: "Size of the content in bytes"
+                            schema:
+                                type: string
+                        Last-Modified:
+                            description: "Last modification date"
+                            schema:
+                                type: string
+                                format: date-time
+                        ETag:
+                            description: "Entity tag for cache validation"
+                            schema:
+                                type: string
+                        x-amz-version-id:
+                            description: "S3 version ID if versioned"
+                            schema:
+                                type: string
+                        x-amz-storage-class:
+                            description: "S3 storage class"
+                            schema:
+                                type: string
+                        Cache-Control:
+                            description: "Cache control directive"
+                            schema:
+                                type: string
+                                example: "no-cache, no-store"
+                "400":
+                    description: Invalid parameters or unallowed file type.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to access this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, asset, or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: "path"
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "assetId"
+                  in: "path"
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "proxy+"
+                  in: "path"
+                  description: "File path within the auxiliary preview bucket to check. Can include subdirectories and filename."
+                  required: true
+                  schema:
+                    type: "string"
+            security:
+                - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/listFiles:
         get:
             summary: "List files in an asset."
+            description: "List files in an asset with optional pagination and filtering. Supports two modes: basic mode (fast, minimal data) and full mode (detailed data with version info, preview files, and metadata). Use basic mode for quick file listings and full mode when you need complete file information."
             responses:
                 "200":
                     description: OK
@@ -1742,8 +2147,22 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - name: maxItems
+                in: query
+                description: "Maximum number of items to return. Default is 200 for full mode, 1500 for basic mode. Maximum allowed is 1500."
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 1500
+              - name: pageSize
+                in: query
+                description: "Number of items per page. Default is 200 for full mode, 1500 for basic mode. Maximum allowed is 1500."
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 1500
               - $ref: "#/components/parameters/startingTokenParam"
               - name: databaseId
                 in: path
@@ -1763,12 +2182,20 @@ paths:
                 required: false
                 schema:
                     type: boolean
+                    default: false
               - name: prefix
                 in: query
                 description: Filter files by prefix
                 required: false
                 schema:
                     type: string
+              - name: basic
+                in: query
+                description: "Enable basic mode for fast file listing. When true, skips expensive operations (head_object calls, preview file lookups, version mismatch checks) and returns only data available from S3 list operation. Fields like versionId, primaryType, and previewFile will be null/empty in basic mode. Use basic mode for quick listings and full mode (basic=false) when you need complete file details."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
     /database/{databaseId}/assets/{assetId}/fileInfo:
         get:
             summary: "Get detailed information about a specific file."
@@ -1827,7 +2254,8 @@ paths:
     
     /database/{databaseId}/assets/{assetId}/moveFile:
         post:
-            summary: "Move a file within an asset."
+            summary: "Move or rename a file within an asset."
+            description: "Move a file to a different path or rename it in place. Handles both moving files to different directories and renaming files within the same directory. Source file must not be archived, and destination must not exist (including archived versions). Preview files and auxiliary files are automatically moved/renamed with the base file."
             requestBody:
                 required: true
                 content:
@@ -1836,19 +2264,19 @@ paths:
                             $ref: "#/components/schemas/moveFileRequest"
             responses:
                 "200":
-                    description: File moved successfully.
+                    description: File moved/renamed successfully.
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or file already exists at destination.
+                    description: Invalid parameters, file already exists at destination, or source file is archived.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to move files in this asset.
+                    description: Not authorized to move/rename files in this asset.
                     content:
                         application/json:
                             schema:
@@ -1880,7 +2308,7 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
               - DefaultCognitoAuthorizer: []
-    
+
     /database/{databaseId}/assets/{assetId}/copyFile:
         post:
             summary: "Copy a file within an asset or to another asset."
@@ -2654,6 +3082,100 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
               - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/unarchiveAsset:
+        put:
+            summary: "Unarchive an asset (restore from soft delete)."
+            description: "Restore a previously archived asset by removing S3 delete markers and moving the asset record back to the active database partition. The databaseId can be provided with or without the #deleted suffix, which will be normalized automatically."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                confirmUnarchive:
+                                    type: boolean
+                                    description: "Confirmation flag for unarchiving (must be true)"
+                                    default: false
+                                reason:
+                                    type: string
+                                    maxLength: 256
+                                    description: "Optional reason for unarchiving the asset"
+                            required:
+                                - confirmUnarchive
+                            example:
+                                confirmUnarchive: true
+                                reason: "Restoring asset for active use"
+            responses:
+                "200":
+                    description: Asset unarchived successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    success:
+                                        type: boolean
+                                        example: true
+                                    message:
+                                        type: string
+                                        example: "Asset {assetId} unarchived successfully"
+                                    assetId:
+                                        type: string
+                                        example: "my-asset-id"
+                                    operation:
+                                        type: string
+                                        example: "unarchive"
+                                    timestamp:
+                                        type: string
+                                        format: date-time
+                                        example: "2024-01-15T10:30:00.000Z"
+                                required:
+                                    - success
+                                    - message
+                                    - assetId
+                                    - operation
+                                    - timestamp
+                "400":
+                    description: Invalid parameters, asset not archived, or confirmation not provided.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to unarchive this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: "Database ID (may include #deleted suffix which will be normalized)"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: "Asset ID to unarchive"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/revert:
         post:
             summary: "Revert an asset to a previous version."
@@ -3206,20 +3728,31 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
                 - DefaultCognitoAuthorizer: []
-    /metadataschema/{databaseId}/:
+    /database/{databaseId}/assets/{assetId}/metadata:
         get:
-            summary: "Get metadata schema for a given database."
+            summary: "Get metadata for an asset."
+            description: "Retrieve all metadata associated with a specific asset with pagination support."
             responses:
                 "200":
-                    description: OK
+                    description: Metadata retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getAssetMetadataResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to view metadata for this asset.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Missing asset or database ID path parameters.
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -3231,26 +3764,624 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: "databaseId"
                 in: "path"
-                description: "Database Id"
+                description: "Unique identifier for database."
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
         post:
-            summary: "Update metadata schema for a given database."
+            summary: "Create metadata for an asset (bulk operation)."
+            description: "Add new metadata items to a specific asset. Supports bulk creation of multiple metadata items in a single request. Returns partial success information if some items fail."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: "#/components/schemas/metadata_schema"
+                            $ref: "#/components/schemas/createAssetMetadataRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Metadata creation completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update metadata for an asset (bulk operation)."
+            description: "Update existing metadata items for a specific asset. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateAssetMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata update completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update metadata for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete metadata for an asset (bulk operation)."
+            description: "Remove metadata items from an asset. Supports bulk deletion of multiple metadata items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteAssetMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata deletion completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete metadata for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/assets/{assetId}/metadata/file:
+        get:
+            summary: "Get metadata or attributes for a file."
+            description: "Retrieve all metadata or attributes associated with a specific file with pagination support. Supports both 'metadata' and 'attribute' types."
+            responses:
+                "200":
+                    description: File metadata/attributes retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getFileMetadataResponse"
+                "400":
+                    description: Invalid parameters, pagination token, or file path is a folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view metadata for this file.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "filePath"
+                in: "query"
+                description: "Relative file path (must not end with / for folders)."
+                required: true
+                schema:
+                    type: string
+              - name: "type"
+                in: "query"
+                description: "Type of data to retrieve: 'metadata' or 'attribute'."
+                required: true
+                schema:
+                    type: string
+                    enum: [metadata, attribute]
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create metadata or attributes for a file (bulk operation)."
+            description: "Add new metadata or attribute items to a specific file. Supports bulk creation. File attributes only support 'string' metadataValueType. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createFileMetadataRequest"
+            responses:
+                "200":
+                    description: File metadata/attributes creation completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters, validation error, or file path is a folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata for this file.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update metadata or attributes for a file (bulk operation)."
+            description: "Update existing metadata or attribute items for a specific file. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). File attributes only support 'string' metadataValueType. Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateFileMetadataRequest"
+            responses:
+                "200":
+                    description: File metadata/attributes update completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters, validation error, or file path is a folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update metadata for this file.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete metadata or attributes for a file (bulk operation)."
+            description: "Remove metadata or attribute items from a file. Supports bulk deletion of multiple items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteFileMetadataRequest"
+            responses:
+                "200":
+                    description: File metadata/attributes deletion completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters, validation error, or file path is a folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete metadata for this file.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/metadata:
+        get:
+            summary: "Get metadata for a database."
+            description: "Retrieve all metadata associated with a specific database with pagination support."
+            responses:
+                "200":
+                    description: Metadata retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getDatabaseMetadataResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view metadata for this database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create metadata for a database (bulk operation)."
+            description: "Add new metadata items to a specific database. Supports bulk creation of multiple metadata items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createDatabaseMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata creation completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata for this database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update metadata for a database (bulk operation)."
+            description: "Update existing metadata items for a specific database. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateDatabaseMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata update completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update metadata for this database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete metadata for a database (bulk operation)."
+            description: "Remove metadata items from a database. Supports bulk deletion of multiple metadata items in a single request. Returns partial success information if some items fail."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteDatabaseMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata deletion completed (may include partial failures).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bulkMetadataOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete metadata for this database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/metadataSchema/{metadataSchemaId}:
+        get:
+            summary: "Get a specific metadata schema."
+            description: "Retrieve details of a specific metadata schema by its ID. Returns the complete schema definition including field definitions, entity type, and configuration."
+            responses:
+                "200":
+                    description: Metadata schema retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/metadataSchemaResponse"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -3258,44 +4389,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to view this metadata schema.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Missing asset or database ID path parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters: 
-              - name: "databaseId"
-                in: "path"
-                description: "Database Id"
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-    /metadataschema/{databaseId}/{field}/:
-        delete:
-            summary: "Delete metadata schema field."
-            responses:
-                "200":
-                    description: OK
-                "403":
-                    description: Action not allowed or not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Missing asset or database ID path parameters.
+                    description: Metadata schema not found.
                     content:
                         application/json:
                             schema:
@@ -3307,18 +4407,199 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - name: "field"
-                in: "path"
-                description: "Field name"
-                required: true
-                schema:
-                    type: string
               - name: "databaseId"
                 in: "path"
-                description: "Database Id"
+                description: "Database ID"
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
+              - name: "metadataSchemaId"
+                in: "path"
+                description: "Metadata schema ID"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete a metadata schema."
+            description: "Delete a metadata schema by its ID. Requires confirmation in the request body."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteMetadataSchemaRequest"
+            responses:
+                "200":
+                    description: Metadata schema deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/metadataSchemaOperationResponse"
+                "400":
+                    description: Invalid parameters or confirmation not provided.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete this metadata schema.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Metadata schema not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Database ID"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "metadataSchemaId"
+                in: "path"
+                description: "Metadata schema ID"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /metadataschema:
+        get:
+            summary: "List metadata schemas with optional filters."
+            description: "Retrieve a paginated list of metadata schemas. Supports filtering by database ID and/or entity type. Returns schemas the user is authorized to view."
+            responses:
+                "200":
+                    description: Metadata schemas retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getMetadataSchemasResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to list metadata schemas.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "query"
+                description: "Filter by database ID (optional)"
+                required: false
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "metadataEntityType"
+                in: "query"
+                description: "Filter by entity type (optional)"
+                required: false
+                schema:
+                    type: string
+                    enum: [databaseMetadata, assetMetadata, fileMetadata, fileAttribute, assetLinkMetadata]
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+            security:
+                - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create a new metadata schema."
+            description: "Create a new metadata schema template for a specific entity type. Supports GLOBAL database ID for system-wide schemas. Validates field definitions and enforces constraints based on entity type."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createMetadataSchemaRequest"
+            responses:
+                "200":
+                    description: Metadata schema created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/metadataSchemaOperationResponse"
+                "400":
+                    description: Invalid parameters, validation error, or database does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata schemas.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update an existing metadata schema."
+            description: "Update an existing metadata schema's name, fields, file restrictions, or enabled status. At least one field must be provided for update."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateMetadataSchemaRequest"
+            responses:
+                "200":
+                    description: Metadata schema updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/metadataSchemaOperationResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update this metadata schema.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Metadata schema not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
             security:
                 - DefaultCognitoAuthorizer: []
     /pipelines:
@@ -3412,17 +4693,22 @@ paths:
     /roles:
         get:
             summary: "List all roles."
+            description: "Retrieve a paginated list of all roles. Only returns roles the user is authorized to view."
             responses:
                 "200":
-                    description: OK
+                    description: Roles retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/getRolesResponse'
                 "400":
-                    description: No asset ID in API call.
+                    description: Invalid parameters.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to list roles.
                     content:
                         application/json:
                             schema:
@@ -3433,25 +4719,36 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
         post:
-            summary: "Create roles."
+            summary: "Create a new role."
+            description: "Create a new role with the specified name, description, and optional source information. Role names must be unique."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: "#/components/schemas/role"
+                            $ref: "#/components/schemas/createRoleRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Role created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/roleOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or role already exists.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to create roles.
                     content:
                         application/json:
                             schema:
@@ -3465,24 +4762,29 @@ paths:
             security:
                 - DefaultCognitoAuthorizer: []
         put:
-            summary: "Update role."
+            summary: "Update an existing role."
+            description: "Update a role's description, source, sourceIdentifier, and mfaRequired fields. The role name cannot be changed."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: "#/components/schemas/role"
+                            $ref: "#/components/schemas/updateRoleRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Role updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/roleOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or role not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to update roles.
                     content:
                         application/json:
                             schema:
@@ -3493,6 +4795,48 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+    /roles/{roleId}:
+        delete:
+            summary: "Delete a role."
+            description: "Delete a role by its name. This operation cannot be undone."
+            responses:
+                "200":
+                    description: Role deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "success"
+                "400":
+                    description: Invalid role name or role does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete roles.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: roleId
+                in: path
+                description: "Role name to delete."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
             security:
               - DefaultCognitoAuthorizer: []
     /subscriptions: 
@@ -3619,9 +4963,25 @@ paths:
     /tags:
         get:
             summary: "List all tags."
+            description: "Retrieve a paginated list of all tags. Tags are returned with their associated tag type, and required tags are marked with [R] suffix."
             responses:
                 "200":
-                    description: OK
+                    description: Tags retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/tagResponse"
+                                            NextToken:
+                                                type: string
+                                                description: "Pagination token for retrieving next page"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -3629,7 +4989,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to list tags.
                     content:
                         application/json:
                             schema:
@@ -3647,29 +5007,29 @@ paths:
             security:
               - DefaultCognitoAuthorizer: []
         post:
-            summary: "Create new tags."
+            summary: "Create a new tag."
+            description: "Create a new tag with the specified name, description, and tag type. Tag names must be unique across all tag types."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: object
-                            properties:
-                                tags:
-                                    type: array
-                                    items:
-                                        $ref: "#/components/schemas/tag"
+                            $ref: "#/components/schemas/createTagRequest"
             responses:
                 "200":
-                    description: Succeeded
+                    description: Tag created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or tag already exists.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to create tags.
                     content:
                         application/json:
                             schema:
@@ -3683,29 +5043,29 @@ paths:
             security:
               - DefaultCognitoAuthorizer: []
         put:
-            summary: "Update tags."
+            summary: "Update an existing tag."
+            description: "Update a tag's description and/or tag type. The tag name cannot be changed."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: object
-                            properties:
-                                tags:
-                                    type: array
-                                    items:
-                                        $ref: "#/components/schemas/tag"
+                            $ref: "#/components/schemas/updateTagRequest"
             responses:
                 "200":
-                    description: Succeeded.
+                    description: Tag updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or tag not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to update tags.
                     content:
                         application/json:
                             schema:
@@ -3720,24 +5080,29 @@ paths:
               - DefaultCognitoAuthorizer: []
     /tags/{tagId}:
         delete:
-            summary: "Delete tags."
+            summary: "Delete a tag."
+            description: "Delete a tag by its name. This operation cannot be undone."
             responses:
                 "200":
-                    description: OK
+                    description: Tag deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid tag name.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to delete tags.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database not found.
+                    description: Tag not found.
                     content:
                         application/json:
                             schema:
@@ -3749,25 +5114,36 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
               - name: tagId
                 in: path
-                description: One or more tag ids to delete.
+                description: "Tag name to delete."
                 required: true
                 schema:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/object_name_pattern_regex"
+                    $ref: "#/components/schemas/object_name_pattern_regex"
             security:
               - DefaultCognitoAuthorizer: []
     /tag-types:
         get:
             summary: "List all tag types."
+            description: "Retrieve a paginated list of all tag types with their associated tags. Tag types marked as required will have the required field set to 'True'."
             responses:
                 "200":
-                    description: OK
+                    description: Tag types retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/tagTypeResponse"
+                                            NextToken:
+                                                type: string
+                                                description: "Pagination token for retrieving next page"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -3775,7 +5151,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to list tag types.
                     content:
                         application/json:
                             schema:
@@ -3793,29 +5169,29 @@ paths:
             security:
               - DefaultCognitoAuthorizer: []
         post:
-            summary: "Create new tag types."
+            summary: "Create a new tag type."
+            description: "Create a new tag type with the specified name, description, and required flag. Tag type names must be unique."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: object
-                            properties:
-                              tagTypes:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/tagType"
+                            $ref: "#/components/schemas/createTagTypeRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Tag type created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagTypeOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or tag type already exists.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to create tag types.
                     content:
                         application/json:
                             schema:
@@ -3826,40 +5202,38 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []            
         put:
-            summary: "Update tag types."
+            summary: "Update an existing tag type."
+            description: "Update a tag type's description and/or required flag. The tag type name cannot be changed."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: object
-                            properties:
-                              tagTypes:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/tagType"
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
+                            $ref: "#/components/schemas/updateTagTypeRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Tag type updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagTypeOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or tag type not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to update tag types.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Tag type not found.
                     content:
                         application/json:
                             schema:
@@ -3875,17 +5249,28 @@ paths:
     /tag-types/{tagTypeId}:
         delete:
             summary: "Delete a tag type."
+            description: "Delete a tag type by its name. This operation cannot be undone. Tag types that are currently in use by tags cannot be deleted."
             responses:
                 "200":
-                    description: OK
+                    description: Tag type deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/tagTypeOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid tag type name or tag type is in use by tags.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to delete tag types.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Tag type not found.
                     content:
                         application/json:
                             schema:
@@ -3897,12 +5282,9 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
               - name: tagTypeId
                 in: path
-                description: Tag type.
+                description: "Tag type name to delete."
                 required: true
                 schema:
                     $ref: "#/components/schemas/object_name_pattern_regex"
@@ -3938,17 +5320,22 @@ paths:
     /user-roles:
         get:
             summary: "List all user roles."
+            description: "Retrieve a paginated list of all user-role assignments grouped by user. Returns users with their assigned roles. Only returns user roles the requesting user is authorized to view based on Casbin policies."
             responses:
                 "200":
-                    description: OK
+                    description: User roles retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/getUserRolesResponse'
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid pagination parameters.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to list user roles.
                     content:
                         application/json:
                             schema:
@@ -3963,37 +5350,32 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
-              - name: roleName
-                in: query
-                description: One or more role names to add.
-                required: true
-                schema:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/object_name_pattern_regex"
-              - name: userId
-                in: query
-                description: User e-mails.
-                required: true
-                schema:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/email_pattern_regex"
             security:
               - DefaultCognitoAuthorizer: []
         post: 
             summary: "Create new user roles."
+            description: "Assign one or more roles to a user. All specified roles must exist in the system. Validates that roles don't already exist for the user before creating. Requires POST permission on userRole objects via Casbin."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createUserRolesRequest"
             responses:
                 "200":
-                    description: OK
+                    description: User roles created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/userRoleOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, role doesn't exist, or role already assigned to user.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to create user roles.
                     content:
                         application/json:
                             schema:
@@ -4004,87 +5386,32 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            type: array
-                            items:
-                                $ref: "#/components/schemas/userRole"
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
-              - name: roleName
-                in: query
-                description: One or more role names to add.
-                required: true
-                schema:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/object_name_pattern_regex"
-              - name: userId
-                in: query
-                description: User e-mails.
-                required: true
-                schema:
-                    type: array
-                    items:
-                     $ref: "#/components/schemas/email_pattern_regex"
             security:
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update user roles."
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "403":
-                    description: Action not allowed or not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
+            description: "Update a user's role assignments by specifying the complete new set of roles. Performs a differential update - adds new roles and removes roles not in the list. All specified roles must exist in the system. Requires POST permission for new roles and DELETE permission for removed roles via Casbin."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            type: array
-                            items:
-                                $ref: "#/components/schemas/userRole"
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
-            security:
-              - DefaultCognitoAuthorizer: []
-        delete: 
-            summary: "Delete user roles."
-            description: "userId (email regex) is a required field."
+                            $ref: "#/components/schemas/updateUserRolesRequest"
             responses:
                 "200":
-                    description: OK
+                    description: User roles updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/userRoleOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or role doesn't exist.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Not authorized to update user roles.
                     content:
                         application/json:
                             schema:
@@ -4095,10 +5422,42 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete: 
+            summary: "Delete all roles for a user."
+            description: "Remove all role assignments for a specified user. Requires DELETE permission on userRole objects via Casbin for each role being removed."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteUserRolesRequest"
+            responses:
+                "200":
+                    description: User roles deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/userRoleOperationResponse"
+                "400":
+                    description: Invalid userId parameter.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete user roles.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
             security:
               - DefaultCognitoAuthorizer: []
     /visualizerAssets/{proxy+}/:
@@ -4480,24 +5839,257 @@ components:
                 - assetId
                 - commentId
                 - commentBody
-        constraint:
+        # Constraint API Request/Response Schemas
+        constraintCriteria:
             type: object
             properties:
-                criteriaAnd:
+                field:
                     type: string
-                    pattern: ^[a-zA-Z0-9\.\-_]+$
-                criteriaOrValue:
+                    minLength: 1
+                    maxLength: 256
+                    description: "Field name to evaluate in the constraint"
+                operator:
                     type: string
-                    pattern: ^[a-zA-Z0-9\.\-_]+$
-                groupPermissions:
-                    $ref: '#/components/schemas/object_name_pattern_regex'
-                userPermissions:
-                    $ref: "#/components/schemas/email_pattern_regex"
+                    enum: [equals, contains, does_not_contain, starts_with, ends_with, is_one_of, is_not_one_of]
+                    description: "Comparison operator for the criteria"
+                value:
+                    oneOf:
+                        - type: string
+                        - type: array
+                          items:
+                              type: string
+                    description: "Value or array of values to compare against. Must be a valid regex pattern."
             required:
-                - criteriaAnd
-                - criteriaOrValue
-                - groupPermissions
-                - userPermissions
+                - field
+                - operator
+                - value
+        
+        groupPermission:
+            type: object
+            properties:
+                groupId:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Role/group name (must exist in roles table)"
+                permission:
+                    type: string
+                    enum: [GET, PUT, POST, DELETE]
+                    description: "Permission type"
+                permissionType:
+                    type: string
+                    enum: [allow, deny]
+                    description: "Whether to allow or deny the permission"
+            required:
+                - groupId
+                - permission
+                - permissionType
+        
+        userPermission:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/userid_regex"
+                    description: "User ID (email format)"
+                permission:
+                    type: string
+                    enum: [GET, PUT, POST, DELETE]
+                    description: "Permission type"
+                permissionType:
+                    type: string
+                    enum: [allow, deny]
+                    description: "Whether to allow or deny the permission"
+            required:
+                - userId
+                - permission
+                - permissionType
+        
+        createConstraintRequest:
+            type: object
+            properties:
+                identifier:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Unique constraint identifier (1-256 characters)"
+                name:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Constraint name (1-256 characters)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Constraint description (1-256 characters)"
+                objectType:
+                    type: string
+                    enum: [database, asset, api, web, tag, tagType, role, userRole, pipeline, workflow, metadataSchema]
+                    description: "Type of object this constraint applies to"
+                criteriaAnd:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintCriteria"
+                    description: "Array of criteria that must ALL be true (AND logic)"
+                    default: []
+                criteriaOr:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintCriteria"
+                    description: "Array of criteria where at least ONE must be true (OR logic)"
+                    default: []
+                groupPermissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/groupPermission"
+                    description: "Permissions for groups/roles"
+                    default: []
+                userPermissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/userPermission"
+                    description: "Permissions for specific users"
+                    default: []
+            required:
+                - identifier
+                - name
+                - description
+                - objectType
+            example:
+                identifier: "asset-viewer-constraint"
+                name: "Asset Viewer Constraint"
+                description: "Allow viewers to access distributable assets"
+                objectType: "asset"
+                criteriaAnd:
+                    - field: "isDistributable"
+                      operator: "equals"
+                      value: "true"
+                criteriaOr: []
+                groupPermissions:
+                    - groupId: "viewer"
+                      permission: "GET"
+                      permissionType: "allow"
+                userPermissions: []
+        
+        constraintResponse:
+            type: object
+            properties:
+                constraintId:
+                    type: string
+                    description: "Constraint ID"
+                name:
+                    type: string
+                    description: "Constraint name"
+                description:
+                    type: string
+                    description: "Constraint description"
+                objectType:
+                    type: string
+                    enum: [database, asset, api, web, tag, tagType, role, userRole, pipeline, workflow, metadataSchema]
+                    description: "Type of object this constraint applies to"
+                criteriaAnd:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintCriteria"
+                    description: "Array of AND criteria"
+                    default: []
+                criteriaOr:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintCriteria"
+                    description: "Array of OR criteria"
+                    default: []
+                groupPermissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/groupPermission"
+                    description: "Group permissions"
+                    default: []
+                userPermissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/userPermission"
+                    description: "User permissions"
+                    default: []
+            required:
+                - constraintId
+                - name
+                - description
+                - objectType
+        
+        getConstraintResponse:
+            type: object
+            properties:
+                constraint:
+                    $ref: "#/components/schemas/constraintResponse"
+                    description: "Constraint details"
+            required:
+                - constraint
+        
+        getConstraintsResponse:
+            type: object
+            properties:
+                message:
+                    type: object
+                    properties:
+                        Items:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/constraintResponse"
+                            description: "List of constraints"
+                        NextToken:
+                            type: string
+                            description: "Pagination token for retrieving next page"
+                    required:
+                        - Items
+            required:
+                - message
+            example:
+                message:
+                    Items:
+                        - constraintId: "asset-viewer-constraint"
+                          name: "Asset Viewer Constraint"
+                          description: "Allow viewers to access distributable assets"
+                          objectType: "asset"
+                          criteriaAnd:
+                              - field: "isDistributable"
+                                operator: "equals"
+                                value: "true"
+                          criteriaOr: []
+                          groupPermissions:
+                              - groupId: "viewer"
+                                permission: "GET"
+                                permissionType: "allow"
+                          userPermissions: []
+        
+        constraintOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                constraintId:
+                    type: string
+                    description: "Constraint ID that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+                constraint:
+                    type: string
+                    description: "JSON string of the constraint data (for create/update operations)"
+            required:
+                - success
+                - message
+                - constraintId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "Constraint asset-viewer-constraint created/updated successfully"
+                constraintId: "asset-viewer-constraint"
+                operation: "create"
+                timestamp: "2024-01-15T10:30:00.000Z"
+                constraint: "{\"identifier\":\"asset-viewer-constraint\",\"name\":\"Asset Viewer Constraint\",...}"
         database:
             type: object
             properties:
@@ -4510,10 +6102,72 @@ components:
                 defaultBucketId:
                     #example: 550e8400-e29b-41d4-a716-446655440000
                     $ref: '#/components/schemas/uuid_regex'
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    default: false
+                    description: "Whether to restrict metadata to only fields defined in schemas"
+                restrictFileUploadsToExtensions:
+                    type: string
+                    default: ""
+                    description: "Comma-delimited list of allowed file extensions (e.g., 'jpg,png,pdf'). Empty string allows all extensions."
             required:
                 - databaseId
                 - description
                 - defaultBucketId
+        
+        updateDatabaseRequest:
+            type: object
+            properties:
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated database description (optional)"
+                defaultBucketId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Updated default bucket ID (optional)"
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "Whether to restrict metadata to only fields defined in schemas (optional)"
+                restrictFileUploadsToExtensions:
+                    type: string
+                    description: "Comma-delimited list of allowed file extensions (optional)"
+            required: []
+            example:
+                description: "Updated 3d models used in training programs"
+                restrictMetadataOutsideSchemas: true
+                restrictFileUploadsToExtensions: "obj,fbx,gltf,glb"
+        
+        updateDatabaseResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID that was updated"
+                operation:
+                    type: string
+                    enum: [update]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - databaseId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "Database vr-models-training updated successfully"
+                databaseId: "vr-models-training"
+                operation: "update"
+                timestamp: "2024-01-15T10:30:00.000Z"
         email_pattern_regex: 
             type: string
             pattern: ^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$
@@ -4539,6 +6193,9 @@ components:
         id_regex:
             type: string
             pattern: ^[a-z]([-_a-z0-9]){3,63}$
+        asset_id_regex:
+            type: string
+            pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
         ingest_asset: 
             type: object
             properties:
@@ -4565,13 +6222,251 @@ components:
             properties:
                 assetPath:
                     $ref: '#/components/schemas/asset_path_pattern_regex'
-        metadata_schema:
+        
+        # Metadata Schema V2 API Schemas
+        metadataSchemaEntityType:
+            type: string
+            enum: [databaseMetadata, assetMetadata, fileMetadata, fileAttribute, assetLinkMetadata]
+            description: "Entity type for metadata schema"
+        
+        metadataSchemaFieldDefinition:
             type: object
             properties:
-                field:
+                metadataFieldKeyName:
                     type: string
+                    minLength: 1
+                    maxLength: 256
+                    description: "Field key name (1-256 characters)"
+                metadataFieldValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                    description: "Type of metadata value for this field"
+                required:
+                    type: boolean
+                    default: false
+                    description: "Whether this field is required"
+                dependsOnFieldKeyName:
+                    type: array
+                    items:
+                        type: string
+                    description: "Field keys this field depends on (optional)"
+                controlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Allowed values for INLINE_CONTROLLED_LIST type (required for that type)"
+                defaultMetadataFieldValue:
+                    type: string
+                    description: "Default value for this field (optional, must match metadataFieldValueType)"
             required:
-                - field
+                - metadataFieldKeyName
+                - metadataFieldValueType
+            example:
+                metadataFieldKeyName: "project_status"
+                metadataFieldValueType: "inline_controlled_list"
+                required: true
+                controlledListKeys: ["planning", "in_progress", "completed", "archived"]
+                defaultMetadataFieldValue: "planning"
+        
+        metadataSchemaFields:
+            type: object
+            properties:
+                fields:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataSchemaFieldDefinition"
+                    description: "Array of field definitions (at least one required)"
+            required:
+                - fields
+            example:
+                fields:
+                    - metadataFieldKeyName: "project_name"
+                      metadataFieldValueType: "string"
+                      required: true
+                    - metadataFieldKeyName: "project_status"
+                      metadataFieldValueType: "inline_controlled_list"
+                      required: true
+                      controlledListKeys: ["planning", "in_progress", "completed"]
+                      defaultMetadataFieldValue: "planning"
+        
+        createMetadataSchemaRequest:
+            type: object
+            properties:
+                databaseId:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                    description: "Database ID (supports 'GLOBAL' for system-wide schemas)"
+                metadataSchemaEntityType:
+                    $ref: "#/components/schemas/metadataSchemaEntityType"
+                    description: "Entity type this schema applies to"
+                schemaName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Schema name (1-256 characters)"
+                fileKeyTypeRestriction:
+                    type: string
+                    description: "Comma-delimited file extensions (e.g., 'jpg,png,pdf'). Only for fileMetadata/fileAttribute types."
+                fields:
+                    $ref: "#/components/schemas/metadataSchemaFields"
+                    description: "Field definitions for the schema"
+                enabled:
+                    type: boolean
+                    default: true
+                    description: "Whether schema is enabled"
+            required:
+                - databaseId
+                - metadataSchemaEntityType
+                - schemaName
+                - fields
+            example:
+                databaseId: "engineering-db"
+                metadataSchemaEntityType: "assetMetadata"
+                schemaName: "Engineering Asset Schema"
+                fields:
+                    fields:
+                        - metadataFieldKeyName: "project_name"
+                          metadataFieldValueType: "string"
+                          required: true
+                        - metadataFieldKeyName: "completion_date"
+                          metadataFieldValueType: "date"
+                          required: false
+                enabled: true
+        
+        updateMetadataSchemaRequest:
+            type: object
+            properties:
+                metadataSchemaId:
+                    $ref: "#/components/schemas/id_regex"
+                    description: "Metadata schema ID to update"
+                schemaName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Updated schema name (optional)"
+                fileKeyTypeRestriction:
+                    type: string
+                    description: "Updated file extension restrictions (optional)"
+                fields:
+                    $ref: "#/components/schemas/metadataSchemaFields"
+                    description: "Updated field definitions (optional)"
+                enabled:
+                    type: boolean
+                    description: "Updated enabled status (optional)"
+            required:
+                - metadataSchemaId
+            example:
+                metadataSchemaId: "550e8400-e29b-41d4-a716-446655440000"
+                schemaName: "Updated Engineering Asset Schema"
+                enabled: true
+        
+        deleteMetadataSchemaRequest:
+            type: object
+            properties:
+                confirmDelete:
+                    type: boolean
+                    default: false
+                    description: "Confirmation for deletion (must be true)"
+            required:
+                - confirmDelete
+            example:
+                confirmDelete: true
+        
+        metadataSchemaResponse:
+            type: object
+            properties:
+                metadataSchemaId:
+                    $ref: "#/components/schemas/id_regex"
+                    description: "Metadata schema ID"
+                databaseId:
+                    type: string
+                    description: "Database ID"
+                metadataSchemaEntityType:
+                    $ref: "#/components/schemas/metadataSchemaEntityType"
+                    description: "Entity type"
+                schemaName:
+                    type: string
+                    description: "Schema name"
+                fileKeyTypeRestriction:
+                    type: string
+                    description: "File extension restrictions (if applicable)"
+                fields:
+                    $ref: "#/components/schemas/metadataSchemaFields"
+                    description: "Field definitions"
+                enabled:
+                    type: boolean
+                    description: "Whether schema is enabled"
+                dateCreated:
+                    type: string
+                    format: date-time
+                    description: "Creation timestamp"
+                dateModified:
+                    type: string
+                    format: date-time
+                    description: "Last modification timestamp"
+                createdBy:
+                    type: string
+                    description: "Creator user ID"
+                modifiedBy:
+                    type: string
+                    description: "Last modifier user ID"
+            required:
+                - metadataSchemaId
+                - databaseId
+                - metadataSchemaEntityType
+                - schemaName
+                - fields
+                - enabled
+        
+        metadataSchemaOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                metadataSchemaId:
+                    $ref: "#/components/schemas/id_regex"
+                    description: "Metadata schema ID"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - metadataSchemaId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "Metadata schema 'Engineering Asset Schema' created successfully"
+                metadataSchemaId: "550e8400-e29b-41d4-a716-446655440000"
+                operation: "create"
+                timestamp: "2024-01-15T10:30:00.000Z"
+        
+        getMetadataSchemasResponse:
+            type: object
+            properties:
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/metadataSchemaResponse"
+                    description: "List of metadata schemas"
+                    default: []
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - Items
+        
         object_name_pattern_regex:
             type: string
             pattern: ^[a-zA-Z0-9\-._ ]{1,256}$
@@ -4609,6 +6504,129 @@ components:
             required:
                 - roleName
                 - description
+        
+        # Role API Request/Response Schemas
+        createRoleRequest:
+            type: object
+            properties:
+                roleName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Unique role name (1-256 characters)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Role description (1-256 characters)"
+                source:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Optional source identifier (must be 'INTERNAL_SYSTEM' if provided)"
+                sourceIdentifier:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Optional source identifier value"
+                mfaRequired:
+                    type: boolean
+                    description: "Whether MFA is required for this role"
+                    default: false
+            required:
+                - roleName
+                - description
+        
+        updateRoleRequest:
+            type: object
+            properties:
+                roleName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Role name to update (cannot be changed)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated role description"
+                source:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated source identifier (must be 'INTERNAL_SYSTEM' if provided)"
+                sourceIdentifier:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated source identifier value"
+                mfaRequired:
+                    type: boolean
+                    description: "Updated MFA requirement flag"
+                    default: false
+            required:
+                - roleName
+                - description
+        
+        roleResponse:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: "Unique role ID (UUID)"
+                roleName:
+                    type: string
+                    description: "Role name"
+                description:
+                    type: string
+                    description: "Role description"
+                createdOn:
+                    type: string
+                    format: date-time
+                    description: "Date when role was created"
+                source:
+                    type: string
+                    description: "Source identifier"
+                sourceIdentifier:
+                    type: string
+                    description: "Source identifier value"
+                mfaRequired:
+                    type: boolean
+                    description: "Whether MFA is required for this role"
+                    default: false
+            required:
+                - roleName
+                - description
+        
+        getRolesResponse:
+            type: object
+            properties:
+                message:
+                    type: object
+                    properties:
+                        Items:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/roleResponse"
+                            description: "List of roles"
+                        NextToken:
+                            type: string
+                            description: "Pagination token for retrieving next page"
+                    required:
+                        - Items
+            required:
+                - message
+        
+        roleOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                roleName:
+                    type: string
+                    description: "Role name that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - roleName
+                - operation
+                - timestamp
         route:
             type: object
             properties:
@@ -4667,6 +6685,90 @@ components:
                 - tagName
                 - description
                 - tagTypeName
+        
+        # Tag API Request/Response Schemas
+        createTagRequest:
+            type: object
+            properties:
+                tagName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Unique tag name (1-256 characters)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Tag description (1-256 characters)"
+                tagTypeName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Tag type name that this tag belongs to"
+            required:
+                - tagName
+                - description
+                - tagTypeName
+        
+        updateTagRequest:
+            type: object
+            properties:
+                tagName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Tag name to update (cannot be changed)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated tag description"
+                tagTypeName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Updated tag type name"
+            required:
+                - tagName
+                - description
+                - tagTypeName
+        
+        tagResponse:
+            type: object
+            properties:
+                tagName:
+                    type: string
+                    description: "Tag name"
+                description:
+                    type: string
+                    description: "Tag description"
+                tagTypeName:
+                    type: string
+                    description: "Tag type name (may include [R] suffix for required tags)"
+                required:
+                    type: string
+                    enum: ["True", "False"]
+                    description: "Whether this tag is required (inherited from tag type)"
+                    default: "False"
+            required:
+                - tagName
+                - description
+                - tagTypeName
+        
+        tagOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                tagName:
+                    type: string
+                    description: "Tag name that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - tagName
+                - operation
+                - timestamp
         tagType:
             type: object
             properties: 
@@ -4677,6 +6779,95 @@ components:
             required: 
                 - tagTypeName
                 - description
+        
+        # Tag Type API Request/Response Schemas
+        createTagTypeRequest:
+            type: object
+            properties:
+                tagTypeName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Unique tag type name (1-256 characters)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Tag type description (1-256 characters)"
+                required:
+                    type: string
+                    enum: ["True", "False"]
+                    description: "Whether tags of this type are required"
+                    default: "False"
+            required:
+                - tagTypeName
+                - description
+        
+        updateTagTypeRequest:
+            type: object
+            properties:
+                tagTypeName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Tag type name to update (cannot be changed)"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                    description: "Updated tag type description"
+                required:
+                    type: string
+                    enum: ["True", "False"]
+                    description: "Updated required flag"
+                    default: "False"
+            required:
+                - tagTypeName
+                - description
+        
+        tagTypeResponse:
+            type: object
+            properties:
+                tagTypeName:
+                    type: string
+                    description: "Tag type name"
+                description:
+                    type: string
+                    description: "Tag type description"
+                required:
+                    type: string
+                    enum: ["True", "False"]
+                    description: "Whether tags of this type are required"
+                    default: "False"
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "List of tag names associated with this tag type"
+                    default: []
+            required:
+                - tagTypeName
+                - description
+                - required
+        
+        tagTypeOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                tagTypeName:
+                    type: string
+                    description: "Tag type name that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - tagTypeName
+                - operation
+                - timestamp
         userid_regex:
             type: string
             pattern: ^[\w\-\.\+\@]{3,256}$
@@ -4690,6 +6881,142 @@ components:
             required:
                 - roleName
                 - description
+        
+        # User Role API Request/Response Schemas
+        createUserRolesRequest:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/userid_regex"
+                    description: "User ID (email format, 3-256 characters)"
+                roleName:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Array of role names to assign to the user (at least one required)"
+            required:
+                - userId
+                - roleName
+            example:
+                userId: "user@example.com"
+                roleName: ["admin", "editor"]
+        
+        updateUserRolesRequest:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/userid_regex"
+                    description: "User ID (email format, 3-256 characters)"
+                roleName:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/object_name_pattern_regex"
+                    description: "Complete new set of role names for the user (at least one required). Performs differential update."
+            required:
+                - userId
+                - roleName
+            example:
+                userId: "user@example.com"
+                roleName: ["admin", "viewer"]
+        
+        deleteUserRolesRequest:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/userid_regex"
+                    description: "User ID (email format, 3-256 characters) whose roles should be deleted"
+            required:
+                - userId
+            example:
+                userId: "user@example.com"
+        
+        userRoleResponse:
+            type: object
+            properties:
+                userId:
+                    type: string
+                    description: "User ID (email)"
+                roleName:
+                    type: array
+                    items:
+                        type: string
+                    description: "Array of role names assigned to the user"
+                createdOn:
+                    type: string
+                    format: date-time
+                    description: "Date when the first role was created for this user"
+            required:
+                - userId
+                - roleName
+            example:
+                userId: "user@example.com"
+                roleName: ["admin", "editor"]
+                createdOn: "2024-01-15T10:30:00.000Z"
+        
+        getUserRolesResponse:
+            type: object
+            properties:
+                message:
+                    type: object
+                    properties:
+                        Items:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/userRoleResponse"
+                            description: "List of user role assignments grouped by user"
+                        NextToken:
+                            type: string
+                            description: "Pagination token for retrieving next page"
+                    required:
+                        - Items
+            required:
+                - message
+            example:
+                message:
+                    Items:
+                        - userId: "user1@example.com"
+                          roleName: ["admin", "editor"]
+                          createdOn: "2024-01-15T10:30:00.000Z"
+                        - userId: "user2@example.com"
+                          roleName: ["viewer"]
+                          createdOn: "2024-01-16T14:20:00.000Z"
+                    NextToken: "2024-01-16T14:20:00.000Z"
+        
+        userRoleOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                userId:
+                    type: string
+                    description: "User ID that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - userId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "User roles created successfully"
+                userId: "user@example.com"
+                operation: "create"
+                timestamp: "2024-01-15T10:30:00.000Z"
+        
         uuid_regex:
             type: string
             pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
@@ -5000,7 +7327,7 @@ components:
                     type: array
                     items:
                         $ref: "#/components/schemas/assetFileItem"
-                nextToken:
+                NextToken:
                     type: string
                     description: "Token for pagination"
             required:
@@ -5268,6 +7595,12 @@ components:
                 createdBy:
                     type: string
                     description: "User who created this version"
+                versionedMetadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetVersionMetadataItemModel"
+                    description: "Snapshot of metadata and attributes at the time of version creation"
+                    default: []
             required:
                 - assetId
                 - assetVersionId
@@ -5314,7 +7647,7 @@ components:
                     type: array
                     items:
                         $ref: "#/components/schemas/assetVersionListItemModel"
-                nextToken:
+                NextToken:
                     type: string
                     description: "Token for pagination"
             required:
@@ -5388,12 +7721,48 @@ components:
                 - relativeKey
                 - versionId
         
+        assetVersionMetadataItemModel:
+            type: object
+            properties:
+                type:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "Type of metadata item: 'metadata' (from AssetFileMetadataStorageTableV2) or 'attribute' (from FileAttributeStorageTableV2)"
+                filePath:
+                    type: string
+                    description: "File path relative to asset root. '/' for asset-level metadata, '/path/to/file' for file-level metadata"
+                metadataKey:
+                    type: string
+                    description: "Metadata or attribute key name"
+                metadataValue:
+                    type: string
+                    description: "Metadata or attribute value (stored as string)"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                    description: "Data type of the value"
+            required:
+                - type
+                - filePath
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+            example:
+                type: "metadata"
+                filePath: "/"
+                metadataKey: "project_name"
+                metadataValue: "Building Renovation"
+                metadataValueType: "string"
+        
         revertAssetVersionRequest:
             type: object
             properties:
                 comment:
                     type: string
                     description: "Comment for the new version created by the revert operation"
+                revertMetadata:
+                    type: boolean
+                    default: false
+                    description: "Whether to revert metadata and attributes to the target version state. When true, deletes all current metadata/attributes and restores from the target version."
             required: []
         
         getAssetVersionRequest:
@@ -5740,38 +8109,156 @@ components:
                 - children
                 - unauthorizedCounts
         
-        # Asset Link Metadata Schemas
-        createAssetLinkMetadataRequest:
+        # Centralized Metadata Schemas (All Entity Types)
+        metadataValueType:
+            type: string
+            enum: [string, multiline_string, inline_controlled_list, number, boolean, date, xyz, wxyz, matrix4x4, geopoint, geojson, lla, json]
+            description: "Type of metadata value"
+            default: "string"
+        
+        metadataItem:
             type: object
             properties:
                 metadataKey:
                     type: string
-                    description: "Metadata key"
+                    minLength: 1
+                    maxLength: 256
+                    description: "Metadata key (1-256 characters)"
                 metadataValue:
                     type: string
-                    description: "Metadata value"
+                    description: "Metadata value as string"
                 metadataValueType:
-                    type: string
-                    enum: [string, number, boolean, date]
-                    description: "Type of metadata value"
-                    default: "string"
+                    $ref: "#/components/schemas/metadataValueType"
             required:
                 - metadataKey
                 - metadataValue
         
+        bulkMetadataItem:
+            type: object
+            properties:
+                metadataKey:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                    description: "Metadata key (1-256 characters) - used directly as primary key"
+                metadataValue:
+                    type: string
+                    description: "Metadata value as string"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+            required:
+                - metadataKey
+                - metadataValue
+        
+        bulkMetadataOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "True if at least one item succeeded"
+                totalItems:
+                    type: integer
+                    description: "Total number of items in the request"
+                successCount:
+                    type: integer
+                    description: "Number of items that succeeded"
+                failureCount:
+                    type: integer
+                    description: "Number of items that failed"
+                successfulItems:
+                    type: array
+                    items:
+                        type: string
+                    description: "List of metadata keys that succeeded"
+                    default: []
+                failedItems:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            key:
+                                type: string
+                                description: "Metadata key that failed"
+                            error:
+                                type: string
+                                description: "Error message"
+                    description: "List of failed items with error messages"
+                    default: []
+                message:
+                    type: string
+                    description: "Overall operation message"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Operation timestamp"
+            required:
+                - success
+                - totalItems
+                - successCount
+                - failureCount
+                - successfulItems
+                - failedItems
+                - message
+                - timestamp
+        
+        # Asset Link Metadata Schemas
+        createAssetLinkMetadataRequest:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataItem"
+                    description: "List of metadata items to create (at least one required)"
+            required:
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "relationship_strength"
+                      metadataValue: "strong"
+                      metadataValueType: "string"
+                    - metadataKey: "confidence_score"
+                      metadataValue: "0.95"
+                      metadataValueType: "number"
+        
         updateAssetLinkMetadataRequest:
             type: object
             properties:
-                metadataValue:
+                metadata:
+                    type: array
+                    minItems: 1
+                    maxItems: 500
+                    items:
+                        $ref: "#/components/schemas/bulkMetadataItem"
+                    description: "List of metadata items to update (at least one required, max 500 for REPLACE_ALL mode)"
+                updateType:
                     type: string
-                    description: "Updated metadata value"
-                metadataValueType:
-                    type: string
-                    enum: [string, number, boolean, date]
-                    description: "Type of metadata value"
-                    default: "string"
+                    enum: [update, replace_all]
+                    default: "update"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
             required:
-                - metadataValue
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "relationship_strength"
+                      metadataValue: "very_strong"
+                      metadataValueType: "string"
+                updateType: "update"
+        
+        deleteAssetLinkMetadataRequest:
+            type: object
+            properties:
+                metadataKeys:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: string
+                    description: "List of metadata keys to delete (at least one required)"
+            required:
+                - metadataKeys
+            example:
+                metadataKeys: ["relationship_strength", "confidence_score"]
         
         assetLinkMetadataModel:
             type: object
@@ -5786,23 +8273,38 @@ components:
                     type: string
                     description: "Metadata value"
                 metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                metadataSchemaField:
+                    type: boolean
+                    description: "Is this field defined in a schema?"
+                    nullable: true
+                metadataSchemaRequired:
+                    type: boolean
+                    description: "Is this field required per schema?"
+                    nullable: true
+                metadataSchemaDefaultValue:
                     type: string
-                    enum: [string, number, boolean, date]
-                    description: "Type of metadata value"
+                    description: "Default value from schema"
+                    nullable: true
+                metadataSchemaDependsOn:
+                    type: string
+                    description: "Field this depends on"
+                    nullable: true
+                metadataSchemaMultiFieldConflict:
+                    type: boolean
+                    description: "Multiple schemas define this field with conflicts"
+                    nullable: true
+                metadataSchemaControlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Controlled list values for INLINE_CONTROLLED_LIST type"
+                    nullable: true
             required:
                 - assetLinkId
                 - metadataKey
                 - metadataValue
                 - metadataValueType
-        
-        createAssetLinkMetadataResponse:
-            type: object
-            properties:
-                message:
-                    type: string
-                    description: "Success message"
-            required:
-                - message
         
         getAssetLinkMetadataResponse:
             type: object
@@ -5812,30 +8314,449 @@ components:
                     items:
                         $ref: "#/components/schemas/assetLinkMetadataModel"
                     description: "List of metadata for the asset link"
+                    default: []
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "True if either database restricts metadata outside schemas AND schemas exist for this entity type"
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
                 message:
                     type: string
                     description: "Response message"
                     default: "Success"
             required:
                 - metadata
+                - restrictMetadataOutsideSchemas
         
-        updateAssetLinkMetadataResponse:
+        # Asset Metadata Schemas
+        createAssetMetadataRequest:
             type: object
             properties:
-                message:
-                    type: string
-                    description: "Success message"
+                metadata:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataItem"
+                    description: "List of metadata items to create (at least one required)"
             required:
-                - message
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "project_name"
+                      metadataValue: "Building Renovation"
+                      metadataValueType: "string"
+                    - metadataKey: "location"
+                      metadataValue: '{"type":"Point","coordinates":[-122.4194,37.7749]}'
+                      metadataValueType: "geopoint"
         
-        deleteAssetLinkMetadataResponse:
+        updateAssetMetadataRequest:
             type: object
             properties:
+                metadata:
+                    type: array
+                    minItems: 1
+                    maxItems: 500
+                    items:
+                        $ref: "#/components/schemas/bulkMetadataItem"
+                    description: "List of metadata items to update (at least one required, max 500 for REPLACE_ALL mode)"
+                updateType:
+                    type: string
+                    enum: [update, replace_all]
+                    default: "update"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+            required:
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "project_name"
+                      metadataValue: "Building Renovation Phase 2"
+                      metadataValueType: "string"
+                updateType: "update"
+        
+        deleteAssetMetadataRequest:
+            type: object
+            properties:
+                metadataKeys:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: string
+                    description: "List of metadata keys to delete (at least one required)"
+            required:
+                - metadataKeys
+            example:
+                metadataKeys: ["project_name", "location"]
+        
+        assetMetadataModel:
+            type: object
+            properties:
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID"
+                metadataKey:
+                    type: string
+                    description: "Metadata key (used as primary key)"
+                metadataValue:
+                    type: string
+                    description: "Metadata value"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                metadataSchemaField:
+                    type: boolean
+                    description: "Is this field defined in a schema?"
+                    nullable: true
+                metadataSchemaRequired:
+                    type: boolean
+                    description: "Is this field required per schema?"
+                    nullable: true
+                metadataSchemaDefaultValue:
+                    type: string
+                    description: "Default value from schema"
+                    nullable: true
+                metadataSchemaDependsOn:
+                    type: string
+                    description: "Field this depends on"
+                    nullable: true
+                metadataSchemaMultiFieldConflict:
+                    type: boolean
+                    description: "Multiple schemas define this field with conflicts"
+                    nullable: true
+                metadataSchemaControlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Controlled list values for INLINE_CONTROLLED_LIST type"
+                    nullable: true
+            required:
+                - databaseId
+                - assetId
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+        
+        getAssetMetadataResponse:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetMetadataModel"
+                    description: "List of metadata for the asset"
+                    default: []
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "True if database restricts metadata outside schemas AND schemas exist for this entity type"
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
                 message:
                     type: string
-                    description: "Success message"
+                    description: "Response message"
+                    default: "Success"
             required:
-                - message
+                - metadata
+                - restrictMetadataOutsideSchemas
+        
+        # File Metadata/Attribute Schemas
+        createFileMetadataRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Relative file path (must not end with / for folders)"
+                type:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "Type: 'metadata' or 'attribute'. Attributes only support 'string' metadataValueType."
+                metadata:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataItem"
+                    description: "List of metadata/attribute items to create (at least one required)"
+            required:
+                - filePath
+                - type
+                - metadata
+            example:
+                filePath: "models/building.obj"
+                type: "metadata"
+                metadata:
+                    - metadataKey: "file_format_version"
+                      metadataValue: "2.0"
+                      metadataValueType: "string"
+                    - metadataKey: "polygon_count"
+                      metadataValue: "150000"
+                      metadataValueType: "number"
+        
+        updateFileMetadataRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Relative file path (must not end with / for folders)"
+                type:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "Type: 'metadata' or 'attribute'. Attributes only support 'string' metadataValueType."
+                metadata:
+                    type: array
+                    minItems: 1
+                    maxItems: 500
+                    items:
+                        $ref: "#/components/schemas/bulkMetadataItem"
+                    description: "List of metadata/attribute items to update (at least one required, max 500 for REPLACE_ALL mode)"
+                updateType:
+                    type: string
+                    enum: [update, replace_all]
+                    default: "update"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+            required:
+                - filePath
+                - type
+                - metadata
+            example:
+                filePath: "models/building.obj"
+                type: "metadata"
+                metadata:
+                    - metadataKey: "polygon_count"
+                      metadataValue: "175000"
+                      metadataValueType: "number"
+                updateType: "update"
+        
+        deleteFileMetadataRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Relative file path (must not end with / for folders)"
+                type:
+                    type: string
+                    enum: [metadata, attribute]
+                    description: "Type: 'metadata' or 'attribute'"
+                metadataKeys:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: string
+                    description: "List of metadata/attribute keys to delete (at least one required)"
+            required:
+                - filePath
+                - type
+                - metadataKeys
+            example:
+                filePath: "models/building.obj"
+                type: "metadata"
+                metadataKeys: ["file_format_version", "polygon_count"]
+        
+        fileMetadataModel:
+            type: object
+            properties:
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID"
+                filePath:
+                    type: string
+                    description: "Relative file path"
+                metadataKey:
+                    type: string
+                    description: "Metadata key (or attributeKey for attributes) - used as primary key"
+                metadataValue:
+                    type: string
+                    description: "Metadata value (or attributeValue for attributes)"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                metadataSchemaField:
+                    type: boolean
+                    description: "Is this field defined in a schema?"
+                    nullable: true
+                metadataSchemaRequired:
+                    type: boolean
+                    description: "Is this field required per schema?"
+                    nullable: true
+                metadataSchemaDefaultValue:
+                    type: string
+                    description: "Default value from schema"
+                    nullable: true
+                metadataSchemaDependsOn:
+                    type: string
+                    description: "Field this depends on"
+                    nullable: true
+                metadataSchemaMultiFieldConflict:
+                    type: boolean
+                    description: "Multiple schemas define this field with conflicts"
+                    nullable: true
+                metadataSchemaControlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Controlled list values for INLINE_CONTROLLED_LIST type"
+                    nullable: true
+            required:
+                - databaseId
+                - assetId
+                - filePath
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+        
+        getFileMetadataResponse:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/fileMetadataModel"
+                    description: "List of metadata/attributes for the file"
+                    default: []
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "True if database restricts metadata outside schemas AND schemas exist for this entity type"
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - metadata
+                - restrictMetadataOutsideSchemas
+        
+        # Database Metadata Schemas
+        createDatabaseMetadataRequest:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/metadataItem"
+                    description: "List of metadata items to create (at least one required)"
+            required:
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "organization"
+                      metadataValue: "Engineering Department"
+                      metadataValueType: "string"
+                    - metadataKey: "data_classification"
+                      metadataValue: "Internal"
+                      metadataValueType: "string"
+        
+        updateDatabaseMetadataRequest:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    minItems: 1
+                    maxItems: 500
+                    items:
+                        $ref: "#/components/schemas/bulkMetadataItem"
+                    description: "List of metadata items to update (at least one required, max 500 for REPLACE_ALL mode)"
+                updateType:
+                    type: string
+                    enum: [update, replace_all]
+                    default: "update"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+            required:
+                - metadata
+            example:
+                metadata:
+                    - metadataKey: "organization"
+                      metadataValue: "Engineering & Design Department"
+                      metadataValueType: "string"
+                updateType: "update"
+        
+        deleteDatabaseMetadataRequest:
+            type: object
+            properties:
+                metadataKeys:
+                    type: array
+                    minItems: 1
+                    items:
+                        type: string
+                    description: "List of metadata keys to delete (at least one required)"
+            required:
+                - metadataKeys
+            example:
+                metadataKeys: ["organization", "data_classification"]
+        
+        databaseMetadataModel:
+            type: object
+            properties:
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                metadataKey:
+                    type: string
+                    description: "Metadata key (used as primary key)"
+                metadataValue:
+                    type: string
+                    description: "Metadata value"
+                metadataValueType:
+                    $ref: "#/components/schemas/metadataValueType"
+                metadataSchemaField:
+                    type: boolean
+                    description: "Is this field defined in a schema?"
+                    nullable: true
+                metadataSchemaRequired:
+                    type: boolean
+                    description: "Is this field required per schema?"
+                    nullable: true
+                metadataSchemaDefaultValue:
+                    type: string
+                    description: "Default value from schema"
+                    nullable: true
+                metadataSchemaDependsOn:
+                    type: string
+                    description: "Field this depends on"
+                    nullable: true
+                metadataSchemaMultiFieldConflict:
+                    type: boolean
+                    description: "Multiple schemas define this field with conflicts"
+                    nullable: true
+                metadataSchemaControlledListKeys:
+                    type: array
+                    items:
+                        type: string
+                    description: "Controlled list values for INLINE_CONTROLLED_LIST type"
+                    nullable: true
+            required:
+                - databaseId
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+        
+        getDatabaseMetadataResponse:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/databaseMetadataModel"
+                    description: "List of metadata for the database"
+                    default: []
+                restrictMetadataOutsideSchemas:
+                    type: boolean
+                    description: "True if database restricts metadata outside schemas AND schemas exist for this entity type"
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - metadata
+                - restrictMetadataOutsideSchemas
         
         # Set Primary File Schemas
         setPrimaryFileRequest:

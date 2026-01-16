@@ -104,6 +104,136 @@ function addDirectories(root: FileTree, directories: string): FileTree {
     return currentRoot;
 }
 
+/**
+ * Merge new files into an existing tree, updating existing nodes instead of duplicating
+ * Creates a new tree with updated nodes to ensure React detects changes
+ */
+export function mergeFiles(fileKeys: FileKey[], root: FileTree): FileTree {
+    // CRITICAL: Store original root node name/displayName at the START
+    const originalRootName = root.name;
+    const originalRootDisplayName = root.displayName;
+
+    // Create a map of updates by relativePath
+    const updatesMap = new Map<string, FileKey>();
+    const newFilesMap = new Map<string, FileKey>();
+
+    // Build map of existing nodes
+    const existingNodesMap = new Map<string, FileTree>();
+    const buildNodeMap = (node: FileTree): void => {
+        existingNodesMap.set(node.relativePath, node);
+        node.subTree.forEach((child) => buildNodeMap(child));
+    };
+    buildNodeMap(root);
+
+    // Categorize incoming files as updates or new files
+    for (const fileKey of fileKeys) {
+        const normalizedPath =
+            fileKey.isFolder || fileKey.key.endsWith("/")
+                ? fileKey.relativePath.endsWith("/")
+                    ? fileKey.relativePath
+                    : fileKey.relativePath + "/"
+                : fileKey.relativePath;
+
+        if (existingNodesMap.has(normalizedPath)) {
+            updatesMap.set(normalizedPath, fileKey);
+        } else {
+            newFilesMap.set(normalizedPath, fileKey);
+        }
+    }
+
+    // If there are updates, create a new tree with updated nodes
+    if (updatesMap.size > 0) {
+        // Recursive function to update nodes and create new tree
+        const updateNode = (node: FileTree): FileTree => {
+            const update = updatesMap.get(node.relativePath);
+
+            // Create new node (always create new object for React to detect change)
+            const newNode: FileTree = {
+                ...node,
+                subTree: node.subTree.map((child) => updateNode(child)),
+            };
+
+            // Apply updates if this node has them
+            if (update) {
+                // Special handling for root node - DON'T update version data, only preserve name
+                if (node.relativePath === "/" && node.level === 0) {
+                    // CRITICAL: Never overwrite root name with empty values from API
+                    if (node.name && node.displayName) {
+                        newNode.name = node.name; // Preserve original name
+                        newNode.displayName = node.displayName; // Preserve original displayName
+                    }
+                    // DO NOT update versionId, dateCreatedCurrentVersion, or isArchived for root
+                    newNode.keyPrefix = update.key || newNode.keyPrefix; // Only update keyPrefix
+                } else {
+                    // For non-root nodes, update name if provided
+                    if (update.fileName) {
+                        newNode.name = update.fileName;
+                        newNode.displayName = update.fileName;
+                    }
+
+                    // Apply all updates for non-root nodes
+                    // IMPORTANT: Don't overwrite valid versionId with null/empty values
+                    // This prevents streaming data (basic mode with null versionId) from overwriting
+                    // on-demand fetched data (detailed mode with valid versionId)
+                    const hasValidVersionId =
+                        newNode.versionId &&
+                        newNode.versionId !== null &&
+                        newNode.versionId !== "null" &&
+                        newNode.versionId !== "";
+                    const updateHasValidVersionId =
+                        update.versionId &&
+                        update.versionId !== null &&
+                        update.versionId !== "null" &&
+                        update.versionId !== "";
+
+                    // Only update versionId if the update has a valid one, or if current node doesn't have one
+                    if (updateHasValidVersionId || !hasValidVersionId) {
+                        newNode.versionId = update.versionId || newNode.versionId;
+                    }
+
+                    newNode.isArchived =
+                        update.isArchived !== undefined ? update.isArchived : newNode.isArchived;
+                    newNode.primaryType =
+                        update.primaryType !== undefined ? update.primaryType : newNode.primaryType;
+                    newNode.previewFile =
+                        update.previewFile !== undefined ? update.previewFile : newNode.previewFile;
+                    newNode.currentAssetVersionFileVersionMismatch =
+                        update.currentAssetVersionFileVersionMismatch !== undefined
+                            ? update.currentAssetVersionFileVersionMismatch
+                            : newNode.currentAssetVersionFileVersionMismatch;
+                    newNode.dateCreatedCurrentVersion =
+                        update.dateCreatedCurrentVersion || newNode.dateCreatedCurrentVersion;
+                    newNode.size = update.size !== undefined ? update.size : newNode.size;
+                    newNode.keyPrefix = update.key || newNode.keyPrefix;
+                }
+            }
+
+            return newNode;
+        };
+
+        root = updateNode(root);
+    }
+
+    // Add any new files
+    const newFiles = Array.from(newFilesMap.values());
+    if (newFiles.length > 0) {
+        root = addFiles(newFiles, root);
+    }
+
+    // CRITICAL: Restore original root node name/displayName at the END
+    // Also ensure version data is NOT on root node
+    if (originalRootName && originalRootDisplayName) {
+        root.name = originalRootName;
+        root.displayName = originalRootDisplayName;
+        // Clear version data from root node (root doesn't have versions)
+        delete root.versionId;
+        delete root.dateCreatedCurrentVersion;
+        delete root.isArchived;
+    }
+
+    return root;
+}
+
 export function addFiles(fileKeys: FileKey[], root: FileTree) {
     // Helper function to get parent directory path
     const getParentDirectory = (path: string) => {
@@ -111,22 +241,16 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
         return parentPath === "" ? "" : parentPath;
     };
 
-    // Enhanced logging for debugging
-    console.log("Adding files to tree, total items:", fileKeys.length);
-
     try {
         // Filter out problematic entries
         const filteredFileKeys = fileKeys.filter((fileKey) => {
             // Skip entries with double slashes in the key (these are artifacts)
             if (fileKey.key.includes("//")) {
-                console.warn("Skipping entry with double slashes:", fileKey);
                 return false;
             }
 
             return true;
         });
-
-        console.log("Filtered file keys:", filteredFileKeys.length);
 
         // Track all created paths to avoid duplicates
         const createdPaths = new Set<string>();
@@ -174,16 +298,22 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
             }
         });
 
-        console.log("Folders to process:", folders.length);
-        console.log("Files to process:", files.length);
-
-        // If we found a root folder entry, just mark the root path as created
-        // but don't update the root node with version information (as requested)
+        // If we found a root folder entry, ONLY update keyPrefix, NOT name/displayName or version data
         if (rootFolderEntry) {
-            // Only update the keyPrefix, but not the version information
+            // Store the original root name/displayName before any updates
+            const originalRootName = root.name;
+            const originalRootDisplayName = root.displayName;
+
+            // Only update the keyPrefix to match S3 structure
             root.keyPrefix = rootFolderEntry.key;
 
-            console.log("Found root folder entry, but not updating version info on root node");
+            // Ensure root name/displayName are preserved (never overwrite with empty values)
+            if (originalRootName) {
+                root.name = originalRootName;
+            }
+            if (originalRootDisplayName) {
+                root.displayName = originalRootDisplayName;
+            }
 
             // Mark the root path as created
             createdPaths.add("/");
@@ -227,8 +357,6 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     primaryType: fileKey.primaryType,
                     previewFile: fileKey.previewFile,
                 });
-
-                console.log("Added root level file:", relativePath);
             } else {
                 // For nested files, find or create parent directories
                 // First, ensure the path is properly formatted
@@ -270,7 +398,6 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                         };
 
                         currentNode.subTree.push(folderNode);
-                        console.log(`Created folder: ${folderPath}`);
 
                         // Mark this path as created
                         createdPaths.add(folderPath);
@@ -299,8 +426,6 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     primaryType: fileKey.primaryType,
                     previewFile: fileKey.previewFile,
                 });
-
-                console.log("Added nested file:", relativePath);
             }
 
             // Mark this path as created
@@ -331,8 +456,6 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     existingFolder.currentAssetVersionFileVersionMismatch =
                         folderKey.currentAssetVersionFileVersionMismatch;
                     existingFolder.keyPrefix = folderKey.key; // Update the key prefix to match the versioned folder
-
-                    console.log("Updated existing folder with version info:", normalizedPath);
                 }
                 continue;
             }
@@ -364,8 +487,6 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     currentAssetVersionFileVersionMismatch:
                         folderKey.currentAssetVersionFileVersionMismatch,
                 });
-
-                console.log("Added root level folder:", normalizedPath);
             } else {
                 // For nested folders
                 const parentDir = getParentDirectory(normalizedPath.slice(0, -1)); // Remove trailing slash for getParentDirectory
@@ -374,7 +495,6 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
 
                 if (!parentNode) {
                     // Create parent directories if they don't exist
-                    console.log("Creating parent directories for:", normalizedPath);
                     parentNode = addDirectories(root, parentDir);
 
                     // Mark parent directories as created
@@ -409,8 +529,6 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                         currentAssetVersionFileVersionMismatch:
                             folderKey.currentAssetVersionFileVersionMismatch,
                     });
-
-                    console.log("Added nested folder:", normalizedPath);
                 }
             }
 
@@ -436,8 +554,6 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     existingFolder.currentAssetVersionFileVersionMismatch =
                         folderKey.currentAssetVersionFileVersionMismatch;
                     existingFolder.keyPrefix = folderKey.key; // Update the key prefix to match the versioned folder
-
-                    console.log("Updated folder with version info in final pass:", normalizedPath);
                 }
             }
         });
@@ -449,15 +565,12 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
         );
 
         if (duplicateRootEntries.length > 0) {
-            console.log("Found duplicate root entries to remove:", duplicateRootEntries.length);
-
             // Remove duplicate root entries from the tree
             root.subTree = root.subTree.filter(
                 (item) => item.relativePath !== "/" && item.relativePath !== ""
             );
         }
 
-        console.log("File tree construction complete");
         return root;
     } catch (error) {
         console.error("Error in addFiles function:", error);

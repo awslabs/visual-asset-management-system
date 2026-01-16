@@ -106,12 +106,16 @@ List assets in a database or all assets.
 
 -   `-d, --database-id`: Database ID to list assets from (optional for all assets)
 -   `--show-archived`: Include archived assets
+-   `--page-size`: Number of items per page
+-   `--max-items`: Maximum total items to fetch (only with --auto-paginate, default: 10000)
+-   `--starting-token`: Token for pagination (manual pagination)
+-   `--auto-paginate`: Automatically fetch all items
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# List assets in specific database
+# Basic listing (uses API defaults)
 vamscli assets list -d my-database
 
 # List all assets across databases
@@ -120,9 +124,37 @@ vamscli assets list
 # Include archived assets
 vamscli assets list -d my-database --show-archived
 
+# Auto-pagination to fetch all items (default: up to 10,000)
+vamscli assets list -d my-database --auto-paginate
+
+# Auto-pagination with custom limit
+vamscli assets list -d my-database --auto-paginate --max-items 5000
+
+# Auto-pagination with custom page size
+vamscli assets list -d my-database --auto-paginate --page-size 500
+
+# Manual pagination with page size
+vamscli assets list -d my-database --page-size 200
+vamscli assets list -d my-database --starting-token "token123" --page-size 200
+
 # JSON output for automation
 vamscli assets list --json-output
 ```
+
+**Pagination Features:**
+
+-   **Auto-Pagination**: Use `--auto-paginate` to automatically fetch all items up to the limit
+-   **Manual Pagination**: Use `--page-size` and `--starting-token` for manual page-by-page control
+-   **CLI-Side Limit**: `--max-items` is a CLI-side limit (not passed to API) that controls total items fetched
+-   **API-Side Control**: `--page-size` is passed to the API to control items per request
+-   **Default Limit**: Auto-pagination defaults to 10,000 items maximum
+-   **Progress Display**: Shows progress during auto-pagination in CLI mode
+
+**Pagination Restrictions:**
+
+-   Cannot use `--auto-paginate` with `--starting-token` (choose one pagination mode)
+-   `--max-items` only applies with `--auto-paginate` (warning shown if used without it)
+-   When using manual pagination, use the `NextToken` from the response as `--starting-token` for the next page
 
 ### `vamscli assets archive`
 
@@ -333,17 +365,24 @@ Revert an asset to a previous version.
 **Options:**
 
 -   `--comment`: Comment for the new version created by revert operation
+-   `--revert-metadata/--no-revert-metadata`: Revert metadata and attributes along with files (default: false)
 -   `--json-input`: JSON input file path or JSON string with complete request data
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# Revert to previous version
+# Revert to previous version (files only, default behavior)
 vamscli asset-version revert -d my-db -a my-asset -v 1
 
 # Revert with custom comment
 vamscli asset-version revert -d my-db -a my-asset -v 2 --comment "Reverting due to issues found in version 3"
+
+# Revert both files AND metadata/attributes
+vamscli asset-version revert -d my-db -a my-asset -v 1 --revert-metadata
+
+# Explicitly revert files only (same as default)
+vamscli asset-version revert -d my-db -a my-asset -v 1 --no-revert-metadata
 
 # Revert with JSON input
 vamscli asset-version revert -d my-db -a my-asset -v 1 --json-input @revert-data.json
@@ -356,13 +395,31 @@ vamscli asset-version revert -d my-db -a my-asset -v 1 --json-output
 
 ```json
 {
-    "comment": "Reverting to stable version due to issues"
+    "comment": "Reverting to stable version due to issues",
+    "revertMetadata": true
 }
 ```
+
+**Metadata Reversion:**
+
+The `--revert-metadata` flag controls whether metadata and attributes are reverted along with files:
+
+-   **Default Behavior (`--no-revert-metadata`)**: Only file versions are reverted. Asset and file metadata/attributes remain unchanged.
+-   **With `--revert-metadata`**: Both file versions AND all metadata/attributes are reverted to their state in the target version.
+
+**What Gets Reverted:**
+
+When `--revert-metadata` is enabled, the following are reverted:
+
+-   **Asset-Level Metadata**: All metadata keys and values for the asset
+-   **Asset-Level Attributes**: All attribute keys and values for the asset
+-   **File-Level Metadata**: All metadata for each file in the version
+-   **File-Level Attributes**: All attributes for each file in the version
 
 **Features:**
 
 -   Creates new version from target version files
+-   Optionally reverts metadata and attributes to target version state
 -   Preserves audit trail (original versions remain)
 -   Handles missing or deleted files gracefully
 -   Reports skipped files that couldn't be reverted
@@ -379,25 +436,49 @@ List all versions for an asset.
 
 **Options:**
 
--   `--max-items`: Maximum number of versions to return (default: 100)
--   `--starting-token`: Pagination token for retrieving additional results
+-   `--page-size`: Number of items per page
+-   `--max-items`: Maximum total items to fetch (only with --auto-paginate, default: 10000)
+-   `--starting-token`: Token for pagination (manual pagination)
+-   `--auto-paginate`: Automatically fetch all items
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# List all versions for an asset
+# Basic listing (uses API defaults)
 vamscli asset-version list -d my-db -a my-asset
 
-# List with pagination
-vamscli asset-version list -d my-db -a my-asset --max-items 50
+# Auto-pagination to fetch all versions (default: up to 10,000)
+vamscli asset-version list -d my-db -a my-asset --auto-paginate
 
-# Continue pagination
-vamscli asset-version list -d my-db -a my-asset --starting-token "next-page-token"
+# Auto-pagination with custom limit
+vamscli asset-version list -d my-db -a my-asset --auto-paginate --max-items 5000
+
+# Auto-pagination with custom page size
+vamscli asset-version list -d my-db -a my-asset --auto-paginate --page-size 500
+
+# Manual pagination with page size
+vamscli asset-version list -d my-db -a my-asset --page-size 200
+vamscli asset-version list -d my-db -a my-asset --starting-token "token123" --page-size 200
 
 # JSON output for automation
 vamscli asset-version list -d my-db -a my-asset --json-output
 ```
+
+**Pagination Features:**
+
+-   **Auto-Pagination**: Use `--auto-paginate` to automatically fetch all items up to the limit
+-   **Manual Pagination**: Use `--page-size` and `--starting-token` for manual page-by-page control
+-   **CLI-Side Limit**: `--max-items` is a CLI-side limit (not passed to API) that controls total items fetched
+-   **API-Side Control**: `--page-size` is passed to the API to control items per request
+-   **Default Limit**: Auto-pagination defaults to 10,000 items maximum
+-   **Progress Display**: Shows progress during auto-pagination in CLI mode
+
+**Pagination Restrictions:**
+
+-   Cannot use `--auto-paginate` with `--starting-token` (choose one pagination mode)
+-   `--max-items` only applies with `--auto-paginate` (warning shown if used without it)
+-   When using manual pagination, use the `NextToken` from the response as `--starting-token` for the next page
 
 **Output Features:**
 
@@ -406,6 +487,7 @@ vamscli asset-version list -d my-db -a my-asset --json-output
 -   Version comments and descriptions
 -   File count for each version
 -   Pipeline associations
+-   Auto-pagination metadata (total items, page count)
 -   Pagination support for assets with many versions
 
 ### `vamscli asset-version get`
@@ -439,6 +521,59 @@ vamscli asset-version get -d my-db -a my-asset -v 2 --json-output
 -   File version IDs and modification dates
 -   File status indicators (archived, deleted)
 -   Human-readable file size formatting
+-   **Versioned metadata and attributes display** (when present)
+
+**Versioned Metadata Display:**
+
+When a version includes versioned metadata and attributes, they are displayed in organized sections:
+
+-   **Asset-Level Metadata**: Metadata keys/values for the asset with their types
+-   **Asset-Level Attributes**: Attribute keys/values for the asset
+-   **File-Level Metadata**: Metadata for specific files, grouped by file path
+-   **File-Level Attributes**: Attributes for specific files, grouped by file path
+
+**Example Output with Versioned Metadata:**
+
+```
+Asset Version Details:
+Asset ID: my-asset
+Version ID: 1
+Created: 2024-01-01T00:00:00Z
+Created By: user@example.com
+Comment: Version with metadata
+
+Files (1 total):
+--------------------------------------------------
+  model.obj
+    Version ID: abc123
+    Size: 1000.0 KB
+    Last Modified: 2024-01-01T00:00:00Z
+
+Versioned Metadata & Attributes (4 total):
+--------------------------------------------------
+
+  Asset-Level Metadata:
+    project: test-project (type: string)
+    priority: 1 (type: number)
+
+  Asset-Level Attributes:
+    category: models
+    status: active
+
+  File-Level Metadata:
+    /model.obj:
+      format: wavefront (type: string)
+      quality: high (type: string)
+
+  File-Level Attributes:
+    /model.obj:
+      reviewed: true
+```
+
+**Metadata vs Attributes:**
+
+-   **Metadata**: Supports multiple value types (string, number, date, json, xyz, geopoint, etc.)
+-   **Attributes**: Only supports STRING type values
 
 ## Asset Links Management Commands
 
@@ -910,11 +1045,48 @@ vamscli asset-links list -d db1 --asset-id main-model --tree-view
 # Create version after making changes
 vamscli asset-version create -d my-db -a my-asset --comment "Added new textures and materials"
 
-# Get details for specific version
+# Get details for specific version (includes versioned metadata)
 vamscli asset-version get -d my-db -a my-asset -v 2
 
-# Revert to previous stable version if needed
+# Revert to previous stable version (files only)
 vamscli asset-version revert -d my-db -a my-asset -v 1 --comment "Reverting to last stable version"
+
+# Revert both files AND metadata to previous version
+vamscli asset-version revert -d my-db -a my-asset -v 1 --revert-metadata --comment "Complete revert including metadata"
+```
+
+### Metadata Versioning Workflow
+
+```bash
+# Create initial version (captures current metadata state)
+vamscli asset-version create -d my-db -a my-asset --comment "Initial version with metadata"
+
+# View version details including metadata snapshot
+vamscli asset-version get -d my-db -a my-asset -v 1
+# Output shows:
+#   - Files with version IDs
+#   - Asset-level metadata (project, priority, etc.)
+#   - Asset-level attributes (category, status, etc.)
+#   - File-level metadata (format, quality, etc.)
+#   - File-level attributes (reviewed, etc.)
+
+# Make changes to metadata in current state
+vamscli metadata create -d my-db -a my-asset --key "priority" --value "5" --type number
+
+# Create new version (captures updated metadata)
+vamscli asset-version create -d my-db -a my-asset --comment "Updated priority metadata"
+
+# Compare versions to see metadata changes
+vamscli asset-version get -d my-db -a my-asset -v 1  # Shows priority: 1
+vamscli asset-version get -d my-db -a my-asset -v 2  # Shows priority: 5
+
+# Revert only files (metadata stays at current state)
+vamscli asset-version revert -d my-db -a my-asset -v 1 --comment "Revert files only"
+# Result: Files from v1, but metadata remains at current state (priority: 5)
+
+# Revert both files AND metadata
+vamscli asset-version revert -d my-db -a my-asset -v 1 --revert-metadata --comment "Complete revert"
+# Result: Both files AND metadata from v1 (priority: 1)
 ```
 
 ## Asset Links Metadata Management Commands
@@ -1341,6 +1513,15 @@ vamscli assets download /local/path -d my-db -a my-asset --json-output
 }
 ```
 
+**Folder Filtering Behavior:**
+
+The download command automatically filters out folder objects and only downloads actual files:
+
+-   **Automatic Filtering**: Folder objects (items with `isFolder: true`) are never downloaded
+-   **Root Folder**: When using `--file-key "/"`, all files at the root level are downloaded (the "/" folder object itself is ignored)
+-   **Recursive Downloads**: When using `--recursive`, all files in the folder tree are downloaded (folder objects are ignored)
+-   **File Placement**: Files are placed at their relative path key (unless `--flatten-download-tree` is specified)
+
 **Download Scenarios:**
 
 1. **Individual File Download**
@@ -1354,12 +1535,14 @@ vamscli assets download /local/path -d my-db -a my-asset --json-output
     - Downloads all files under folder prefix
     - `--recursive` includes all subdirectories
     - `--flatten-download-tree` ignores folder structure
+    - **Folder objects are automatically filtered out**
 
 3. **Whole Asset Download**
 
     - Downloads all files from asset
     - Maintains asset folder structure
     - Skips archived files automatically
+    - **Folder objects are automatically filtered out**
 
 4. **Asset Preview Download**
 

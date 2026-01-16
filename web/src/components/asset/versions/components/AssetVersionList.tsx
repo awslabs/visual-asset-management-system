@@ -70,6 +70,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         setCurrentPage,
         setPageSize,
         setSelectedVersion,
+        refreshVersions,
         compareMode,
         versionToCompare,
         // New properties for enhanced functionality
@@ -77,6 +78,9 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         handleVersionSelectionForComparison,
         filterText,
         setFilterText,
+        // Sorting properties
+        sortingColumn,
+        setSortingColumn,
         // Additional properties needed for comparison UI
         showComparisonOptions,
         comparisonType,
@@ -323,6 +327,27 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         v{item.Version}
                         {item.isCurrent && <Badge color="blue">Current</Badge>}
+                        {item.hasMetadata && (
+                            <span
+                                title="This version includes metadata snapshot"
+                                style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    color: "#0972d3",
+                                }}
+                            >
+                                <svg
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    style={{ marginLeft: "4px" }}
+                                >
+                                    <path d="M8 0C3.6 0 0 3.6 0 8s3.6 8 8 8 8-3.6 8-8-3.6-8-8-8zm0 14c-3.3 0-6-2.7-6-6s2.7-6 6-6 6 2.7 6 6-2.7 6-6 6z" />
+                                    <path d="M7 4h2v5H7zM7 10h2v2H7z" />
+                                </svg>
+                            </span>
+                        )}
                     </div>
                 </Box>
             ),
@@ -411,6 +436,9 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                 loadingText="Loading asset versions"
                 selectionType="single"
                 selectedItems={selectedVersion ? [selectedVersion] : []}
+                sortingColumn={sortingColumn}
+                sortingDescending={sortingColumn.isDescending}
+                onSortingChange={({ detail }) => setSortingColumn(detail)}
                 onSelectionChange={({ detail }) => {
                     console.log("AssetVersionList - onSelectionChange raw event:", detail);
 
@@ -484,12 +512,19 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                     </div>
                 }
                 filter={
-                    <TextFilter
-                        filteringText={filterText}
-                        filteringPlaceholder="Find versions"
-                        filteringAriaLabel="Filter versions"
-                        onChange={({ detail }) => setFilterText(detail.filteringText)}
-                    />
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <TextFilter
+                            filteringText={filterText}
+                            filteringPlaceholder="Find versions"
+                            filteringAriaLabel="Filter versions"
+                            onChange={({ detail }) => setFilterText(detail.filteringText)}
+                        />
+                        <Button
+                            iconName="refresh"
+                            onClick={refreshVersions}
+                            ariaLabel="Refresh versions"
+                        />
+                    </SpaceBetween>
                 }
                 pagination={
                     <Pagination

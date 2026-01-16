@@ -2,6 +2,155 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.4.0] (2026-01-16)
+
+### Major Change Summary:
+
+• New Partner/Solution Integrations - Veerum 3D Viewer for 3D Tiles and Point-Clouds (licensed), NVIDIA IsaacSim use-case pipeline (reinforcement training/evaluation), Garnet Framework (knowledge graph) external data indexing
+• Metadata Schema System Overhaul - Database-specific and global schemas, multi-schema overlay support with validation, new field value types, optional CDK-deployable default schemas
+• Metadata System Overhaul - Multi-entity type metadata support (databases, assets, files, asset links), bulk editing with CSV import/export, separate file metadata and attributes storage, asset metadata versioning, enhanced metadata validations
+• Enhanced Backend Infrastructure - Refactored data queues for easy indexing expansions and performance (ie. Garnet Framework), auto-workflow triggering on file upload, EKS deployment option for RapidPipeline, improved file streaming APIs
+• Advanced Asset Management - Asset unarchiving, file renaming, database-level file upload restrictions option, asset search location mini-maps, concurrent workflow execution support for single asset
+• Performance & Scale - Refactored UI/API/Storage for large/many file uploads and overall performance/security improvements, UI lazy loading, optimizations to support hundreds to thousands of files per asset, fine-tuned data caching, enhanced load times
+• New Audit Logging - Amazon Cloudwatch separate audit logging for authorizations, VAMS actions, and errors/validations
+• CLI & CDK Deployment - CLI workflow execution commands, CLI metadata operations, CLI BOM industry query example, custom CloudFront DNS/TLS configuration, API-only deployment option (no website)
+
+### ⚠ BREAKING CHANGES
+
+Permission authorization constraints now use a dedicated DynamoDB table (no longer shared with authEntities) to improve permission lookup performance. Existing custom constraints must be migrated. VAMS default constructs (Admin/RO) will be re-added automatically.
+
+Metadata and metadataSchema DynamoDB tables have been replaced with new tables. The data migration script must be run to migrate data from the deprecated tables.
+
+OpenSearch indexes have changed their schema for "MD\_" and "AB\_" fields (now flat-objects). A re-index with clearing of old indexes is required to apply the new schema. The migration script handles this process.
+
+**Recommended Upgrade Path:** Run the upgrade script to migrate permission constraints from the old table to the new one if custom constraints were added or modified beyond VAMS defaults: `infra\deploymentDataMigration\v2.3_to_v2.4\upgrade`
+
+### Features
+
+-   (Breaking Change) Overhauled metadata schema to support multiple schemas per database (including "GLOBAL" database schemas) and entity types (database, asset links, assets, asset files). Asset files can be further restricted by file extension. File metadata and attributes are now supported; file attributes only support "string" field type.
+    -   Support for both database specific and GLOBAL (all database) schemas. All schemas apply that are relevant.
+    -   Supported field types for schemas and metadata across all entities: STRING, MULTILINE_STRING, INLINE_CONTROLLED_LIST, NUMBER, BOOLEAN, DATE, XYZ, WXYZ, MATRIX4X4, GEOPOINT, GEOJSON, LLA, JSON
+    -   Schemas can be named, and multiple schemas can apply to entity type metadata with aggregation (e.g., a GLOBAL schema for a specific entity type will stack with a database-specific schema for the same entity type). Field name conflicts default metadata to `string` with no conditions applied.
+    -   New CDK config options to auto-load default GLOBAL schemas. Options under `app.metadataSchema.X` are now available and enabled by default. See `infra\lib\nestedStacks\apiLambda\constructs\dynamodb-metadataschema-defaults-construct.ts` for default schemas.
+    -   New permission constraint fields for modifying and retrieving metadataSchema: metadataSchemaName, metadataSchemaEntityType. Deprecated: field
+    -   **Web** Updated to support new fields and APIs
+    -   **CLI** Updated to support new fields and APIs. CLI currently supports only GET/LIST for metadata schema.
+    -   Data migration scripts added to migrate old metadata schema to new DynamoDB tables
+    -   Note: Schema rule restrictions are enforced only when updating metadata via API and some web validation checks. Metadata may not match schema requirements in some cases (e.g., new asset creation or pipeline returns). Schema validation is not foolproof for restricting metadata (e.g., new assets won't have required metadata until the first metadata API call validates requirements).
+-   (Breaking Change) Overhauled metadata APIs, CLI, and Web interfaces to support metadata for multiple data entities and entity types (database, asset, asset file, asset links), improved validation and error handling, bulk metadata updates (including CSV import/export), and enhanced metadata schema overlays. Files now support "attributes" separately from metadata (only "string" value type for attributes). General file search includes file attribute fields, but specific metadata searching is limited to metadata fields.
+    -   Supported field types for metadata: STRING, MULTILINE_STRING, INLINE_CONTROLLED_LIST (only with applied schema), NUMBER, BOOLEAN, DATE, XYZ, WXYZ, MATRIX4X4, GEOPOINT, GEOJSON, LLA, JSON
+    -   MetadataSchema now enforced at API level with web support for schema overlays
+    -   Updated workflow executions and return formats for metadata (and updated applicable use-case pipelines) to support new entity types and field value types
+    -   Updated OpenSearch indexing to catalog new DynamoDB tables for metadata. File attributes are now stored separately in the file index as `AB_` fields. This creates new OpenSearch v2 indexes with a new name as new index schemas need to be applied. `MD_*` and `AB_*` fields are now flat object fields.
+    -   Limit of 500 metadata and attributes per metadata entity type
+    -   Updated relevant use-case pipelines that relied on metadata to properly function with the new system; the CAD3D metadata extraction pipeline now writes to file attributes instead of metadata
+    -   **Web** Updated to support new fields and APIs. Web currently doesn't support displaying/updating database metadata (API/CLI functionality only).
+    -   **CLI** Updated to support new fields and APIs.
+    -   Data migration scripts added to migrate old asset and file metadata to new DynamoDB tables
+-   (Breaking Change) Refactored permission constraints DynamoDB table, Casbin lookup logic, and authConstraints API for improved performance following new DynamoDB table refactor patterns. This improves solution performance for repeated data actions.
+-   Updated databases, metadata, and file uploads to support new database config options (on database APIs) for optionally restricting file extension types on asset file upload and restricting additional metadata outside applicable schemas: `restrictMetadataOutsideSchemas` (bool, default: False) and `restrictFileUploadsToExtensions` (string, default: Empty (allow all), also supports `.all` to allow all)
+    -   Added new PUT API path to update databases at `/database/{databaseId}`; POST API method no longer allows database updating
+    -   Note: File extension restrictions apply only on file upload and are not checked on direct S3 bucket file manipulation
+    -   **Web** Updated to support new fields and APIs
+    -   **CLI** Updated to support new fields and APIs
+-   Asset versions will now save all and view asset and file metadata and atrributes as part of versioning an asset; previously versioned asset will not have any metadata as part of the version
+    -   There is now an option on reverting to a asset version to update and revert to the saved file and asset metadata (and file attributes)
+    -   Asset versions can now be created, even if no files are in the asset
+-   New addon feature and configuration which allows pushing database, asset, and file changes to a Garnet Framework solution (Knowledge graph) deployed in the same AWS account. Visit [garnet-framework.dev](https://garnet-framework.dev/) for more information on the garnet framework solution. See the [ConfigurationGuide.md](./documentation/ConfigurationGuide.md) on how to turn this addon feature on.
+-   **Web** Added Veerum 3D Model licensed viewer to the viewer plugin system for `e57, las, laz, ply, and json (3D Tile)` files. Visit [veerum.com](https://www.veerum.com/) for license purchasing, then enable this viewer in `web\src\visualizerPlugin\config\viewerConfig.json`.
+    -   Note: This viewer requires the Potree Auto-Processing pipeline to be enabled for PointCloud file loading.
+-   Added new Amazon EKS pipeline option for RapidPipeline use-case pipeline (complementing existing Amazon ECS). This provides a pattern example for other use-case pipelines implementing Kubernetes (EKS) versus Elastic Container Service (ECS).
+-   New reinforcement learning training use-case pipeline using NVIDIA Isaac Lab on AWS Batch with GPU acceleration. Train and evaluate RL policies for robotics simulation directly from VAMS assets.
+    -   Supports training mode with configurable tasks, environments, and iterations using RSL-RL library
+    -   Supports evaluation mode for testing trained policies with metrics export
+    -   Uses AWS Batch with GPU instances (g6e.2xlarge/g5.xlarge) for compute
+    -   EFS-backed checkpoint storage for training persistence
+    -   Step Functions orchestration with async task token callbacks
+    -   Auto-registers `isaaclab-training` and `isaaclab-evaluation` workflows when enabled
+    -   Configurable warm instance option to reduce cold start times
+    -   Outputs training logs (.txt), metrics (.csv), and model checkpoints (.pt) to VAMS
+    -   Requires explicit NVIDIA EULA acceptance in config.json (`acceptNvidiaEula: true`)
+-   **Web** Added API (`/database/{databaseId}/assets/{assetId}/unarchiveAsset`) and UI on Asset and File search for Unarchive Asset. Cleaned up UI logic for archived asset elements.
+-   **Web** Added Rename File operation in asset details file manager when selecting single files. Uses existing file move API.
+-   Added new CDK deployment configuration support for disabling both CloudFront and ALB static website deployment options to enable API-only VAMS deployments
+-   Added new CDK deployment configuration support for CloudFront static website custom domains and TLS certificate imports
+-   Refactored backend data indexing flow to support current OpenSearch indexing and enable easy expansion to other indexing solutions or partner integrations
+-   **Web** Refactored web upload workflow for files to further parallelize uploads into batches, handle errors and retries, and manage backend throttling
+-   Updated ./listFiles API with additional `basic` query parameter (boolean, default: false) for quick file listing without archival, version, or preview file data (much faster).
+    -   **CLI** File listing command now has auto-paginate and basic parameter flags
+-   **Web** Updated asset files manager to implement lazy loading approach for loading files via API calls, making page loads faster when accessing file information (especially helpful for assets with many files)
+-   **CLI** Added --auto-paginate parameter (and adjusted other pagination parameters) to listing of databases, buckets, assets, and lists
+-   **CLI** Updated CLI profile/auth/setup to pull in and display more environment configurations from the API across various commands
+-   Workflow execution restrictions loosened to allow multiple running executions of the same workflow on an asset as long as different files are being processed (previously allowed only 1 running execution per workflow per asset without considering input files)
+-   **Web** New workflow/pipeline auto-triggering execution system for file uploads. Workflows have a new property settable in the workflow editor; some have default configurations in deployed CDK use-case pipelines to auto-set this (`autoRegisterAutoTriggerOnFileUpload`). Parts of this system will be refactored in an upcoming pipeline overhaul.
+    -   Trigger is set by specifying which file extensions should initiate the pipeline for each file uploaded to an asset (new or modified). This is a comma-delimited list of extensions. If ".all" is provided, it executes on all file extensions uploaded.
+    -   Feature implemented with new indexing SNS where a new SQS queue subscribes to the system for file uploads to check executions per file. This enables high scalability for file uploads.
+    -   PotreePipeline now defaults to auto-register in VAMS with the auto-trigger feature instead of its direct SQS tap-in, which previously bypassed the Workflow system
+-   **Web** Workflow Executions on View Asset now lazy loads data; search bar temporarily removed
+-   **CLI** Added new command grouping (`workflow`) and commands for workflow listing, asset workflow execution listing, and executing new workflows on assets
+-   **CLI** Added new command sub-grouping (`bom`) under `industry engineering` which provides an example BOM query input command to to aggregate + file combine data across assets
+    -   Note: Backend API not yet upgraded to new request/response model pattern; expected as part of pipeline/workflow overhaul development task
+-   **Web** Web text viewer now additionally supports file types: `".inf", ".cfg", ".md", ".sh", ".csv", ".py", ".log", ".js", ".ts", ".sql", ".ps1"`
+-   File type upload restrictions no longer restrict: `".ps1", ".sh", ".py", ".ini", ".inf", ".sql", ".js", ".docx"`
+-   **Web** Asset Search now has a search mode option to show map thumbnails, similar to preview thumbnails, displaying a mini-map for each asset record in the regular search listing that has location or lat/long metadata defined. This is in addition to the existing map view for all assets with this data. Only shown if location services are enabled on the backend.
+-   OpenSearch (OS) no longer indexes metadata fields as individual OS fields but instead groups metadata (and the new attributes) under single `MD_` and `AB_` flat-object fields for asset and file indexes. This may reduce future functionality to be able to do advanced searching on these fields but provides both better performance and prevents future errors when hitting OS max field limits.
+-   **Web** Ability to now navigate directly to a file via URL path (to allow outside static references) `#/databases/<databaseId>/assets/<assetId>/file/<relative file path>`; previously file was passed only via web state
+-   Added new CloudWatch event logs for specific VAMS audit logging. Currently Authorization (API-All, Data-UnauthorizedOnly), AuthOther, AuthChanges, FileUpload, FileDownload, FileDownload-Streamed, and Errors are logged to the special audit event logs.
+    -   Note: Some errors may not be logged if the API still uses the non-refactored old patterns. These will be updated in the future.
+    -   Note: Authentication events are handled through Cognito or external IDP event logs currently. See [AuditLoggingGuide.md](./documentation/AuditLoggingGuide.md) for more details.
+
+### Bug Fixes
+
+-   Permanently deleting an asset now also deletes associated asset links and asset link metadata in the database (previously caused inconsistencies when viewing asset links from related assets)
+-   Fixed bug where archived assets were not properly reindexed in OpenSearch as archived
+-   Fixed bug where archiving an asset caused the asset (or default database) to be re-created in some scenarios during S3 file re-indexing
+-   S3 bucket sync processes to create assets from S3 objects now operate even when OpenSearch functionality is disabled (part of indexing flow refactor)
+-   Fixed Casbin cache logic to properly enforce 60-second cache duration for updating constraints, roles, and user roles in lambda authorization logic
+-   Fixed bug in move file API command that prevented moves (or renames) due to destination check logic issues
+-   Fixed bug in many use-case pipelines where early errors or validation issues did not properly trigger external workflow error handling (caused workflows to run to prescribed timeout instead of failing early)
+-   **Web** File previews provided as `.previewFile.` now display correctly in Asset/File search
+-   **Web** File operations in asset details file manager now appropriately refresh the details panel during certain operations
+-   **Web** Fixed UI where some delete operations did not refresh the page and/or did not show the correct record ID to be deleted (display issue only)
+-   Fixed various API pagination issues with listing databases, assets, and files
+-   **CLI** Fixed to ensure all errors return in proper JSON format when `--json-output` flag is set
+-   Fixed assets and auxiliary assets streaming APIs to properly check payload sizes under 6MB and return presigned S3 URL redirects for larger payloads. This fixes issues with Potree and 3D Tile viewers where clients may fetch larger range sizes for tiled subsets.
+-   **Web** Added tracking of asset file input for workflow execution history and display on the view asset page
+-   **Web** Updated logic for file viewers (Potree viewer) that require fetching/passing JWT tokens for API header passing to fetch/refresh tokens as needed without page refresh and properly work with external OAuth2 tokens (non-Cognito)
+-   **CLI** Fixed assets download command to properly download entire asset files at once from root or from different file folders
+-   **Web** Fixed Workflow Execution on View Asset not auto-refreshing data when executing a new workflow; now shows proper execution counts
+-   **Web** Fixed error when building/installing Potree Viewer and Pipeline on some OS build versions (e.g., Linux)
+-   **Web** Fixed bug in "Execute Workflow" modal that prevented user from selecting the entire asset as input (previously required selecting an individual file)
+-   Added back-off retries to OpenSearch file and asset indexing lambdas when 429 `too many requests` errors happens; this helps prevent files and assets from not getting indexed properly during heavy load or re-indexing operations
+-   Workflow pipelines that output files to be written back to the asset now properly keep the relative key path how they should be stored in the asset (verses just storing all at the asset root currently)
+-   **Web** Fixed asset version component / tab data paging issue and column sorting not working
+-   **Web** Fix constraints editing form to allow selecting individual criteria (or/and) items to remove; it only allowed select all or nothing
+-   Fixed default RO role constraint permission examples that get loaded during cdk deploy to work with changes that happened to APIs in v2.2+
+
+### Chores
+
+-   Refactored tag, tagType, roles, userRoles, authConstraints, and auxiliary asset stream API service backends to meet new API standards for error handling, validation, and request/response model usage
+-   Refactored some API request/response models to replace deprecated Pydantic v1 "extra" field with proper v2 pattern
+-   Refactored remaining CDK lambdabuilder functions to follow new naming pattern for table inputs and permissions
+-   Further adjusted upload thresholds for throttling and file/part/sequence splitting across backend API, web, and CLI to optimize for both large files and many files
+-   Updated ./listFiles API to default maxItems to 10000 and max page size to 1500 for basic mode and 100 for non-basic mode
+-   API for `/secureConfig` now returns the website deployed URL (if a website is deployed)
+-   File streaming APIs now support HEAD requests to check if a file exists before streaming its contents with GET
+-   **Web** Consolidated auth token functions to a utility function, moved out of Auth.tsx
+-   Updated logic for when fileIndexerSNS queue is published from S3 object changes to reduce calls for objects that should be skipped (e.g., folder objects, `init` files/folders, special exclusion folder prefixes and their objects). These still get processed by sqsBucketSync queue/lambda but will not be further re-published, reducing downstream processing where these objects are typically ignored.
+-   **CLI** Removed API version check on all API commands to reduce CLI API calls and slightly increase performance. Only auth and setup commands now check CLI version against API version.
+-   Updated all lambda memory to 5308 from 3003, increasing vCPU from 2 to 4 and improving API response performance
+-   Updated authz criteria builder on backend to ignore fields in criteria that are not in the current constants file (e.g., deprecated authz fields)
+-   Added warning on OS reindex utility when the lambda function times-outs that it doesn't return an error code. It returns a warning that the lambda may still be running and to check cloudwatch logs.
+-   **Web** Added a note on the web navigation bar if no items show up that the user doesn't have permissions to view any web navigation pages
+-   Updated the custom lambda authorizer for cognito to use `joserfc` library from jose to overcome critical security findings on the jose library
+
+### Known Outstanding Issues
+
+-   With multiple S3 bucket support, scenarios may occur where identical assetIds exist across different buckets/prefixes in different databases, causing lookup conflicts in Asset Versions, Comments, and subscriptions functionality. This can only occur with manual S3 changes, as assetIds generated from VAMS uploads use unique GUIDs.
+-   Using the same pipeline ID in both GLOBAL and non-GLOBAL databases will cause overlap conflicts and issues.
+-   Pipeline metadata inputs have a limit when sending to ECS pipelines. Assets and/or files with extensive metadata may exceed the ECS limit for JSON metadata input (8k characters). Future pipeline overhauls will convert metadata input to a file to resolve this.
+-   When dealing with hundreds to thousands of files per asset or very large files (TB-size), some API asset/file operations may time-out on the request (after 29 seconds) however the lambda may still be processing the request and successfully complete the operation (up to 15 minutes). This also goes for OpenSearch indexing when there are hundreds of thousands to millions of files to re-index. The re-index may actually not finish after the 15 minute lambda time-out with millions of files and require different re-indexing technique locally or in a container. Asynchronous methods and optional containerized processing are being evaluated for the future for all API requests to prevent this.
+
 ## [2.3.2] (2026-01-12)
 
 ### Bug Fixes

@@ -1,486 +1,689 @@
+# Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import boto3
 import json
 import datetime
-
-from common.validators import validate
-from common.constants import STANDARD_JSON_RESPONSE
-from handlers.auth import request_to_claims
-from handlers.authz import CasbinEnforcer
-from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
+from botocore.config import Config
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.constants import STANDARD_JSON_RESPONSE
+from handlers.authz import CasbinEnforcer
+from handlers.auth import request_to_claims
+from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_auth_changes
+from models.common import (
+    APIGatewayProxyResponseV2,
+    internal_error,
+    success,
+    validation_error,
+    general_error,
+    authorization_error,
+    VAMSGeneralErrorResponse
+)
+from models.roleConstraints import (
+    GetUserRolesRequestModel,
+    CreateUserRolesRequestModel,
+    UpdateUserRolesRequestModel,
+    DeleteUserRolesRequestModel,
+    UserRoleResponseModel,
+    GetUserRolesResponseModel,
+    UserRoleOperationResponseModel
+)
 
-claims_and_roles = {}
+# Configure AWS clients with retry configuration
+retry_config = Config(
+    retries={
+        'max_attempts': 5,
+        'mode': 'adaptive'
+    }
+)
+
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
 logger = safeLogger(service="UserRolesService")
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
 
-main_rest_response = STANDARD_JSON_RESPONSE
+# Global variables for claims and roles
+claims_and_roles = {}
 
+# Load environment variables
 try:
     roles_table_name = os.environ["ROLES_TABLE_NAME"]
     user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-except:
+except Exception as e:
     logger.exception("Failed loading environment variables")
-    main_rest_response['body'] = json.dumps({"message": "Failed Loading Environment Variables"})
+    raise e
 
+# Initialize DynamoDB tables
+roles_table = dynamodb.Table(roles_table_name)
+user_roles_table = dynamodb.Table(user_roles_table_name)
+
+
+#######################
+# Utility Functions
+#######################
 
 def get_all_roles_for_user(user_id):
-    resp = dynamodb_client.query(
-        TableName=user_roles_table_name,
-        KeyConditionExpression='userId = :id',
-        ExpressionAttributeValues={':id': {'S': user_id}}
-    )
-    return resp.get('Items', [])
+    """Get all roles for a specific user
+    
+    Args:
+        user_id: The user ID
+        
+    Returns:
+        List of role items from DynamoDB
+    """
+    try:
+        resp = dynamodb_client.query(
+            TableName=user_roles_table_name,
+            KeyConditionExpression='userId = :id',
+            ExpressionAttributeValues={':id': {'S': user_id}}
+        )
+        return resp.get('Items', [])
+    except Exception as e:
+        logger.exception(f"Error getting roles for user {user_id}: {e}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving user roles.")
 
 
-def get_role(roleName):
-    resp = dynamodb_client.query(
-        TableName=roles_table_name,
-        KeyConditionExpression='roleName = :roleName',
-        ExpressionAttributeValues={':roleName': {'S': roleName}}
-    )
-    return resp.get('Items', [])
+def get_role(role_name):
+    """Get a specific role by name
+    
+    Args:
+        role_name: The role name
+        
+    Returns:
+        List of role items from DynamoDB
+    """
+    try:
+        resp = dynamodb_client.query(
+            TableName=roles_table_name,
+            KeyConditionExpression='roleName = :roleName',
+            ExpressionAttributeValues={':roleName': {'S': role_name}}
+        )
+        return resp.get('Items', [])
+    except Exception as e:
+        logger.exception(f"Error getting role {role_name}: {e}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving role.")
 
 
 def validate_roles_exist_strict(role_names):
-    """Strictly validate that all role names exist"""
+    """Strictly validate that all role names exist
+    
+    Args:
+        role_names: List of role names to validate
+        
+    Returns:
+        True if all roles exist
+        
+    Raises:
+        ValueError: If any role does not exist
+    """
     for role_name in role_names:
         role_items = get_role(role_name)
         if not role_items or len(role_items) == 0:
-            raise ValueError(f"Role does not exist in the system")
+            raise ValueError(f"Role '{role_name}' does not exist in the system")
     return True
 
 
-def update_user_roles(body):
-    response = STANDARD_JSON_RESPONSE
-    user_role_table = dynamodb.Table(user_roles_table_name)
-    items = get_all_roles_for_user(body["userId"])
-    existing_roles = [item["roleName"]['S'] for item in items]
-    roles_to_delete = list(set(existing_roles) - set(body["roleName"]))
-    roles_to_create = list(set(body["roleName"]) - set(existing_roles))
-
-    user_roles_to_create = []
-    user_roles_to_delete = []
-
-    for role in roles_to_create:
-        itemsRole = get_role(role)
-        if itemsRole and len(itemsRole) == 0:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Role does not exist in available roles"})
-            return response
-
-        create_user_role = {
-            'userId': body["userId"],
-            'roleName': role,
-            'createdOn': str(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
-        }
-        # Add Casbin Enforcer to check if the current user has permissions to POST the User Role
-        allowed = False
-        create_user_role.update({"object__type": "userRole"})
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(create_user_role, "POST"):
-                user_roles_to_create.append(create_user_role)
-                allowed = True
-        if not allowed:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Action not allowed"})
-            return response
-
-    with user_role_table.batch_writer() as batch:
-        for item in user_roles_to_create:
-            batch.put_item(Item=item)
-
-    for role in roles_to_delete:
-        delete_user_role = {
-            'userId': body["userId"],
-            'roleName': role
-        }
-        # Add Casbin Enforcer to check if the current user has permissions to DELETE the User Roles
-        allowed = False
-        temp_role_object = {}
-        temp_role_object.update(delete_user_role)
-
-        temp_role_object.update({"object__type": "userRole"})
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(temp_role_object, "DELETE"):
-                user_roles_to_delete.append(delete_user_role)
-                allowed = True
-        if not allowed:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Action not allowed"})
-            return response
-
-    with user_role_table.batch_writer() as batch:
-        for keys in user_roles_to_delete:
-            batch.delete_item(Key=keys)
-
-    response['statusCode'] = 200
-    response['body'] = json.dumps({"message": "success"})
-    return response
-
-
-def delete_user_roles(body):
-    response = STANDARD_JSON_RESPONSE
-    user_role_table = dynamodb.Table(user_roles_table_name)
-    items = get_all_roles_for_user(body["userId"])
-
-    items_to_delete = []
-    for role in items:
-        user_role = {
-            'userId': body["userId"],
-            'roleName': role['roleName']['S']
-        }
-        # Add Casbin Enforcer to check if the current user has permissions to DELETE the User Role
-        user_role.update({"object__type": "userRole"})
-        allowed = False
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(user_role, "DELETE"):
-                items_to_delete.append(user_role)
-                allowed = True
-        if not allowed:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Action not allowed"})
-            return response
-
-    with user_role_table.batch_writer() as batch:
-        for keys in items_to_delete:
-            keys.pop("object__type")
-            batch.delete_item(Key=keys)
-
-    response['statusCode'] = 200
-    response['body'] = json.dumps({"message": "success"})
-    return response
-
-
-def is_any_user_role_already_existing(items, body):
+def is_any_user_role_already_existing(items, user_id, role_names):
+    """Check if any user role combination already exists
+    
+    Args:
+        items: Existing user role items
+        user_id: The user ID
+        role_names: List of role names to check
+        
+    Returns:
+        True if any combination already exists, False otherwise
+    """
     existing_roles = [f"{item['userId']['S']}---{item['roleName']['S']}" for item in items]
-    new_roles = []
-    for role in body["roleName"]:
-        new_roles.append(f"{body['userId']}---{role}")
-
-    logger.info("existing_roles...")
-    logger.info(existing_roles)
-    logger.info("new_roles...")
-    logger.info(new_roles)
-
+    new_roles = [f"{user_id}---{role}" for role in role_names]
+    
+    logger.info(f"Existing roles: {existing_roles}")
+    logger.info(f"New roles: {new_roles}")
+    
     for role in new_roles:
         if role in existing_roles:
             return True
-
+    
     return False
 
 
-def create_user_roles(body):
-    response = STANDARD_JSON_RESPONSE
-    user_role_table = dynamodb.Table(user_roles_table_name)
+#######################
+# Business Logic Functions
+#######################
+
+def create_user_roles(request_model: CreateUserRolesRequestModel, claims_and_roles):
+    """Create new user roles
+    
+    Args:
+        request_model: Validated CreateUserRolesRequestModel
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        UserRoleOperationResponseModel with operation result
+    """
+    user_id = request_model.userId
+    role_names = request_model.roleName
     
     # Validate that all roles exist before proceeding
     try:
-        validate_roles_exist_strict(body["roleName"])
+        validate_roles_exist_strict(role_names)
     except ValueError as e:
-        response['statusCode'] = 400
-        response['body'] = json.dumps({"message": str(e)})
-        return response
+        raise VAMSGeneralErrorResponse(str(e))
     
-    itemsUserRoles = get_all_roles_for_user(body["userId"])
-    logger.info(itemsUserRoles)
-    logger.info(is_any_user_role_already_existing(itemsUserRoles, body))
-    if is_any_user_role_already_existing(itemsUserRoles, body):
-        response['statusCode'] = 400
-        response['body'] = json.dumps({"message": "Role is already existing for this user."})
-        return response
-
+    # Check for existing user roles
+    existing_items = get_all_roles_for_user(user_id)
+    if is_any_user_role_already_existing(existing_items, user_id, role_names):
+        raise VAMSGeneralErrorResponse("One or more roles already exist for this user")
+    
+    # Prepare items to insert with authorization checks
     items_to_insert = []
-    for role in body["roleName"]:
-        itemsRole = get_role(role)
-        if itemsRole and len(itemsRole) == 0:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Role does not exist in available roles"})
-            return response
-
+    for role in role_names:
         user_role = {
-            'userId': body["userId"],
+            'userId': user_id,
             'roleName': role,
-            'createdOn': str(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
+            'createdOn': datetime.datetime.utcnow().isoformat()
         }
-        # Add Casbin Enforcer to check if the current user has permissions to POST the User Roles
-        user_role.update({"object__type": "userRole"})
-        allowed = False
+        
+        # Add Casbin Enforcer to check if the current user has permissions to POST the User Role
+        user_role_check = user_role.copy()
+        user_role_check.update({"object__type": "userRole"})
+        
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(user_role, "POST"):
-                items_to_insert.append(user_role)
-                allowed = True
-        if not allowed:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Action not allowed"})
-            return response
+            if not casbin_enforcer.enforce(user_role_check, "POST"):
+                raise authorization_error()
+        
+        items_to_insert.append(user_role)
+    
+    # Insert all user roles
+    try:
+        with user_roles_table.batch_writer() as batch:
+            for item in items_to_insert:
+                batch.put_item(Item=item)
+        
+        timestamp = datetime.datetime.utcnow().isoformat()
+        return UserRoleOperationResponseModel(
+            success=True,
+            message="User roles created successfully",
+            userId=user_id,
+            operation="create",
+            timestamp=timestamp
+        )
+    except Exception as e:
+        logger.exception(f"Error creating user roles: {e}")
+        raise VAMSGeneralErrorResponse(f"Error creating user roles.")
 
-    with user_role_table.batch_writer() as batch:
-        for item in items_to_insert:
-            batch.put_item(Item=item)
 
-    response['statusCode'] = 200
-    response['body'] = json.dumps({"message": "success"})
-    return response
+def update_user_roles(request_model: UpdateUserRolesRequestModel, claims_and_roles):
+    """Update user roles (differential update - add new, remove old)
+    
+    Args:
+        request_model: Validated UpdateUserRolesRequestModel
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        UserRoleOperationResponseModel with operation result
+    """
+    user_id = request_model.userId
+    new_role_names = request_model.roleName
+    
+    # Get existing roles
+    items = get_all_roles_for_user(user_id)
+    existing_roles = [item["roleName"]['S'] for item in items]
+    
+    # Calculate differential
+    roles_to_delete = list(set(existing_roles) - set(new_role_names))
+    roles_to_create = list(set(new_role_names) - set(existing_roles))
+    
+    # Validate new roles exist
+    if roles_to_create:
+        try:
+            validate_roles_exist_strict(roles_to_create)
+        except ValueError as e:
+            raise VAMSGeneralErrorResponse(str(e))
+    
+    # Prepare roles to create with authorization checks
+    user_roles_to_create = []
+    for role in roles_to_create:
+        create_user_role = {
+            'userId': user_id,
+            'roleName': role,
+            'createdOn': datetime.datetime.utcnow().isoformat()
+        }
+        
+        # Add Casbin Enforcer to check if the current user has permissions to POST the User Role
+        create_user_role_check = create_user_role.copy()
+        create_user_role_check.update({"object__type": "userRole"})
+        
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(create_user_role_check, "POST"):
+                raise authorization_error()
+        
+        user_roles_to_create.append(create_user_role)
+    
+    # Prepare roles to delete with authorization checks
+    user_roles_to_delete = []
+    for role in roles_to_delete:
+        delete_user_role = {
+            'userId': user_id,
+            'roleName': role
+        }
+        
+        # Add Casbin Enforcer to check if the current user has permissions to DELETE the User Role
+        delete_user_role_check = delete_user_role.copy()
+        delete_user_role_check.update({"object__type": "userRole"})
+        
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(delete_user_role_check, "DELETE"):
+                raise authorization_error()
+        
+        user_roles_to_delete.append(delete_user_role)
+    
+    # Perform batch operations
+    try:
+        with user_roles_table.batch_writer() as batch:
+            for item in user_roles_to_create:
+                batch.put_item(Item=item)
+            for keys in user_roles_to_delete:
+                batch.delete_item(Key=keys)
+        
+        timestamp = datetime.datetime.utcnow().isoformat()
+        return UserRoleOperationResponseModel(
+            success=True,
+            message="User roles updated successfully",
+            userId=user_id,
+            operation="update",
+            timestamp=timestamp
+        )
+    except Exception as e:
+        logger.exception(f"Error updating user roles: {e}")
+        raise VAMSGeneralErrorResponse(f"Error updating user roles.")
+
+
+def delete_user_roles(request_model: DeleteUserRolesRequestModel, claims_and_roles):
+    """Delete all roles for a user
+    
+    Args:
+        request_model: Validated DeleteUserRolesRequestModel
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        UserRoleOperationResponseModel with operation result
+    """
+    user_id = request_model.userId
+    
+    # Get all roles for the user
+    items = get_all_roles_for_user(user_id)
+    
+    # Prepare items to delete with authorization checks
+    items_to_delete = []
+    for role in items:
+        user_role = {
+            'userId': user_id,
+            'roleName': role['roleName']['S']
+        }
+        
+        # Add Casbin Enforcer to check if the current user has permissions to DELETE the User Role
+        user_role_check = user_role.copy()
+        user_role_check.update({"object__type": "userRole"})
+        
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(user_role_check, "DELETE"):
+                raise authorization_error()
+        
+        items_to_delete.append(user_role)
+    
+    # Delete all user roles
+    try:
+        with user_roles_table.batch_writer() as batch:
+            for keys in items_to_delete:
+                batch.delete_item(Key=keys)
+        
+        timestamp = datetime.datetime.utcnow().isoformat()
+        return UserRoleOperationResponseModel(
+            success=True,
+            message="User roles deleted successfully",
+            userId=user_id,
+            operation="delete",
+            timestamp=timestamp
+        )
+    except Exception as e:
+        logger.exception(f"Error deleting user roles: {e}")
+        raise VAMSGeneralErrorResponse(f"Error deleting user roles.")
 
 
 def get_user_roles(query_params):
-    #Custom pagination logic for user roles which may be very non-performant.
-    #TODO: Try to fix performance as this works across the whole users in role dataset every time before providing a subset page at the end.
-    response = STANDARD_JSON_RESPONSE
+    """Get all user roles with pagination
+    
+    Args:
+        query_params: Query parameters for pagination
+        
+    Returns:
+        Dictionary with Items and optional NextToken
+    """
     deserializer = TypeDeserializer()
     paginator = dynamodb_client.get_paginator('scan')
-
-    rawUserRoles = []
-    page_iterator = paginator.paginate(
-        TableName=user_roles_table_name,
-        PaginationConfig={
-            'MaxItems': 1000,
-            'PageSize': 1000,
-        }
-    ).build_full_result()
-    if(len(page_iterator["Items"]) > 0):
-        rawUserRoles.extend(page_iterator["Items"])
-        while("NextToken" in page_iterator):
-            page_iterator = paginator.paginate(
-                TableName=user_roles_table_name,
-                PaginationConfig={
-                    'MaxItems': 1000,
-                    'PageSize': 1000,
-                    'StartingToken': page_iterator["NextToken"]
-                }
-            ).build_full_result()
-            if(len(page_iterator["Items"]) > 0):
-                rawUserRoles.extend(page_iterator["Items"])
-
-
-    grouped_data = {
-        "Items": []
-    }
-
-    #Process all records initially, which may be large
-    for user_role in page_iterator["Items"]:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in user_role.items()}
-
-        # Add Casbin Enforcer to check if the current user has permissions to GET the User Roles
-        deserialized_document.update({
-            "object__type": "userRole"
-        })
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(deserialized_document, "GET"):
-
-                userIdExists = False
-                for item in grouped_data["Items"]:
-                    if item["userId"] == deserialized_document["userId"]:
-                        #Found record so just add the roleName to the existing record
-                        item["roleName"].append(deserialized_document["roleName"])
-                        userIdExists = True
-                        break
-
-
-                if userIdExists == False:
-                    grouped_data["Items"].append({
-                        "userId": deserialized_document["userId"],
-                        "roleName": [deserialized_document["roleName"]],
-                        "createdOn": deserialized_document["createdOn"]
-                    })
-
-    #Sort the list results by createdOn so we can properly paginate for NextToken later
-    grouped_data["Items"].sort(key=lambda x: x["createdOn"])
-
-    #Do custom pagination here for end results
-    #Start record page at previous starting token if given, loop through sorted list (and deleteentries) until we get to starting token
-    if "startingToken" in query_params:
-        if query_params["startingToken"]:
-            for item in grouped_data["Items"]:
+    
+    # Scan all user roles
+    try:
+        raw_user_roles = []
+        page_iterator = paginator.paginate(
+            TableName=user_roles_table_name,
+            PaginationConfig={
+                'MaxItems': 1000,
+                'PageSize': 1000,
+            }
+        ).build_full_result()
+        
+        if len(page_iterator["Items"]) > 0:
+            raw_user_roles.extend(page_iterator["Items"])
+            while "NextToken" in page_iterator:
+                page_iterator = paginator.paginate(
+                    TableName=user_roles_table_name,
+                    PaginationConfig={
+                        'MaxItems': 1000,
+                        'PageSize': 1000,
+                        'StartingToken': page_iterator["NextToken"]
+                    }
+                ).build_full_result()
+                if len(page_iterator["Items"]) > 0:
+                    raw_user_roles.extend(page_iterator["Items"])
+        
+        # Group by userId
+        grouped_data = {"Items": []}
+        
+        for user_role in raw_user_roles:
+            deserialized_document = {k: deserializer.deserialize(v) for k, v in user_role.items()}
+            
+            # Add Casbin Enforcer to check if the current user has permissions to GET the User Roles
+            deserialized_document.update({"object__type": "userRole"})
+            
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(deserialized_document, "GET"):
+                    user_id_exists = False
+                    for item in grouped_data["Items"]:
+                        if item["userId"] == deserialized_document["userId"]:
+                            # Found record so just add the roleName to the existing record
+                            item["roleName"].append(deserialized_document["roleName"])
+                            user_id_exists = True
+                            break
+                    
+                    if not user_id_exists:
+                        grouped_data["Items"].append({
+                            "userId": deserialized_document["userId"],
+                            "roleName": [deserialized_document["roleName"]],
+                            "createdOn": deserialized_document["createdOn"]
+                        })
+        
+        # Sort the list results by createdOn for pagination
+        grouped_data["Items"].sort(key=lambda x: x["createdOn"])
+        
+        # Custom pagination
+        if "startingToken" in query_params and query_params["startingToken"]:
+            for item in grouped_data["Items"][:]:
                 if item["createdOn"] != query_params["startingToken"]:
                     grouped_data["Items"].remove(item)
                 else:
                     break
-
-    #Prepare records for next page set
-    #Set token for next page entry if exists and delete all records afterwards page
-    nextIsToken = False
-    startRemovingRecords = False
-    recordCount = 0
-    for item in grouped_data["Items"]:
-        recordCount += 1
-        if nextIsToken:
-            #set next token as the createdOn of the next record in the list after the maxSize
-            grouped_data['NextToken'] = item["createdOn"]
-            nextIsToken = False
-            startRemovingRecords = True
-        if startRemovingRecords:
-            #remove the rest of the records after the next token
-            grouped_data["Items"].remove(item)
-        if recordCount == int(query_params["maxItems"]):
-            nextIsToken = True
-
-    response['statusCode'] = 200
-    response['body'] = json.dumps({"message": grouped_data})
-    return response
-
-########################################################
-
-    # page_iterator = paginator.paginate(
-    #     TableName=user_roles_table_name,
-    #     PaginationConfig={
-    #         'MaxItems': int(query_params['maxItems']),
-    #         'PageSize': int(query_params['pageSize']),
-    #         'StartingToken': query_params['startingToken']
-    #     }
-    # ).build_full_result()
-
-    # grouped_data = {
-    #     "Items": []
-    # }
-
-    # for user_role in page_iterator["Items"]:
-    #     deserialized_document = {k: deserializer.deserialize(v) for k, v in user_role.items()}
-
-    #     # Add Casbin Enforcer to check if the current user has permissions to GET the User Roles
-    #     deserialized_document.update({
-    #         "object__type": "userRole"
-    #     })
-    #     if len(claims_and_roles["tokens"]) > 0:
-    #         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    #         if casbin_enforcer.enforce(deserialized_document, "GET"):
-
-    #             userIdExists = False
-    #             for item in grouped_data["Items"]:
-    #                 if item["userId"] == deserialized_document["userId"]:
-    #                     #Found record so just add the roleName to the existing record
-    #                     item["roleName"].append(deserialized_document["roleName"])
-    #                     userIdExists = True
-    #                     break
+        
+        # Prepare records for next page
+        next_is_token = False
+        start_removing_records = False
+        record_count = 0
+        for item in grouped_data["Items"][:]:
+            record_count += 1
+            if next_is_token:
+                grouped_data['NextToken'] = item["createdOn"]
+                next_is_token = False
+                start_removing_records = True
+            if start_removing_records:
+                grouped_data["Items"].remove(item)
+            if record_count == int(query_params["maxItems"]):
+                next_is_token = True
+        
+        return grouped_data
+        
+    except Exception as e:
+        logger.exception(f"Error getting user roles: {e}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving user roles.")
 
 
-    #             if userIdExists == False:
-    #                 grouped_data["Items"].append({
-    #                     "userId": deserialized_document["userId"],
-    #                     "roleName": [deserialized_document["roleName"]],
-    #                     "createdOn": deserialized_document["createdOn"]
-    #                 })
+#######################
+# Request Handlers
+#######################
 
-    # if 'NextToken' in page_iterator:
-    #     grouped_data['NextToken'] = page_iterator['NextToken']
-
-########################################################
-
-
-def lambda_handler(event, context):
-    response = STANDARD_JSON_RESPONSE
+def handle_get_request(event):
+    """Handle GET requests for user roles
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    query_parameters = event.get('queryStringParameters', {}) or {}
+    
     try:
-        http_method = event['requestContext']['http']['method']
+        # Parse and validate query parameters
+        request_model = parse(query_parameters, model=GetUserRolesRequestModel)
+        
+        # Extract validated parameters for the query
+        query_params = {
+            'maxItems': request_model.maxItems,
+            'pageSize': request_model.pageSize,
+            'startingToken': request_model.startingToken
+        }
+        
+        # Get user roles
+        user_roles_result = get_user_roles(query_params)
+        
+        # Return success response
+        return success(body={"message": user_roles_result})
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error in query parameters: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
+    except VAMSGeneralErrorResponse as e:
+        return general_error(body={"message": str(e)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error handling GET request: {e}")
+        return internal_error(event=event)
 
-        global claims_and_roles
-        claims_and_roles = request_to_claims(event)
 
-        queryParameters = event.get('queryStringParameters', {})
-        validate_pagination_info(queryParameters)
+def handle_post_request(event):
+    """Handle POST requests to create user roles
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    try:
+        # Parse request body
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"}, event=event)
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
+        
+        # Parse and validate the request model
+        request_model = parse(body, model=CreateUserRolesRequestModel)
+        
+        # Create user roles
+        result = create_user_roles(request_model, claims_and_roles)
+        
+        # AUDIT LOG: User roles created
+        log_auth_changes(event, "userRoleCreate", {
+            "userId": result.userId,
+            "operation": "create",
+            "roleNames": request_model.roleName
+        })
+        
+        # Return success response
+        return success(body=result.dict())
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error handling POST request: {e}")
+        return internal_error(event=event)
 
+
+def handle_put_request(event):
+    """Handle PUT requests to update user roles
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    try:
+        # Parse request body
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"}, event=event)
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
+        
+        # Parse and validate the request model
+        request_model = parse(body, model=UpdateUserRolesRequestModel)
+        
+        # Update user roles
+        result = update_user_roles(request_model, claims_and_roles)
+        
+        # AUDIT LOG: User roles updated
+        log_auth_changes(event, "userRoleUpdate", {
+            "userId": result.userId,
+            "operation": "update",
+            "roleNames": request_model.roleName
+        })
+        
+        # Return success response
+        return success(body=result.dict())
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error handling PUT request: {e}")
+        return internal_error(event=event)
+
+
+def handle_delete_request(event):
+    """Handle DELETE requests for user roles
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    try:
+        # Parse request body
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"}, event=event)
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
+        
+        # Parse and validate the request model
+        request_model = parse(body, model=DeleteUserRolesRequestModel)
+        
+        # Delete user roles
+        result = delete_user_roles(request_model, claims_and_roles)
+        
+        # AUDIT LOG: User roles deleted
+        log_auth_changes(event, "userRoleDelete", {
+            "userId": result.userId,
+            "operation": "delete"
+        })
+        
+        # Return success response
+        return success(body=result.dict())
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error handling DELETE request: {e}")
+        return internal_error(event=event)
+
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for user roles service APIs"""
+    global claims_and_roles
+    claims_and_roles = request_to_claims(event)
+    
+    try:
+        # Parse request
+        method = event['requestContext']['http']['method']
+        
+        # Check API authorization
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-        if http_method == 'GET' and method_allowed_on_api:
-            return get_user_roles(queryParameters)
-
-        # Parse request body
-        if not event.get('body'):
-            message = 'Request body is required'
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            logger.error(response)
-            return response
-
-        if isinstance(event['body'], str):
-            try:
-                event['body'] = json.loads(event['body'])
-            except json.JSONDecodeError as e:
-                logger.exception(f"Invalid JSON in request body: {e}")
-                response['statusCode'] = 400
-                response['body'] = json.dumps({"message": "Invalid JSON in request body"})
-                return response
-
-        if http_method == 'POST' and method_allowed_on_api:
-            if 'roleName' not in event['body'] or 'userId' not in event['body']:
-                message = "RoleName and userId are required."
-                response['statusCode'] = 400
-                response['body'] = json.dumps({"message": message})
-                return response
-
-            (valid, message) = validate({
-                'roleName': {
-                    'value': event['body']['roleName'],
-                    'validator': 'OBJECT_NAME_ARRAY'
-                },
-                'userId': {
-                    'value': event['body']['userId'],
-                    'validator': 'USERID'
-                }
-            })
-            if not valid:
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
-            return create_user_roles(event['body'])
-        elif http_method == 'PUT' and method_allowed_on_api:
-            if 'roleName' not in event['body'] or 'userId' not in event['body']:
-                message = "RoleName and userId are required."
-                response['statusCode'] = 400
-                response['body'] = json.dumps({"message": message})
-                return response
-
-            (valid, message) = validate({
-                'roleName': {
-                    'value': event['body']['roleName'],
-                    'validator': 'OBJECT_NAME_ARRAY'
-                },
-                'userId': {
-                    'value': event['body']['userId'],
-                    'validator': 'USERID'
-                }
-            })
-            if not valid:
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
-            return update_user_roles(event['body'])
-        elif http_method == 'DELETE' and method_allowed_on_api:
-            if not event['body'].get('userId'):
-                message = "userId is required."
-                response['statusCode'] = 400
-                response['body'] = json.dumps({"message": message})
-                return response
-
-            (valid, message) = validate({
-                'userId': {
-                    'value': event['body']['userId'],
-                    'validator': 'USERID'
-                }
-            })
-            if not valid:
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
-            return delete_user_roles(event['body'])
+        
+        if not method_allowed_on_api:
+            return authorization_error()
+        
+        # Route to appropriate handler
+        if method == 'GET':
+            return handle_get_request(event)
+        elif method == 'POST':
+            return handle_post_request(event)
+        elif method == 'PUT':
+            return handle_put_request(event)
+        elif method == 'DELETE':
+            return handle_delete_request(event)
         else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
-
+            return validation_error(body={'message': "Method not allowed"}, event=event)
+            
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
-        logger.exception(e)
-        response['statusCode'] = 500
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
+        logger.exception(f"Internal error: {e}")
+        return internal_error(event=event)

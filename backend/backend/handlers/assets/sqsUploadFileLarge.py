@@ -13,6 +13,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_file_upload
 from common.s3 import validateS3AssetExtensionsAndContentType
 from models.common import VAMSGeneralErrorResponse
 
@@ -1008,6 +1009,39 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
             if success:
                 logger.info(f"Successfully processed large file - {format_correlation_ids(correlation_ids)}")
                 success_count += 1
+                
+                # AUDIT LOG: Large file upload completed asynchronously
+                # Create a mock event for audit logging since this is SQS-triggered
+                try:
+                    mock_event = {
+                        'requestContext': {
+                            'authorizer': {
+                                'jwt': {
+                                    'claims': {
+                                        'sub': 'SYSTEM_ASYNC_PROCESSOR'
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    log_file_upload(
+                        mock_event,
+                        file_info.get('databaseId'),
+                        file_info.get('assetId'),
+                        file_info.get('relativeKey'),
+                        False,  # Not denied
+                        None,
+                        {
+                            "uploadId": file_info.get('uploadId'),
+                            "uploadType": file_info.get('uploadType'),
+                            "status": "completed_async",
+                            "processingType": "large_file_async",
+                            "correlationId": record_correlation_id
+                        }
+                    )
+                except Exception as audit_error:
+                    logger.exception(f"Failed to log large file upload audit - {format_correlation_ids(correlation_ids)}: {audit_error}")
             else:
                 logger.error(f"Failed to process large file - {format_correlation_ids(correlation_ids)}")
                 failure_count += 1

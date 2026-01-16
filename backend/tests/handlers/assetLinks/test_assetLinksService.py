@@ -16,6 +16,7 @@ def mock_env_variables(monkeypatch):
     monkeypatch.setenv("ASSET_LINKS_METADATA_STORAGE_TABLE_NAME", "test-metadata-table")
     monkeypatch.setenv("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
     monkeypatch.setenv("AUTH_TABLE_NAME", "test-auth-table")
+    monkeypatch.setenv("CONSTRAINTS_TABLE_NAME", "test-constraint-table")
     monkeypatch.setenv("USER_ROLES_TABLE_NAME", "test-user-roles-table")
     monkeypatch.setenv("ROLES_TABLE_NAME", "test-roles-table")
     monkeypatch.setenv("AWS_REGION", "us-east-1")

@@ -1,227 +1,365 @@
-#  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-#  SPDX-License-Identifier: Apache-2.0
+# Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 import os
 import boto3
 import json
-
+from datetime import datetime
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from botocore.config import Config
+
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from common.constants import STANDARD_JSON_RESPONSE
+from models.common import (
+    APIGatewayProxyResponseV2,
+    success,
+    validation_error,
+    authorization_error,
+    general_error,
+    internal_error,
+    VAMSGeneralErrorResponse
+)
+from models.tag import (
+    GetTagTypesRequestModel,
+    DeleteTagTypeRequestModel,
+    TagTypeResponseModel,
+    TagTypeOperationResponseModel
+)
 
+# Configure retry
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
+logger = safeLogger(service_name="TagTypeService")
+
+# Global variables
 claims_and_roles = {}
-logger = safeLogger(service="TagTypeService")
-dynamodb = boto3.resource('dynamodb')
-dynamodbClient = boto3.client('dynamodb')
-main_rest_response = STANDARD_JSON_RESPONSE
 
+# Load environment variables
 try:
-    tag_db_table_name = os.environ["TAGS_STORAGE_TABLE_NAME"]
-    tag_type_db_table_name = os.environ["TAG_TYPES_STORAGE_TABLE_NAME"]
-except:
+    tag_table_name = os.environ["TAGS_STORAGE_TABLE_NAME"]
+    tag_type_table_name = os.environ["TAG_TYPES_STORAGE_TABLE_NAME"]
+except Exception as e:
     logger.exception("Failed loading environment variables")
-    main_rest_response['body'] = json.dumps(
-        {"message": "Failed Loading Environment Variables"})
+    raise e
 
+# Initialize DynamoDB tables
+tag_table = dynamodb.Table(tag_table_name)
+tag_type_table = dynamodb.Table(tag_type_table_name)
 
-def get_tag_types(response, query_params):
-    deserializer = TypeDeserializer()
-    paginator = dynamodbClient.get_paginator('scan')
+#######################
+# Business Logic Functions
+#######################
 
-
-    page_iteratorTagTypes = paginator.paginate(
-        TableName=tag_type_db_table_name,
-        PaginationConfig={
-            'MaxItems': int(query_params['maxItems']),
-            'PageSize': int(query_params['pageSize']),
-            'StartingToken': query_params['startingToken']
-        }
-    ).build_full_result()
-
-    #Loop to get all tag results for tag type
-    rawTagItems = []
-    page_iteratorTags = paginator.paginate(
-        TableName=tag_db_table_name,
-        PaginationConfig={
-            'MaxItems': 1000,
-            'PageSize': 1000,
-        }
-    ).build_full_result()
-    if(len(page_iteratorTags["Items"]) > 0):
-        rawTagItems.extend(page_iteratorTags["Items"])
-        while("NextToken" in page_iteratorTags):
-            page_iteratorTags = paginator.paginate(
-                TableName=tag_db_table_name,
-                PaginationConfig={
-                    'MaxItems': 1000,
-                    'PageSize': 1000,
-                    'StartingToken': page_iteratorTags["NextToken"]
-                }
-            ).build_full_result()
-            if(len(page_iteratorTags["Items"]) > 0):
-                rawTagItems.extend(page_iteratorTags["Items"])
-
-
-    authorized_tags = []
-    for tag in rawTagItems:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in tag.items()}
-
-        #Commented out permissions check as it behooves users who do have access to see tag types to see all the tags associated, even if they don't have permission to use them
-        # # Add Casbin Enforcer to check if the current user has permissions to GET the Tag
-        # deserialized_document.update({
-        #     "object__type": "tag"
-        # })
-        # if len(claims_and_roles["tokens"]) > 0:
-        #     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        #     if casbin_enforcer.enforce(deserialized_document, "GET"):
-
-        authorized_tags.append(deserialized_document)
-
-    formatted_tag_results = {}
-
-    for tagResult in authorized_tags:
-        tagName = tagResult["tagName"]
-        tagTypeName = tagResult["tagTypeName"]
-
-        if tagTypeName not in formatted_tag_results:
-            formatted_tag_results[tagTypeName] = [tagName]
-        else:
-            formatted_tag_results[tagTypeName].append(tagName)
-
-    formattedTagTypeResults = {
-        "Items": []
-    }
-
-    for tagTypeResult in page_iteratorTagTypes["Items"]:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in tagTypeResult.items()}
-
-        tagType = {
-            "tagTypeName": deserialized_document["tagTypeName"],
-            "description": deserialized_document["description"],
-            "required": deserialized_document.get("required", "False"),
-            "tags": [] if deserialized_document["tagTypeName"] not in formatted_tag_results else formatted_tag_results[
-                deserialized_document["tagTypeName"]]
-        }
-
-        # Add Casbin Enforcer to check if the current user has permissions to GET the Tag Type
-        tagType.update({
-            "object__type": "tagType"
-        })
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(tagType, "GET"):
-                formattedTagTypeResults["Items"].append(tagType)
-
-    if 'NextToken' in page_iteratorTagTypes:
-        formattedTagTypeResults['NextToken'] = page_iteratorTagTypes['NextToken']
-
-    response['body'] = json.dumps({"message": formattedTagTypeResults})
-    return response
-
-
-def delete_tag_type(response, pathParameters):
-    tag_type_table = dynamodb.Table(tag_type_db_table_name)
-    tag_type_name = pathParameters.get("tagTypeId")
-
-    if tag_type_name is None or len(tag_type_name) == 0:
-        message = "TagTypeName is a required path parameter."
-        response['statusCode'] = 400
-        response['body'] = json.dumps({"message": message})
-        return response
-
-    (valid, message) = validate({
-        'tagTypeName': {
-            'value': tag_type_name,
-            'validator': 'OBJECT_NAME'
-        }
-    })
-
-    if not valid:
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        return response
-
-    tag_type_response = tag_type_table.get_item(Key={'tagTypeName': tag_type_name})
-    tag_type = tag_type_response.get("Item", {})
-
-    if tag_type:
-
-        #Scan tag table to see if we have any tags that currently use the type, if so error
-        tag_table = dynamodb.Table(tag_db_table_name)
-        tagResults = tag_table.scan().get('Items', [])
-
-        for tag in tagResults:
-            tagTypeName = tag["tagTypeName"]
-            if tagTypeName == tag_type_name:
-                response['statusCode'] = 400
-                response['body'] = json.dumps({"message": "Cannot delete tag type that is currently in use by a tag"})
-                return response
-
-        # Add Casbin Enforcer to check if the current user has permissions to DELETE the Tag
-        allowed = False
-        tag_type.update({
-            "object__type": "tagType"
-        })
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(tag_type, "DELETE"):
-                allowed = True
-
-        if allowed:
-            logger.info("Deleting Tag Type: "+tag_type_name)
-            tag_type_table.delete_item(
-                Key={'tagTypeName': tag_type_name},
-                ConditionExpression='attribute_exists(tagTypeName)'
-            )
-            response['statusCode'] = 200
-            response['body'] = json.dumps({"message": "Success"})
-            return response
-        else:
-            response['statusCode'] = 403
-            response['message'] = "Action not allowed"
-            return response
-    else:
-        response['statusCode'] = 404
-        response['message'] = "Record not found"
-        return response
-
-
-def lambda_handler(event, context):
-    response = STANDARD_JSON_RESPONSE
-    logger.info(event)
-
-    pathParameters = event.get('pathParameters', {})
-    queryParameters = event.get('queryStringParameters', {})
-
+def get_tag_types(query_params: dict, claims_and_roles: dict) -> dict:
+    """Get all tag types with their associated tags
+    
+    Args:
+        query_params: Pagination parameters (maxItems, pageSize, startingToken)
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        Dictionary with Items (list of tag types) and optional NextToken
+        
+    Raises:
+        VAMSGeneralErrorResponse: If retrieval fails
+    """
     try:
-        httpMethod = event['requestContext']['http']['method']
+        deserializer = TypeDeserializer()
+        paginator = dynamodb_client.get_paginator('scan')
+        
+        # Get tag types with pagination
+        page_iterator_tag_types = paginator.paginate(
+            TableName=tag_type_table_name,
+            PaginationConfig={
+                'MaxItems': int(query_params['maxItems']),
+                'PageSize': int(query_params['pageSize']),
+                'StartingToken': query_params.get('startingToken')
+            }
+        ).build_full_result()
+        
+        # Get all tags (no pagination needed for tags lookup)
+        raw_tag_items = []
+        page_iterator_tags = paginator.paginate(
+            TableName=tag_table_name,
+            PaginationConfig={
+                'MaxItems': 1000,
+                'PageSize': 1000,
+            }
+        ).build_full_result()
+        
+        if len(page_iterator_tags.get("Items", [])) > 0:
+            raw_tag_items.extend(page_iterator_tags["Items"])
+            
+            # Continue fetching if there are more tags
+            while "NextToken" in page_iterator_tags:
+                page_iterator_tags = paginator.paginate(
+                    TableName=tag_table_name,
+                    PaginationConfig={
+                        'MaxItems': 1000,
+                        'PageSize': 1000,
+                        'StartingToken': page_iterator_tags["NextToken"]
+                    }
+                ).build_full_result()
+                if len(page_iterator_tags.get("Items", [])) > 0:
+                    raw_tag_items.extend(page_iterator_tags["Items"])
+        
+        # Deserialize and organize tags by tag type
+        formatted_tag_results = {}
+        for tag in raw_tag_items:
+            deserialized_tag = {k: deserializer.deserialize(v) for k, v in tag.items()}
+            tag_name = deserialized_tag.get("tagName")
+            tag_type_name = deserialized_tag.get("tagTypeName")
+            
+            if tag_type_name and tag_name:
+                if tag_type_name not in formatted_tag_results:
+                    formatted_tag_results[tag_type_name] = [tag_name]
+                else:
+                    formatted_tag_results[tag_type_name].append(tag_name)
+        
+        # Process tag types and check authorization
+        formatted_tag_type_results = []
+        for tag_type_item in page_iterator_tag_types.get("Items", []):
+            deserialized_tag_type = {k: deserializer.deserialize(v) for k, v in tag_type_item.items()}
+            
+            tag_type = {
+                "tagTypeName": deserialized_tag_type.get("tagTypeName"),
+                "description": deserialized_tag_type.get("description"),
+                "required": deserialized_tag_type.get("required", "False"),
+                "tags": formatted_tag_results.get(deserialized_tag_type.get("tagTypeName"), [])
+            }
+            
+            # Check authorization
+            tag_type.update({"object__type": "tagType"})
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(tag_type, "GET"):
+                    # Remove object__type before adding to results
+                    tag_type.pop("object__type", None)
+                    formatted_tag_type_results.append(tag_type)
+            else:
+                # No authorization required, add all
+                tag_type.pop("object__type", None)
+                formatted_tag_type_results.append(tag_type)
+        
+        # Build response
+        result = {"Items": formatted_tag_type_results}
+        if 'NextToken' in page_iterator_tag_types:
+            result['NextToken'] = page_iterator_tag_types['NextToken']
+        
+        return result
+        
+    except Exception as e:
+        logger.exception(f"Error getting tag types: {e}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving tag types: {str(e)}")
 
-        validate_pagination_info(queryParameters)
+def delete_tag_type(tag_type_name: str, claims_and_roles: dict) -> TagTypeOperationResponseModel:
+    """Delete a tag type
+    
+    Args:
+        tag_type_name: Name of the tag type to delete
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        TagTypeOperationResponseModel with operation result
+        
+    Raises:
+        VAMSGeneralErrorResponse: If tag type not found, in use, or deletion fails
+    """
+    try:
+        # Get the tag type
+        tag_type_response = tag_type_table.get_item(Key={'tagTypeName': tag_type_name})
+        tag_type = tag_type_response.get("Item")
+        
+        if not tag_type:
+            raise VAMSGeneralErrorResponse("Tag type not found", status_code=404)
+        
+        # Check if tag type is in use by any tags
+        tag_results = tag_table.scan().get('Items', [])
+        for tag in tag_results:
+            if tag.get("tagTypeName") == tag_type_name:
+                raise VAMSGeneralErrorResponse(
+                    "Cannot delete tag type that is currently in use by a tag",
+                    status_code=400
+                )
+        
+        # Check authorization
+        tag_type.update({"object__type": "tagType"})
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(tag_type, "DELETE"):
+                raise VAMSGeneralErrorResponse("Not authorized to delete tag type", status_code=403)
+        
+        # Delete the tag type
+        logger.info(f"Deleting tag type: {tag_type_name}")
+        tag_type_table.delete_item(
+            Key={'tagTypeName': tag_type_name},
+            ConditionExpression='attribute_exists(tagTypeName)'
+        )
+        
+        # Return success response
+        timestamp = datetime.utcnow().isoformat()
+        return TagTypeOperationResponseModel(
+            success=True,
+            message=f"Tag type '{tag_type_name}' deleted successfully",
+            tagTypeName=tag_type_name,
+            operation="delete",
+            timestamp=timestamp
+        )
+        
+    except VAMSGeneralErrorResponse:
+        raise
+    except Exception as e:
+        logger.exception(f"Error deleting tag type: {e}")
+        if hasattr(e, 'response') and e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            raise VAMSGeneralErrorResponse("Tag type not found", status_code=404)
+        raise VAMSGeneralErrorResponse(f"Error deleting tag type: {str(e)}")
 
-        global claims_and_roles
-        claims_and_roles = request_to_claims(event)
+#######################
+# Request Handlers
+#######################
 
+def handle_get_request(event):
+    """Handle GET requests to list tag types
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    query_parameters = event.get('queryStringParameters', {}) or {}
+    
+    try:
+        # Parse and validate query parameters using GetTagTypesRequestModel
+        try:
+            request_model = parse(query_parameters, model=GetTagTypesRequestModel)
+            # Extract validated parameters for the query
+            query_params = {
+                'maxItems': request_model.maxItems,
+                'pageSize': request_model.pageSize,
+                'startingToken': request_model.startingToken
+            }
+        except ValidationError as v:
+            logger.exception(f"Validation error in query parameters: {v}")
+            # Fall back to default pagination with validation
+            validate_pagination_info(query_parameters)
+            query_params = query_parameters
+        
+        # Get tag types
+        result = get_tag_types(query_params, claims_and_roles)
+        
+        # Convert to response models
+        formatted_items = []
+        for item in result.get('Items', []):
+            try:
+                tag_type_model = TagTypeResponseModel(**item)
+                formatted_items.append(tag_type_model.dict())
+            except ValidationError:
+                # Fall back to raw item if conversion fails
+                formatted_items.append(item)
+        
+        # Build response
+        response = {"Items": formatted_items}
+        if 'NextToken' in result:
+            response['NextToken'] = result['NextToken']
+        
+        return success(body={"message": response})
+        
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
+    except Exception as e:
+        logger.exception(f"Error handling GET request: {e}")
+        return internal_error(event=event)
+
+def handle_delete_request(event):
+    """Handle DELETE requests to delete tag types
+    
+    Args:
+        event: API Gateway event
+        
+    Returns:
+        APIGatewayProxyResponseV2 response
+    """
+    path_parameters = event.get('pathParameters', {})
+    
+    try:
+        # Validate path parameters
+        tag_type_name = path_parameters.get("tagTypeId")
+        
+        if not tag_type_name or len(tag_type_name) == 0:
+            return validation_error(body={'message': "TagTypeName is a required path parameter"}, event=event)
+        
+        # Validate tag type name format
+        from common.validators import validate
+        (valid, message) = validate({
+            'tagTypeName': {
+                'value': tag_type_name,
+                'validator': 'OBJECT_NAME'
+            }
+        })
+        
+        if not valid:
+            logger.error(message)
+            return validation_error(body={'message': message}, event=event)
+        
+        # Delete tag type
+        result = delete_tag_type(tag_type_name, claims_and_roles)
+        
+        return success(body=result.dict())
+        
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
+    except Exception as e:
+        logger.exception(f"Error handling DELETE request: {e}")
+        return internal_error(event=event)
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for tag type service operations (GET, DELETE)"""
+    global claims_and_roles
+    claims_and_roles = request_to_claims(event)
+    
+    try:
+        # Parse request
+        method = event['requestContext']['http']['method']
+        
+        # Validate pagination info for GET requests
+        if method == 'GET':
+            query_parameters = event.get('queryStringParameters', {})
+            validate_pagination_info(query_parameters)
+        
+        # Check API authorization
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-        if httpMethod == 'GET' and method_allowed_on_api:
-            return get_tag_types(response, queryParameters)
-        elif httpMethod == 'DELETE' and method_allowed_on_api:
-            return delete_tag_type(response, pathParameters)
+        
+        if not method_allowed_on_api:
+            return authorization_error()
+        
+        # Route to appropriate handler
+        if method == 'GET':
+            return handle_get_request(event)
+        elif method == 'DELETE':
+            return handle_delete_request(event)
         else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
-
+            return validation_error(body={'message': "Method not allowed"}, event=event)
+            
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
-        logger.exception(e)
-        response['statusCode'] = 500
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
+        logger.exception(f"Internal error: {e}")
+        return internal_error(event=event)

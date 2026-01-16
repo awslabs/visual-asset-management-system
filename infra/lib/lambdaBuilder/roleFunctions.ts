@@ -10,22 +10,22 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import * as Config from "../../config/config";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
 export function buildRoleService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    rolesStorageTable: dynamodb.Table,
-    authEntitiesStorageTable: dynamodb.Table,
-    userRolesStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "roleService";
-    const roleService = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.roles.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -40,34 +40,29 @@ export function buildRoleService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            ROLES_TABLE_NAME: rolesStorageTable.tableName,
-            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-        },
+        environment: {},
     });
 
-    rolesStorageTable.grantReadWriteData(roleService);
-    authEntitiesStorageTable.grantReadWriteData(roleService);
-    userRolesStorageTable.grantReadWriteData(roleService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(roleService, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(roleService, config);
-    return roleService;
+    storageResources.dynamo.rolesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildCreateRoleFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    rolesStorageTable: dynamodb.Table,
-    authEntitiesStorageTable: dynamodb.Table,
-    userRolesStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "createRole";
-    const createRoleFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.roles.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -82,17 +77,14 @@ export function buildCreateRoleFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            ROLES_TABLE_NAME: rolesStorageTable.tableName,
-            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-        },
+        environment: {},
     });
 
-    rolesStorageTable.grantReadWriteData(createRoleFunction);
-    authEntitiesStorageTable.grantReadWriteData(createRoleFunction);
-    userRolesStorageTable.grantReadWriteData(createRoleFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(createRoleFunction, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(createRoleFunction, config);
-    return createRoleFunction;
+    storageResources.dynamo.rolesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }

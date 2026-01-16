@@ -16,6 +16,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
 export function buildMetadataSchemaService(
@@ -26,8 +27,8 @@ export function buildMetadataSchemaService(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "schema";
-    const fn = new lambda.Function(scope, name, {
+    const name = "metadataSchemaService";
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.metadataschema.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -44,20 +45,15 @@ export function buildMetadataSchemaService(
                 : undefined,
         environment: {
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            METADATA_SCHEMA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.metadataSchemaStorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            METADATA_SCHEMA_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
         },
     });
-    storageResources.dynamo.databaseStorageTable.grantReadData(fn);
-    storageResources.dynamo.metadataSchemaStorageTable.grantReadWriteData(fn);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fn);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fn);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fn);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fn, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fn, config);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.dynamo.metadataSchemaStorageTableV2.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
-    return fn;
+    return fun;
 }

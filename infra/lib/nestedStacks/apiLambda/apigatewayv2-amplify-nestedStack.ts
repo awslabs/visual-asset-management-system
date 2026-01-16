@@ -27,6 +27,7 @@ import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { buildApiGatewayAuthorizerHttpFunction } from "../../lambdaBuilder/authFunctions";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import { NagSuppressions } from "cdk-nag";
 
 export interface ApiGatewayV2AmplifyNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -71,6 +72,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         const customAuthorizerFunction = buildApiGatewayAuthorizerHttpFunction(
             this,
             props.lambdaAuthorizerLayer,
+            props.storageResources,
             props.config,
             props.vpc,
             props.subnets
@@ -131,8 +133,10 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                     "X-Api-Key",
                     "X-Amz-Security-Token",
                     "X-Amz-User-Agent",
+                    "Access-Control-Allow-Origin",
                 ],
                 allowMethods: [
+                    apigw.CorsHttpMethod.HEAD,
                     apigw.CorsHttpMethod.OPTIONS,
                     apigw.CorsHttpMethod.GET,
                     apigw.CorsHttpMethod.PUT,
@@ -239,5 +243,16 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
 
         // assign public properties
         this.apiGatewayV2 = api;
+
+        NagSuppressions.addResourceSuppressions(
+            this,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Not providing IAM wildcard permissions to various data tables.",
+                },
+            ],
+            true
+        );
     }
 }

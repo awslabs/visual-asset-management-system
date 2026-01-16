@@ -43,12 +43,8 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
 }) => {
     // Helper function to check if a filter is a location filter (added by map view)
     const isLocationFilter = (filter: MetadataFilter) => {
-        return (
-            (filter.key === "location" &&
-                (filter.fieldType === "gp" || filter.fieldType === "gs")) ||
-            (filter.key === "latitude" && filter.fieldType === "str") ||
-            (filter.key === "longitude" && filter.fieldType === "str")
-        );
+        const keyLower = filter.key.toLowerCase();
+        return keyLower === "location" || keyLower === "latitude" || keyLower === "longitude";
     };
     const searchModeOptions = [
         { label: "Search Both (Field Names & Values)", value: "both" },
@@ -130,14 +126,7 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                     const isLocFilter = isLocationFilter(filter);
                     return (
                         <Box key={index} padding={{ bottom: "s" }}>
-                            <Grid
-                                gridDefinition={[
-                                    { colspan: 3 },
-                                    { colspan: 2 },
-                                    { colspan: 5 },
-                                    { colspan: 2 },
-                                ]}
-                            >
+                            <Grid gridDefinition={[{ colspan: 5 }, { colspan: 5 }, { colspan: 2 }]}>
                                 <FormField label="Field Name">
                                     <Input
                                         value={filter.key}
@@ -145,35 +134,6 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                             onUpdateFilter(index, { ...filter, key: detail.value })
                                         }
                                         placeholder="e.g., product"
-                                        disabled={
-                                            disabled ||
-                                            metadataSearchMode === "value" ||
-                                            isLocFilter
-                                        }
-                                    />
-                                </FormField>
-
-                                <FormField label="Type">
-                                    <Select
-                                        selectedOption={{
-                                            label: filter.fieldType || "str",
-                                            value: filter.fieldType || "str",
-                                        }}
-                                        onChange={({ detail }) =>
-                                            onUpdateFilter(index, {
-                                                ...filter,
-                                                fieldType: detail.selectedOption.value as any,
-                                            })
-                                        }
-                                        options={[
-                                            { label: "String", value: "str" },
-                                            { label: "Number", value: "num" },
-                                            { label: "Boolean", value: "bool" },
-                                            { label: "Date", value: "date" },
-                                            { label: "List", value: "list" },
-                                            { label: "Geo Point", value: "gp" },
-                                            { label: "Geo Shape", value: "gs" },
-                                        ]}
                                         disabled={
                                             disabled ||
                                             metadataSearchMode === "value" ||

@@ -9,8 +9,10 @@ SPDX-License-Identifier: Apache-2.0
 import os
 import boto3
 import json
+import time
+import random
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Callable
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from botocore.config import Config
@@ -42,16 +44,13 @@ claims_and_roles = {}
 # Load environment variables with error handling
 try:
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    metadata_storage_table_name = os.environ["METADATA_STORAGE_TABLE_NAME"]
+    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
     s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
     asset_versions_table_name = os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"]
     opensearch_asset_index_ssm_param = os.environ["OPENSEARCH_ASSET_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -73,7 +72,7 @@ opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
 
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
-metadata_storage_table = dynamodb.Table(metadata_storage_table_name)
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 asset_links_table = dynamodb.Table(asset_links_table_name)
 asset_versions_table = dynamodb.Table(asset_versions_table_name)
@@ -142,6 +141,141 @@ class AssetIndexOpenSearchManager:
 opensearch_manager = AssetIndexOpenSearchManager()
 
 #######################
+# OpenSearch Retry Logic
+#######################
+
+def opensearch_operation_with_retry(operation_func: Callable, max_retries: int = 5, operation_name: str = "operation") -> Any:
+    """
+    Execute OpenSearch operation with exponential backoff retry for 429 errors
+    
+    Args:
+        operation_func: Lambda/function that performs the OpenSearch operation
+        max_retries: Maximum number of retry attempts (default: 5)
+        operation_name: Name of operation for logging
+    
+    Returns:
+        Result from the operation function
+        
+    Raises:
+        TransportError: If operation fails after all retries or for non-429 errors
+    """
+    from opensearchpy.exceptions import TransportError
+    
+    for attempt in range(max_retries):
+        try:
+            return operation_func()
+        except TransportError as e:
+            if e.status_code == 429 and attempt < max_retries - 1:
+                # Calculate exponential backoff with jitter
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                logger.warning(
+                    f"Rate limited (429) during {operation_name}, "
+                    f"retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(wait_time)
+            else:
+                # Re-raise if not 429 or max retries reached
+                raise
+
+#######################
+# Metadata Normalization
+#######################
+
+def normalize_metadata_value(value: str, value_type: Optional[str] = None) -> Any:
+    """
+    Normalize metadata values for OpenSearch indexing with type detection.
+    Handles dates, booleans, numbers, and strings with fallback to string.
+    
+    Args:
+        value: The metadata value to normalize (from DynamoDB)
+        value_type: Optional type hint from metadataValueType field
+        
+    Returns:
+        Normalized value in the appropriate type, or string if parsing fails
+    """
+    import re
+    
+    if not isinstance(value, str):
+        return value
+    
+    # If we have a type hint, try to use it
+    if value_type:
+        try:
+            if value_type == 'boolean' or value_type == 'bool':
+                # Handle boolean values
+                if value.lower() in ('true', '1', 'yes', 'on'):
+                    return True
+                elif value.lower() in ('false', '0', 'no', 'off'):
+                    return False
+                else:
+                    return value  # Return as string if not parseable
+                    
+            elif value_type in ('number', 'integer', 'int'):
+                # Try integer first
+                try:
+                    return int(value)
+                except ValueError:
+                    # Try float
+                    try:
+                        return float(value)
+                    except ValueError:
+                        return value  # Return as string if not parseable
+                        
+            elif value_type in ('float', 'double'):
+                try:
+                    return float(value)
+                except ValueError:
+                    return value  # Return as string if not parseable
+                    
+            elif value_type in ('date', 'datetime'):
+                # Handle datetime - strip microseconds
+                datetime_pattern = r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(Z|[+-]\d{2}:\d{2})'
+                match = re.match(datetime_pattern, value)
+                if match:
+                    base_datetime = match.group(1)
+                    timezone = match.group(3)
+                    return f"{base_datetime}{timezone}"
+                else:
+                    return value  # Return as-is if already in correct format
+                    
+        except Exception as e:
+            logger.warning(f"Error parsing metadata value with type hint '{value_type}': {e}")
+            # Fall through to auto-detection
+    
+    # Auto-detection if no type hint or type hint parsing failed
+    
+    # 1. Try to detect and normalize datetime with microseconds
+    datetime_pattern = r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(Z|[+-]\d{2}:\d{2})'
+    match = re.match(datetime_pattern, value)
+    if match:
+        base_datetime = match.group(1)
+        timezone = match.group(3)
+        normalized = f"{base_datetime}{timezone}"
+        logger.debug(f"Normalized datetime from '{value}' to '{normalized}'")
+        return normalized
+    
+    # 2. Try boolean detection
+    if value.lower() in ('true', 'false'):
+        return value.lower() == 'true'
+    
+    # 3. Try number detection
+    try:
+        # Try integer first (no decimal point or scientific notation)
+        if '.' not in value and 'e' not in value.lower():
+            return int(value)
+    except ValueError:
+        pass
+    
+    try:
+        # Try float
+        return float(value)
+    except ValueError:
+        pass
+    
+    # 4. Default: return as string
+    return value
+
+#######################
 # Utility Functions
 #######################
 
@@ -203,35 +337,39 @@ def get_asset_details(database_id: str, asset_id: str) -> Optional[Dict[str, Any
         return None
 
 def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
-    """Get asset-level metadata from metadata table"""
+    """
+    Get asset-level metadata from NEW schema table as a flat single-level JSON object.
+    Returns metadata without any type prefixes - just field names and values.
+    """
     try:
-        # Query for metadata with no path or root path
-        metadata_keys = [
-            f"{asset_id}",      # No path
-            f"{asset_id}/",     # Root path variant 1
-            f"/{asset_id}/"     # Root path variant 2
-        ]
+        # Build composite key for asset-level metadata (file_path = "/")
+        composite_key = f"{database_id}:{asset_id}:/"
         
         all_metadata = {}
         
-        for key in metadata_keys:
-            try:
-                response = metadata_storage_table.get_item(
-                    Key={
-                        'databaseId': database_id,
-                        'assetId': key
-                    }
-                )
+        # Query assetFileMetadataStorageTable for metadata fields
+        response = asset_file_metadata_table.query(
+            IndexName='DatabaseIdAssetIdFilePathIndex',
+            KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+        )
+        
+        for item in response.get('Items', []):
+            metadata_key = item.get('metadataKey')
+            metadata_value = item.get('metadataValue')
+            metadata_value_type = item.get('metadataValueType')
+            
+            # Skip system metadata records that conflict with OpenSearch field mappings
+            if metadata_key == 'REINDEX_METADATA_RECORD':
+                logger.debug(f"Skipping system metadata: {metadata_key}")
+                continue  # Skip this metadata, but continue processing others
+            
+            if metadata_key and metadata_value:
+                # Normalize the value with type hint
+                normalized_value = normalize_metadata_value(metadata_value, metadata_value_type)
                 
-                if 'Item' in response:
-                    metadata = response['Item']
-                    # Remove system fields and merge
-                    filtered_metadata = {k: v for k, v in metadata.items() 
-                                       if not k.startswith('_') and k not in ['databaseId', 'assetId']}
-                    all_metadata.update(filtered_metadata)
-            except Exception as e:
-                logger.warning(f"Error getting metadata for key {key}: {e}")
-                continue
+                # Store as flat single-level JSON: just field name -> value
+                # No type prefixes (str_, num_, etc.) - flat object handles all types as strings
+                all_metadata[metadata_key] = normalized_value
         
         return all_metadata
     except Exception as e:
@@ -333,9 +471,12 @@ def build_asset_document(request: AssetIndexRequest, asset_details: Dict[str, An
                         is_archived: bool) -> AssetDocumentModel:
     """Build an asset document for indexing"""
     
+    # Normalize databaseId for storage (remove #deleted suffix)
+    normalized_database_id = request.databaseId.replace('#deleted', '')
+    
     # Create base document
     doc = AssetDocumentModel(
-        str_databaseid=request.databaseId,
+        str_databaseid=normalized_database_id,  # Store normalized version
         str_assetid=request.assetId,
         str_bucketid=bucket_details.get('bucketId'),
         str_assetname=asset_details.get('assetName'),
@@ -370,24 +511,32 @@ def build_asset_document(request: AssetIndexRequest, asset_details: Dict[str, An
 #######################
 
 def index_asset_document(document: AssetDocumentModel) -> bool:
-    """Index an asset document in OpenSearch"""
+    """Index an asset document in OpenSearch with retry logic for 429 errors"""
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
         
         client = opensearch_manager.get_client()
+
+        # Normalize databaseId for storage (addition of #deleted suffix if archived)
+        normalized_database_id = document.str_databaseid
+        if(document.bool_archived and "#deleted" not in normalized_database_id):
+            normalized_database_id = f"{normalized_database_id}#deleted"
         
         # Create document ID from key components
-        doc_id = f"{document.str_databaseid}#{document.str_assetid}"
+        doc_id = f"{normalized_database_id}#{document.str_assetid}"
         
         # Convert document to dict for indexing
         doc_dict = document.dict(exclude_unset=True)
         
-        # Index the document
-        response = client.index(
-            index=opensearch_asset_index,
-            id=doc_id,
-            body=doc_dict
+        # Index the document with retry logic
+        response = opensearch_operation_with_retry(
+            lambda: client.index(
+                index=opensearch_asset_index,
+                id=doc_id,
+                body=doc_dict
+            ),
+            operation_name=f"index asset {doc_id}"
         )
         
         logger.info(f"Indexed asset document: {doc_id}")
@@ -398,7 +547,7 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
         return False
 
 def delete_asset_document(database_id: str, asset_id: str) -> bool:
-    """Delete an asset document from OpenSearch"""
+    """Delete an asset document from OpenSearch with retry logic for 429 errors"""
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
@@ -408,11 +557,14 @@ def delete_asset_document(database_id: str, asset_id: str) -> bool:
         # Create document ID
         doc_id = f"{database_id}#{asset_id}"
         
-        # Delete the document
-        response = client.delete(
-            index=opensearch_asset_index,
-            id=doc_id,
-            ignore=[404]  # Ignore if document doesn't exist
+        # Delete the document with retry logic
+        response = opensearch_operation_with_retry(
+            lambda: client.delete(
+                index=opensearch_asset_index,
+                id=doc_id,
+                ignore=[404]  # Ignore if document doesn't exist
+            ),
+            operation_name=f"delete asset {doc_id}"
         )
         
         logger.info(f"Deleted asset document: {doc_id}")
@@ -431,24 +583,42 @@ def process_asset_index_request(request: AssetIndexRequest) -> IndexOperationRes
     
     try:
         # Validate input parameters using VAMS validators
-        (valid, message) = validate({
-            'databaseId': {
-                'value': request.databaseId,
-                'validator': 'ID'
-            },
-            'assetId': {
-                'value': request.assetId,
-                'validator': 'ASSET_ID'
-            }
-        })
-        if not valid:
-            logger.error(f"Validation error in asset index request: {message}")
-            return IndexOperationResponse(
-                success=False,
-                message="Invalid input parameters",
-                indexName=opensearch_asset_index,
-                operation="validation_error"
-            )
+        # Skip databaseId validation for archived assets (databaseId ends with #deleted)
+        if not request.databaseId.endswith('#deleted'):
+            (valid, message) = validate({
+                'databaseId': {
+                    'value': request.databaseId,
+                    'validator': 'ID'
+                },
+                'assetId': {
+                    'value': request.assetId,
+                    'validator': 'ASSET_ID'
+                }
+            })
+            if not valid:
+                logger.error(f"Validation error in asset index request: {message}")
+                return IndexOperationResponse(
+                    success=False,
+                    message="Invalid input parameters",
+                    indexName=opensearch_asset_index,
+                    operation="validation_error"
+                )
+        else:
+            # For archived assets, only validate the assetId
+            (valid, message) = validate({
+                'assetId': {
+                    'value': request.assetId,
+                    'validator': 'ASSET_ID'
+                }
+            })
+            if not valid:
+                logger.error(f"Validation error in asset index request: {message}")
+                return IndexOperationResponse(
+                    success=False,
+                    message="Invalid input parameters",
+                    indexName=opensearch_asset_index,
+                    operation="validation_error"
+                )
         
         if request.operation == "delete":
             # Check if asset still exists
@@ -635,52 +805,78 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
     """Handle DynamoDB metadata table stream for asset indexing"""
     try:
         event_name = event_record.get('eventName', '')
+        dynamodb_data = event_record.get('dynamodb', {})
         
-        # Get the record data
+        # For REMOVE events, Keys are always present regardless of StreamViewType
+        # We should use Keys directly since OldImage won't exist for NEW_IMAGE stream type
         if event_name == 'REMOVE':
-            # For deletes, use the old image
-            record_data = event_record.get('dynamodb', {}).get('OldImage', {})
-        else:
-            # For inserts/updates, use the new image
-            record_data = event_record.get('dynamodb', {}).get('NewImage', {})
-        
-        if not record_data:
-            logger.warning("No record data found in metadata stream event")
-            return IndexOperationResponse(
-                success=True,
-                message="No record data, skipping",
-                indexName=opensearch_asset_index,
-                operation="skip"
-            )
-        
-        # Extract database ID and asset ID from DynamoDB record
-        database_id = record_data.get('databaseId', {}).get('S')
-        asset_id_with_path = record_data.get('assetId', {}).get('S')
-        
-        if not database_id or not asset_id_with_path:
-            logger.warning("Missing database ID or asset ID in metadata stream")
-            return IndexOperationResponse(
-                success=True,
-                message="Missing IDs, skipping",
-                indexName=opensearch_asset_index,
-                operation="skip"
-            )
-        
-        # Check if this is asset-level metadata (no path or root path)
-        if '/' in asset_id_with_path:
-            asset_id, file_path = asset_id_with_path.split('/', 1)
-            
-            # Only process if it's root path metadata
-            if file_path and file_path != '/' and file_path != '':
-                logger.info("File-level metadata, skipping for asset index")
+            # Get composite key from Keys (always present for REMOVE)
+            keys = dynamodb_data.get('Keys', {})
+            if not keys or 'databaseId:assetId:filePath' not in keys:
+                logger.warning("Missing Keys in REMOVE event")
                 return IndexOperationResponse(
                     success=True,
-                    message="File-level metadata, skipping",
+                    message="Missing Keys in REMOVE event, skipping",
+                    indexName=opensearch_asset_index,
+                    operation="skip"
+                )
+            
+            composite_key = keys.get('databaseId:assetId:filePath', {}).get('S')
+            if not composite_key:
+                logger.warning("Missing composite key value in REMOVE event")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Missing composite key value, skipping",
                     indexName=opensearch_asset_index,
                     operation="skip"
                 )
         else:
-            asset_id = asset_id_with_path
+            # For INSERT/MODIFY, get the record data from NewImage
+            record_data = dynamodb_data.get('NewImage', {})
+            
+            if not record_data:
+                logger.warning("No NewImage found in INSERT/MODIFY event")
+                return IndexOperationResponse(
+                    success=True,
+                    message="No NewImage data, skipping",
+                    indexName=opensearch_asset_index,
+                    operation="skip"
+                )
+            
+            # Parse composite key format (databaseId:assetId:filePath)
+            composite_key = record_data.get('databaseId:assetId:filePath', {}).get('S')
+            
+            if not composite_key:
+                logger.warning("Missing composite key in metadata stream")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Missing composite key, skipping",
+                    indexName=opensearch_asset_index,
+                    operation="skip"
+                )
+        
+        # Parse composite key
+        parts = composite_key.split(':', 2)
+        if len(parts) != 3:
+            logger.warning(f"Invalid composite key format: {composite_key}")
+            return IndexOperationResponse(
+                success=True,
+                message="Invalid composite key format, skipping",
+                indexName=opensearch_asset_index,
+                operation="skip"
+            )
+        
+        database_id, asset_id, file_path = parts
+        
+        # Only process if it's asset-level (file_path is "/")
+        if file_path != '/':
+            logger.info("File-level metadata, skipping for asset index")
+            return IndexOperationResponse(
+                success=True,
+                message="File-level metadata, skipping",
+                indexName=opensearch_asset_index,
+                operation="skip"
+            )
         
         # Create asset index request
         request = AssetIndexRequest(
@@ -705,27 +901,41 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[IndexOperati
     """Handle DynamoDB asset links table stream for asset indexing"""
     try:
         event_name = event_record.get('eventName', '')
+        dynamodb_data = event_record.get('dynamodb', {})
         
-        # Get the record data
+        # For REMOVE events, Keys are always present regardless of StreamViewType
+        # We should use Keys directly since OldImage won't exist for NEW_IMAGE stream type
         if event_name == 'REMOVE':
-            # For deletes, use the old image
-            record_data = event_record.get('dynamodb', {}).get('OldImage', {})
+            # Get keys from Keys (always present for REMOVE)
+            keys = dynamodb_data.get('Keys', {})
+            if not keys:
+                logger.warning("Missing Keys in REMOVE event for asset links")
+                return [IndexOperationResponse(
+                    success=True,
+                    message="Missing Keys in REMOVE event, skipping",
+                    indexName=opensearch_asset_index,
+                    operation="skip"
+                )]
+            
+            # Extract from and to asset information from Keys
+            from_asset_key = keys.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
+            to_asset_key = keys.get('toAssetDatabaseId:toAssetId', {}).get('S')
         else:
-            # For inserts/updates, use the new image
-            record_data = event_record.get('dynamodb', {}).get('NewImage', {})
-        
-        if not record_data:
-            logger.warning("No record data found in asset links stream event")
-            return [IndexOperationResponse(
-                success=True,
-                message="No record data, skipping",
-                indexName=opensearch_asset_index,
-                operation="skip"
-            )]
-        
-        # Extract from and to asset information
-        from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
-        to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
+            # For INSERT/MODIFY, use NewImage
+            record_data = dynamodb_data.get('NewImage', {})
+            
+            if not record_data:
+                logger.warning("No NewImage found in INSERT/MODIFY event for asset links")
+                return [IndexOperationResponse(
+                    success=True,
+                    message="No NewImage data, skipping",
+                    indexName=opensearch_asset_index,
+                    operation="skip"
+                )]
+            
+            # Extract from and to asset information from NewImage
+            from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
+            to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
         
         if not from_asset_key or not to_asset_key:
             logger.warning("Missing asset keys in asset links stream")
@@ -791,7 +1001,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         result = handle_asset_stream(record)
                         results.append(result)
                         
-                    elif metadata_storage_table_name in source_arn:
+                    elif asset_file_metadata_table_name in source_arn:
                         # Metadata table stream
                         result = handle_metadata_stream(record)
                         results.append(result)
@@ -803,6 +1013,81 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         
                     else:
                         logger.warning(f"Unknown DynamoDB table in source ARN: {source_arn}")
+                
+                elif event_source == 'aws:sqs':
+                    # SQS message (contains SNS message with DynamoDB stream record)
+                    try:
+                        # Parse SQS message body
+                        body = record.get('body', '')
+                        if isinstance(body, str):
+                            body = json.loads(body)
+                        
+                        # Check if this is an SNS message
+                        if body.get('Type') == 'Notification' and body.get('Message'):
+                            # Parse SNS message
+                            sns_message = body.get('Message')
+                            if isinstance(sns_message, str):
+                                sns_message = json.loads(sns_message)
+                            
+                            # First check if SNS message is a direct DynamoDB stream record (from SNS queuing Lambda)
+                            # This is the direct SNS→SQS path - check by eventSourceARN or eventName
+                            source_arn = sns_message.get('eventSourceARN', '')
+                            
+                            if asset_storage_table_name in source_arn:
+                                # Direct asset table stream from SNS queuing Lambda
+                                result = handle_asset_stream(sns_message)
+                                results.append(result)
+                            elif asset_file_metadata_table_name in source_arn:
+                                # Direct metadata table stream from SNS queuing Lambda
+                                result = handle_metadata_stream(sns_message)
+                                results.append(result)
+                            elif asset_links_table_name in source_arn:
+                                # Direct asset links table stream from SNS queuing Lambda
+                                link_results = handle_asset_links_stream(sns_message)
+                                results.extend(link_results)
+                            # Fallback: check if it's a DynamoDB stream by eventName and try to determine type
+                            elif sns_message.get('eventName') in ['INSERT', 'MODIFY', 'REMOVE']:
+                                # This is a DynamoDB stream record, try to determine type by data structure
+                                dynamodb_data = sns_message.get('dynamodb', {})
+                                new_image = dynamodb_data.get('NewImage', {})
+                                old_image = dynamodb_data.get('OldImage', {})
+                                keys = dynamodb_data.get('Keys', {})
+                                
+                                # Check if it has assetLinkId (asset links table)
+                                if 'assetLinkId' in new_image or 'assetLinkId' in old_image or 'assetLinkId' in keys:
+                                    link_results = handle_asset_links_stream(sns_message)
+                                    results.extend(link_results)
+                                # Check if it has assetId and databaseId (could be asset or metadata)
+                                elif ('assetId' in new_image or 'assetId' in old_image or 'assetId' in keys) and \
+                                     ('databaseId' in new_image or 'databaseId' in old_image or 'databaseId' in keys):
+                                    # Try to determine if it's asset or metadata by checking assetId format
+                                    asset_id_value = new_image.get('assetId', {}).get('S') or \
+                                                    old_image.get('assetId', {}).get('S') or \
+                                                    keys.get('assetId', {}).get('S')
+                                    
+                                    if asset_id_value and '/' in asset_id_value:
+                                        # Has path, likely metadata
+                                        result = handle_metadata_stream(sns_message)
+                                        results.append(result)
+                                    else:
+                                        # No path, likely asset
+                                        result = handle_asset_stream(sns_message)
+                                        results.append(result)
+                                else:
+                                    logger.warning(f"Cannot determine DynamoDB table type from SNS message structure")
+                            
+                            else:
+                                logger.warning(f"SNS message does not contain recognized event format (no eventSource, eventName, or Records): {list(sns_message.keys())}")
+                        else:
+                            logger.warning("SQS message is not an SNS notification")
+                    except json.JSONDecodeError as e:
+                        logger.exception(f"Error parsing SQS/SNS message: {e}")
+                        results.append(IndexOperationResponse(
+                            success=False,
+                            message=f"Error parsing SQS/SNS message: {str(e)}",
+                            indexName=opensearch_asset_index,
+                            operation="error"
+                        ))
                         
                 else:
                     logger.warning(f"Unknown event source: {event_source}")
@@ -815,7 +1100,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 results.append(result)
             except ValidationError as v:
                 logger.exception(f"Validation error: {v}")
-                return validation_error(body={'message': str(v)})
+                return validation_error(body={'message': str(v)}, event=event)
         
         # Summarize results
         successful = sum(1 for r in results if r.success)
@@ -830,10 +1115,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error in asset indexer: {e}")
-        return internal_error()
+        return internal_error(event=event)

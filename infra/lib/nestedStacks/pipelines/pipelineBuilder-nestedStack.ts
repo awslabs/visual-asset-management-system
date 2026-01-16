@@ -14,9 +14,11 @@ import { PcPotreeViewerBuilderNestedStack } from "./preview/pcPotreeViewer/pcPot
 import { SplatToolboxBuilderNestedStack } from "./3dRecon/splatToolbox/splatToolboxBuilder-nestedStack";
 import { Metadata3dLabelingNestedStack } from "./genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack";
 import { RapidPipelineNestedStack } from "./multi/rapidPipeline/rapidPipeline-nestedStack";
+import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipelineEKS-nestedStack";
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
 import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
+import { IsaacLabTrainingBuilderNestedStack } from "./simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -132,8 +134,10 @@ export class PipelineBuilderNestedStack extends NestedStack {
         if (
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
             props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
-            props.config.app.pipelines.useRapidPipeline.enabled ||
-            props.config.app.pipelines.useModelOps.enabled
+            props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
+            props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
+            props.config.app.pipelines.useModelOps.enabled ||
+            props.config.app.pipelines.useIsaacLabTraining.enabled
         ) {
             //Create nested stack for each turned on pipeline
             if (props.config.app.pipelines.usePreviewPcPotreeViewer.enabled) {
@@ -198,7 +202,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 );
             }
 
-            if (props.config.app.pipelines.useRapidPipeline.enabled) {
+            if (props.config.app.pipelines.useRapidPipeline.useEcs.enabled) {
                 const rapidPipelineNestedStack = new RapidPipelineNestedStack(
                     this,
                     "RapidPipelineNestedStack",
@@ -218,6 +222,54 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
                     rapidPipelineNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            if (props.config.app.pipelines.useRapidPipeline.useEks.enabled) {
+                const rapidPipelineEKSNestedStack = new RapidPipelineEKSNestedStack(
+                    this,
+                    "RapidPipelineEKSNestedStack",
+                    {
+                        config: props.config,
+                        storageResources: props.storageResources,
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        vpc: props.vpc,
+                        pipelineSubnetsPrivate: pipelineNetwork.privateSubnets.pipeline,
+                        pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        importGlobalPipelineWorkflowFunctionName:
+                            props.importGlobalPipelineWorkflowFunctionName,
+                    }
+                );
+                //Add function name to array for stack output
+                this.pipelineVamsLambdaFunctionNames.push(
+                    rapidPipelineEKSNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            if (props.config.app.pipelines.useIsaacLabTraining.enabled) {
+                const isaacLabTrainingNestedStack = new IsaacLabTrainingBuilderNestedStack(
+                    this,
+                    "IsaacLabTrainingNestedStack",
+                    {
+                        ...props,
+                        config: props.config,
+                        storageResources: props.storageResources,
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        vpc: props.vpc,
+                        // Use private subnets for compute - requires NAT Gateway for
+                        // internet access to download assets from Omniverse content server
+                        pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
+                        // Use isolated subnets for EFS - no internet access needed
+                        pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        importGlobalPipelineWorkflowFunctionName:
+                            props.importGlobalPipelineWorkflowFunctionName,
+                    }
+                );
+                //Add function name to array for stack output
+                this.pipelineVamsLambdaFunctionNames.push(
+                    isaacLabTrainingNestedStack.pipelineVamsLambdaFunctionName
                 );
             }
         }

@@ -1,4 +1,4 @@
-import React, { useContext, useState, useEffect } from "react";
+import React, { useContext, useState, useEffect, useRef } from "react";
 import {
     Box,
     Button,
@@ -12,7 +12,7 @@ import {
 import { archiveFile, deleteAssetPreview } from "../../../services/FileOperationsService";
 import { useNavigate, useParams } from "react-router";
 import { AssetDetailContext, AssetDetailContextType } from "../../../context/AssetDetailContext";
-import { createFolder, fetchAsset } from "../../../services/APIService";
+import { createFolder, fetchAsset, fetchFileInfo } from "../../../services/APIService";
 import { FileInfoPanelProps, FileManagerContextType } from "../types/FileManagerTypes";
 import {
     formatFileSize,
@@ -27,6 +27,7 @@ import { MoveFilesModal } from "../modals/MoveFilesModal";
 import { FileVersionsModal } from "../modals/FileVersionsModal";
 import { SetPrimaryTypeModal } from "../modals/SetPrimaryTypeModal";
 import { ShareUrlsModal } from "../modals/ShareUrlsModal";
+import { RenameFileModal } from "../modals/RenameFileModal";
 import AssetPreviewThumbnail from "./AssetPreviewThumbnail";
 import FilePreviewThumbnail from "./FilePreviewThumbnail";
 import PreviewModal from "./PreviewModal";
@@ -46,9 +47,19 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
     const [asset, setAsset] = useState<any>(null);
+    const [fetchingFileInfo, setFetchingFileInfo] = useState(false);
+    const fetchedFilePathsRef = useRef<Set<string>>(new Set());
     const selectedItem = state.selectedItem;
     const selectedItems = state.selectedItems;
     const isMultiSelect = state.multiSelectMode && selectedItems.length > 1;
+
+    // Clear fetched files cache when refresh happens
+    useEffect(() => {
+        if (state.refreshTrigger > 0) {
+            console.log("Clearing fetched files cache due to refresh");
+            fetchedFilePathsRef.current = new Set();
+        }
+    }, [state.refreshTrigger]);
 
     // Fetch asset data directly
     useEffect(() => {
@@ -62,12 +73,6 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     showArchived: true,
                 });
 
-                console.log("FileDetailsPanel - API Response:", item);
-                console.log(
-                    "FileDetailsPanel - API Response previewLocation:",
-                    item?.previewLocation
-                );
-
                 if (item !== false) {
                     setAsset(item);
                 }
@@ -78,6 +83,100 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
 
         fetchAssetData();
     }, [databaseId, assetId]);
+
+    // On-demand file info fetching when user selects a file without detailed data
+    useEffect(() => {
+        const fetchDetailedFileInfo = async () => {
+            if (!databaseId || !assetId) return;
+            if (!selectedItem) return;
+            if (fetchingFileInfo) return;
+
+            // Check if this is a folder or root
+            const isFolder =
+                selectedItem.isFolder !== undefined
+                    ? selectedItem.isFolder
+                    : selectedItem.subTree.length > 0 || selectedItem.keyPrefix.endsWith("/");
+
+            if (isFolder) return;
+            if (selectedItem.relativePath === "/") return;
+
+            // Check if file lacks detailed data
+            // Basic mode returns versionId as None/null which may be serialized as empty string, "null", null, or undefined
+            const needsDetailedData =
+                !selectedItem.versionId ||
+                selectedItem.versionId === null ||
+                selectedItem.versionId === undefined ||
+                selectedItem.versionId === "null" ||
+                selectedItem.versionId === "" ||
+                selectedItem.versionId.trim() === "";
+
+            if (!needsDetailedData) {
+                return;
+            }
+
+            // Check if we've already fetched this file
+            if (fetchedFilePathsRef.current.has(selectedItem.relativePath)) {
+                console.log("Already attempted to fetch file info for:", selectedItem.relativePath);
+                return;
+            }
+
+            console.log("🔄 Fetching detailed file info for:", selectedItem.relativePath);
+            setFetchingFileInfo(true);
+
+            try {
+                const [success, fileInfo] = await fetchFileInfo({
+                    databaseId,
+                    assetId,
+                    fileKey: selectedItem.keyPrefix,
+                    includeVersions: false,
+                });
+
+                if (success && fileInfo) {
+                    console.log("✅ Received file info:", fileInfo);
+
+                    // Mark this file as fetched AFTER successful fetch
+                    fetchedFilePathsRef.current.add(selectedItem.relativePath);
+
+                    // Update the tree with the detailed file info
+                    // Set preserveSelection flag to keep current selection
+                    dispatch({
+                        type: "MERGE_FILES",
+                        payload: {
+                            files: [
+                                {
+                                    fileName: fileInfo.fileName,
+                                    key: fileInfo.key,
+                                    relativePath: fileInfo.relativePath,
+                                    isFolder: fileInfo.isFolder,
+                                    size: fileInfo.size,
+                                    dateCreatedCurrentVersion:
+                                        fileInfo.dateCreatedCurrentVersion || fileInfo.lastModified,
+                                    versionId: fileInfo.versionId,
+                                    storageClass: fileInfo.storageClass,
+                                    isArchived: fileInfo.isArchived,
+                                    primaryType: fileInfo.primaryType,
+                                    previewFile: fileInfo.previewFile,
+                                },
+                            ],
+                            loadingPhase: state.loadingPhase,
+                            loadingProgress: state.loadingProgress,
+                            paginationTokens: state.paginationTokens,
+                            preserveSelection: true, // Keep current selection during on-demand fetch
+                        },
+                    });
+                    console.log("✅ Dispatched MERGE_FILES for on-demand fetch");
+                } else {
+                    console.error("❌ Failed to fetch file info:", fileInfo);
+                }
+            } catch (error) {
+                console.error("❌ Error fetching file info:", error);
+            } finally {
+                setFetchingFileInfo(false);
+            }
+        };
+
+        fetchDetailedFileInfo();
+    }, [selectedItem?.relativePath, databaseId, assetId, state.loadingPhase]);
 
     const isFolder =
         selectedItem?.isFolder !== undefined
@@ -111,6 +210,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [showShareUrlsModal, setShowShareUrlsModal] = useState(false);
     const [showFileViewerModal, setShowFileViewerModal] = useState(false);
     const [modalFiles, setModalFiles] = useState<FileInfo[]>([]);
+    const [showRenameFileModal, setShowRenameFileModal] = useState(false);
 
     // Helper function to get files for the modal
     const getModalFiles = (): FileInfo[] => {
@@ -304,7 +404,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         forceDeleteMode={selectedItems.every((item) => item.isArchived)}
                         onSuccess={(operation) => {
                             setShowDeleteModal(false);
-                            // Refresh file list
+                            // Clear selection first, then refresh file list
+                            dispatch({ type: "CLEAR_SELECTION", payload: null });
                             dispatch({ type: "REFRESH_FILES", payload: null });
                         }}
                     />
@@ -317,7 +418,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         assetId={assetId}
                         onSuccess={() => {
                             setShowUnarchiveModal(false);
-                            // Refresh file list
+                            // Clear selection first, then refresh file list
+                            dispatch({ type: "CLEAR_SELECTION", payload: null });
                             dispatch({ type: "REFRESH_FILES", payload: null });
                         }}
                     />
@@ -338,7 +440,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         fileTreeData={state.fileTree}
                         onSuccess={(operation, results) => {
                             setShowMoveFilesModal(false);
-                            // Refresh file list
+                            // Clear selection first, then refresh file list
+                            dispatch({ type: "CLEAR_SELECTION", payload: null });
                             dispatch({ type: "REFRESH_FILES", payload: null });
                         }}
                     />
@@ -351,7 +454,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         assetId={assetId!}
                         onSuccess={() => {
                             setShowSetPrimaryTypeModal(false);
-                            // Refresh file list
+                            // Refresh file list (keep selection for Set Primary Type)
                             dispatch({ type: "REFRESH_FILES", payload: null });
                         }}
                     />
@@ -654,7 +757,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     forceDeleteMode={selectedItem?.isArchived}
                     onSuccess={(operation) => {
                         setShowDeleteModal(false);
-                        // Refresh file list
+                        // Clear selection first, then refresh file list
+                        dispatch({ type: "CLEAR_SELECTION", payload: null });
                         dispatch({ type: "REFRESH_FILES", payload: null });
                     }}
                 />
@@ -668,7 +772,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     fileTreeData={state.fileTree}
                     onSuccess={(operation, results) => {
                         setShowMoveFilesModal(false);
-                        // Refresh file list
+                        // Clear selection first, then refresh file list
+                        dispatch({ type: "CLEAR_SELECTION", payload: null });
                         dispatch({ type: "REFRESH_FILES", payload: null });
                     }}
                 />
@@ -681,7 +786,22 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     assetId={assetId}
                     onSuccess={() => {
                         setShowUnarchiveModal(false);
-                        // Refresh file list
+                        // Clear selection first, then refresh file list
+                        dispatch({ type: "CLEAR_SELECTION", payload: null });
+                        dispatch({ type: "REFRESH_FILES", payload: null });
+                    }}
+                />
+
+                <RenameFileModal
+                    visible={showRenameFileModal}
+                    onDismiss={() => setShowRenameFileModal(false)}
+                    selectedFile={selectedItem}
+                    databaseId={databaseId!}
+                    assetId={assetId!}
+                    onSuccess={() => {
+                        setShowRenameFileModal(false);
+                        // Clear selection first, then refresh file list
+                        dispatch({ type: "CLEAR_SELECTION", payload: null });
                         dispatch({ type: "REFRESH_FILES", payload: null });
                     }}
                 />
@@ -805,7 +925,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     assetId={assetId!}
                     onSuccess={() => {
                         setShowSetPrimaryTypeModal(false);
-                        // Refresh file list
+                        // Refresh file list (keep selection for Set Primary Type)
                         dispatch({ type: "REFRESH_FILES", payload: null });
                     }}
                 />
@@ -953,6 +1073,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     iconName: "settings",
                                                 },
                                                 {
+                                                    id: "rename",
+                                                    text: "Rename File",
+                                                    iconName: "edit",
+                                                },
+                                                {
                                                     id: "move-copy",
                                                     text: "Move/Copy File",
                                                     iconName: "copy",
@@ -973,6 +1098,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                         break;
                                                     case "set-primary":
                                                         setShowSetPrimaryTypeModal(true);
+                                                        break;
+                                                    case "rename":
+                                                        setShowRenameFileModal(true);
                                                         break;
                                                 }
                                             }}

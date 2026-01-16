@@ -32,6 +32,7 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 ![Database View](./documentation/diagrams/screenshots/database_view.png)
 ![Asset and File Search](./documentation/diagrams/screenshots/assets.png)
+![Assets Map View](./documentation/diagrams/screenshots/assets_mapView.png)
 ![Asset Details](./documentation/diagrams/screenshots/asset_detail_view.png)
 ![3D Model Viewer](./documentation/diagrams/screenshots/model_view.png)
 ![Asset Metadata](./documentation/diagrams/screenshots/metadata.png)
@@ -85,6 +86,26 @@ Direct REST API integration for custom applications and integrations:
 | **Custom Logic**       | ✗ Fixed workflows              | ✗ Limited customization                  | ✓ Complete customization          |
 | **Learning Curve**     | ✓ Minimal                      | ✓ Moderate                               | ✗ Requires API knowledge          |
 | **Development Effort** | ✓ None required                | ✓ Minimal setup                          | ✗ Custom development required     |
+
+## Partner / External Solution - Significant Integrations
+
+Various AWS partners, ISVs, or other external solutions that VAMS significantly integrates with (as optional deployment components):
+
+-   [Online 3D Viewer](https://3dviewer.net/): 3D viewer for generalized 3D web viewing (Potree-OpenSource)
+-   [Cesium](https://cesium.com/platform/cesiumjs/): 3D viewer for 3D tiles web viewing (Cesium-OpenSource)
+-   [Potree](https://potree.github.io/): 3D viewer and use-case pipeline for E57, LAS, and LAZ point-cloud web viewing (Potree-OpenSource)
+-   [BabylonJS](https://www.babylonjs.com/): 3D viewer for gaussian splat web viewing (Potree-OpenSource)
+-   [PlayCanvas](https://playcanvas.com/): 3D viewer for gaussian splat web viewing (Potree-OpenSource)
+-   [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws): Use-case pipeline for gaussian splat generation from media files (AWS-OpenSource)
+-   [Trimesh](https://trimesh.org/): Use-case pipeline for 3D mesh conversion and metadata extraction (TriMesh-OpenSource)
+-   [CADQuery](https://github.com/CadQuery/cadquery): Use-case pipeline for open standard CAD conversion and metadata extraction (TriMesh-OpenSource)
+-   [Blender](https://www.blender.org/): Use-case pipeline for preview file generation and metadata generation (Blender-OpenSource)
+-   [Garnet Framework](https://garnet-framework.dev/): Data syncing integration for pushing VAMS data to a external knowledge graph solution (AWS-OpenSource)
+-   [NVIDIA IsaacSim](https://github.com/isaac-sim/IsaacSim): Use-case pipeline for reinforcement learning training and evaluation using NVIDIA IsaacSim (NVIDIA-OpenSource)
+
+-   [RapidPipeline (licensed)](https://rapidpipeline.com/): Use-case pipeline for Spatial data conversions and optimizations (paid)
+-   [VNTANA (licensed)](https://www.vntana.com/): 3D viewer and use-case pipeline (ModelOps) for Spatial data conversations, optimizations, and web viewing (paid)
+-   [Veerum (licensed)](https://veerum.com/): 3D viewer for web viewing point-cloud and 3D tiles (paid)
 
 ## Architecture Overview
 

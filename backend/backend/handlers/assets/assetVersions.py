@@ -5,9 +5,11 @@ import os
 import boto3
 import json
 import uuid
+import base64
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.types import TypeDeserializer
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -22,7 +24,7 @@ from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
     GetAssetVersionRequestModel, GetAssetVersionsRequestModel, AssetVersionFileModel,
     AssetVersionResponseModel, AssetVersionsListResponseModel, AssetVersionOperationResponseModel,
-    AssetVersionListItemModel
+    AssetVersionListItemModel, AssetVersionMetadataItemModel
 )
 
 retry_config = Config(
@@ -52,6 +54,9 @@ try:
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
     asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
+    asset_file_metadata_versions_table_name = os.environ.get("ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME")
+    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
+    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -61,6 +66,9 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_database)
 asset_file_versions_table = dynamodb.Table(asset_file_versions_table_name)
 asset_versions_table = dynamodb.Table(asset_versions_table_name)
+asset_file_metadata_versions_table = dynamodb.Table(asset_file_metadata_versions_table_name) if asset_file_metadata_versions_table_name else None
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
+file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribute_table_name else None
 
 #######################
 # Utility Functions
@@ -705,7 +713,7 @@ def mark_assetVersion_as_current(assetId: str, new_assetVersionId: str) -> bool:
         logger.exception(f"Error marking version as current: {e}")
         return False
 
-def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment: Optional[str] = None, created_by: str = 'system') -> Dict:
+def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment: Optional[str] = None, created_by: str = 'SYSTEM_USER') -> Dict:
     """Update asset's version tracking metadata using asset versions table
     
     Args:
@@ -736,6 +744,503 @@ def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment:
     update_asset_current_version_reference(asset, new_assetVersionId)
 
     return asset
+
+
+def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: str, 
+                               files_to_version: List[Dict]) -> bool:
+    """Save a snapshot of current asset and file metadata/attributes for a version
+    
+    Only saves metadata for files that are actually being versioned.
+    Asset-level metadata (filePath="/") is always included.
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        assetVersionId: The asset version ID
+        files_to_version: List of files being versioned (with relativeKey)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    logger.info(f"=== START save_asset_metadata_version for asset {assetId} version {assetVersionId} ===")
+    logger.info(f"Files to version: {len(files_to_version)} files")
+    
+    if not asset_file_metadata_versions_table:
+        logger.warning("Asset file metadata versions table not available")
+        return False
+    
+    try:
+        # Build set of file paths from files_to_version
+        versioned_file_paths = set()
+        versioned_file_paths.add("/")  # Always include asset-level metadata
+        
+        for file in files_to_version:
+            relative_key = file['relativeKey']
+            
+            # Remove asset ID prefix if present
+            if relative_key.startswith(assetId + '/'):
+                path_without_asset = relative_key[len(assetId) + 1:]
+            else:
+                path_without_asset = relative_key
+            
+            # Prepend "/" to match metadata filePath format
+            file_path = "/" + path_without_asset.lstrip('/')
+            versioned_file_paths.add(file_path)
+        
+        logger.info(f"Versioning metadata for {len(versioned_file_paths)} file paths (including asset-level)")
+        logger.info(f"Versioned file paths: {versioned_file_paths}")
+        
+        # Composite key for querying all metadata/attributes for this asset
+        composite_key = f"{databaseId}:{assetId}"
+        created_at = datetime.utcnow().isoformat()
+        
+        # Partition key for the version table
+        version_pk = f"{databaseId}:{assetId}:{assetVersionId}"
+        
+        items_to_write = []
+        filtered_count = 0
+        
+        # 1. Fetch all asset and file metadata from assetFileMetadataStorageTable using GSI query
+        logger.info(f"Fetching metadata from assetFileMetadataStorageTable for composite key: {composite_key}")
+        if asset_file_metadata_table:
+            try:
+                paginator = dynamodb_client.get_paginator('query')
+                page_iterator = paginator.paginate(
+                    TableName=asset_file_metadata_table_name,
+                    IndexName='DatabaseIdAssetIdIndex',
+                    KeyConditionExpression='#pk = :pkValue',
+                    ExpressionAttributeNames={'#pk': 'databaseId:assetId'},
+                    ExpressionAttributeValues={':pkValue': {'S': composite_key}}
+                ).build_full_result()
+                
+                deserializer = TypeDeserializer()
+                metadata_count = 0
+                for item in page_iterator.get('Items', []):
+                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                    metadata_count += 1
+                    
+                    # Extract filePath from composite key
+                    file_path_composite = deserialized.get('databaseId:assetId:filePath', '')
+                    # Format: "databaseId:assetId:filePath"
+                    parts = file_path_composite.split(':', 2)
+                    file_path = parts[2] if len(parts) == 3 else '/'
+                    
+                    # Filter: always include asset-level metadata, otherwise check against versioned files
+                    if file_path != "/" and file_path not in versioned_file_paths:
+                        filtered_count += 1
+                        logger.debug(f"Filtering out metadata for file path: {file_path}")
+                        continue
+                    
+                    # Create sort key: type:filePath:metadataKey
+                    sort_key = f"metadata:{file_path}:{deserialized['metadataKey']}"
+                    
+                    # Prepare item for version table
+                    version_item = {
+                        'databaseId:assetId:assetVersionId': {'S': version_pk},
+                        'type:filePath:metadataKey': {'S': sort_key},
+                        'databaseId:assetId': {'S': composite_key},
+                        'metadataKey': {'S': deserialized['metadataKey']},
+                        'metadataValue': {'S': deserialized['metadataValue']},
+                        'metadataValueType': {'S': deserialized['metadataValueType']},
+                        'createdAt': {'S': created_at}
+                    }
+                    
+                    items_to_write.append({'PutRequest': {'Item': version_item}})
+                
+                logger.info(f"Fetched {metadata_count} metadata items from assetFileMetadataStorageTable")
+                    
+            except Exception as e:
+                logger.warning(f"Error fetching asset/file metadata: {e}")
+        
+        # 2. Fetch all file attributes from fileAttributeStorageTable using GSI query
+        logger.info(f"Fetching attributes from fileAttributeStorageTable for composite key: {composite_key}")
+        if file_attribute_table:
+            try:
+                paginator = dynamodb_client.get_paginator('query')
+                page_iterator = paginator.paginate(
+                    TableName=file_attribute_table_name,
+                    IndexName='DatabaseIdAssetIdIndex',
+                    KeyConditionExpression='#pk = :pkValue',
+                    ExpressionAttributeNames={'#pk': 'databaseId:assetId'},
+                    ExpressionAttributeValues={':pkValue': {'S': composite_key}}
+                ).build_full_result()
+                
+                deserializer = TypeDeserializer()
+                attribute_count = 0
+                for item in page_iterator.get('Items', []):
+                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                    attribute_count += 1
+                    
+                    # Extract filePath from composite key
+                    file_path_composite = deserialized.get('databaseId:assetId:filePath', '')
+                    parts = file_path_composite.split(':', 2)
+                    file_path = parts[2] if len(parts) == 3 else '/'
+                    
+                    # Filter: only include if filePath matches versioned files
+                    if file_path not in versioned_file_paths:
+                        filtered_count += 1
+                        logger.debug(f"Filtering out attribute for file path: {file_path}")
+                        continue
+                    
+                    # Get attribute key (handle both old and new field names)
+                    attribute_key = deserialized.get('attributeKey', deserialized.get('metadataKey', ''))
+                    attribute_value = deserialized.get('attributeValue', deserialized.get('metadataValue', ''))
+                    attribute_value_type = deserialized.get('attributeValueType', deserialized.get('metadataValueType', 'string'))
+                    
+                    # Create sort key: type:filePath:metadataKey
+                    sort_key = f"attribute:{file_path}:{attribute_key}"
+                    
+                    # Prepare item for version table
+                    version_item = {
+                        'databaseId:assetId:assetVersionId': {'S': version_pk},
+                        'type:filePath:metadataKey': {'S': sort_key},
+                        'databaseId:assetId': {'S': composite_key},
+                        'metadataKey': {'S': attribute_key},
+                        'metadataValue': {'S': attribute_value},
+                        'metadataValueType': {'S': attribute_value_type},
+                        'createdAt': {'S': created_at}
+                    }
+                    
+                    items_to_write.append({'PutRequest': {'Item': version_item}})
+                
+                logger.info(f"Fetched {attribute_count} attribute items from fileAttributeStorageTable")
+                    
+            except Exception as e:
+                logger.warning(f"Error fetching file attributes: {e}")
+        
+        # 3. Batch write all items to version table
+        logger.info(f"Total items to write: {len(items_to_write)}, filtered count: {filtered_count}")
+        if items_to_write:
+            logger.info(f"Saving {len(items_to_write)} metadata/attribute items for version {assetVersionId}, filtered out {filtered_count} items for files not in version")
+            
+            for i in range(0, len(items_to_write), 25):
+                batch = items_to_write[i:i+25]
+                try:
+                    dynamodb_client.batch_write_item(
+                        RequestItems={
+                            asset_file_metadata_versions_table_name: batch
+                        }
+                    )
+                except Exception as e:
+                    logger.exception(f"Error in batch write for metadata versions: {e}")
+                    return False
+            
+            logger.info(f"Successfully saved all {len(items_to_write)} metadata/attribute items to version table")
+        else:
+            logger.info(f"No metadata/attributes found to version for asset {assetId}")
+        
+        logger.info(f"=== END save_asset_metadata_version - SUCCESS ===")
+        return True
+        
+    except Exception as e:
+        logger.exception(f"Error saving asset metadata version: {e}")
+        return False
+
+
+def get_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: str) -> List[AssetVersionMetadataItemModel]:
+    """Get metadata/attributes snapshot for a specific asset version
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        assetVersionId: The asset version ID
+        
+    Returns:
+        List of AssetVersionMetadataItemModel sorted by type then filePath
+    """
+    if not asset_file_metadata_versions_table:
+        logger.warning("Asset file metadata versions table not available")
+        return []
+    
+    try:
+        # Partition key for querying
+        version_pk = f"{databaseId}:{assetId}:{assetVersionId}"
+        
+        # Query all metadata/attributes for this version
+        paginator = dynamodb_client.get_paginator('query')
+        page_iterator = paginator.paginate(
+            TableName=asset_file_metadata_versions_table_name,
+            KeyConditionExpression='#pk = :pkValue',
+            ExpressionAttributeNames={'#pk': 'databaseId:assetId:assetVersionId'},
+            ExpressionAttributeValues={':pkValue': {'S': version_pk}}
+        ).build_full_result()
+        
+        # Process items
+        metadata_items = []
+        deserializer = TypeDeserializer()
+        
+        for item in page_iterator.get('Items', []):
+            deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+            
+            # Parse sort key: type:filePath:metadataKey
+            sort_key = deserialized.get('type:filePath:metadataKey', '')
+            parts = sort_key.split(':', 2)
+            
+            if len(parts) == 3:
+                item_type = parts[0]  # "metadata" or "attribute"
+                file_path = parts[1]  # "/" or "/path/to/file"
+                metadata_key = parts[2]
+                
+                metadata_items.append(AssetVersionMetadataItemModel(
+                    type=item_type,
+                    filePath=file_path,
+                    metadataKey=metadata_key,
+                    metadataValue=deserialized.get('metadataValue', ''),
+                    metadataValueType=deserialized.get('metadataValueType', 'string')
+                ))
+        
+        # Sort by type first (attribute < metadata), then by filePath
+        metadata_items.sort(key=lambda x: (x.type, x.filePath))
+        
+        return metadata_items
+        
+    except Exception as e:
+        logger.exception(f"Error getting asset metadata version: {e}")
+        return []
+
+
+def revert_asset_metadata_version(databaseId: str, assetId: str, target_assetVersionId: str, 
+                                 new_assetVersionId: str, files_to_version: List[Dict]) -> bool:
+    """Revert asset and file metadata/attributes to a previous version
+    
+    Only reverts metadata for files that were successfully reverted (non-skipped).
+    Asset-level metadata (filePath="/") is always included.
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        target_assetVersionId: The version ID to revert to
+        new_assetVersionId: The new version ID being created
+        files_to_version: List of files successfully reverted (non-skipped)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    logger.info(f"=== START revert_asset_metadata_version ===")
+    logger.info(f"Target version: {target_assetVersionId}, New version: {new_assetVersionId}")
+    logger.info(f"Files to revert metadata for: {len(files_to_version)} files")
+    
+    if not asset_file_metadata_versions_table:
+        logger.warning("Asset file metadata versions table not available")
+        return False
+    
+    try:
+        # Build set of file paths from files_to_version
+        versioned_file_paths = set()
+        versioned_file_paths.add("/")  # Always include asset-level metadata
+        
+        for file in files_to_version:
+            relative_key = file['relativeKey']
+            
+            # Remove asset ID prefix if present
+            if relative_key.startswith(assetId + '/'):
+                path_without_asset = relative_key[len(assetId) + 1:]
+            else:
+                path_without_asset = relative_key
+            
+            # Prepend "/" to match metadata filePath format
+            file_path = "/" + path_without_asset.lstrip('/')
+            versioned_file_paths.add(file_path)
+        
+        logger.info(f"Reverting metadata for {len(versioned_file_paths)} file paths (including asset-level)")
+        logger.info(f"Versioned file paths: {versioned_file_paths}")
+        
+        # 1. Fetch target version metadata
+        logger.info(f"Fetching target version metadata from version {target_assetVersionId}")
+        target_metadata = get_asset_metadata_version(databaseId, assetId, target_assetVersionId)
+        
+        if not target_metadata:
+            logger.info(f"No metadata found for version {target_assetVersionId}, skipping metadata revert")
+            return True  # Not an error - version may not have metadata
+        
+        logger.info(f"Found {len(target_metadata)} metadata/attribute items in version {target_assetVersionId}")
+        
+        # 2. Delete ALL current metadata/attributes for this asset using GSI query
+        composite_key = f"{databaseId}:{assetId}"
+        logger.info(f"Starting deletion of current metadata/attributes for composite key: {composite_key}")
+        
+        # Delete from assetFileMetadataStorageTable using GSI query
+        if asset_file_metadata_table:
+            logger.info(f"Querying assetFileMetadataStorageTable for items to delete")
+            try:
+                paginator = dynamodb_client.get_paginator('query')
+                page_iterator = paginator.paginate(
+                    TableName=asset_file_metadata_table_name,
+                    IndexName='DatabaseIdAssetIdIndex',
+                    KeyConditionExpression='#pk = :pkValue',
+                    ExpressionAttributeNames={'#pk': 'databaseId:assetId'},
+                    ExpressionAttributeValues={':pkValue': {'S': composite_key}}
+                ).build_full_result()
+                
+                items_to_delete = []
+                deserializer = TypeDeserializer()
+                
+                for item in page_iterator.get('Items', []):
+                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                    items_to_delete.append({
+                        'DeleteRequest': {
+                            'Key': {
+                                'metadataKey': {'S': deserialized['metadataKey']},
+                                'databaseId:assetId:filePath': {'S': deserialized['databaseId:assetId:filePath']}
+                            }
+                        }
+                    })
+                
+                # Delete in batches of 25
+                for i in range(0, len(items_to_delete), 25):
+                    batch = items_to_delete[i:i+25]
+                    dynamodb_client.batch_write_item(
+                        RequestItems={asset_file_metadata_table_name: batch}
+                    )
+                
+                logger.info(f"Deleted {len(items_to_delete)} metadata items from assetFileMetadataStorageTable")
+                
+            except Exception as e:
+                logger.exception(f"Error deleting current metadata: {e}")
+        else:
+            logger.info("assetFileMetadataStorageTable not available, skipping metadata deletion")
+        
+        # Delete from fileAttributeStorageTable using GSI query
+        if file_attribute_table:
+            logger.info(f"Querying fileAttributeStorageTable for items to delete")
+            try:
+                paginator = dynamodb_client.get_paginator('query')
+                page_iterator = paginator.paginate(
+                    TableName=file_attribute_table_name,
+                    IndexName='DatabaseIdAssetIdIndex',
+                    KeyConditionExpression='#pk = :pkValue',
+                    ExpressionAttributeNames={'#pk': 'databaseId:assetId'},
+                    ExpressionAttributeValues={':pkValue': {'S': composite_key}}
+                ).build_full_result()
+                
+                items_to_delete = []
+                deserializer = TypeDeserializer()
+                
+                for item in page_iterator.get('Items', []):
+                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                    items_to_delete.append({
+                        'DeleteRequest': {
+                            'Key': {
+                                'attributeKey': {'S': deserialized['attributeKey']},
+                                'databaseId:assetId:filePath': {'S': deserialized['databaseId:assetId:filePath']}
+                            }
+                        }
+                    })
+                
+                # Delete in batches of 25
+                for i in range(0, len(items_to_delete), 25):
+                    batch = items_to_delete[i:i+25]
+                    dynamodb_client.batch_write_item(
+                        RequestItems={file_attribute_table_name: batch}
+                    )
+                
+                logger.info(f"Deleted {len(items_to_delete)} attribute items from fileAttributeStorageTable")
+                
+            except Exception as e:
+                logger.exception(f"Error deleting current attributes: {e}")
+        else:
+            logger.info("fileAttributeStorageTable not available, skipping attribute deletion")
+        
+        # 3. Restore metadata/attributes from target version (filtered by versioned files)
+        logger.info(f"Starting restoration of metadata/attributes from version {target_assetVersionId}")
+        items_to_restore = []
+        asset_composite_key = f"{databaseId}:{assetId}"
+        filtered_count = 0
+        
+        for metadata_item in target_metadata:
+            # Construct composite key for current tables
+            file_path_composite = f"{databaseId}:{assetId}:{metadata_item.filePath}"
+            
+            if metadata_item.type == "metadata":
+                # Filter: always include asset-level metadata, otherwise check against versioned files
+                if metadata_item.filePath != "/" and metadata_item.filePath not in versioned_file_paths:
+                    filtered_count += 1
+                    logger.warning(f"Skipping metadata for file '{metadata_item.filePath}' - file not in version")
+                    continue
+                
+                # Restore to assetFileMetadataStorageTable
+                if asset_file_metadata_table:
+                    restore_item = {
+                        'metadataKey': {'S': metadata_item.metadataKey},
+                        'databaseId:assetId:filePath': {'S': file_path_composite},
+                        'databaseId:assetId': {'S': asset_composite_key},
+                        'metadataValue': {'S': metadata_item.metadataValue},
+                        'metadataValueType': {'S': metadata_item.metadataValueType}
+                    }
+                    items_to_restore.append({
+                        'table': asset_file_metadata_table_name,
+                        'item': {'PutRequest': {'Item': restore_item}}
+                    })
+            else:  # attribute
+                  # Attributes always have full file paths, so always check against versioned files
+                  if metadata_item.filePath not in versioned_file_paths:
+                      filtered_count += 1
+                      logger.warning(f"Skipping attribute for file '{metadata_item.filePath}' - file not in version")
+                      continue
+                  
+                  # Restore to fileAttributeStorageTable
+                  if file_attribute_table:
+                      restore_item = {
+                          'attributeKey': {'S': metadata_item.metadataKey},
+                          'databaseId:assetId:filePath': {'S': file_path_composite},
+                          'databaseId:assetId': {'S': asset_composite_key},
+                          'attributeValue': {'S': metadata_item.metadataValue},
+                          'attributeValueType': {'S': metadata_item.metadataValueType}
+                      }
+                      items_to_restore.append({
+                          'table': file_attribute_table_name,
+                          'item': {'PutRequest': {'Item': restore_item}}
+                      })
+        
+        # 4. Batch write restored items grouped by table
+        logger.info(f"Total items to restore: {len(items_to_restore)}, filtered: {filtered_count}")
+        metadata_items = [item for item in items_to_restore if item['table'] == asset_file_metadata_table_name]
+        attribute_items = [item for item in items_to_restore if item['table'] == file_attribute_table_name]
+        
+        logger.info(f"Metadata items to restore: {len(metadata_items)}, Attribute items to restore: {len(attribute_items)}")
+        
+        # Write metadata items
+        if metadata_items:
+            logger.info(f"Writing {len(metadata_items)} metadata items to assetFileMetadataStorageTable")
+            metadata_batch = [item['item'] for item in metadata_items]
+            for i in range(0, len(metadata_batch), 25):
+                batch = metadata_batch[i:i+25]
+                try:
+                    dynamodb_client.batch_write_item(
+                        RequestItems={asset_file_metadata_table_name: batch}
+                    )
+                except Exception as e:
+                    logger.exception(f"Error restoring metadata: {e}")
+                    return False
+            
+            logger.info(f"Successfully restored {len(metadata_items)} metadata items to assetFileMetadataStorageTable")
+        else:
+            logger.info("No metadata items to restore")
+        
+        # Write attribute items
+        if attribute_items:
+            logger.info(f"Writing {len(attribute_items)} attribute items to fileAttributeStorageTable")
+            attribute_batch = [item['item'] for item in attribute_items]
+            for i in range(0, len(attribute_batch), 25):
+                batch = attribute_batch[i:i+25]
+                try:
+                    dynamodb_client.batch_write_item(
+                        RequestItems={file_attribute_table_name: batch}
+                    )
+                except Exception as e:
+                    logger.exception(f"Error restoring attributes: {e}")
+                    return False
+            
+            logger.info(f"Successfully restored {len(attribute_items)} attribute items to fileAttributeStorageTable")
+        else:
+            logger.info("No attribute items to restore")
+        
+        logger.info(f"=== END revert_asset_metadata_version - SUCCESS ===")
+        return True
+        
+    except Exception as e:
+        logger.exception(f"Error reverting asset metadata version: {e}")
+        return False
 
 
 #######################
@@ -823,16 +1328,18 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
             
         skipped_files = invalid_files
     
-    # Ensure we have at least one file
-    if not files_to_version:
-        raise VAMSGeneralErrorResponse("No valid files found for versioning")
     
     # Save file versions to DynamoDB
     if not save_asset_file_versions(assetId, new_assetVersionId, files_to_version):
         raise VAMSGeneralErrorResponse("Failed to save file versions")
     
+    # Save metadata snapshot for this version (only for versioned files)
+    metadata_saved = save_asset_metadata_version(databaseId, assetId, new_assetVersionId, files_to_version)
+    if not metadata_saved:
+        logger.warning(f"Failed to save metadata snapshot for version {new_assetVersionId}")
+    
     # Update asset version metadata
-    username = claims_and_roles.get("tokens", ["system"])[0]
+    username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
     updated_asset = update_asset_version_metadata(asset, new_assetVersionId, request_model.comment, username)
 
     #Send email for new version
@@ -940,11 +1447,36 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     if not save_asset_file_versions(assetId, new_assetVersionId, files_to_version):
         raise VAMSGeneralErrorResponse("Failed to save file versions")
     
+    # Revert metadata if requested (only for successfully reverted files)
+    logger.info(f"Metadata revert requested: {request_model.revertMetadata}")
+    if request_model.revertMetadata:
+        logger.info(f"Starting metadata revert from version {request_model.assetVersionId} to new version {new_assetVersionId}")
+        metadata_reverted = revert_asset_metadata_version(
+            databaseId, assetId, request_model.assetVersionId, new_assetVersionId, files_to_version
+        )
+        if not metadata_reverted:
+            logger.warning(f"Failed to revert metadata for version {request_model.assetVersionId}")
+    else:
+        logger.info(f"Metadata revert not requested, keeping current metadata")
+    
+    # Always save a snapshot of the current metadata state for the new version
+    logger.info(f"Saving metadata snapshot for new version {new_assetVersionId}")
+    metadata_saved = save_asset_metadata_version(databaseId, assetId, new_assetVersionId, files_to_version)
+    if not metadata_saved:
+        logger.warning(f"Failed to save metadata snapshot for reverted version {new_assetVersionId}")
+    else:
+        logger.info(f"Successfully saved metadata snapshot for reverted version {new_assetVersionId}")
+    
     #Get user of request
     username = claims_and_roles.get("tokens", ["system"])[0]
 
-    # Update asset version metadata
-    comment = request_model.comment if request_model.comment else f"Reverted to version {request_model.assetVersionId}"
+    # Update asset version metadata with [REVERTED FROM Vx] prefix
+    if request_model.comment:
+        comment = f"[REVERTED FROM v{request_model.assetVersionId}] {request_model.comment}"
+    else:
+        comment = f"[REVERTED FROM v{request_model.assetVersionId}] Reverted to version {request_model.assetVersionId}"
+    
+    logger.info(f"Creating version metadata with comment: {comment}")
     updated_asset = update_asset_version_metadata(asset, new_assetVersionId, comment, username)
 
     #Send email for asset version change
@@ -964,70 +1496,81 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
 
 def get_asset_versions(databaseId: str, assetId: str, query_params: Dict, 
                       claims_and_roles: Dict) -> AssetVersionsListResponseModel:
-    """Get all versions for an asset
+    """Get all versions for an asset with proper DynamoDB pagination
     
     Args:
         databaseId: The database ID
         assetId: The asset ID
-        query_params: Query parameters for pagination
+        query_params: Query parameters for pagination (pageSize, startingToken)
         claims_and_roles: The claims and roles from the request
         
     Returns:
-        AssetVersionsListResponseModel with the versions
+        AssetVersionsListResponseModel with versions list and optional NextToken
     """
     # Get asset and verify permissions
     asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
     
-    all_versions = get_all_asset_versions(assetId)
+    # Build query parameters for DynamoDB
+    query_params_dict = {
+        'TableName': asset_versions_table_name,
+        'KeyConditionExpression': 'assetId = :assetId',
+        'ExpressionAttributeValues': {
+            ':assetId': {'S': assetId}
+        },
+        'ScanIndexForward': False,  # Newest first
+        'Limit': int(query_params.get('pageSize', 1000))
+    }
     
-    # Get Version Data - create properly typed AssetVersionListItemModel instances
-    versions = []
-    for version in all_versions:
+    # Add ExclusiveStartKey if startingToken provided (decode base64)
+    if query_params.get('startingToken'):
+        try:
+            decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+            query_params_dict['ExclusiveStartKey'] = json.loads(decoded_token)
+        except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+            logger.exception(f"Invalid startingToken format: {e}")
+            raise VAMSGeneralErrorResponse("Invalid pagination token")
+    
+    # Single query call with pagination
+    response = dynamodb_client.query(**query_params_dict)
+    
+    # Process items
+    authorized_versions = []
+    deserializer = TypeDeserializer()
+    for item in response.get('Items', []):
+        # Deserialize the item
+        deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+        
         try:
             # Get file count for this version
-            file_count = get_asset_version_file_count(assetId, version.get('assetVersionId'))
+            file_count = get_asset_version_file_count(assetId, deserialized_item.get('assetVersionId'))
             
+            # Create version item model
             version_item = AssetVersionListItemModel(
-                Version=version.get('assetVersionId', '0'),
-                DateModified=version.get('dateCreated', ''),
-                Comment=version.get('comment', ''),
-                description=version.get('description', ''),
-                specifiedPipelines=version.get('specifiedPipelines', []),
-                createdBy=version.get('createdBy', 'system'),
-                isCurrent=version.get('isCurrentVersion', False),
+                Version=deserialized_item.get('assetVersionId', '0'),
+                DateModified=deserialized_item.get('dateCreated', ''),
+                Comment=deserialized_item.get('comment', ''),
+                description=deserialized_item.get('description', ''),
+                specifiedPipelines=deserialized_item.get('specifiedPipelines', []),
+                createdBy=deserialized_item.get('createdBy', 'SYSTEM_USER'),
+                isCurrent=deserialized_item.get('isCurrentVersion', False),
                 fileCount=file_count
             )
-            versions.append(version_item)
+            authorized_versions.append(version_item)
         except Exception as e:
-            logger.warning(f"Error returning asset response model for version {version.get('assetVersionId', 'unknown')}: {e}")
+            logger.warning(f"Error creating version item model for version {deserialized_item.get('assetVersionId', 'unknown')}: {e}")
             # Skip invalid versions
             continue
     
-    # Apply pagination
-    max_items = int(query_params.get('maxItems', 100))
-    starting_token = query_params.get('startingToken')
-    
-    # If starting token is provided, find the starting index
-    start_index = 0
-    if starting_token:
-        try:
-            start_index = int(starting_token)
-        except ValueError:
-            start_index = 0
-    
-    # Get paginated results
-    end_index = start_index + max_items
-    paginated_versions = versions[start_index:end_index]
-    
-    # Determine if there are more results
+    # Determine NextToken from LastEvaluatedKey (base64 encoded)
     next_token = None
-    if end_index < len(versions):
-        next_token = str(end_index)
+    if 'LastEvaluatedKey' in response:
+        json_str = json.dumps(response['LastEvaluatedKey'])
+        next_token = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
     
-    # Return response
+    # Return response model
     return AssetVersionsListResponseModel(
-        versions=paginated_versions,
-        nextToken=next_token
+        versions=authorized_versions,
+        NextToken=next_token
     )
 
 def get_asset_version_details(databaseId: str, assetId: str, request_model: GetAssetVersionRequestModel, 
@@ -1058,7 +1601,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
             'DateModified': version_metadata.get('dateCreated', ''),
             'Comment': version_metadata.get('comment', ''),
             'description': version_metadata.get('description', ''),
-            'createdBy': version_metadata.get('createdBy', 'system')
+            'createdBy': version_metadata.get('createdBy', 'SYSTEM_USER')
         }
     
     if not version_info:
@@ -1100,6 +1643,9 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
             etag=file.get('etag')
         ))
     
+    # Get versioned metadata
+    versioned_metadata = get_asset_metadata_version(databaseId, assetId, version_id)
+    
     # Return response
     return AssetVersionResponseModel(
         assetId=assetId,
@@ -1107,7 +1653,8 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
         dateCreated=version_info.get('DateModified', ''),
         comment=version_info.get('Comment', ''),
         files=files,
-        createdBy=version_info.get('createdBy')
+        createdBy=version_info.get('createdBy'),
+        versionedMetadata=versioned_metadata
     )
 
 #######################
@@ -1137,10 +1684,10 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -1155,12 +1702,12 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1168,12 +1715,12 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=CreateAssetVersionRequestModel)
@@ -1190,13 +1737,13 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /revertVersion/{assetVersionId} requests
@@ -1221,13 +1768,13 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
             
         if 'assetVersionId' not in path_params:
-            return validation_error(body={'message': "No asset version ID in API Call"})
+            return validation_error(body={'message': "No asset version ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -1246,7 +1793,7 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Get request body for optional comment
         body = {}
@@ -1259,18 +1806,21 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
                     body = json.loads(body)
                 except json.JSONDecodeError as e:
                     logger.exception(f"Invalid JSON in request body: {e}")
-                    return validation_error(body={'message': "Invalid JSON in request body"})
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
             elif isinstance(body, dict):
                 body = body
             else:
                 logger.error("Request body is not a string")
-                return validation_error(body={'message': "Request body cannot be parsed"})
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
-        # Create request model with assetVersionId from path parameter
+        # Create request model with assetVersionId from path parameter and body fields
         request_model = RevertAssetVersionRequestModel(
             assetVersionId=path_params['assetVersionId'],
-            comment=body.get('comment')
+            comment=body.get('comment'),
+            revertMetadata=body.get('revertMetadata', False)
         )
+        
+        logger.info(f"Parsed request model - revertMetadata: {request_model.revertMetadata}, comment: {request_model.comment}")
         
         # Process request
         response = revert_asset_version(
@@ -1284,13 +1834,13 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
     """Handle GET /getVersions requests
@@ -1315,10 +1865,10 @@ def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -1333,7 +1883,7 @@ def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Get query parameters
         query_params = event.get('queryStringParameters', {}) or {}
@@ -1353,13 +1903,13 @@ def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
     """Handle GET /getVersion/{assetVersionId} requests
@@ -1384,13 +1934,13 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
             
         if 'assetVersionId' not in path_params:
-            return validation_error(body={'message': "No asset version ID in API Call"})
+            return validation_error(body={'message': "No asset version ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -1405,7 +1955,7 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Create request model with assetVersionId from path parameter
         request_model = GetAssetVersionRequestModel(assetVersionId=path_params['assetVersionId'])
@@ -1422,13 +1972,13 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 #######################
 # Lambda Handler
@@ -1452,6 +2002,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         path = event['requestContext']['http']['path']
         method = event['requestContext']['http']['method']
         
+        # Log incoming request
+        logger.info(f"Asset versions lambda handler invoked: {method} {path}")
+        logger.debug(f"Event path parameters: {event.get('pathParameters', {})}")
+        logger.debug(f"Event query parameters: {event.get('queryStringParameters', {})}")
+        
         # Route to appropriate handler based on path pattern
         if method == 'POST' and path.endswith('/createVersion'):
             return handle_create_version(event, context)
@@ -1462,8 +2017,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'GET' and '/getVersion/' in path:
             return handle_get_version(event, context)
         else:
-            return validation_error(body={'message': "Invalid API path or method"})
+            return validation_error(body={'message': "Invalid API path or method"}, event=event)
     
     except Exception as e:
         logger.exception(f"Unhandled error in lambda_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)

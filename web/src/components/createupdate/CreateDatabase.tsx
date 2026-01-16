@@ -15,9 +15,10 @@ import {
     MultiselectProps,
     Select,
     SelectProps,
+    Checkbox,
 } from "@cloudscape-design/components";
 import { useState, useEffect } from "react";
-import { createDatabase, fetchBuckets } from "../../services/APIService";
+import { createDatabase, updateDatabase, fetchBuckets } from "../../services/APIService";
 
 interface CreateDatabaseProps {
     open: boolean;
@@ -30,6 +31,8 @@ interface DatabaseFields {
     databaseId: string;
     description: string;
     defaultBucketId?: string;
+    restrictMetadataOutsideSchemas?: boolean;
+    restrictFileUploadsToExtensions?: string;
 }
 
 interface BucketOption {
@@ -47,7 +50,7 @@ function validateDatabaseNameLowercase(name: string) {
 
 // when a string is between 4 and 64 characters, return null, otherwise return the string "Between 3 and 64 characters"
 function validateDatabaseNameLength(name: string) {
-    return name.length >= 3 && name.length <= 64 ? null : "Between 3 and 64 characters";
+    return name.length >= 4 && name.length <= 64 ? null : "Between 3 and 64 characters";
 }
 
 // databaseId cannot be named "GLOBAL" (case insenstive)
@@ -71,6 +74,38 @@ function validateDatabaseDescriptionLength(description: string) {
     return description.length >= min && description.length <= max
         ? null
         : `Between ${min} and ${max} characters`;
+}
+
+// Validate file extensions format
+function validateFileExtensions(extensions: string): string | null {
+    if (!extensions || extensions.trim() === "") {
+        return null; // Empty is valid (means no restrictions)
+    }
+
+    // Check for .all special case
+    if (extensions.trim().toLowerCase() === ".all") {
+        return null;
+    }
+
+    // Split by comma and validate each extension
+    const extList = extensions.split(",").map((ext) => ext.trim());
+
+    for (const ext of extList) {
+        // Must start with a dot
+        if (!ext.startsWith(".")) {
+            return "Each extension must start with a dot (e.g., .jpg)";
+        }
+        // Must have at least one character after the dot
+        if (ext.length < 2) {
+            return "Extensions must have at least one character after the dot";
+        }
+        // Only allow alphanumeric characters after the dot
+        if (!/^\.[a-zA-Z0-9]+$/.test(ext)) {
+            return "Extensions can only contain letters and numbers after the dot";
+        }
+    }
+
+    return null;
 }
 
 export default function CreateDatabase({
@@ -171,25 +206,44 @@ export default function CreateDatabase({
                             variant="primary"
                             onClick={() => {
                                 setInProgress(true);
-                                createDatabase({
-                                    databaseId: formState.databaseId,
-                                    description: formState.description,
-                                    defaultBucketId: formState.defaultBucketId || "",
-                                })
+                                const isEdit = initState && initState.databaseId;
+
+                                const apiCall = isEdit
+                                    ? updateDatabase({
+                                          databaseId: formState.databaseId,
+                                          description: formState.description,
+                                          defaultBucketId: formState.defaultBucketId || "",
+                                          restrictMetadataOutsideSchemas:
+                                              formState.restrictMetadataOutsideSchemas || false,
+                                          restrictFileUploadsToExtensions:
+                                              formState.restrictFileUploadsToExtensions || "",
+                                      })
+                                    : createDatabase({
+                                          databaseId: formState.databaseId,
+                                          description: formState.description,
+                                          defaultBucketId: formState.defaultBucketId || "",
+                                          restrictMetadataOutsideSchemas:
+                                              formState.restrictMetadataOutsideSchemas || false,
+                                          restrictFileUploadsToExtensions:
+                                              formState.restrictFileUploadsToExtensions || "",
+                                      });
+
+                                apiCall
                                     .then((res) => {
                                         if (res && res[0]) {
                                             setOpen(false);
                                             setReload(true);
                                         } else {
-                                            let msg = `Unable to ${createOrUpdate} database. Error: ${res[1]}`;
+                                            // Display the actual error message from the API
+                                            let msg =
+                                                res[1] || `Unable to ${createOrUpdate} database`;
                                             setFormError(msg);
                                         }
                                     })
                                     .catch((err) => {
-                                        console.log("create database error", err);
-                                        let msg = `Unable to ${createOrUpdate} database. Error: ${
-                                            err.message || "Unknown error"
-                                        }`;
+                                        console.log(`${createOrUpdate} database error`, err);
+                                        let msg =
+                                            err.message || `Unable to ${createOrUpdate} database`;
                                         setFormError(msg);
                                     })
                                     .finally(() => {
@@ -202,7 +256,10 @@ export default function CreateDatabase({
                                     validateDatabaseName(formState.databaseId) === null &&
                                     validateDatabaseDescriptionLength(formState.description) ===
                                         null &&
-                                    formState.defaultBucketId
+                                    formState.defaultBucketId &&
+                                    validateFileExtensions(
+                                        formState.restrictFileUploadsToExtensions || ""
+                                    ) === null
                                 )
                             }
                             data-testid={`${createOrUpdate}-database-button`}
@@ -220,7 +277,7 @@ export default function CreateDatabase({
                         <FormField
                             label="Database Name"
                             errorText={validateDatabaseName(formState.databaseId)}
-                            constraintText="Required. No special chars or spaces except - and _ min 3 and max 64"
+                            constraintText="Required. No special chars or spaces except - and 4 and max 64"
                         >
                             <Input
                                 value={formState.databaseId}
@@ -281,6 +338,44 @@ export default function CreateDatabase({
                                 statusType={loadingBuckets ? "loading" : "finished"}
                                 disabled={inProgress}
                                 data-testid="database-bucket"
+                            />
+                        </FormField>
+                        <FormField
+                            label="Restrict Metadata Outside Schemas"
+                            description="Restricts all metadata for components below this database to only allow fields based on applied metadata schema. If no schema is applied, this option is disregarded."
+                        >
+                            <Checkbox
+                                checked={formState.restrictMetadataOutsideSchemas || false}
+                                onChange={({ detail }) =>
+                                    setFormState({
+                                        ...formState,
+                                        restrictMetadataOutsideSchemas: detail.checked,
+                                    })
+                                }
+                                disabled={inProgress}
+                            >
+                                Enable metadata schema restrictions
+                            </Checkbox>
+                        </FormField>
+                        <FormField
+                            label="Restrict File Upload Extensions"
+                            description="Restricts file uploads through web and CLI to specific extensions (comma-delimited). Use '.all' or leave blank to allow all extensions (except system-wide restrictions). Does not apply to files directly edited in the S3 bucket."
+                            constraintText="Optional. Comma-separated list of extensions (e.g., .jpg,.png,.pdf)"
+                            errorText={validateFileExtensions(
+                                formState.restrictFileUploadsToExtensions || ""
+                            )}
+                        >
+                            <Input
+                                value={formState.restrictFileUploadsToExtensions || ""}
+                                onChange={({ detail }) =>
+                                    setFormState({
+                                        ...formState,
+                                        restrictFileUploadsToExtensions: detail.value,
+                                    })
+                                }
+                                placeholder="e.g., .jpg,.png,.pdf or leave blank for all"
+                                disabled={inProgress}
+                                data-testid="database-file-extensions"
                             />
                         </FormField>
                     </SpaceBetween>

@@ -59,7 +59,7 @@ export interface MetadataFilter {
     value: string;
     operator: "=" | "!=" | ">" | "<" | ">=" | "<=" | "contains";
     type: "string" | "number" | "date" | "boolean";
-    fieldType: "str" | "num" | "bool" | "date" | "list" | "gp" | "gs";
+    // fieldType removed - all metadata searches now use string type
 }
 
 export interface SearchQuery {
@@ -136,6 +136,7 @@ export interface SearchPreferences {
     sortField: string;
     sortDirection: "asc" | "desc";
     showThumbnails: boolean;
+    showMapThumbnails: boolean; // Show map thumbnails for assets with location data
     filterPresets: FilterPreset[];
     lastUsedFilters: SearchFilters;
     sidebarWidth?: number; // Width of the search sidebar (resizable)
@@ -412,6 +413,7 @@ export const DEFAULT_PREFERENCES: SearchPreferences = {
     sortField: "str_assetname",
     sortDirection: "asc",
     showThumbnails: false,
+    showMapThumbnails: false, // Default off
     filterPresets: [],
     lastUsedFilters: {
         _rectype: {

@@ -50,9 +50,6 @@ try:
     asset_links_table_v2_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
     asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -587,7 +584,7 @@ def handle_get_request(event):
                 request_model = parse(path_parameters, model=GetSingleAssetLinkRequestModel)
             except ValidationError as v:
                 logger.exception(f"Validation error in path parameters: {v}")
-                return validation_error(body={'message': str(v)})
+                return validation_error(body={'message': str(v)}, event=event)
             
             # Validate asset link ID
             (valid, message) = validate({
@@ -598,7 +595,7 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
             
             # Get the single asset link
             response = get_single_asset_link(request_model.assetLinkId, claims_and_roles)
@@ -621,7 +618,7 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
             
             # Parse and validate parameters using request model
             try:
@@ -635,7 +632,7 @@ def handle_get_request(event):
                 request_model = parse(combined_params, model=GetAssetLinksRequestModel)
             except ValidationError as v:
                 logger.exception(f"Validation error in parameters: {v}")
-                return validation_error(body={'message': str(v)})
+                return validation_error(body={'message': str(v)}, event=event)
             
             # Get asset links
             response = get_asset_links_for_asset(
@@ -647,19 +644,19 @@ def handle_get_request(event):
             return success(body=response.dict())
             
         else:
-            return validation_error(body={'message': 'Asset ID, Database ID, or Asset Link ID is required'})
+            return validation_error(body={'message': 'Asset ID, Database ID, or Asset Link ID is required'}, event=event)
             
     except ValueError as v:
         logger.warning(f"Validation error in asset links retrieval: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error in asset links retrieval: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_put_request(event):
     """Handle PUT requests to update asset links"""
@@ -668,14 +665,14 @@ def handle_put_request(event):
     try:
         # Validate required path parameters
         if 'assetLinkId' not in path_parameters:
-            return validation_error(body={'message': "Asset link ID is required"})
+            return validation_error(body={'message': "Asset link ID is required"}, event=event)
         
         # Parse and validate path parameters using request model
         try:
             path_request_model = parse(path_parameters, model=GetSingleAssetLinkRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Validate asset link ID
         (valid, message) = validate({
@@ -686,14 +683,14 @@ def handle_put_request(event):
         })
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         logger.info(f"Updating asset link {path_request_model.assetLinkId}")
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -701,12 +698,12 @@ def handle_put_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
             
         # Parse and validate the request model
         request_model = parse(body, model=UpdateAssetLinkRequestModel)
@@ -717,15 +714,15 @@ def handle_put_request(event):
         
     except ValueError as v:
         logger.warning(f"Validation error in asset link update: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error in asset link update: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_delete_request(event):
     """Handle DELETE requests for asset links"""
@@ -734,14 +731,14 @@ def handle_delete_request(event):
     try:
         # Validate required path parameters
         if 'relationId' not in path_parameters:
-            return validation_error(body={'message': "Asset link ID (relationId) is required"})
+            return validation_error(body={'message': "Asset link ID (relationId) is required"}, event=event)
         
         # Parse and validate path parameters using request model
         try:
             request_model = parse(path_parameters, model=DeleteAssetLinkRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)})
+            return validation_error(body={'message': str(v)}, event=event)
         
         # Validate relation ID
         (valid, message) = validate({
@@ -752,7 +749,7 @@ def handle_delete_request(event):
         })
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         logger.info(f"Deleting asset link {request_model.relationId}")
         
@@ -762,15 +759,15 @@ def handle_delete_request(event):
         
     except ValueError as v:
         logger.warning(f"Validation error in asset link deletion: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error in asset link deletion: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 #######################
 # Lambda Handler
@@ -804,14 +801,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

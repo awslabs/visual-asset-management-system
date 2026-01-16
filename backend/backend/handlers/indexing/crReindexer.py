@@ -3,26 +3,33 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-VAMS OpenSearch Reindexer Lambda Function
+VAMS Indexer and OpenSearch Reindexer Lambda Function
 
-This Lambda function provides reindexing capabilities for VAMS OpenSearch indexes.
-It can be invoked directly or triggered via CloudFormation custom resources.
+This Lambda function provides reindexing capabilities for VAMS global indexing and OpenSearch indexes.
+It can be invoked directly or triggered via CloudFormation custom resources or directly.
 
 Key Features:
-- Reindex assets and/or files by updating AssetsMetadata DynamoDB table
-- DynamoDB Streams automatically trigger OpenSearch indexing
+- Reindex assets and/or files by "touching" the AssetFileMetadata DynamoDB table
+- Uses "touch and delete" pattern: creates then immediately deletes REINDEX_METADATA_RECORD
+- DynamoDB Streams automatically trigger OpenSearch indexing on both INSERT and REMOVE events
 - Supports both direct Lambda invocation and CloudFormation custom resource events
 - All configuration read from environment variables
 - Comprehensive error handling and logging
+- Batch operations for optimal performance
 
 Environment Variables Required:
-- ASSET_STORAGE_TABLE_NAME: DynamoDB table for assets
-- S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: DynamoDB table for S3 bucket configs
-- METADATA_STORAGE_TABLE_NAME: DynamoDB table for metadata (target for updates)
+- ASSET_STORAGE_TABLE_NAME: DynamoDB table for assets (source)
+- S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: DynamoDB table for S3 bucket configs (source)
+- ASSET_FILE_METADATA_STORAGE_TABLE_NAME: DynamoDB table for asset/file metadata (target for touch operations)
 - OPENSEARCH_ASSET_INDEX_SSM_PARAM: SSM parameter for asset index name
 - OPENSEARCH_FILE_INDEX_SSM_PARAM: SSM parameter for file index name
 - OPENSEARCH_ENDPOINT_SSM_PARAM: SSM parameter for OpenSearch endpoint
 - OPENSEARCH_TYPE: Type of OpenSearch deployment (serverless or provisioned)
+
+Reindexing Strategy:
+- Assets: Creates metadata record with composite key "databaseId:assetId:/" (root path)
+- Files: Creates metadata record with composite key "databaseId:assetId:filePath"
+- Both operations immediately delete the created records to trigger stream events
 
 Usage:
     Direct Invocation:
@@ -64,7 +71,7 @@ http = urllib3.PoolManager()
 # Environment Variables - Loaded at module initialization
 ASSET_STORAGE_TABLE_NAME = os.environ.get('ASSET_STORAGE_TABLE_NAME', '')
 S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = os.environ.get('S3_ASSET_BUCKETS_STORAGE_TABLE_NAME', '')
-METADATA_STORAGE_TABLE_NAME = os.environ.get('METADATA_STORAGE_TABLE_NAME', '')
+ASSET_FILE_METADATA_STORAGE_TABLE_NAME = os.environ.get('ASSET_FILE_METADATA_STORAGE_TABLE_NAME', '')
 OPENSEARCH_ASSET_INDEX_SSM_PARAM = os.environ.get('OPENSEARCH_ASSET_INDEX_SSM_PARAM', '')
 OPENSEARCH_FILE_INDEX_SSM_PARAM = os.environ.get('OPENSEARCH_FILE_INDEX_SSM_PARAM', '')
 OPENSEARCH_ENDPOINT_SSM_PARAM = os.environ.get('OPENSEARCH_ENDPOINT_SSM_PARAM', '')
@@ -85,7 +92,10 @@ class DecimalEncoder(json.JSONEncoder):
 class ReindexUtility:
     """
     Utility class for triggering OpenSearch reindexing of VAMS assets and files
-    by updating the AssetsMetadata DynamoDB table.
+    by "touching" the AssetFileMetadata DynamoDB table.
+    
+    Uses a "touch and delete" pattern where temporary metadata records are created
+    and immediately deleted to trigger DynamoDB stream events for reindexing.
     """
     
     def __init__(
@@ -181,55 +191,73 @@ class ReindexUtility:
                 retry_on_timeout=True
             )
             
+            # Determine deletion strategy based on OpenSearch type
+            use_search_after = OPENSEARCH_TYPE == 'serverless'
+            logger.info(f"Using {'search_after' if use_search_after else 'delete_by_query/scroll'} strategy for {OPENSEARCH_TYPE} OpenSearch")
+            
             # Clear asset index
             logger.info(f"Clearing asset index: {asset_index}")
             if client.indices.exists(index=asset_index):
-                try:
-                    # Try delete_by_query first (works for managed OpenSearch)
-                    response = client.delete_by_query(
-                        index=asset_index,
-                        body={"query": {"match_all": {}}}
-                    )
-                    results['asset_index']['deleted_count'] = response.get('deleted', 0)
+                if use_search_after:
+                    # Use search_after for Serverless
+                    logger.info(f"Using search_after pagination for: {asset_index}")
+                    deleted_count = self._search_after_and_delete_documents(client, asset_index)
+                    results['asset_index']['deleted_count'] = deleted_count
                     results['asset_index']['success'] = True
-                    logger.info(f"Deleted {results['asset_index']['deleted_count']} documents from {asset_index}")
-                except Exception as e:
-                    if '404' in str(e) or 'NotFoundError' in str(type(e).__name__):
-                        # delete_by_query not supported in OpenSearch Serverless
-                        # Use scroll and bulk delete instead
-                        logger.info(f"delete_by_query not supported, using scroll and bulk delete for: {asset_index}")
-                        deleted_count = self._scroll_and_delete_documents(client, asset_index)
-                        results['asset_index']['deleted_count'] = deleted_count
+                    logger.info(f"Deleted {deleted_count} documents from {asset_index}")
+                else:
+                    # Try delete_by_query first for Provisioned
+                    try:
+                        response = client.delete_by_query(
+                            index=asset_index,
+                            body={"query": {"match_all": {}}}
+                        )
+                        results['asset_index']['deleted_count'] = response.get('deleted', 0)
                         results['asset_index']['success'] = True
-                        logger.info(f"Deleted {deleted_count} documents from {asset_index}")
-                    else:
-                        raise
+                        logger.info(f"Deleted {results['asset_index']['deleted_count']} documents from {asset_index}")
+                    except Exception as e:
+                        if '404' in str(e) or 'NotFoundError' in str(type(e).__name__):
+                            # Fallback to scroll if delete_by_query not available
+                            logger.info(f"delete_by_query not supported, using scroll for: {asset_index}")
+                            deleted_count = self._scroll_and_delete_documents(client, asset_index)
+                            results['asset_index']['deleted_count'] = deleted_count
+                            results['asset_index']['success'] = True
+                            logger.info(f"Deleted {deleted_count} documents from {asset_index}")
+                        else:
+                            raise
             else:
                 logger.warning(f"Asset index {asset_index} does not exist")
             
             # Clear file index
             logger.info(f"Clearing file index: {file_index}")
             if client.indices.exists(index=file_index):
-                try:
-                    # Try delete_by_query first (works for managed OpenSearch)
-                    response = client.delete_by_query(
-                        index=file_index,
-                        body={"query": {"match_all": {}}}
-                    )
-                    results['file_index']['deleted_count'] = response.get('deleted', 0)
+                if use_search_after:
+                    # Use search_after for Serverless
+                    logger.info(f"Using search_after pagination for: {file_index}")
+                    deleted_count = self._search_after_and_delete_documents(client, file_index)
+                    results['file_index']['deleted_count'] = deleted_count
                     results['file_index']['success'] = True
-                    logger.info(f"Deleted {results['file_index']['deleted_count']} documents from {file_index}")
-                except Exception as e:
-                    if '404' in str(e) or 'NotFoundError' in str(type(e).__name__):
-                        # delete_by_query not supported in OpenSearch Serverless
-                        # Use scroll and bulk delete instead
-                        logger.info(f"delete_by_query not supported, using scroll and bulk delete for: {file_index}")
-                        deleted_count = self._scroll_and_delete_documents(client, file_index)
-                        results['file_index']['deleted_count'] = deleted_count
+                    logger.info(f"Deleted {deleted_count} documents from {file_index}")
+                else:
+                    # Try delete_by_query first for Provisioned
+                    try:
+                        response = client.delete_by_query(
+                            index=file_index,
+                            body={"query": {"match_all": {}}}
+                        )
+                        results['file_index']['deleted_count'] = response.get('deleted', 0)
                         results['file_index']['success'] = True
-                        logger.info(f"Deleted {deleted_count} documents from {file_index}")
-                    else:
-                        raise
+                        logger.info(f"Deleted {results['file_index']['deleted_count']} documents from {file_index}")
+                    except Exception as e:
+                        if '404' in str(e) or 'NotFoundError' in str(type(e).__name__):
+                            # Fallback to scroll if delete_by_query not available
+                            logger.info(f"delete_by_query not supported, using scroll for: {file_index}")
+                            deleted_count = self._scroll_and_delete_documents(client, file_index)
+                            results['file_index']['deleted_count'] = deleted_count
+                            results['file_index']['success'] = True
+                            logger.info(f"Deleted {deleted_count} documents from {file_index}")
+                        else:
+                            raise
             else:
                 logger.warning(f"File index {file_index} does not exist")
             
@@ -246,10 +274,10 @@ class ReindexUtility:
             results['error'] = str(e)
             return results
     
-    def _scroll_and_delete_documents(self, client, index_name: str) -> int:
+    def _search_after_and_delete_documents(self, client, index_name: str) -> int:
         """
-        Delete all documents from an index using scroll and bulk delete.
-        This is used for OpenSearch Serverless where delete_by_query is not supported.
+        Delete all documents from an index using search_after and bulk delete.
+        This is the recommended approach for OpenSearch Serverless.
         
         Args:
             client: OpenSearch client
@@ -259,6 +287,87 @@ class ReindexUtility:
             int: Number of documents deleted
         """
         deleted_count = 0
+        
+        try:
+            batch_size = 1000
+            search_after = None
+            
+            while True:
+                # Build search query with search_after
+                search_body = {
+                    "query": {"match_all": {}},
+                    "size": batch_size,
+                    "sort": [{"_id": "asc"}],  # Sort by _id for consistent pagination
+                    "_source": False  # We only need IDs
+                }
+                
+                if search_after:
+                    search_body["search_after"] = search_after
+                
+                # Execute search
+                response = client.search(
+                    index=index_name,
+                    body=search_body
+                )
+                
+                hits = response.get('hits', {}).get('hits', [])
+                
+                # If no hits, we're done
+                if not hits:
+                    logger.info(f"No more documents to process in {index_name}")
+                    break
+                
+                # Build bulk delete operations
+                bulk_body = []
+                for hit in hits:
+                    bulk_body.append({
+                        "delete": {
+                            "_index": index_name,
+                            "_id": hit['_id']
+                        }
+                    })
+                
+                # Execute bulk delete
+                if bulk_body:
+                    bulk_response = client.bulk(body=bulk_body)
+                    
+                    # Count successful deletes
+                    for item in bulk_response.get('items', []):
+                        if 'delete' in item and item['delete'].get('result') in ['deleted', 'not_found']:
+                            deleted_count += 1
+                    
+                    logger.info(f"Deleted batch of {len(bulk_body)} documents from {index_name} (total: {deleted_count})")
+                
+                # Get search_after value from last hit for next iteration
+                if hits:
+                    search_after = hits[-1].get('sort')
+                    if not search_after:
+                        # If no sort value, we can't continue
+                        logger.warning(f"No sort value in response, stopping pagination")
+                        break
+                else:
+                    break
+            
+            return deleted_count
+            
+        except Exception as e:
+            logger.exception(f"Error in search_after and delete for {index_name}: {e}")
+            return deleted_count
+    
+    def _scroll_and_delete_documents(self, client, index_name: str) -> int:
+        """
+        Delete all documents from an index using scroll and bulk delete.
+        This is used for OpenSearch Provisioned where scroll is supported.
+        
+        Args:
+            client: OpenSearch client
+            index_name: Name of the index to clear
+            
+        Returns:
+            int: Number of documents deleted
+        """
+        deleted_count = 0
+        scroll_id = None
         
         try:
             # Use search with scroll to get all document IDs
@@ -589,133 +698,106 @@ class ReindexUtility:
             logger.error(f"Error scanning S3 buckets table: {e}")
             raise
     
-    def _batch_get_existing_records(
-        self,
-        keys: List[Tuple[str, str]]
-    ) -> Dict[str, Dict]:
-        """Batch get existing metadata records from AssetsMetadata table."""
-        if not keys:
-            return {}
-        
-        records = {}
-        
-        try:
-            # Process in batches of 100 (DynamoDB BatchGetItem limit)
-            batch_size = 100
-            for i in range(0, len(keys), batch_size):
-                batch_keys = keys[i:i + batch_size]
-                
-                # Build request items in DynamoDB low-level format
-                request_items = {
-                    self.assets_metadata_table_name: {
-                        'Keys': [
-                            {
-                                'databaseId': {'S': db_id},
-                                'assetId': {'S': asset_id}
-                            }
-                            for db_id, asset_id in batch_keys
-                        ]
-                    }
-                }
-                
-                # Batch get with retry for unprocessed keys
-                response = dynamodb_client.batch_get_item(RequestItems=request_items)
-                
-                # Process responses
-                if self.assets_metadata_table_name in response.get('Responses', {}):
-                    for item in response['Responses'][self.assets_metadata_table_name]:
-                        # Convert from low-level format to high-level format
-                        from boto3.dynamodb.types import TypeDeserializer
-                        deserializer = TypeDeserializer()
-                        deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
-                        
-                        record_key = f"{deserialized_item['databaseId']}#{deserialized_item['assetId']}"
-                        records[record_key] = deserialized_item
-                
-                # Handle unprocessed keys
-                unprocessed = response.get('UnprocessedKeys', {})
-                while unprocessed:
-                    logger.warning(f"Retrying {len(unprocessed.get(self.assets_metadata_table_name, {}).get('Keys', []))} unprocessed keys")
-                    time.sleep(0.5)  # Brief delay before retry
-                    response = dynamodb_client.batch_get_item(RequestItems=unprocessed)
-                    
-                    if self.assets_metadata_table_name in response.get('Responses', {}):
-                        for item in response['Responses'][self.assets_metadata_table_name]:
-                            from boto3.dynamodb.types import TypeDeserializer
-                            deserializer = TypeDeserializer()
-                            deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
-                            
-                            record_key = f"{deserialized_item['databaseId']}#{deserialized_item['assetId']}"
-                            records[record_key] = deserialized_item
-                    
-                    unprocessed = response.get('UnprocessedKeys', {})
-            
-            return records
-            
-        except Exception as e:
-            logger.error(f"Error batch getting metadata records: {e}")
-            return {}
     
     def _update_assets_in_metadata_table(
         self,
         assets: List[Dict],
         timestamp: str
     ) -> Dict:
-        """Update a batch of assets in the AssetsMetadata table."""
-        table = dynamodb_resource.Table(self.assets_metadata_table_name)
+        """Touch assets by creating and immediately deleting metadata records.
+        
+        This triggers DynamoDB streams which will update the OpenSearch index.
+        """
         results = {'success': 0, 'failed': 0, 'errors': []}
         
         try:
-            # Batch fetch existing records for efficiency
-            existing_records = self._batch_get_existing_records(
-                [(asset['databaseId'], asset['assetId']) for asset in assets]
-            )
+            # Step 1: Batch CREATE metadata records
+            items_to_create = []
+            successfully_prepared_assets = []
             
-            # Process in DynamoDB batch size chunks
-            for i in range(0, len(assets), self.asset_batch_size):
-                batch = assets[i:i + self.asset_batch_size]
-                
-                with table.batch_writer() as batch_writer:
-                    for asset in batch:
-                        try:
-                            database_id = asset['databaseId']
-                            asset_id = asset['assetId']
-                            
-                            # Get existing metadata record from batch fetch
-                            record_key = f"{database_id}#{asset_id}"
-                            existing_record = existing_records.get(record_key)
-                            
-                            # Merge with existing attributes
-                            if existing_record:
-                                # Preserve all existing attributes
-                                metadata_record = existing_record.copy()
-                            else:
-                                # Create new record with minimal keys
-                                metadata_record = {
-                                    'databaseId': database_id,
-                                    'assetId': asset_id
-                                }
-                            
-                            # Update timestamp
-                            metadata_record['_asset_table_updated'] = timestamp
-                            
-                            # Write to table
-                            batch_writer.put_item(Item=metadata_record)
-                            results['success'] += 1
-                            
-                        except Exception as e:
-                            results['failed'] += 1
-                            error_msg = f"Failed to update asset {asset.get('assetId')}: {str(e)}"
-                            logger.error(error_msg)
-                            results['errors'].append({
-                                'assetId': asset.get('assetId'),
-                                'error': str(e)
-                            })
+            for asset in assets:
+                try:
+                    database_id = asset['databaseId']
+                    asset_id = asset['assetId']
+                    composite_key = f"{database_id}:{asset_id}:/"
+                    
+                    item = {
+                        'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                        'databaseId:assetId:filePath': {'S': composite_key},
+                        'metadataValue': {'S': timestamp},
+                        'metadataValueType': {'S': 'string'}
+                    }
+                    items_to_create.append({'PutRequest': {'Item': item}})
+                    successfully_prepared_assets.append(asset)
+                except Exception as e:
+                    results['failed'] += 1
+                    logger.warning(f"Error preparing asset {asset.get('assetId')}: {e}")
+                    results['errors'].append({
+                        'assetId': asset.get('assetId'),
+                        'error': str(e)
+                    })
+            
+            # Write in batches of 25
+            for i in range(0, len(items_to_create), 25):
+                batch = items_to_create[i:i+25]
+                try:
+                    dynamodb_client.batch_write_item(
+                        RequestItems={
+                            self.assets_metadata_table_name: batch
+                        }
+                    )
+                except Exception as e:
+                    logger.exception(f"Error in batch create: {e}")
+                    for item in batch:
+                        results['failed'] += 1
+                        results['errors'].append({
+                            'error': 'Batch create failed',
+                            'details': str(e)
+                        })
+            
+            # Step 2: Batch DELETE the same records (only for successfully prepared assets)
+            items_to_delete = []
+            for asset in successfully_prepared_assets:
+                try:
+                    database_id = asset['databaseId']
+                    asset_id = asset['assetId']
+                    composite_key = f"{database_id}:{asset_id}:/"
+                    
+                    items_to_delete.append({
+                        'DeleteRequest': {
+                            'Key': {
+                                'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                                'databaseId:assetId:filePath': {'S': composite_key}
+                            }
+                        }
+                    })
+                except Exception as e:
+                    logger.warning(f"Error preparing delete for asset {asset.get('assetId')}: {e}")
+            
+            # Delete in batches of 25
+            for i in range(0, len(items_to_delete), 25):
+                batch = items_to_delete[i:i+25]
+                try:
+                    dynamodb_client.batch_write_item(
+                        RequestItems={
+                            self.assets_metadata_table_name: batch
+                        }
+                    )
+                    # Count successes for this batch
+                    results['success'] += len(batch)
+                except Exception as e:
+                    logger.exception(f"Error in batch delete: {e}")
+                    for item in batch:
+                        results['failed'] += 1
+                        results['errors'].append({
+                            'error': 'Batch delete failed',
+                            'details': str(e)
+                        })
             
             return results
             
         except Exception as e:
-            logger.error(f"Error in batch update: {e}")
+            logger.error(f"Error in touch and delete: {e}")
             results['failed'] = len(assets) - results['success']
             results['errors'].append({'error': str(e), 'type': 'batch_error'})
             return results
@@ -808,24 +890,26 @@ class ReindexUtility:
                         if not asset_id or not database_id:
                             continue
                         
-                        # Calculate relative path from base prefix
+                        # Calculate relative path from base prefix and asset ID
+                        # Start with the full S3 key
                         relative_path = obj['Key']
-                        if base_prefix and obj['Key'].startswith(base_prefix):
-                            relative_path = obj['Key'][len(base_prefix):].lstrip('/')
                         
-                        # Check if the relative path already starts with the asset ID
+                        # Remove base prefix if present
+                        if base_prefix and relative_path.startswith(base_prefix):
+                            relative_path = relative_path[len(base_prefix):].lstrip('/')
+                        
+                        # Remove asset ID prefix if present (the file is stored under assetId/)
                         if relative_path.startswith(f"{asset_id}/"):
-                            # Path already includes assetId, just prepend with /
-                            formatted_asset_id = f"/{relative_path}"
-                        else:
-                            # Path doesn't include assetId, add it
-                            formatted_asset_id = f"/{asset_id}/{relative_path}"
+                            relative_path = relative_path[len(asset_id) + 1:]  # +1 to remove the trailing slash
+                        
+                        # Prepend with forward slash for metadata storage
+                        file_path = f"/{relative_path}"
                         
                         files_batch.append({
                             'databaseId': database_id,
-                            'assetId': formatted_asset_id,
+                            'assetId': asset_id,
                             'original_asset_id': asset_id,
-                            'relative_path': relative_path
+                            'relative_path': file_path
                         })
                         
                         results['total'] += 1
@@ -891,62 +975,106 @@ class ReindexUtility:
         files: List[Dict],
         timestamp: str
     ) -> Dict:
-        """Update a batch of files in the AssetsMetadata table."""
-        table = dynamodb_resource.Table(self.assets_metadata_table_name)
+        """Touch files by creating and immediately deleting metadata records.
+        
+        This triggers DynamoDB streams which will update the OpenSearch index.
+        """
         results = {'success': 0, 'failed': 0, 'errors': []}
         
         try:
-            # Batch fetch existing records for efficiency
-            existing_records = self._batch_get_existing_records(
-                [(file_record['databaseId'], file_record['assetId']) for file_record in files]
-            )
+            # Step 1: Batch CREATE metadata records
+            items_to_create = []
+            successfully_prepared_files = []
             
-            # Process in DynamoDB batch size chunks (max 25 for batch_writer)
-            batch_size = min(self.file_batch_size, 25)
-            for i in range(0, len(files), batch_size):
-                batch = files[i:i + batch_size]
-                
-                with table.batch_writer() as batch_writer:
-                    for file_record in batch:
-                        try:
-                            database_id = file_record['databaseId']
-                            asset_id = file_record['assetId']  # Already formatted
-                            
-                            # Get existing metadata record from batch fetch
-                            record_key = f"{database_id}#{asset_id}"
-                            existing_record = existing_records.get(record_key)
-                            
-                            # Merge with existing attributes
-                            if existing_record:
-                                # Preserve all existing attributes
-                                metadata_record = existing_record.copy()
-                            else:
-                                # Create new record with minimal keys
-                                metadata_record = {
-                                    'databaseId': database_id,
-                                    'assetId': asset_id
-                                }
-                            
-                            # Update timestamp
-                            metadata_record['_asset_table_updated'] = timestamp
-                            
-                            # Write to table
-                            batch_writer.put_item(Item=metadata_record)
-                            results['success'] += 1
-                            
-                        except Exception as e:
-                            results['failed'] += 1
-                            error_msg = f"Failed to update file {file_record.get('assetId')}: {str(e)}"
-                            logger.error(error_msg)
-                            results['errors'].append({
-                                'assetId': file_record.get('assetId'),
-                                'error': str(e)
-                            })
+            for file_record in files:
+                try:
+                    database_id = file_record['databaseId']
+                    original_asset_id = file_record['original_asset_id']
+                    relative_path = file_record['relative_path']
+                    
+                    # Construct composite key using the file path
+                    composite_key = f"{database_id}:{original_asset_id}:{relative_path}"
+                    
+                    item = {
+                        'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                        'databaseId:assetId:filePath': {'S': composite_key},
+                        'metadataValue': {'S': timestamp},
+                        'metadataValueType': {'S': 'string'}
+                    }
+                    items_to_create.append({'PutRequest': {'Item': item}})
+                    successfully_prepared_files.append(file_record)
+                except Exception as e:
+                    results['failed'] += 1
+                    logger.warning(f"Error preparing file {file_record.get('relative_path')}: {e}")
+                    results['errors'].append({
+                        'filePath': file_record.get('relative_path'),
+                        'error': str(e)
+                    })
+            
+            # Write in batches of 25
+            for i in range(0, len(items_to_create), 25):
+                batch = items_to_create[i:i+25]
+                try:
+                    dynamodb_client.batch_write_item(
+                        RequestItems={
+                            self.assets_metadata_table_name: batch
+                        }
+                    )
+                except Exception as e:
+                    logger.exception(f"Error in batch create: {e}")
+                    for item in batch:
+                        results['failed'] += 1
+                        results['errors'].append({
+                            'error': 'Batch create failed',
+                            'details': str(e)
+                        })
+            
+            # Step 2: Batch DELETE the same records (only for successfully prepared files)
+            items_to_delete = []
+            for file_record in successfully_prepared_files:
+                try:
+                    database_id = file_record['databaseId']
+                    original_asset_id = file_record['original_asset_id']
+                    relative_path = file_record['relative_path']
+                    
+                    # Construct composite key using the file path
+                    composite_key = f"{database_id}:{original_asset_id}:{relative_path}"
+                    
+                    items_to_delete.append({
+                        'DeleteRequest': {
+                            'Key': {
+                                'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                                'databaseId:assetId:filePath': {'S': composite_key}
+                            }
+                        }
+                    })
+                except Exception as e:
+                    logger.warning(f"Error preparing delete for file {file_record.get('relative_path')}: {e}")
+            
+            # Delete in batches of 25
+            for i in range(0, len(items_to_delete), 25):
+                batch = items_to_delete[i:i+25]
+                try:
+                    dynamodb_client.batch_write_item(
+                        RequestItems={
+                            self.assets_metadata_table_name: batch
+                        }
+                    )
+                    # Count successes for this batch
+                    results['success'] += len(batch)
+                except Exception as e:
+                    logger.exception(f"Error in batch delete: {e}")
+                    for item in batch:
+                        results['failed'] += 1
+                        results['errors'].append({
+                            'error': 'Batch delete failed',
+                            'details': str(e)
+                        })
             
             return results
             
         except Exception as e:
-            logger.error(f"Error in batch update: {e}")
+            logger.error(f"Error in touch and delete: {e}")
             results['failed'] = len(files) - results['success']
             results['errors'].append({'error': str(e), 'type': 'batch_error'})
             return results
@@ -1015,12 +1143,12 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
     
     try:
         # Validate required environment variables
-        if not all([ASSET_STORAGE_TABLE_NAME, S3_ASSET_BUCKETS_STORAGE_TABLE_NAME, METADATA_STORAGE_TABLE_NAME]):
+        if not all([ASSET_STORAGE_TABLE_NAME, S3_ASSET_BUCKETS_STORAGE_TABLE_NAME, ASSET_FILE_METADATA_STORAGE_TABLE_NAME]):
             error_msg = "Missing required environment variables"
             logger.error(error_msg)
             logger.error(f"  ASSET_STORAGE_TABLE_NAME: {ASSET_STORAGE_TABLE_NAME}")
             logger.error(f"  S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: {S3_ASSET_BUCKETS_STORAGE_TABLE_NAME}")
-            logger.error(f"  METADATA_STORAGE_TABLE_NAME: {METADATA_STORAGE_TABLE_NAME}")
+            logger.error(f"  ASSET_FILE_METADATA_STORAGE_TABLE_NAME: {ASSET_FILE_METADATA_STORAGE_TABLE_NAME}")
             if is_cfn_event:
                 send_cfn_response(event, context, 'FAILED', reason=error_msg)
                 return {'statusCode': 500, 'body': json.dumps({'error': error_msg})}
@@ -1031,7 +1159,7 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
         logger.info("Environment Configuration:")
         logger.info(f"  ASSET_STORAGE_TABLE_NAME: {ASSET_STORAGE_TABLE_NAME}")
         logger.info(f"  S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: {S3_ASSET_BUCKETS_STORAGE_TABLE_NAME}")
-        logger.info(f"  METADATA_STORAGE_TABLE_NAME: {METADATA_STORAGE_TABLE_NAME}")
+        logger.info(f"  ASSET_FILE_METADATA_STORAGE_TABLE_NAME: {ASSET_FILE_METADATA_STORAGE_TABLE_NAME}")
         logger.info(f"  OPENSEARCH_TYPE: {OPENSEARCH_TYPE}")
         logger.info(f"  OPENSEARCH_ASSET_INDEX_SSM_PARAM: {OPENSEARCH_ASSET_INDEX_SSM_PARAM}")
         logger.info(f"  OPENSEARCH_FILE_INDEX_SSM_PARAM: {OPENSEARCH_FILE_INDEX_SSM_PARAM}")
@@ -1041,7 +1169,7 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
         utility = ReindexUtility(
             asset_table_name=ASSET_STORAGE_TABLE_NAME,
             s3_buckets_table_name=S3_ASSET_BUCKETS_STORAGE_TABLE_NAME,
-            assets_metadata_table_name=METADATA_STORAGE_TABLE_NAME
+            assets_metadata_table_name=ASSET_FILE_METADATA_STORAGE_TABLE_NAME
         )
         
         # Handle CloudFormation custom resource events

@@ -143,6 +143,100 @@ export function globalLambdaEnvironmentsAndPermissions(
     }
 }
 
+/**
+ * Sets up common security and logging environment variables and permissions for Lambda functions.
+ * This includes authentication and authorization tables required for all Lambda functions to perform
+ * global authorization and authentication operations.
+ *
+ * @param lambdaFunction The Lambda function to configure
+ * @param storageResources The storage resources object containing DynamoDB table references
+ */
+export function setupSecurityAndLoggingEnvironmentAndPermissions(
+    lambdaFunction: lambda.Function,
+    storageResources: storageResources
+): void {
+    // Add authentication and authorization environment variables
+    lambdaFunction.addEnvironment(
+        "AUTH_TABLE_NAME",
+        storageResources.dynamo.authEntitiesStorageTable.tableName
+    );
+    lambdaFunction.addEnvironment(
+        "CONSTRAINTS_TABLE_NAME",
+        storageResources.dynamo.constraintsStorageTable.tableName
+    );
+    lambdaFunction.addEnvironment(
+        "USER_ROLES_TABLE_NAME",
+        storageResources.dynamo.userRolesStorageTable.tableName
+    );
+    lambdaFunction.addEnvironment(
+        "ROLES_TABLE_NAME",
+        storageResources.dynamo.rolesStorageTable.tableName
+    );
+
+    // Add CloudWatch audit log group environment variables
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_AUTHENTICATION",
+        storageResources.cloudWatchAuditLogGroups.authentication.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_AUTHORIZATION",
+        storageResources.cloudWatchAuditLogGroups.authorization.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_FILEUPLOAD",
+        storageResources.cloudWatchAuditLogGroups.fileUpload.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_FILEDOWNLOAD",
+        storageResources.cloudWatchAuditLogGroups.fileDownload.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_FILEDOWNLOAD_STREAMED",
+        storageResources.cloudWatchAuditLogGroups.fileDownloadStreamed.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_AUTHOTHER",
+        storageResources.cloudWatchAuditLogGroups.authOther.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_AUTHCHANGES",
+        storageResources.cloudWatchAuditLogGroups.authChanges.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_ACTIONS",
+        storageResources.cloudWatchAuditLogGroups.actions.logGroupName
+    );
+    lambdaFunction.addEnvironment(
+        "AUDIT_LOG_ERRORS",
+        storageResources.cloudWatchAuditLogGroups.errors.logGroupName
+    );
+
+    // Grant read permissions to authentication and authorization tables
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(lambdaFunction);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(lambdaFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(lambdaFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(lambdaFunction);
+
+    // Grant CloudWatch Logs permissions for audit logging
+    lambdaFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+            resources: [
+                `${storageResources.cloudWatchAuditLogGroups.authentication.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.authorization.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.fileUpload.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.fileDownload.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.fileDownloadStreamed.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.authOther.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.authChanges.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.actions.logGroupArn}:*`,
+                `${storageResources.cloudWatchAuditLogGroups.errors.logGroupArn}:*`,
+            ],
+        })
+    );
+}
+
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
     bucket: s3.IBucket,
     config: Config.Config
@@ -227,6 +321,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("SQS").Principal,
             Service("SNS").Principal,
             Service("ECS").Principal,
+            Service("EKS").Principal,
             Service("ECS_TASKS").Principal,
             Service("LOGS").Principal,
             Service("LAMBDA").Principal,
@@ -239,7 +334,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
     // Add account root principal for custom resource Lambda roles and CloudFormation
     policyStatement.addPrincipals(new iam.AccountRootPrincipal());
 
-    if (!config.app.useAlb.enabled) {
+    if (!config.app.useCloudFront.enabled) {
         policyStatement.addPrincipals(Service("CLOUDFRONT").Principal);
     }
 
@@ -284,6 +379,7 @@ export function generateContentSecurityPolicy(
 
     let scriptSrc = [
         "'self'",
+        "'unsafe-hashes'",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
     ];
 

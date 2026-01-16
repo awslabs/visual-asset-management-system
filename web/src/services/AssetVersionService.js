@@ -4,18 +4,71 @@
  */
 
 import { API } from "aws-amplify";
+import { fetchAssetS3Files } from "./APIService";
 
 /**
- * Fetches all asset versions for a given asset
+ * Fetches all asset versions for a given asset (fetches all pages)
  * @param {Object} params - Parameters object
  * @param {string} params.databaseId - Database ID
  * @param {string} params.assetId - Asset ID
- * @param {number} params.maxItems - Maximum items per page (optional)
+ * @param {number} params.pageSize - Page size for fetching (optional, default 100)
+ * @returns {Promise<[boolean, any]>}
+ */
+export const fetchAllAssetVersions = async ({ databaseId, assetId, pageSize = 100 }, api = API) => {
+    try {
+        if (!databaseId || !assetId) {
+            return [false, "Database ID and Asset ID are required"];
+        }
+
+        let allVersions = [];
+        let nextToken = null;
+
+        do {
+            const [success, response] = await fetchAssetVersions(
+                {
+                    databaseId,
+                    assetId,
+                    pageSize,
+                    startingToken: nextToken,
+                },
+                api
+            );
+
+            if (!success || !response) {
+                console.error("Failed to fetch page of versions");
+                break;
+            }
+
+            const versions = response.versions || [];
+            allVersions = [...allVersions, ...versions];
+            nextToken = response.NextToken || null;
+
+            console.log(
+                `Fetched ${versions.length} versions, total so far: ${
+                    allVersions.length
+                }, nextToken: ${nextToken ? "exists" : "null"}`
+            );
+        } while (nextToken);
+
+        console.log(`Finished fetching all versions, total: ${allVersions.length}`);
+        return [true, { versions: allVersions, totalCount: allVersions.length }];
+    } catch (error) {
+        console.error("Error fetching all asset versions:", error);
+        return [false, error?.message || "Failed to fetch all asset versions"];
+    }
+};
+
+/**
+ * Fetches a single page of asset versions for a given asset
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {number} params.pageSize - Page size (optional, default 100)
  * @param {string|null} params.startingToken - Pagination token (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchAssetVersions = async (
-    { databaseId, assetId, maxItems = 100, startingToken = null },
+    { databaseId, assetId, pageSize = 100, startingToken = null },
     api = API
 ) => {
     try {
@@ -24,7 +77,7 @@ export const fetchAssetVersions = async (
         }
 
         const queryParams = {
-            maxItems: maxItems.toString(),
+            pageSize: pageSize.toString(),
         };
 
         if (startingToken && startingToken != "") {
@@ -59,7 +112,7 @@ export const fetchAssetVersions = async (
                     true,
                     {
                         versions: response.message,
-                        nextToken: response.nextToken || null,
+                        nextToken: response.NextToken || null,
                     },
                 ];
             } else if (typeof response.message === "object" && response.message.versions) {
@@ -74,7 +127,7 @@ export const fetchAssetVersions = async (
                     true,
                     {
                         versions: [response.message],
-                        nextToken: response.nextToken || null,
+                        nextToken: response.NextToken || null,
                     },
                 ];
             } else {
@@ -217,10 +270,11 @@ export const createAssetVersion = async (
  * @param {string} params.assetId - Asset ID
  * @param {string} params.assetVersionId - Asset version ID to revert to
  * @param {string} params.comment - Revert comment (optional)
+ * @param {boolean} params.revertMetadata - Whether to revert metadata/attributes (optional, default: false)
  * @returns {Promise<boolean|{message}|any>}
  */
 export const revertAssetVersion = async (
-    { databaseId, assetId, assetVersionId, comment = "" },
+    { databaseId, assetId, assetVersionId, comment = "", revertMetadata = false },
     api = API
 ) => {
     try {
@@ -228,7 +282,9 @@ export const revertAssetVersion = async (
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
         }
 
-        const body = {};
+        const body = {
+            revertMetadata: revertMetadata,
+        };
 
         if (comment) {
             body.comment = comment;
@@ -267,101 +323,6 @@ export const revertAssetVersion = async (
     } catch (error) {
         console.error("Error reverting asset version:", error);
         return [false, error?.message || "Failed to revert asset version"];
-    }
-};
-
-/**
- * Fetches all files in S3 for an asset (for version creation)
- * @param {Object} params - Parameters object
- * @param {string} params.databaseId - Database ID
- * @param {string} params.assetId - Asset ID
- * @param {boolean} params.includeArchived - Whether to include archived files
- * @returns {Promise<boolean|{message}|any>}
- */
-export const fetchAssetS3Files = async (
-    { databaseId, assetId, includeArchived = false },
-    api = API
-) => {
-    try {
-        if (!databaseId || !assetId) {
-            return [false, "Database ID and Asset ID are required"];
-        }
-
-        const response = await api.get(
-            "api",
-            `database/${databaseId}/assets/${assetId}/listFiles`,
-            {
-                queryStringParameters: {
-                    includeArchived: includeArchived.toString(),
-                },
-            }
-        );
-
-        console.log("fetchAssetS3Files raw response:", JSON.stringify(response, null, 2));
-
-        // Handle direct response format (new API format)
-        if (response && response.items) {
-            let items = response.items;
-
-            // Handle pagination if needed
-            let nextToken = response.nextToken;
-            while (nextToken) {
-                const nextResponse = await api.get(
-                    "api",
-                    `database/${databaseId}/assets/${assetId}/listFiles`,
-                    {
-                        queryStringParameters: {
-                            includeArchived: includeArchived.toString(),
-                            startingToken: nextToken,
-                        },
-                    }
-                );
-
-                if (nextResponse && nextResponse.items) {
-                    items = items.concat(nextResponse.items);
-                    nextToken = nextResponse.nextToken;
-                } else {
-                    break;
-                }
-            }
-            return [true, items];
-        }
-        // Handle legacy response format with message wrapper
-        else if (response.message) {
-            let items = [];
-            if (response.message.Items) {
-                items = response.message.Items;
-
-                // Handle pagination if needed
-                let nextToken = response.message.NextToken;
-                while (nextToken) {
-                    const nextResponse = await api.get(
-                        "api",
-                        `database/${databaseId}/assets/${assetId}/listFiles`,
-                        {
-                            queryStringParameters: {
-                                includeArchived: includeArchived.toString(),
-                                startingToken: nextToken,
-                            },
-                        }
-                    );
-
-                    if (nextResponse.message && nextResponse.message.Items) {
-                        items = items.concat(nextResponse.message.Items);
-                        nextToken = nextResponse.message.NextToken;
-                    } else {
-                        break;
-                    }
-                }
-            }
-            return [true, items];
-        } else {
-            console.error("Unexpected response format:", response);
-            return [false, "No response received"];
-        }
-    } catch (error) {
-        console.error("Error fetching asset S3 files:", error);
-        return [false, error?.message || "Failed to fetch asset files"];
     }
 };
 
@@ -407,6 +368,7 @@ export const compareAssetVersions = async (
                     databaseId,
                     assetId,
                     includeArchived: false,
+                    basic: false,
                 },
                 api
             );

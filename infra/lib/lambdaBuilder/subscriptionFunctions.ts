@@ -19,19 +19,16 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import * as Service from "../../lib/helper/service-helper";
 import * as Config from "../../config/config";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
 export function buildSubscriptionService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    subscriptionsStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table,
-    userRolesStorageTable: dynamodb.Table,
-    authEntitiesStorageTable: dynamodb.Table,
-    userStorageTable: dynamodb.Table,
-    rolesStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -39,7 +36,7 @@ export function buildSubscriptionService(
 ): lambda.Function {
     const name = "subscriptionService";
     const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
-    const subscriptionServiceFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.subscription.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -55,16 +52,14 @@ export function buildSubscriptionService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME: subscriptionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-            USER_STORAGE_TABLE_NAME: userStorageTable.tableName,
-            ROLES_TABLE_NAME: rolesStorageTable.tableName,
+            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.subscriptionsStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
         },
     });
 
-    subscriptionServiceFunction.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: [
                 "sns:CreateTopic",
@@ -80,32 +75,27 @@ export function buildSubscriptionService(
         })
     );
 
-    subscriptionsStorageTable.grantReadWriteData(subscriptionServiceFunction);
-    assetStorageTable.grantReadWriteData(subscriptionServiceFunction);
-    authEntitiesStorageTable.grantReadWriteData(subscriptionServiceFunction);
-    userRolesStorageTable.grantReadData(subscriptionServiceFunction);
-    rolesStorageTable.grantReadData(subscriptionServiceFunction);
-    userStorageTable.grantReadWriteData(subscriptionServiceFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(subscriptionServiceFunction, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(subscriptionServiceFunction, config);
-    return subscriptionServiceFunction;
+    storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.userStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildCheckSubscriptionFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    subscriptionsStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table,
-    userRolesStorageTable: dynamodb.Table,
-    authEntitiesStorageTable: dynamodb.Table,
-    rolesStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "checkSubscriptionService";
-    const checkSubscriptionService = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.subscription.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -121,31 +111,24 @@ export function buildCheckSubscriptionFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME: subscriptionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: rolesStorageTable.tableName,
+            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.subscriptionsStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
         },
     });
-    subscriptionsStorageTable.grantReadWriteData(checkSubscriptionService);
-    assetStorageTable.grantReadWriteData(checkSubscriptionService);
-    authEntitiesStorageTable.grantReadWriteData(checkSubscriptionService);
-    userRolesStorageTable.grantReadData(checkSubscriptionService);
-    rolesStorageTable.grantReadData(checkSubscriptionService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(checkSubscriptionService, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(checkSubscriptionService, config);
-    return checkSubscriptionService;
+    storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildUnSubscribeFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    subscriptionsStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table,
-    userRolesStorageTable: dynamodb.Table,
-    authEntitiesStorageTable: dynamodb.Table,
-    rolesStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -153,7 +136,7 @@ export function buildUnSubscribeFunction(
 ): lambda.Function {
     const name = "unsubscribeService";
     const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
-    const unsubscribeServiceFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.subscription.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -169,15 +152,13 @@ export function buildUnSubscribeFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME: subscriptionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: rolesStorageTable.tableName,
+            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.subscriptionsStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
         },
     });
 
-    unsubscribeServiceFunction.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: [
                 "sns:ListTopics",
@@ -192,12 +173,11 @@ export function buildUnSubscribeFunction(
         })
     );
 
-    subscriptionsStorageTable.grantReadWriteData(unsubscribeServiceFunction);
-    assetStorageTable.grantReadWriteData(unsubscribeServiceFunction);
-    authEntitiesStorageTable.grantReadWriteData(unsubscribeServiceFunction);
-    userRolesStorageTable.grantReadData(unsubscribeServiceFunction);
-    rolesStorageTable.grantReadData(unsubscribeServiceFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(unsubscribeServiceFunction, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(unsubscribeServiceFunction, config);
-    return unsubscribeServiceFunction;
+    storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
