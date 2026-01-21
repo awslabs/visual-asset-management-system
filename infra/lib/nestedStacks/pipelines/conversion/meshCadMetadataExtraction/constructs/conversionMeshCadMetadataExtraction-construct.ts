@@ -116,6 +116,11 @@ export class ConversionMeshCadMetadataExtractionConstruct extends NestedStack {
                     workflowId: "metadata-extraction-cad-mesh",
                     workflowDescription:
                         "Basic Metadata Attribute Extraction (File-level metadata) - using Trimesh and CADQuery library. Supported files are STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ, STP, DXF.",
+                    autoTriggerOnFileExtensionsUpload:
+                        props.config.app.pipelines.useConversionCadMeshMetadataExtraction
+                            .autoRegisterAutoTriggerOnFileUpload === true
+                            ? ".stl,.obj,.ply,.gltf,.glb,.3mf,.xaml,.3dxml,.dae,.xyz,.stp,.dxf"
+                            : "",
                 },
             });
 

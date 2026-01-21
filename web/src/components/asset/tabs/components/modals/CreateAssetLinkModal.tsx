@@ -97,41 +97,51 @@ export function CreateAssetLinkModal({
         }
 
         if (isUploadMode) {
-            // In upload mode, just add to local state (handled by parent component)
+            // In upload mode, add all selected assets to local state
             try {
                 setAddDisabled(true);
+                const addedAssets: string[] = [];
 
-                // Create asset node from the first selected item (upload mode doesn't support multi-select yet)
-                const selectedAsset = selectedAssets[0];
-                // Generate unique temp ID that includes alias to distinguish multiple links to same asset
-                const tempId = aliasId
-                    ? `temp-${selectedAsset.assetId}-${relationshipType}-${aliasId}`
-                    : `temp-${selectedAsset.assetId}-${relationshipType}-no-alias`;
+                // Process each selected asset
+                for (const selectedAsset of selectedAssets) {
+                    // Generate unique temp ID that includes alias and timestamp to distinguish multiple links
+                    const tempId = aliasId
+                        ? `temp-${
+                              selectedAsset.assetId
+                          }-${relationshipType}-${aliasId}-${Date.now()}`
+                        : `temp-${
+                              selectedAsset.assetId
+                          }-${relationshipType}-no-alias-${Date.now()}`;
 
-                const assetNode = {
-                    assetId: selectedAsset.assetId,
-                    assetName: selectedAsset.assetName,
-                    databaseId: selectedAsset.databaseName || selectedAsset.databaseId,
-                    assetLinkId: tempId,
-                    ...(aliasId && relationshipType !== "related"
-                        ? { assetLinkAliasId: aliasId }
-                        : {}),
-                };
+                    const assetNode = {
+                        assetId: selectedAsset.assetId,
+                        assetName: selectedAsset.assetName,
+                        databaseId: selectedAsset.databaseName || selectedAsset.databaseId,
+                        assetLinkId: tempId,
+                        ...(aliasId && relationshipType !== "related"
+                            ? { assetLinkAliasId: aliasId }
+                            : {}),
+                    };
 
-                // Show success message
+                    // Pass each asset node to the parent
+                    onSuccess(assetNode, relationshipType);
+                    addedAssets.push(selectedAsset.assetName);
+                }
+
+                // Show success message with count
                 showMessage({
                     type: "success",
-                    message: `Successfully added ${relationshipType} link`,
+                    message: `Successfully added ${addedAssets.length} ${relationshipType} link${
+                        addedAssets.length !== 1 ? "s" : ""
+                    }`,
                     dismissible: true,
                     autoDismiss: true,
                 });
 
                 handleClose();
-                // Pass the selected asset data to the parent
-                onSuccess(assetNode, relationshipType);
             } catch (err: any) {
-                console.error("Error adding asset link:", err);
-                setFormError("Unable to add asset link. Please try again.");
+                console.error("Error adding asset links:", err);
+                setFormError("Unable to add asset links. Please try again.");
             } finally {
                 setAddDisabled(false);
             }

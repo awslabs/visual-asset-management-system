@@ -314,7 +314,7 @@ def create_asset_version_record(asset):
             'dateCreated': datetime.now().isoformat(),
             'comment': current_version.get('Comment', f'Asset migration - Version {current_version.get("Version", "0")}'),
             'description': current_version.get('description', ''),
-            'createdBy': current_version.get('CreatedBy', 'system'),
+            'createdBy': current_version.get('CreatedBy', 'SYSTEM_USER'),
             'specifiedPipelines': current_version.get('specifiedPipelines', []),
         }
         
@@ -331,7 +331,7 @@ def create_asset_version_record(asset):
             'dateCreated': datetime.now().isoformat(),
             'comment': top_version.get('Comment', f'Asset migration'),
             'description': top_version.get('description', ''),
-            'createdBy': top_version.get('CreatedBy', 'system'),
+            'createdBy': top_version.get('CreatedBy', 'SYSTEM_USER'),
             'specifiedPipelines': top_version.get('specifiedPipelines', []),
         }
         

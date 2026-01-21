@@ -28,6 +28,121 @@ export interface DynamoDbAuthDefaultsAdminConstructStackProps extends cdk.StackP
 }
 
 /**
+ * Helper function to convert constraint data to denormalized table format
+ * Creates one item per UNIQUE group/user for efficient GSI queries
+ * Multiple permissions for same group are stored in the groupPermissions JSON
+ */
+function convertConstraintToNewFormat(constraint: any): any[] {
+    const items: any[] = [];
+
+    // Base constraint data shared across all denormalized items
+    const baseConstraint = {
+        name: constraint.name,
+        description: constraint.description,
+        objectType: constraint.objectType,
+        // Convert complex fields to JSON strings
+        criteriaAnd: {
+            S: JSON.stringify(
+                constraint.criteriaAnd?.L?.map((c: any) => ({
+                    field: c.M.field.S,
+                    id: c.M.id.S,
+                    operator: c.M.operator.S,
+                    value: c.M.value.S,
+                })) || []
+            ),
+        },
+        criteriaOr: {
+            S: JSON.stringify(
+                constraint.criteriaOr?.L?.map((c: any) => ({
+                    field: c.M.field.S,
+                    id: c.M.id.S,
+                    operator: c.M.operator.S,
+                    value: c.M.value.S,
+                })) || []
+            ),
+        },
+        groupPermissions: {
+            S: JSON.stringify(
+                constraint.groupPermissions?.L?.map((p: any) => ({
+                    groupId: p.M.groupId.S,
+                    id: p.M.id.S,
+                    permission: p.M.permission.S,
+                    permissionType: p.M.permissionType.S,
+                })) || []
+            ),
+        },
+        userPermissions: {
+            S: JSON.stringify(
+                constraint.userPermissions?.L?.map((p: any) => ({
+                    userId: p.M.userId.S,
+                    id: p.M.id.S,
+                    permission: p.M.permission.S,
+                    permissionType: p.M.permissionType.S,
+                })) || []
+            ),
+        },
+        dateCreated: {
+            S: new Date().toISOString(),
+        },
+        dateModified: {
+            S: new Date().toISOString(),
+        },
+        createdBy: {
+            S: "SYSTEM",
+        },
+        modifiedBy: {
+            S: "SYSTEM",
+        },
+    };
+
+    // Create one item per UNIQUE groupId (not per permission)
+    // Multiple permissions for same group are stored in the groupPermissions JSON
+    const groupPermissions = constraint.groupPermissions?.L || [];
+    const uniqueGroupIds = new Set<string>();
+    for (const groupPerm of groupPermissions) {
+        const groupId = groupPerm.M.groupId.S;
+        if (!uniqueGroupIds.has(groupId)) {
+            uniqueGroupIds.add(groupId);
+            items.push({
+                constraintId: {
+                    S: `${constraint.constraintId.S}#group#${groupId}`,
+                },
+                groupId: { S: groupId }, // For GroupPermissionsIndex GSI
+                ...baseConstraint,
+            });
+        }
+    }
+
+    // Create one item per UNIQUE userId (not per permission)
+    // Multiple permissions for same user are stored in the userPermissions JSON
+    const userPermissions = constraint.userPermissions?.L || [];
+    const uniqueUserIds = new Set<string>();
+    for (const userPerm of userPermissions) {
+        const userId = userPerm.M.userId.S;
+        if (!uniqueUserIds.has(userId)) {
+            uniqueUserIds.add(userId);
+            items.push({
+                constraintId: {
+                    S: `${constraint.constraintId.S}#user#${userId}`,
+                },
+                userId: { S: userId }, // For UserPermissionsIndex GSI
+                ...baseConstraint,
+            });
+        }
+    }
+
+    // Safety: If no permissions exist, create one base item (shouldn't happen in practice)
+    if (items.length === 0) {
+        items.push({
+            constraintId: constraint.constraintId,
+            ...baseConstraint,
+        });
+    }
+
+    return items;
+}
+
+/**
  * Deploys Auth Defaults to DynamoDB tables
  */
 export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
@@ -153,7 +268,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_web_paths",
+                    S: "initial_admin_allow_all_web_paths",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_web_paths",
@@ -261,7 +376,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_apis",
+                    S: "initial_admin_allow_all_apis",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_apis",
@@ -369,7 +484,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_databases",
+                    S: "initial_admin_allow_all_databases",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_databases",
@@ -477,7 +592,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_assets",
+                    S: "initial_admin_allow_all_assets",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_assets",
@@ -585,7 +700,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_pipelines",
+                    S: "initial_admin_allow_all_pipelines",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_pipelines",
@@ -693,7 +808,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_workflows",
+                    S: "initial_admin_allow_all_workflows",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_workflows",
@@ -801,7 +916,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_metadataschemas",
+                    S: "initial_admin_allow_all_metadataschemas",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_metadataschemas",
@@ -909,7 +1024,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_tags",
+                    S: "initial_admin_allow_all_tags",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_tags",
@@ -1017,7 +1132,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_tagtypes",
+                    S: "initial_admin_allow_all_tagtypes",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_tagtypes",
@@ -1125,7 +1240,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_roles",
+                    S: "initial_admin_allow_all_roles",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_roles",
@@ -1233,7 +1348,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
-                    S: "constraint#initial_admin_allow_all_userroles",
+                    S: "initial_admin_allow_all_userroles",
                 },
                 constraintId: {
                     S: "initial_admin_allow_all_userroles",
@@ -1340,29 +1455,35 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
 
         let i = 0;
         for (const constraint of adminInitialConstraints) {
-            const awsSdkCall: AwsSdkCall = {
-                service: "DynamoDB",
-                action: "putItem",
-                parameters: {
-                    TableName: props.storageResources.dynamo.authEntitiesStorageTable.tableName,
-                    Item: constraint,
-                    //ConditionExpression: "attribute_not_exists(sk)",
-                },
-                physicalResourceId: PhysicalResourceId.of(
-                    `${props.storageResources.dynamo.authEntitiesStorageTable.tableName}_initialization${roleNameIDCleanAdmin}_${i}`
-                ),
-            };
+            // Convert to denormalized table format (returns array of items)
+            const denormalizedItems = convertConstraintToNewFormat(constraint);
 
-            new AwsCustomResource(
-                this,
-                `authEntitiesTable_${roleNameIDCleanAdmin}CustomResource_${i}`,
-                {
-                    onCreate: awsSdkCall,
-                    onUpdate: awsSdkCall,
-                    role: props.customResourceRole,
-                }
-            );
-            i++;
+            // Create a custom resource for each denormalized item
+            for (const item of denormalizedItems) {
+                const awsSdkCall: AwsSdkCall = {
+                    service: "DynamoDB",
+                    action: "putItem",
+                    parameters: {
+                        TableName: props.storageResources.dynamo.constraintsStorageTable.tableName,
+                        Item: item,
+                        //ConditionExpression: "attribute_not_exists(constraintId)",
+                    },
+                    physicalResourceId: PhysicalResourceId.of(
+                        `${props.storageResources.dynamo.constraintsStorageTable.tableName}_initialization${roleNameIDCleanAdmin}_${i}`
+                    ),
+                };
+
+                new AwsCustomResource(
+                    this,
+                    `constraintsStorageTable_${roleNameIDCleanAdmin}CustomResource_${i}`,
+                    {
+                        onCreate: awsSdkCall,
+                        onUpdate: awsSdkCall,
+                        role: props.customResourceRole,
+                    }
+                );
+                i++;
+            }
         }
     }
 }

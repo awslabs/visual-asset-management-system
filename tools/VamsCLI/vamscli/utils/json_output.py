@@ -89,7 +89,8 @@ def output_error(error: Exception, json_output: bool,
     """
     Output error in JSON or CLI format.
     
-    When json_output is True, outputs error as JSON object to stdout.
+    When json_output is True, outputs error as JSON object to stdout and exits with code 1.
+    This prevents duplicate error messages from Click's exception handling.
     When json_output is False, outputs styled error message to stderr.
     
     Args:
@@ -109,6 +110,12 @@ def output_error(error: Exception, json_output: bool,
             error_type="Asset Not Found",
             helpful_message="Use 'vamscli assets list' to see available assets."
         )
+    
+    Note:
+        In JSON mode, this function calls sys.exit(1) after outputting the error JSON.
+        This ensures pure JSON output without any trailing text from Click's exception handling.
+        Commands should still include 'raise click.ClickException(str(e))' after calling
+        this function, but it will only execute in CLI mode (not JSON mode).
     """
     # Log to file (not console - console output handled below)
     try:
@@ -124,6 +131,10 @@ def output_error(error: Exception, json_output: bool,
             "error_type": error.__class__.__name__
         }
         click.echo(json.dumps(error_data, indent=2))
+        
+        # Exit immediately in JSON mode to prevent Click from adding duplicate text
+        # This ensures pure JSON output as required by Rule 17
+        sys.exit(1)
     else:
         # CLI-friendly error output to stderr
         click.secho(f"✗ {error_type}: {error}", fg='red', bold=True, err=True)
@@ -211,4 +222,3 @@ def output_info(message: str, json_output: bool) -> None:
     
     if not json_output:
         click.secho(message, fg='cyan')
-

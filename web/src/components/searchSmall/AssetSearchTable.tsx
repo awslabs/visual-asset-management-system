@@ -267,11 +267,12 @@ export function AssetSearchTable({
         // Load asset files if callback provided
         if (onAssetFilesLoad) {
             try {
-                const { fetchAssetS3Files } = await import("../../services/AssetVersionService");
+                const { fetchAssetS3Files } = await import("../../services/APIService");
                 const [success, files] = await fetchAssetS3Files({
                     databaseId: asset.databaseId,
                     assetId: asset.assetId,
                     includeArchived: false,
+                    basic: true,
                 });
                 if (success && files && Array.isArray(files)) {
                     onAssetFilesLoad(asset.assetId, files);

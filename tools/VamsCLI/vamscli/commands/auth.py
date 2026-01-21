@@ -142,8 +142,8 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
                 
                 # Fetch feature switches after successful validation
                 try:
-                    feature_switches_result = api_client.get_feature_switches()
-                    profile_manager.save_feature_switches(feature_switches_result)
+                    secure_config_result = api_client.get_secure_config()
+                    profile_manager.save_feature_switches(secure_config_result)
                     output_status("Feature switches updated successfully.", json_output)
                 except Exception as fs_e:
                     # Feature switches fetch failure is non-blocking
@@ -199,6 +199,20 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
     
     else:
         # Cognito authentication path
+        # NEW: Check if Cognito is configured
+        amplify_config = config.get('amplify_config', {})
+        cognito_user_pool_id = amplify_config.get('cognitoUserPoolId')
+        
+        if not cognito_user_pool_id or cognito_user_pool_id in ['undefined', 'null', '']:
+            error_msg = (
+                "Cognito authentication is not configured for this environment. "
+                "This deployment uses external authentication. "
+                "Please use token override authentication with: "
+                "'vamscli auth login --user-id <user-id> --token-override <token>'"
+            )
+            output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
+            raise click.ClickException(error_msg)
+        
         if not username:
             error_msg = "--username is required for Cognito authentication"
             output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
@@ -235,8 +249,8 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
                 
                 # Fetch feature switches after successful authentication
                 try:
-                    feature_switches_result = api_client.get_feature_switches()
-                    profile_manager.save_feature_switches(feature_switches_result)
+                    secure_config_result = api_client.get_secure_config()
+                    profile_manager.save_feature_switches(secure_config_result)
                     output_status("Feature switches updated successfully.", json_output)
                 except Exception as fs_e:
                     # Feature switches fetch failure is non-blocking
@@ -435,6 +449,16 @@ def status(ctx: click.Context, json_output: bool):
             result['saved_credentials'] = profile_manager.has_credentials()
             result['refresh_supported'] = True
         
+        # Add webDeployedUrl and locationServiceApiUrl (backward compatible)
+        if auth_profile:
+            web_url = auth_profile.get('web_deployed_url')
+            if web_url:
+                result['web_deployed_url'] = web_url
+            
+            location_url = auth_profile.get('location_service_api_url')
+            if location_url:
+                result['location_service_api_url'] = location_url
+        
         # Show feature switches information
         feature_switches_info = profile_manager.get_feature_switches_info()
         if feature_switches_info['has_feature_switches']:
@@ -475,6 +499,14 @@ def status(ctx: click.Context, json_output: bool):
                 lines.append(f"  Saved credentials: {'Yes' if data['saved_credentials'] else 'No'}")
             
             lines.append(f"  Refresh: {'Supported' if data['refresh_supported'] else 'Not supported'}")
+            
+            # Show webDeployedUrl (backward compatible - only if present)
+            if data.get('web_deployed_url'):
+                lines.append(f"  Web Deployed URL: {data['web_deployed_url']}")
+            
+            # Show locationServiceApiUrl (backward compatible - only if present)
+            if data.get('location_service_api_url'):
+                lines.append(f"  Location Service URL: {data['location_service_api_url']}")
             
             # Feature switches
             if data.get('feature_switches'):
@@ -641,8 +673,8 @@ def set_override(ctx: click.Context, user_id: str, token: str, expires_at: str, 
             
             # Fetch feature switches after successful validation
             try:
-                feature_switches_result = api_client.get_feature_switches()
-                profile_manager.save_feature_switches(feature_switches_result)
+                secure_config_result = api_client.get_secure_config()
+                profile_manager.save_feature_switches(secure_config_result)
                 output_status("Feature switches updated successfully.", json_output)
             except Exception as fs_e:
                 # Feature switches fetch failure is non-blocking

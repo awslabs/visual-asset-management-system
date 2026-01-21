@@ -39,8 +39,8 @@ config.env.coreStackName = vamsCoreStackName;
 //Deploy with WAF?
 if (config.app.useWaf) {
     //Deploy web access firewall to us-east-1 for cloudfront or in-region for non-cloudfront (ALB) deployments
-    const wafRegion = config.app.useAlb.enabled ? config.env.region : "us-east-1";
-    const wafScope = config.app.useAlb.enabled ? WAFScope.REGIONAL : WAFScope.CLOUDFRONT;
+    const wafRegion = !config.app.useCloudFront.enabled ? config.env.region : "us-east-1";
+    const wafScope = !config.app.useCloudFront.enabled ? WAFScope.REGIONAL : WAFScope.CLOUDFRONT;
 
     //Web access firewall stackname
     const wafStackName = `${config.name}-waf-${

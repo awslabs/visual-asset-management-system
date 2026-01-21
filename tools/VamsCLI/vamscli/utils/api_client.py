@@ -16,7 +16,9 @@ from ..constants import (
     API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION, API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION,
     API_ASSET_LINKS, API_ASSET_LINKS_SINGLE, API_ASSET_LINKS_UPDATE, API_ASSET_LINKS_DELETE, API_ASSET_LINKS_FOR_ASSET,
     API_ASSET_LINKS_METADATA, API_ASSET_LINKS_METADATA_KEY, API_METADATA, API_METADATA_SCHEMA,
-    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING
+    API_METADATA_SCHEMA_LIST, API_METADATA_SCHEMA_BY_ID,
+    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING,
+    API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW
 )
 from ..version import get_version
 from .exceptions import (
@@ -413,8 +415,8 @@ class APIClient:
                 
                 # Try to fetch feature switches after successful re-authentication
                 try:
-                    feature_switches_result = self.get_feature_switches()
-                    self.profile_manager.save_feature_switches(feature_switches_result)
+                    secure_config_result = self.get_secure_config()
+                    self.profile_manager.save_feature_switches(secure_config_result)
                     
                     log_auth_diagnostic(
                         auth_type="reauth_saved_creds",
@@ -422,10 +424,10 @@ class APIClient:
                         details={
                             'user_id': saved_credentials['username'],
                             'profile_name': self.profile_manager.profile_name,
-                            'feature_switches': feature_switches_result
+                            'secure_config': secure_config_result
                         }
                     )
-                except Exception as fs_error:
+                except Exception as sc_error:
                     # Feature switches fetch failure is non-blocking
                     log_auth_diagnostic(
                         auth_type="reauth_saved_creds",
@@ -433,7 +435,7 @@ class APIClient:
                         details={
                             'user_id': saved_credentials['username'],
                             'profile_name': self.profile_manager.profile_name,
-                            'feature_switches_error': str(fs_error)
+                            'secure_config_error': str(sc_error)
                         }
                     )
                     
@@ -617,9 +619,9 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to call login profile API: {e}")
     
-    def get_feature_switches(self) -> Dict[str, Any]:
+    def get_secure_config(self) -> Dict[str, Any]:
         """
-        Fetch feature switches from secure-config API.
+        Fetch fsecure config from secure-config API.
         
         Returns:
             API response data with featuresEnabled string
@@ -805,7 +807,11 @@ class APIClient:
             raise APIError(f"Failed to initialize upload: {e}")
 
     def complete_upload(self, upload_id: str, database_id: str, asset_id: str, upload_type: str, files: list) -> dict:
-        """Complete a multipart upload."""
+        """Complete a multipart upload.
+        
+        Note: 503 Service Unavailable responses are treated as successful asynchronous operations.
+        The backend will process the upload completion asynchronously when it returns 503.
+        """
         from ..constants import API_UPLOADS_COMPLETE
         
         endpoint = API_UPLOADS_COMPLETE.format(uploadId=upload_id)
@@ -821,7 +827,18 @@ class APIClient:
             return response.json()
             
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 400:
+            if e.response.status_code == 503:
+                # 503 Service Unavailable means backend will process asynchronously
+                # This is considered a success - return a synthetic success response
+                return {
+                    "message": "Upload completion accepted for asynchronous processing",
+                    "overallSuccess": True,
+                    "asynchronousProcessing": True,
+                    "uploadId": upload_id,
+                    "note": "Processing times are undergoing expected throttling. Your upload will be processed asynchronously."
+                }
+                
+            elif e.response.status_code == 400:
                 error_data = e.response.json() if e.response.content else {}
                 error_message = error_data.get('message', str(e))
                 raise InvalidAssetDataError(f"Invalid completion data: {error_message}")
@@ -1329,10 +1346,14 @@ class APIClient:
 
     def update_database(self, database_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Update an existing database using the /database POST endpoint.
+        Update an existing database using the /database/{databaseId} PUT endpoint.
         
         Args:
-            database_data: Database update data with databaseId, description, defaultBucketId
+            database_data: Database update data with databaseId and optional fields:
+                - description: New database description
+                - defaultBucketId: New default bucket ID
+                - restrictMetadataOutsideSchemas: Enable/disable metadata restriction
+                - restrictFileUploadsToExtensions: Set allowed file extensions
         
         Returns:
             API response data with database update result
@@ -1344,7 +1365,17 @@ class APIClient:
             APIError: When API call fails
         """
         try:
-            response = self.post(API_DATABASE, data=database_data, include_auth=True)
+            # Extract database_id and build endpoint
+            database_id = database_data.get('databaseId')
+            if not database_id:
+                raise InvalidDatabaseDataError("databaseId is required for update")
+            
+            endpoint = API_DATABASE_BY_ID.format(databaseId=database_id)
+            
+            # Remove databaseId from data as it's in the path
+            update_data = {k: v for k, v in database_data.items() if k != 'databaseId'}
+            
+            response = self.put(endpoint, data=update_data, include_auth=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -2178,193 +2209,20 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to get asset links for asset: {e}")
 
-    # Asset Links Metadata API Methods
+    # Unified Metadata API Methods (v2.2+)
 
-    def get_asset_link_metadata(self, asset_link_id: str) -> Dict[str, Any]:
+    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
         """
-        Get all metadata for an asset link using the /asset-links/{assetLinkId}/metadata GET endpoint.
-        
-        Args:
-            asset_link_id: Asset link ID
-        
-        Returns:
-            API response data with metadata list
-        
-        Raises:
-            AssetLinkNotFoundError: When asset link is not found
-            AssetLinkPermissionError: When user lacks permissions
-            APIError: When API call fails
-        """
-        try:
-            endpoint = API_ASSET_LINKS_METADATA.format(assetLinkId=asset_link_id)
-            response = self.get(endpoint, include_auth=True)
-            return response.json()
-            
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
-            elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise AssetLinkPermissionError(f"Not authorized to view metadata for this asset link: {error_message}")
-            else:
-                raise APIError(f"Failed to get asset link metadata: {e}")
-                
-        except Exception as e:
-            raise APIError(f"Failed to get asset link metadata: {e}")
-
-    def create_asset_link_metadata(self, asset_link_id: str, metadata_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Create metadata for an asset link using the /asset-links/{assetLinkId}/metadata POST endpoint.
-        
-        Args:
-            asset_link_id: Asset link ID
-            metadata_data: Metadata creation data matching CreateAssetLinkMetadataRequestModel
-        
-        Returns:
-            API response data with creation result
-        
-        Raises:
-            AssetLinkNotFoundError: When asset link is not found
-            AssetLinkValidationError: When metadata data is invalid or key already exists
-            AssetLinkPermissionError: When user lacks permissions
-            APIError: When API call fails
-        """
-        try:
-            endpoint = API_ASSET_LINKS_METADATA.format(assetLinkId=asset_link_id)
-            response = self.post(endpoint, data=metadata_data, include_auth=True)
-            return response.json()
-            
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                
-                if 'already exists' in error_message.lower():
-                    raise AssetLinkValidationError(f"Metadata key already exists: {error_message}")
-                else:
-                    raise AssetLinkValidationError(f"Invalid metadata data: {error_message}")
-                    
-            elif e.response.status_code == 404:
-                raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
-            elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise AssetLinkPermissionError(f"Not authorized to create metadata for this asset link: {error_message}")
-            else:
-                raise APIError(f"Asset link metadata creation failed: {e}")
-                
-        except Exception as e:
-            raise APIError(f"Failed to create asset link metadata: {e}")
-
-    def update_asset_link_metadata(self, asset_link_id: str, metadata_key: str, metadata_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update metadata for an asset link using the /asset-links/{assetLinkId}/metadata/{metadataKey} PUT endpoint.
-        
-        Args:
-            asset_link_id: Asset link ID
-            metadata_key: Metadata key to update
-            metadata_data: Metadata update data matching UpdateAssetLinkMetadataRequestModel
-        
-        Returns:
-            API response data with update result
-        
-        Raises:
-            AssetLinkNotFoundError: When asset link is not found
-            AssetLinkValidationError: When metadata data is invalid or key not found
-            AssetLinkPermissionError: When user lacks permissions
-            APIError: When API call fails
-        """
-        try:
-            endpoint = API_ASSET_LINKS_METADATA_KEY.format(assetLinkId=asset_link_id, metadataKey=metadata_key)
-            response = self.put(endpoint, data=metadata_data, include_auth=True)
-            return response.json()
-            
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise AssetLinkValidationError(f"Invalid metadata data: {error_message}")
-                
-            elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                
-                if 'metadata' in error_message.lower() and 'key' in error_message.lower():
-                    raise AssetLinkValidationError(f"Metadata key '{metadata_key}' not found for this asset link")
-                else:
-                    raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
-                    
-            elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise AssetLinkPermissionError(f"Not authorized to update metadata for this asset link: {error_message}")
-            else:
-                raise APIError(f"Asset link metadata update failed: {e}")
-                
-        except Exception as e:
-            raise APIError(f"Failed to update asset link metadata: {e}")
-
-    def delete_asset_link_metadata(self, asset_link_id: str, metadata_key: str) -> Dict[str, Any]:
-        """
-        Delete metadata for an asset link using the /asset-links/{assetLinkId}/metadata/{metadataKey} DELETE endpoint.
-        
-        Args:
-            asset_link_id: Asset link ID
-            metadata_key: Metadata key to delete
-        
-        Returns:
-            API response data with deletion result
-        
-        Raises:
-            AssetLinkNotFoundError: When asset link is not found
-            AssetLinkValidationError: When metadata key is not found
-            AssetLinkPermissionError: When user lacks permissions
-            APIError: When API call fails
-        """
-        try:
-            endpoint = API_ASSET_LINKS_METADATA_KEY.format(assetLinkId=asset_link_id, metadataKey=metadata_key)
-            response = self.delete(endpoint, include_auth=True)
-            return response.json()
-            
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise AssetLinkValidationError(f"Invalid parameters: {error_message}")
-                
-            elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                
-                if 'metadata' in error_message.lower() and 'key' in error_message.lower():
-                    raise AssetLinkValidationError(f"Metadata key '{metadata_key}' not found for this asset link")
-                else:
-                    raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
-                    
-            elif e.response.status_code in [401, 403]:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise AssetLinkPermissionError(f"Not authorized to delete metadata for this asset link: {error_message}")
-            else:
-                raise APIError(f"Asset link metadata deletion failed: {e}")
-                
-        except Exception as e:
-            raise APIError(f"Failed to delete asset link metadata: {e}")
-
-    # Metadata API Methods
-
-    def get_metadata(self, database_id: str, asset_id: str, file_path: str = None) -> Dict[str, Any]:
-        """
-        Get metadata for an asset or file using the /database/{databaseId}/assets/{assetId}/metadata GET endpoint.
+        Get metadata for an asset using the new unified API.
         
         Args:
             database_id: Database ID
             asset_id: Asset ID
-            file_path: Optional file path for file-specific metadata (uses prefix query parameter)
+            page_size: Page size for pagination (default: 3000)
+            starting_token: Token for pagination
         
         Returns:
-            API response data with metadata
+            API response with metadata list and optional NextToken
         
         Raises:
             AssetNotFoundError: When asset is not found
@@ -2372,10 +2230,11 @@ class APIClient:
             APIError: When API call fails
         """
         try:
-            endpoint = API_METADATA.format(databaseId=database_id, assetId=asset_id)
-            params = {}
-            if file_path:
-                params['prefix'] = file_path
+            from ..constants import API_ASSET_METADATA
+            endpoint = API_ASSET_METADATA.format(databaseId=database_id, assetId=asset_id)
+            params = {'pageSize': page_size}
+            if starting_token:
+                params['startingToken'] = starting_token
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2393,23 +2252,23 @@ class APIClient:
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
-                raise APIError(f"Failed to get metadata: {e}")
+                raise APIError(f"Failed to get asset metadata: {e}")
                 
         except Exception as e:
-            raise APIError(f"Failed to get metadata: {e}")
+            raise APIError(f"Failed to get asset metadata: {e}")
 
-    def create_metadata(self, database_id: str, asset_id: str, metadata: dict, file_path: str = None) -> Dict[str, Any]:
+    def update_asset_metadata_v2(self, database_id: str, asset_id: str, metadata_items: list, update_type: str = 'update') -> Dict[str, Any]:
         """
-        Create metadata for an asset or file using the /database/{databaseId}/assets/{assetId}/metadata POST endpoint.
+        Create or update metadata for an asset using the new unified API (bulk operation).
         
         Args:
             database_id: Database ID
             asset_id: Asset ID
-            metadata: Metadata dictionary to create
-            file_path: Optional file path for file-specific metadata (uses prefix query parameter)
+            metadata_items: List of metadata items [{"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}]
+            update_type: 'update' (default, upsert) or 'replace_all' (replace all metadata)
         
         Returns:
-            API response data with creation result
+            BulkOperationResponseModel with operation results
         
         Raises:
             AssetNotFoundError: When asset is not found
@@ -2418,18 +2277,14 @@ class APIClient:
             APIError: When API call fails
         """
         try:
-            endpoint = API_METADATA.format(databaseId=database_id, assetId=asset_id)
-            params = {}
-            if file_path:
-                params['prefix'] = file_path
-            
-            # Prepare request body with version and metadata
-            request_data = {
-                "version": "1",
-                "metadata": metadata
+            from ..constants import API_ASSET_METADATA
+            endpoint = API_ASSET_METADATA.format(databaseId=database_id, assetId=asset_id)
+            data = {
+                'metadata': metadata_items,
+                'updateType': update_type
             }
-                
-            response = self.post(endpoint, data=request_data, include_auth=True, params=params)
+            
+            response = self.put(endpoint, data=data, include_auth=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -2450,79 +2305,22 @@ class APIClient:
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
-                raise APIError(f"Metadata creation failed: {e}")
+                raise APIError(f"Asset metadata update failed: {e}")
                 
         except Exception as e:
-            raise APIError(f"Failed to create metadata: {e}")
+            raise APIError(f"Failed to update asset metadata: {e}")
 
-    def update_metadata(self, database_id: str, asset_id: str, metadata: dict, file_path: str = None) -> Dict[str, Any]:
+    def delete_asset_metadata_v2(self, database_id: str, asset_id: str, metadata_keys: list) -> Dict[str, Any]:
         """
-        Update metadata for an asset or file using the /database/{databaseId}/assets/{assetId}/metadata PUT endpoint.
+        Delete metadata for an asset using the new unified API (bulk operation).
         
         Args:
             database_id: Database ID
             asset_id: Asset ID
-            metadata: Metadata dictionary to update
-            file_path: Optional file path for file-specific metadata (uses prefix query parameter)
+            metadata_keys: List of metadata keys to delete
         
         Returns:
-            API response data with update result
-        
-        Raises:
-            AssetNotFoundError: When asset is not found
-            DatabaseNotFoundError: When database doesn't exist
-            InvalidAssetDataError: When metadata data is invalid
-            APIError: When API call fails
-        """
-        try:
-            endpoint = API_METADATA.format(databaseId=database_id, assetId=asset_id)
-            params = {}
-            if file_path:
-                params['prefix'] = file_path
-            
-            # Prepare request body with version and metadata
-            request_data = {
-                "version": "1",
-                "metadata": metadata
-            }
-                
-            response = self.put(endpoint, data=request_data, include_auth=True, params=params)
-            return response.json()
-            
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                raise InvalidAssetDataError(f"Invalid metadata data: {error_message}")
-                
-            elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                
-                if 'database' in error_message.lower():
-                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
-                else:
-                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
-                    
-            elif e.response.status_code in [401, 403]:
-                raise AuthenticationError(f"Authentication failed: {e}")
-            else:
-                raise APIError(f"Metadata update failed: {e}")
-                
-        except Exception as e:
-            raise APIError(f"Failed to update metadata: {e}")
-
-    def delete_metadata(self, database_id: str, asset_id: str, file_path: str = None) -> Dict[str, Any]:
-        """
-        Delete metadata for an asset or file using the /database/{databaseId}/assets/{assetId}/metadata DELETE endpoint.
-        
-        Args:
-            database_id: Database ID
-            asset_id: Asset ID
-            file_path: Optional file path for file-specific metadata (uses prefix query parameter)
-        
-        Returns:
-            API response data with deletion result
+            BulkOperationResponseModel with operation results
         
         Raises:
             AssetNotFoundError: When asset is not found
@@ -2530,12 +2328,11 @@ class APIClient:
             APIError: When API call fails
         """
         try:
-            endpoint = API_METADATA.format(databaseId=database_id, assetId=asset_id)
-            params = {}
-            if file_path:
-                params['prefix'] = file_path
-                
-            response = self.delete(endpoint, include_auth=True, params=params)
+            from ..constants import API_ASSET_METADATA
+            endpoint = API_ASSET_METADATA.format(databaseId=database_id, assetId=asset_id)
+            data = {'metadataKeys': metadata_keys}
+            
+            response = self.delete(endpoint, include_auth=True, json=data)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -2551,16 +2348,424 @@ class APIClient:
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
-                raise APIError(f"Metadata deletion failed: {e}")
+                raise APIError(f"Asset metadata deletion failed: {e}")
                 
         except Exception as e:
-            raise APIError(f"Failed to delete metadata: {e}")
+            raise APIError(f"Failed to delete asset metadata: {e}")
+
+    def get_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str = 'metadata', 
+                            page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
+        """
+        Get metadata or attributes for a file using the new unified API.
+        
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            file_path: Relative file path
+            metadata_type: 'metadata' or 'attribute'
+            page_size: Page size for pagination (default: 3000)
+            starting_token: Token for pagination
+        
+        Returns:
+            API response with metadata list and optional NextToken
+        
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails or file not found
+        """
+        try:
+            from ..constants import API_FILE_METADATA
+            endpoint = API_FILE_METADATA.format(databaseId=database_id, assetId=asset_id)
+            params = {
+                'filePath': file_path,
+                'type': metadata_type,
+                'pageSize': page_size
+            }
+            if starting_token:
+                params['startingToken'] = starting_token
+                
+            response = self.get(endpoint, include_auth=True, params=params)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'file' in error_message.lower():
+                    raise APIError(f"File not found: {error_message}")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get file metadata: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to get file metadata: {e}")
+
+    def update_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str, 
+                               metadata_items: list, update_type: str = 'update') -> Dict[str, Any]:
+        """
+        Create or update metadata/attributes for a file using the new unified API (bulk operation).
+        
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            file_path: Relative file path
+            metadata_type: 'metadata' or 'attribute'
+            metadata_items: List of metadata items [{"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}]
+            update_type: 'update' (default, upsert) or 'replace_all' (replace all metadata)
+        
+        Returns:
+            BulkOperationResponseModel with operation results
+        
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            InvalidAssetDataError: When metadata data is invalid
+            APIError: When API call fails or file not found
+        """
+        try:
+            from ..constants import API_FILE_METADATA
+            endpoint = API_FILE_METADATA.format(databaseId=database_id, assetId=asset_id)
+            data = {
+                'filePath': file_path,
+                'type': metadata_type,
+                'metadata': metadata_items,
+                'updateType': update_type
+            }
+            
+            response = self.put(endpoint, data=data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise InvalidAssetDataError(f"Invalid metadata data: {error_message}")
+                
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'file' in error_message.lower():
+                    raise APIError(f"File not found: {error_message}")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"File metadata update failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to update file metadata: {e}")
+
+    def delete_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str, metadata_keys: list) -> Dict[str, Any]:
+        """
+        Delete metadata/attributes for a file using the new unified API (bulk operation).
+        
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            file_path: Relative file path
+            metadata_type: 'metadata' or 'attribute'
+            metadata_keys: List of metadata keys to delete
+        
+        Returns:
+            BulkOperationResponseModel with operation results
+        
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails or file not found
+        """
+        try:
+            from ..constants import API_FILE_METADATA
+            endpoint = API_FILE_METADATA.format(databaseId=database_id, assetId=asset_id)
+            data = {
+                'filePath': file_path,
+                'type': metadata_type,
+                'metadataKeys': metadata_keys
+            }
+            
+            response = self.delete(endpoint, include_auth=True, json=data)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'file' in error_message.lower():
+                    raise APIError(f"File not found: {error_message}")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"File metadata deletion failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to delete file metadata: {e}")
+
+    def get_asset_link_metadata_v2(self, asset_link_id: str, page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
+        """
+        Get metadata for an asset link using the new unified API.
+        
+        Args:
+            asset_link_id: Asset link ID
+            page_size: Page size for pagination (default: 3000)
+            starting_token: Token for pagination
+        
+        Returns:
+            API response with metadata list and optional NextToken
+        
+        Raises:
+            AssetLinkNotFoundError: When asset link is not found
+            AssetLinkPermissionError: When user lacks permissions
+            APIError: When API call fails
+        """
+        try:
+            from ..constants import API_ASSET_LINK_METADATA
+            endpoint = API_ASSET_LINK_METADATA.format(assetLinkId=asset_link_id)
+            params = {'pageSize': page_size}
+            if starting_token:
+                params['startingToken'] = starting_token
+                
+            response = self.get(endpoint, include_auth=True, params=params)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise AssetLinkPermissionError(f"Not authorized to view metadata for this asset link: {error_message}")
+            else:
+                raise APIError(f"Failed to get asset link metadata: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to get asset link metadata: {e}")
+
+    def update_asset_link_metadata_v2(self, asset_link_id: str, metadata_items: list, update_type: str = 'update') -> Dict[str, Any]:
+        """
+        Create or update metadata for an asset link using the new unified API (bulk operation).
+        
+        Args:
+            asset_link_id: Asset link ID
+            metadata_items: List of metadata items [{"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}]
+            update_type: 'update' (default, upsert) or 'replace_all' (replace all metadata)
+        
+        Returns:
+            BulkOperationResponseModel with operation results
+        
+        Raises:
+            AssetLinkNotFoundError: When asset link is not found
+            AssetLinkValidationError: When metadata data is invalid
+            AssetLinkPermissionError: When user lacks permissions
+            APIError: When API call fails
+        """
+        try:
+            from ..constants import API_ASSET_LINK_METADATA
+            endpoint = API_ASSET_LINK_METADATA.format(assetLinkId=asset_link_id)
+            data = {
+                'metadata': metadata_items,
+                'updateType': update_type
+            }
+            
+            response = self.put(endpoint, data=data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise AssetLinkValidationError(f"Invalid metadata data: {error_message}")
+                
+            elif e.response.status_code == 404:
+                raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise AssetLinkPermissionError(f"Not authorized to update metadata for this asset link: {error_message}")
+            else:
+                raise APIError(f"Asset link metadata update failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to update asset link metadata: {e}")
+
+    def delete_asset_link_metadata_v2(self, asset_link_id: str, metadata_keys: list) -> Dict[str, Any]:
+        """
+        Delete metadata for an asset link using the new unified API (bulk operation).
+        
+        Args:
+            asset_link_id: Asset link ID
+            metadata_keys: List of metadata keys to delete
+        
+        Returns:
+            BulkOperationResponseModel with operation results
+        
+        Raises:
+            AssetLinkNotFoundError: When asset link is not found
+            AssetLinkPermissionError: When user lacks permissions
+            APIError: When API call fails
+        """
+        try:
+            from ..constants import API_ASSET_LINK_METADATA
+            endpoint = API_ASSET_LINK_METADATA.format(assetLinkId=asset_link_id)
+            data = {'metadataKeys': metadata_keys}
+            
+            response = self.delete(endpoint, include_auth=True, json=data)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise AssetLinkNotFoundError(f"Asset link '{asset_link_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise AssetLinkPermissionError(f"Not authorized to delete metadata for this asset link: {error_message}")
+            else:
+                raise APIError(f"Asset link metadata deletion failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to delete asset link metadata: {e}")
+
+    def get_database_metadata_v2(self, database_id: str, page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
+        """
+        Get metadata for a database using the new unified API.
+        
+        Args:
+            database_id: Database ID
+            page_size: Page size for pagination (default: 3000)
+            starting_token: Token for pagination
+        
+        Returns:
+            API response with metadata list and optional NextToken
+        
+        Raises:
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails
+        """
+        try:
+            from ..constants import API_DATABASE_METADATA
+            endpoint = API_DATABASE_METADATA.format(databaseId=database_id)
+            params = {'pageSize': page_size}
+            if starting_token:
+                params['startingToken'] = starting_token
+                
+            response = self.get(endpoint, include_auth=True, params=params)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get database metadata: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to get database metadata: {e}")
+
+    def update_database_metadata_v2(self, database_id: str, metadata_items: list, update_type: str = 'update') -> Dict[str, Any]:
+        """
+        Create or update metadata for a database using the new unified API (bulk operation).
+        
+        Args:
+            database_id: Database ID
+            metadata_items: List of metadata items [{"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}]
+            update_type: 'update' (default, upsert) or 'replace_all' (replace all metadata)
+        
+        Returns:
+            BulkOperationResponseModel with operation results
+        
+        Raises:
+            DatabaseNotFoundError: When database doesn't exist
+            InvalidDatabaseDataError: When metadata data is invalid
+            APIError: When API call fails
+        """
+        try:
+            from ..constants import API_DATABASE_METADATA
+            endpoint = API_DATABASE_METADATA.format(databaseId=database_id)
+            data = {
+                'metadata': metadata_items,
+                'updateType': update_type
+            }
+            
+            response = self.put(endpoint, data=data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise InvalidDatabaseDataError(f"Invalid metadata data: {error_message}")
+                
+            elif e.response.status_code == 404:
+                raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Database metadata update failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to update database metadata: {e}")
+
+    def delete_database_metadata_v2(self, database_id: str, metadata_keys: list) -> Dict[str, Any]:
+        """
+        Delete metadata for a database using the new unified API (bulk operation).
+        
+        Args:
+            database_id: Database ID
+            metadata_keys: List of metadata keys to delete
+        
+        Returns:
+            BulkOperationResponseModel with operation results
+        
+        Raises:
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails
+        """
+        try:
+            from ..constants import API_DATABASE_METADATA
+            endpoint = API_DATABASE_METADATA.format(databaseId=database_id)
+            data = {'metadataKeys': metadata_keys}
+            
+            response = self.delete(endpoint, include_auth=True, json=data)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Database metadata deletion failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to delete database metadata: {e}")
 
     # Metadata Schema API Methods
 
     def get_metadata_schema(self, database_id: str, max_items: int = 1000, page_size: int = 100, starting_token: str = None) -> Dict[str, Any]:
         """
         Get metadata schema for a database using the /metadataschema/{databaseId} GET endpoint.
+        
+        DEPRECATED: Use list_metadata_schemas() instead for the new V2 API.
+        This method is kept for backward compatibility.
         
         Args:
             database_id: Database ID
@@ -2603,6 +2808,117 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to get metadata schema: {e}")
+
+    def list_metadata_schemas(
+        self,
+        database_id: Optional[str] = None,
+        metadata_entity_type: Optional[str] = None,
+        max_items: int = 1000,
+        page_size: int = 100,
+        starting_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        List metadata schemas with optional filters using the /metadataschema GET endpoint.
+        
+        Args:
+            database_id: Optional database ID to filter schemas
+            metadata_entity_type: Optional entity type filter (databaseMetadata, assetMetadata, fileMetadata, fileAttribute, assetLinkMetadata)
+            max_items: Maximum number of items to return (default: 1000)
+            page_size: Number of items per page (default: 100)
+            starting_token: Token for pagination (optional)
+        
+        Returns:
+            API response data with metadata schemas list
+        
+        Raises:
+            DatabaseNotFoundError: When database doesn't exist (if database_id provided)
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        try:
+            endpoint = API_METADATA_SCHEMA_LIST
+            params = {
+                'maxItems': max_items,
+                'pageSize': page_size
+            }
+            
+            if database_id:
+                params['databaseId'] = database_id
+            if metadata_entity_type:
+                params['metadataEntityType'] = metadata_entity_type
+            if starting_token:
+                params['startingToken'] = starting_token
+                
+            response = self.get(endpoint, include_auth=True, params=params)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise APIError(f"Invalid parameters: {error_message}")
+                
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                if database_id and 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found: {error_message}")
+                else:
+                    raise APIError(f"Metadata schemas not found: {error_message}")
+                
+            elif e.response.status_code in [401, 403]:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise AuthenticationError(f"Authentication failed: {error_message}")
+            else:
+                raise APIError(f"Failed to list metadata schemas: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to list metadata schemas: {e}")
+
+    def get_metadata_schema_by_id(self, database_id: str, metadata_schema_id: str) -> Dict[str, Any]:
+        """
+        Get a specific metadata schema by ID using the /database/{databaseId}/metadataSchema/{metadataSchemaId} GET endpoint.
+        
+        Args:
+            database_id: Database ID
+            metadata_schema_id: Metadata schema ID
+        
+        Returns:
+            API response data with metadata schema details
+        
+        Raises:
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When metadata schema is not found or API call fails
+            AuthenticationError: When authentication fails
+        """
+        try:
+            endpoint = API_METADATA_SCHEMA_BY_ID.format(
+                databaseId=database_id,
+                metadataSchemaId=metadata_schema_id
+            )
+            response = self.get(endpoint, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found: {error_message}")
+                else:
+                    raise APIError(f"Metadata schema '{metadata_schema_id}' not found: {error_message}")
+                
+            elif e.response.status_code in [401, 403]:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise AuthenticationError(f"Authentication failed: {error_message}")
+            else:
+                raise APIError(f"Failed to get metadata schema: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to get metadata schema by ID: {e}")
 
     # Asset Download API Methods
 
@@ -2752,7 +3068,7 @@ class APIClient:
                 - includeArchivedFiles: Include archived files
                 - fileExtensions: Filter by file extensions
                 - maxAssets: Max assets per page (1-1000)
-                - nextToken: Pagination token
+                - startingToken: Pagination token
         
         Returns:
             API response with assets, relationships, and pagination info
@@ -2791,6 +3107,202 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to export asset: {e}")
+
+    # Workflow API Methods
+
+    def list_workflows(self, database_id: Optional[str] = None, show_deleted: bool = False, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        List workflows using GET /workflows or GET /database/{databaseId}/workflows endpoint.
+        
+        Args:
+            database_id: Optional database ID to filter workflows
+            show_deleted: Whether to include deleted workflows
+            params: Optional pagination parameters (maxItems, pageSize, startingToken)
+        
+        Returns:
+            API response data with workflows list
+        
+        Raises:
+            DatabaseNotFoundError: When database doesn't exist
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        try:
+            # Determine endpoint based on database_id
+            if database_id:
+                endpoint = API_DATABASE_WORKFLOWS.format(databaseId=database_id)
+            else:
+                endpoint = API_WORKFLOWS
+            
+            query_params = params or {}
+            if show_deleted:
+                query_params['showDeleted'] = 'true'
+                
+            response = self.get(endpoint, include_auth=True, params=query_params)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if database_id and 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                else:
+                    raise APIError(f"Workflows not found: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list workflows: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to list workflows: {e}")
+
+    def list_workflow_executions(self, database_id: str, asset_id: str, workflow_database_id: Optional[str] = None, 
+                                 workflow_id: Optional[str] = None, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        List workflow executions for an asset using GET /database/{databaseId}/assets/{assetId}/workflows/executions endpoint.
+        
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            workflow_database_id: Optional workflow's database ID (for filtering)
+            workflow_id: Optional workflow ID (for filtering)
+            params: Optional pagination parameters (maxItems, pageSize, startingToken)
+                    Note: pageSize is limited to 50 due to Step Functions API throttling
+        
+        Returns:
+            API response data with workflow executions list
+        
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        try:
+            # Build endpoint - workflow_id is optional in path
+            if workflow_id:
+                endpoint = API_WORKFLOW_EXECUTIONS + f"/{workflow_id}"
+            else:
+                endpoint = API_WORKFLOW_EXECUTIONS
+            
+            endpoint = endpoint.format(databaseId=database_id, assetId=asset_id)
+            
+            # Prepare query parameters
+            query_params = params or {}
+            
+            # Prepare request body for workflowDatabaseId if provided
+            request_body = {}
+            if workflow_database_id:
+                request_body['workflowDatabaseId'] = workflow_database_id
+            
+            # Make request with body if needed
+            if request_body:
+                response = self.post(endpoint, data=request_body, include_auth=True, params=query_params)
+            else:
+                response = self.get(endpoint, include_auth=True, params=query_params)
+            
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'asset' in error_message.lower():
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+                else:
+                    raise APIError(f"Workflow executions not found: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list workflow executions: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to list workflow executions: {e}")
+
+    def execute_workflow(self, database_id: str, asset_id: str, workflow_id: str, 
+                        workflow_database_id: str, file_key: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Execute a workflow on an asset using POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId} endpoint.
+        
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            workflow_id: Workflow ID to execute
+            workflow_database_id: Workflow's database ID (required)
+            file_key: Optional specific file key to run workflow on
+        
+        Returns:
+            API response data with execution ID
+        
+        Raises:
+            AssetNotFoundError: When asset is not found
+            WorkflowNotFoundError: When workflow is not found
+            WorkflowAlreadyRunningError: When workflow is already running on the file
+            WorkflowExecutionError: When workflow execution fails
+            DatabaseNotFoundError: When database doesn't exist
+            InvalidWorkflowDataError: When workflow data is invalid
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import WorkflowNotFoundError, WorkflowAlreadyRunningError, WorkflowExecutionError, InvalidWorkflowDataError
+        
+        try:
+            endpoint = API_EXECUTE_WORKFLOW.format(
+                databaseId=database_id,
+                assetId=asset_id,
+                workflowId=workflow_id
+            )
+            
+            # Prepare request body
+            request_body = {
+                'workflowDatabaseId': workflow_database_id
+            }
+            
+            if file_key:
+                request_body['fileKey'] = file_key
+            
+            response = self.post(endpoint, data=request_body, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'already running' in error_message.lower() or 'currently running' in error_message.lower():
+                    raise WorkflowAlreadyRunningError(f"Workflow already running: {error_message}")
+                elif 'pipeline' in error_message.lower() and ('disabled' in error_message.lower() or 'not enabled' in error_message.lower()):
+                    raise WorkflowExecutionError(f"Pipeline not enabled: {error_message}")
+                else:
+                    raise InvalidWorkflowDataError(f"Invalid workflow execution request: {error_message}")
+                    
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'workflow' in error_message.lower():
+                    raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
+                elif 'asset' in error_message.lower():
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+                else:
+                    raise APIError(f"Resource not found: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise WorkflowExecutionError(f"Workflow execution failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to execute workflow: {e}")
 
     # Search API Methods
 

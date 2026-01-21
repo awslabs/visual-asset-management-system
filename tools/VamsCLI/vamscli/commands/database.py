@@ -60,6 +60,16 @@ def format_database_output(database_data: Dict[str, Any], json_output: bool = Fa
         if base_prefix:
             output_lines.append(f"  Base Assets Prefix: {base_prefix}")
     
+    # New configuration fields
+    restrict_metadata = database_data.get('restrictMetadataOutsideSchemas', False)
+    output_lines.append(f"  Restrict Metadata Outside Schemas: {restrict_metadata}")
+    
+    file_extensions = database_data.get('restrictFileUploadsToExtensions', '')
+    if file_extensions:
+        output_lines.append(f"  Restrict File Uploads To Extensions: {file_extensions}")
+    else:
+        output_lines.append(f"  Restrict File Uploads To Extensions: (none)")
+    
     return '\n'.join(output_lines)
 
 
@@ -125,14 +135,15 @@ def database():
 
 @database.command()
 @click.option('--show-deleted', is_flag=True, help='Include deleted databases')
-@click.option('--max-items', type=int, help='Maximum number of items to return')
 @click.option('--page-size', type=int, help='Number of items per page')
-@click.option('--starting-token', help='Token for pagination')
+@click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
+@click.option('--starting-token', help='Token for pagination (manual pagination)')
+@click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_size: Optional[int], 
-         starting_token: Optional[str], json_output: bool):
+def list(ctx: click.Context, show_deleted: bool, page_size: Optional[int], max_items: Optional[int],
+         starting_token: Optional[str], auto_paginate: bool, json_output: bool):
     """
     List all databases.
     
@@ -140,9 +151,24 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
     and filtering for deleted databases.
     
     Examples:
+        # Basic listing (uses API defaults)
         vamscli database list
+        
+        # Auto-pagination to fetch all items (default: up to 10,000)
+        vamscli database list --auto-paginate
+        
+        # Auto-pagination with custom limit
+        vamscli database list --auto-paginate --max-items 5000
+        
+        # Auto-pagination with custom page size
+        vamscli database list --auto-paginate --page-size 500
+        
+        # Manual pagination with page size
+        vamscli database list --page-size 200
+        vamscli database list --starting-token "token123" --page-size 200
+        
+        # With filters
         vamscli database list --show-deleted
-        vamscli database list --max-items 50 --page-size 25
         vamscli database list --json-output
     """
     # Setup/auth already validated by decorator
@@ -150,19 +176,83 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Build pagination parameters
-    params = {}
-    if max_items:
-        params['maxItems'] = max_items
-    if page_size:
-        params['pageSize'] = page_size
-    if starting_token:
-        params['startingToken'] = starting_token
+    # Validate pagination options
+    if auto_paginate and starting_token:
+        raise click.ClickException(
+            "Cannot use --auto-paginate with --starting-token. "
+            "Use --auto-paginate for automatic pagination, or --starting-token for manual pagination."
+        )
     
-    output_status("Retrieving databases...", json_output)
+    # Warn if max-items used without auto-paginate
+    if max_items and not auto_paginate:
+        output_status("Warning: --max-items only applies with --auto-paginate. Ignoring --max-items.", json_output)
+        max_items = None
     
-    # List databases
-    result = api_client.list_databases(show_deleted=show_deleted, params=params)
+    if auto_paginate:
+        # Auto-pagination mode: fetch all items up to max_items (default 10,000)
+        max_total_items = max_items or 10000
+        output_status(f"Retrieving databases (auto-paginating up to {max_total_items} items)...", json_output)
+        
+        all_items = []
+        next_token = None
+        total_fetched = 0
+        page_count = 0
+        
+        while True:
+            page_count += 1
+            
+            # Prepare query parameters for this page
+            params = {}
+            if page_size:
+                params['pageSize'] = page_size  # Pass pageSize to API
+            if next_token:
+                params['startingToken'] = next_token
+            
+            # Note: maxItems is NOT passed to API - it's CLI-side limit only
+            
+            # Make API call
+            page_result = api_client.list_databases(show_deleted=show_deleted, params=params)
+            
+            # Aggregate items
+            items = page_result.get('Items', [])
+            all_items.extend(items)
+            total_fetched += len(items)
+            
+            # Show progress in CLI mode
+            if not json_output:
+                output_status(f"Fetched {total_fetched} databases (page {page_count})...", False)
+            
+            # Check if we should continue
+            next_token = page_result.get('NextToken')
+            if not next_token or total_fetched >= max_total_items:
+                break
+        
+        # Create final result
+        result = {
+            'Items': all_items,
+            'totalItems': len(all_items),
+            'autoPaginated': True,
+            'pageCount': page_count
+        }
+        
+        if total_fetched >= max_total_items and next_token:
+            result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
+        
+    else:
+        # Manual pagination mode: single API call
+        output_status("Retrieving databases...", json_output)
+        
+        # Build pagination parameters
+        params = {}
+        if page_size:
+            params['pageSize'] = page_size  # Pass pageSize to API
+        if starting_token:
+            params['startingToken'] = starting_token
+        
+        # Note: maxItems is NOT passed to API in manual mode
+        
+        # List databases
+        result = api_client.list_databases(show_deleted=show_deleted, params=params)
     
     def format_databases_list(data):
         """Format databases list for CLI display."""
@@ -170,7 +260,17 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
         if not databases:
             return "No databases found."
         
-        lines = [f"\nFound {len(databases)} database(s):", "-" * 80]
+        lines = []
+        
+        # Show auto-pagination info if present
+        if data.get('autoPaginated'):
+            lines.append(f"\nAuto-paginated: Retrieved {data.get('totalItems', 0)} items in {data.get('pageCount', 0)} page(s)")
+            if data.get('note'):
+                lines.append(f"⚠️  {data['note']}")
+            lines.append("")
+        
+        lines.append(f"Found {len(databases)} database(s):")
+        lines.append("-" * 80)
         
         for database in databases:
             lines.append(f"ID: {database.get('databaseId', 'N/A')}")
@@ -183,12 +283,22 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
             if bucket_name:
                 lines.append(f"Bucket Name: {bucket_name}")
             
+            # New configuration fields
+            restrict_metadata = database.get('restrictMetadataOutsideSchemas', False)
+            lines.append(f"Restrict Metadata Outside Schemas: {restrict_metadata}")
+            
+            file_extensions = database.get('restrictFileUploadsToExtensions', '')
+            if file_extensions:
+                lines.append(f"Restrict File Uploads To Extensions: {file_extensions}")
+            else:
+                lines.append(f"Restrict File Uploads To Extensions: (none)")
+            
             lines.append("-" * 80)
         
-        # Show pagination info if available
-        next_token = data.get('NextToken')
-        if next_token:
-            lines.append(f"More results available. Use --starting-token '{next_token}' to see additional databases.")
+        # Show nextToken for manual pagination
+        if not data.get('autoPaginated') and data.get('NextToken'):
+            lines.append(f"\nNext token: {data['NextToken']}")
+            lines.append("Use --starting-token to get the next page")
         
         return '\n'.join(lines)
     
@@ -200,11 +310,14 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
 @click.option('-d', '--database-id', required=True, help='Database ID to create')
 @click.option('--description', help='Database description (required unless using --json-input)')
 @click.option('--default-bucket-id', help='Default bucket ID (optional - will prompt if not provided)')
+@click.option('--restrict-metadata-outside-schemas', is_flag=True, help='Restrict metadata to defined schemas only')
+@click.option('--restrict-file-uploads-to-extensions', help='Comma-separated list of allowed file extensions (e.g., ".pdf,.docx,.jpg")')
 @click.option('--json-input', help='JSON input file path or JSON string with all database data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def create(ctx: click.Context, database_id: str, description: Optional[str], default_bucket_id: Optional[str],
+           restrict_metadata_outside_schemas: bool, restrict_file_uploads_to_extensions: Optional[str],
            json_input: Optional[str], json_output: bool):
     """
     Create a new database.
@@ -217,6 +330,8 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
     Examples:
         vamscli database create -d my-database --description "My Database"
         vamscli database create -d my-database --description "My Database" --default-bucket-id "bucket-uuid"
+        vamscli database create -d my-database --description "My Database" --restrict-metadata-outside-schemas
+        vamscli database create -d my-database --description "My Database" --restrict-file-uploads-to-extensions ".pdf,.docx"
         vamscli database create --json-input '{"databaseId":"test","description":"Test","defaultBucketId":"uuid"}'
     """
     # Get profile manager and API client (setup/auth already validated by decorator)
@@ -247,6 +362,13 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
             else:
                 click.echo("No bucket ID provided. Please select from available buckets:")
                 database_data['defaultBucketId'] = prompt_bucket_selection(api_client)
+            
+            # Add new configuration fields if provided
+            if restrict_metadata_outside_schemas:
+                database_data['restrictMetadataOutsideSchemas'] = True
+            
+            if restrict_file_uploads_to_extensions:
+                database_data['restrictFileUploadsToExtensions'] = restrict_file_uploads_to_extensions
         
         output_status(f"Creating database '{database_id}'...", json_output)
         
@@ -297,11 +419,17 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
 @click.option('-d', '--database-id', required=True, help='Database ID to update')
 @click.option('--description', help='New database description')
 @click.option('--default-bucket-id', help='New default bucket ID')
+@click.option('--restrict-metadata-outside-schemas', is_flag=True, help='Enable metadata restriction to defined schemas')
+@click.option('--no-restrict-metadata-outside-schemas', is_flag=True, help='Disable metadata restriction')
+@click.option('--restrict-file-uploads-to-extensions', help='Set allowed file extensions (e.g., ".pdf,.docx,.jpg")')
+@click.option('--clear-file-extensions', is_flag=True, help='Clear file extension restrictions')
 @click.option('--json-input', help='JSON input file path or JSON string with update data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def update(ctx: click.Context, database_id: str, description: Optional[str], default_bucket_id: Optional[str],
+           restrict_metadata_outside_schemas: bool, no_restrict_metadata_outside_schemas: bool,
+           restrict_file_uploads_to_extensions: Optional[str], clear_file_extensions: bool,
            json_input: Optional[str], json_output: bool):
     """
     Update an existing database.
@@ -312,6 +440,10 @@ def update(ctx: click.Context, database_id: str, description: Optional[str], def
     Examples:
         vamscli database update -d my-database --description "Updated description"
         vamscli database update -d my-database --default-bucket-id "new-bucket-uuid"
+        vamscli database update -d my-database --restrict-metadata-outside-schemas
+        vamscli database update -d my-database --no-restrict-metadata-outside-schemas
+        vamscli database update -d my-database --restrict-file-uploads-to-extensions ".pdf,.png"
+        vamscli database update -d my-database --clear-file-extensions
         vamscli database update --json-input '{"databaseId":"test","description":"Updated","defaultBucketId":"uuid"}'
     """
     # Setup/auth already validated by decorator
@@ -337,11 +469,37 @@ def update(ctx: click.Context, database_id: str, description: Optional[str], def
             if default_bucket_id:
                 database_data['defaultBucketId'] = default_bucket_id
             
+            # Handle new configuration fields
+            # Check for conflicting flags
+            if restrict_metadata_outside_schemas and no_restrict_metadata_outside_schemas:
+                raise click.BadParameter(
+                    "Cannot use both --restrict-metadata-outside-schemas and --no-restrict-metadata-outside-schemas"
+                )
+            
+            if restrict_file_uploads_to_extensions and clear_file_extensions:
+                raise click.BadParameter(
+                    "Cannot use both --restrict-file-uploads-to-extensions and --clear-file-extensions"
+                )
+            
+            # Apply metadata restriction flags
+            if restrict_metadata_outside_schemas:
+                database_data['restrictMetadataOutsideSchemas'] = True
+            elif no_restrict_metadata_outside_schemas:
+                database_data['restrictMetadataOutsideSchemas'] = False
+            
+            # Apply file extension restrictions
+            if restrict_file_uploads_to_extensions:
+                database_data['restrictFileUploadsToExtensions'] = restrict_file_uploads_to_extensions
+            elif clear_file_extensions:
+                database_data['restrictFileUploadsToExtensions'] = ''
+            
             # Ensure at least one field is being updated
             if len(database_data) == 1:  # Only databaseId
                 raise click.BadParameter(
                     "At least one field must be provided for update. "
-                    "Use --description, --default-bucket-id, or --json-input."
+                    "Use --description, --default-bucket-id, --restrict-metadata-outside-schemas, "
+                    "--no-restrict-metadata-outside-schemas, --restrict-file-uploads-to-extensions, "
+                    "--clear-file-extensions, or --json-input."
                 )
         
         output_status(f"Updating database '{database_id}'...", json_output)
@@ -520,14 +678,15 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
 
 
 @database.command('list-buckets')
-@click.option('--max-items', type=int, help='Maximum number of items to return')
 @click.option('--page-size', type=int, help='Number of items per page')
-@click.option('--starting-token', help='Token for pagination')
+@click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
+@click.option('--starting-token', help='Token for pagination (manual pagination)')
+@click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Optional[int], 
-                starting_token: Optional[str], json_output: bool):
+def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
+                starting_token: Optional[str], auto_paginate: bool, json_output: bool):
     """
     List available S3 bucket configurations.
     
@@ -535,8 +694,20 @@ def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Option
     databases in VAMS.
     
     Examples:
+        # Basic listing (uses API defaults)
         vamscli database list-buckets
-        vamscli database list-buckets --max-items 10
+        
+        # Auto-pagination to fetch all items (default: up to 10,000)
+        vamscli database list-buckets --auto-paginate
+        
+        # Auto-pagination with custom limit
+        vamscli database list-buckets --auto-paginate --max-items 5000
+        
+        # Manual pagination with page size
+        vamscli database list-buckets --page-size 200
+        vamscli database list-buckets --starting-token "token123" --page-size 200
+        
+        # JSON output
         vamscli database list-buckets --json-output
     """
     # Setup/auth already validated by decorator
@@ -544,19 +715,83 @@ def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Option
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Build pagination parameters
-    params = {}
-    if max_items:
-        params['maxItems'] = max_items
-    if page_size:
-        params['pageSize'] = page_size
-    if starting_token:
-        params['startingToken'] = starting_token
+    # Validate pagination options
+    if auto_paginate and starting_token:
+        raise click.ClickException(
+            "Cannot use --auto-paginate with --starting-token. "
+            "Use --auto-paginate for automatic pagination, or --starting-token for manual pagination."
+        )
     
-    output_status("Retrieving bucket configurations...", json_output)
+    # Warn if max-items used without auto-paginate
+    if max_items and not auto_paginate:
+        output_status("Warning: --max-items only applies with --auto-paginate. Ignoring --max-items.", json_output)
+        max_items = None
     
-    # List buckets
-    result = api_client.list_buckets(params)
+    if auto_paginate:
+        # Auto-pagination mode: fetch all items up to max_items (default 10,000)
+        max_total_items = max_items or 10000
+        output_status(f"Retrieving bucket configurations (auto-paginating up to {max_total_items} items)...", json_output)
+        
+        all_items = []
+        next_token = None
+        total_fetched = 0
+        page_count = 0
+        
+        while True:
+            page_count += 1
+            
+            # Prepare query parameters for this page
+            params = {}
+            if page_size:
+                params['pageSize'] = page_size  # Pass pageSize to API
+            if next_token:
+                params['startingToken'] = next_token
+            
+            # Note: maxItems is NOT passed to API - it's CLI-side limit only
+            
+            # Make API call
+            page_result = api_client.list_buckets(params)
+            
+            # Aggregate items
+            items = page_result.get('Items', [])
+            all_items.extend(items)
+            total_fetched += len(items)
+            
+            # Show progress in CLI mode
+            if not json_output:
+                output_status(f"Fetched {total_fetched} bucket configurations (page {page_count})...", False)
+            
+            # Check if we should continue
+            next_token = page_result.get('NextToken')
+            if not next_token or total_fetched >= max_total_items:
+                break
+        
+        # Create final result
+        result = {
+            'Items': all_items,
+            'totalItems': len(all_items),
+            'autoPaginated': True,
+            'pageCount': page_count
+        }
+        
+        if total_fetched >= max_total_items and next_token:
+            result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
+        
+    else:
+        # Manual pagination mode: single API call
+        output_status("Retrieving bucket configurations...", json_output)
+        
+        # Build pagination parameters
+        params = {}
+        if page_size:
+            params['pageSize'] = page_size  # Pass pageSize to API
+        if starting_token:
+            params['startingToken'] = starting_token
+        
+        # Note: maxItems is NOT passed to API in manual mode
+        
+        # List buckets
+        result = api_client.list_buckets(params)
     
     def format_buckets_list(data):
         """Format buckets list for CLI display."""
@@ -564,7 +799,17 @@ def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Option
         if not buckets:
             return "No bucket configurations found."
         
-        lines = [f"\nFound {len(buckets)} bucket configuration(s):", "-" * 80]
+        lines = []
+        
+        # Show auto-pagination info if present
+        if data.get('autoPaginated'):
+            lines.append(f"\nAuto-paginated: Retrieved {data.get('totalItems', 0)} items in {data.get('pageCount', 0)} page(s)")
+            if data.get('note'):
+                lines.append(f"⚠️  {data['note']}")
+            lines.append("")
+        
+        lines.append(f"Found {len(buckets)} bucket configuration(s):")
+        lines.append("-" * 80)
         
         for bucket in buckets:
             lines.append(f"ID: {bucket.get('bucketId', 'N/A')}")
@@ -572,10 +817,10 @@ def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Option
             lines.append(f"Base Assets Prefix: {bucket.get('baseAssetsPrefix', 'N/A')}")
             lines.append("-" * 80)
         
-        # Show pagination info if available
-        next_token = data.get('NextToken')
-        if next_token:
-            lines.append(f"More results available. Use --starting-token '{next_token}' to see additional buckets.")
+        # Show nextToken for manual pagination
+        if not data.get('autoPaginated') and data.get('NextToken'):
+            lines.append(f"\nNext token: {data['NextToken']}")
+            lines.append("Use --starting-token to get the next page")
         
         return '\n'.join(lines)
     

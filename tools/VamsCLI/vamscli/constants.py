@@ -59,20 +59,34 @@ API_ASSET_LINKS_UPDATE = "/asset-links/{assetLinkId}"
 API_ASSET_LINKS_DELETE = "/asset-links/{relationId}"
 API_ASSET_LINKS_FOR_ASSET = "/database/{databaseId}/assets/{assetId}/asset-links"
 
-# Asset Links Metadata API Endpoints
+# Asset Links Metadata API Endpoints (New unified API)
+API_ASSET_LINK_METADATA = "/asset-links/{assetLinkId}/metadata"
+
+# Metadata API Endpoints (New unified API)
+API_ASSET_METADATA = "/database/{databaseId}/assets/{assetId}/metadata"
+API_FILE_METADATA = "/database/{databaseId}/assets/{assetId}/metadata/file"
+API_DATABASE_METADATA = "/database/{databaseId}/metadata"
+
+# Legacy Metadata API Endpoints (deprecated)
 API_ASSET_LINKS_METADATA = "/asset-links/{assetLinkId}/metadata"
 API_ASSET_LINKS_METADATA_KEY = "/asset-links/{assetLinkId}/metadata/{metadataKey}"
-
-# Metadata API Endpoints
 API_METADATA = "/database/{databaseId}/assets/{assetId}/metadata"
 
 # Metadata Schema API Endpoints
-API_METADATA_SCHEMA = "/metadataschema/{databaseId}"
+API_METADATA_SCHEMA = "/metadataschema/{databaseId}"  # Legacy endpoint
+API_METADATA_SCHEMA_LIST = "/metadataschema"  # GET with filters
+API_METADATA_SCHEMA_BY_ID = "/database/{databaseId}/metadataSchema/{metadataSchemaId}"  # GET single schema
 
 # Search API Endpoints
 API_SEARCH = "/search"
 API_SEARCH_SIMPLE = "/search/simple"
 API_SEARCH_MAPPING = "/search"
+
+# Workflow API Endpoints
+API_WORKFLOWS = "/workflows"
+API_DATABASE_WORKFLOWS = "/database/{databaseId}/workflows"
+API_WORKFLOW_EXECUTIONS = "/database/{databaseId}/assets/{assetId}/workflows/executions"
+API_EXECUTE_WORKFLOW = "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}"
 
 # Upload Configuration
 DEFAULT_CHUNK_SIZE_SMALL = 150 * 1024 * 1024  # 150MB
@@ -84,11 +98,11 @@ DEFAULT_PARALLEL_UPLOADS = 10
 DEFAULT_RETRY_ATTEMPTS = 3
 
 # New Backend Upload Limits (v2.2+)
-MAX_FILES_PER_REQUEST = 1000  # Maximum files per upload request
-MAX_TOTAL_PARTS_PER_REQUEST = 5000  # Maximum total parts across all files
-MAX_PARTS_PER_FILE = 10000  # Maximum parts per individual file (S3 limit)
+MAX_FILES_PER_REQUEST = 50  # Maximum files per upload request
+MAX_TOTAL_PARTS_PER_REQUEST = 200  # Maximum total parts across all files
+MAX_PARTS_PER_FILE = 200  # Maximum parts per individual file
 MAX_PART_SIZE = 5 * 1024 * 1024 * 1024  # 5GB maximum part size (S3 limit)
-MAX_UPLOADS_PER_USER_PER_MINUTE = 10  # Rate limit for upload initialization
+MAX_UPLOADS_PER_USER_PER_MINUTE = 20  # Rate limit for upload initialization
 
 # Download Configuration
 DEFAULT_PARALLEL_DOWNLOADS = 5

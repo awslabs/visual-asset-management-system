@@ -11,6 +11,7 @@ import datetime
 import uuid
 import random
 import string
+from typing import List, Optional
 from common.validators import validate
 from common.constants import STANDARD_JSON_RESPONSE
 from common.stepfunctions_builder import (
@@ -64,6 +65,53 @@ def generate_random_string(length=8):
     """Generates a random character alphanumeric string with a set input length."""
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for i in range(length))
+
+
+def validate_and_parse_extensions(auto_trigger_extensions: Optional[str]) -> Optional[List[str]]:
+    """
+    Validate and parse comma-delimited extension list
+    
+    Args:
+        auto_trigger_extensions: Comma-delimited string of extensions
+    
+    Returns:
+        List of normalized extensions, or None if invalid/empty
+    """
+    # Skip if field is None, empty, or whitespace
+    if not auto_trigger_extensions or not auto_trigger_extensions.strip():
+        return None
+    
+    # Check for "all" trigger - return special marker
+    trigger_value = auto_trigger_extensions.strip().lower()
+    if trigger_value in ['.all', 'all']:
+        return ['__ALL__']  # Special marker for "all files"
+    
+    # Parse comma-delimited extensions
+    extensions = []
+    for ext in auto_trigger_extensions.split(','):
+        # Strip whitespace
+        ext = ext.strip()
+        
+        # Skip empty strings
+        if not ext:
+            continue
+        
+        # Remove leading dots and convert to lowercase
+        ext = ext.lstrip('.').lower()
+        
+        # Skip if empty after processing
+        if not ext:
+            continue
+        
+        # Validate extension format (alphanumeric and common chars only)
+        if not all(c.isalnum() or c in ['-', '_'] for c in ext):
+            logger.warning(f"Invalid extension format: {ext}, skipping")
+            continue
+        
+        extensions.append(ext)
+    
+    # Return None if no valid extensions found
+    return extensions if extensions else None
 
 
 def get_existing_workflow(database_id, workflow_id):
@@ -467,6 +515,13 @@ def create_workflow(payload):
             'modifiedBy': username
         }
         
+        # Add autoTriggerOnFileExtensionsUpload if provided
+        auto_trigger = payload.get('autoTriggerOnFileExtensionsUpload', '')
+        if auto_trigger:
+            Item['autoTriggerOnFileExtensionsUpload'] = auto_trigger
+        else:
+            Item['autoTriggerOnFileExtensionsUpload'] = ''
+        
         # Preserve dateCreated for updates
         if existing_workflow:
             Item['dateCreated'] = existing_workflow.get('dateCreated', json.dumps(dtNow))
@@ -606,6 +661,17 @@ def lambda_handler(event, context):
                 response['body'] = json.dumps({"message": message})
                 response['statusCode'] = 400
                 return response
+
+            # Validate autoTriggerOnFileExtensionsUpload if provided
+            auto_trigger = event['body'].get('autoTriggerOnFileExtensionsUpload', '')
+            if auto_trigger and auto_trigger.strip():
+                parsed_extensions = validate_and_parse_extensions(auto_trigger)
+                if parsed_extensions is None:
+                    message = "Invalid autoTriggerOnFileExtensionsUpload format. Must be comma-delimited extensions (e.g., 'jpg,png,pdf') or 'all'."
+                    response['statusCode'] = 400
+                    response['body'] = json.dumps({"message": message})
+                    logger.error(response)
+                    return response
 
             logger.info("Validating workflow authorization")
             workflow_allowed = False

@@ -28,6 +28,8 @@ export default function RelatedTableList(props) {
         defaultSortingColumn,
         defaultSortingDescending,
         setReload,
+        countOverride, // Optional: if provided, use this for the counter instead of items.length
+        hideSearch = false, // Optional: if true, hide the search bar and move refresh to header
     } = props;
     const { columnDefinitions, visibleColumns, filterColumns, pluralName, pluralNameTitleCase } =
         listDefinition;
@@ -53,6 +55,10 @@ export default function RelatedTableList(props) {
 
     //private functions
     const getMatchesCountText = (items) => {
+        // When countOverride is provided, count only child items (with parentId)
+        if (countOverride !== undefined) {
+            return `Found ${items} ${pluralName}.`;
+        }
         return `Found ${items} ${pluralName}.`;
     };
     const highlightMatches = (text, match = "") => {
@@ -166,7 +172,13 @@ export default function RelatedTableList(props) {
                     <HeaderControls />
                     <Header
                         counter={
-                            items.length !== allItems.length
+                            countOverride !== undefined
+                                ? items.length !== countOverride
+                                    ? `(${
+                                          items.filter((item) => item.parentId).length
+                                      }/${countOverride})`
+                                    : `(${countOverride})`
+                                : items.length !== allItems.length
                                 ? `(${items.length}/${allItems.length})`
                                 : `(${allItems.length})`
                         }
@@ -184,15 +196,18 @@ export default function RelatedTableList(props) {
                             <CellWrapper item={e}>
                                 {highlightMatches(
                                     e[id],
-                                    (() => {
-                                        const textFilterCaptureElement =
-                                            document.getElementById("textFilterCapture");
-                                        const textFilterInputElement =
-                                            textFilterCaptureElement.querySelectorAll(
-                                                ":scope input"
-                                            )[0];
-                                        return textFilterInputElement?.value;
-                                    })()
+                                    hideSearch
+                                        ? ""
+                                        : (() => {
+                                              const textFilterCaptureElement =
+                                                  document.getElementById("textFilterCapture");
+                                              if (!textFilterCaptureElement) return "";
+                                              const textFilterInputElement =
+                                                  textFilterCaptureElement.querySelectorAll(
+                                                      ":scope input"
+                                                  )[0];
+                                              return textFilterInputElement?.value || "";
+                                          })()
                                 )}
                             </CellWrapper>
                         ),
@@ -207,24 +222,8 @@ export default function RelatedTableList(props) {
             //@todo add aria pagination label
             pagination={<Pagination {...paginationProps} />}
             filter={
-                <Grid
-                    gridDefinition={[{ colspan: { default: "7" } }, { colspan: { default: "5" } }]}
-                >
-                    <div
-                        id="textFilterCapture"
-                        style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "8px",
-                            maxWidth: "100%",
-                        }}
-                    >
-                        <TextFilter
-                            id={"test"}
-                            {...filterProps}
-                            countText={getMatchesCountText(filteredItemsCount)}
-                            filteringAriaLabel={`Filter ${pluralName}`}
-                        />
+                hideSearch ? (
+                    <div style={{ padding: "0 0 16px 0" }}>
                         <Button
                             iconName="refresh"
                             variant="icon"
@@ -233,57 +232,92 @@ export default function RelatedTableList(props) {
                             ariaLabel="Refresh data"
                         />
                     </div>
-                    <div style={{ float: "right" }}>
-                        <Grid
-                            gridDefinition={filteredFilterColumns.map((filterColumn) => {
-                                return {
-                                    colspan: {
-                                        default: String(Math.floor(12 / (filterColumn.length + 1))),
-                                    },
-                                };
-                            })}
+                ) : (
+                    <Grid
+                        gridDefinition={[
+                            { colspan: { default: "7" } },
+                            { colspan: { default: "5" } },
+                        ]}
+                    >
+                        <div
+                            id="textFilterCapture"
+                            style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "8px",
+                                maxWidth: "100%",
+                            }}
                         >
-                            {filteredFilterColumns.map((filterColumn, i) => {
-                                const selectedValue = activeFilters[filterColumn.name];
-                                return (
-                                    <Select
-                                        key={i}
-                                        selectedOption={
-                                            !selectedValue
-                                                ? null
-                                                : {
-                                                      label: selectedValue,
-                                                      value: selectedValue,
-                                                  }
-                                        }
-                                        onChange={({ detail }) => {
-                                            handleFilterSelected(
-                                                filterColumn.name,
-                                                detail?.selectedOption?.value
-                                            );
-                                        }}
-                                        options={[
-                                            {
-                                                label: <em>all</em>,
-                                                value: null,
-                                            },
-                                        ].concat(
-                                            [
-                                                ...new Set(
-                                                    allItems.map((row) => row[filterColumn.name])
-                                                ),
-                                            ].map((cellValue) => {
-                                                return { label: cellValue, value: cellValue };
-                                            })
-                                        )}
-                                        placeholder={filterColumn.placeholder}
-                                        selectedAriaLabel="Selected"
-                                    />
-                                );
-                            })}
-                        </Grid>
-                    </div>
-                </Grid>
+                            <TextFilter
+                                id={"test"}
+                                {...filterProps}
+                                countText={getMatchesCountText(filteredItemsCount)}
+                                filteringAriaLabel={`Filter ${pluralName}`}
+                            />
+                            <Button
+                                iconName="refresh"
+                                variant="icon"
+                                onClick={() => setReload(true)}
+                                loading={loading}
+                                ariaLabel="Refresh data"
+                            />
+                        </div>
+                        <div style={{ float: "right" }}>
+                            <Grid
+                                gridDefinition={filteredFilterColumns.map((filterColumn) => {
+                                    return {
+                                        colspan: {
+                                            default: String(
+                                                Math.floor(12 / (filterColumn.length + 1))
+                                            ),
+                                        },
+                                    };
+                                })}
+                            >
+                                {filteredFilterColumns.map((filterColumn, i) => {
+                                    const selectedValue = activeFilters[filterColumn.name];
+                                    return (
+                                        <Select
+                                            key={i}
+                                            selectedOption={
+                                                !selectedValue
+                                                    ? null
+                                                    : {
+                                                          label: selectedValue,
+                                                          value: selectedValue,
+                                                      }
+                                            }
+                                            onChange={({ detail }) => {
+                                                handleFilterSelected(
+                                                    filterColumn.name,
+                                                    detail?.selectedOption?.value
+                                                );
+                                            }}
+                                            options={[
+                                                {
+                                                    label: <em>all</em>,
+                                                    value: null,
+                                                },
+                                            ].concat(
+                                                [
+                                                    ...new Set(
+                                                        allItems.map(
+                                                            (row) => row[filterColumn.name]
+                                                        )
+                                                    ),
+                                                ].map((cellValue) => {
+                                                    return { label: cellValue, value: cellValue };
+                                                })
+                                            )}
+                                            placeholder={filterColumn.placeholder}
+                                            selectedAriaLabel="Selected"
+                                        />
+                                    );
+                                })}
+                            </Grid>
+                        </div>
+                    </Grid>
+                )
             }
         />
     );
@@ -299,4 +333,6 @@ RelatedTableList.propTypes = {
     childId: PropTypes.string,
     defaultSortingColumn: PropTypes.string,
     defaultSortingDescending: PropTypes.bool,
+    countOverride: PropTypes.number,
+    hideSearch: PropTypes.bool,
 };

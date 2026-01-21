@@ -26,7 +26,8 @@ import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
 import { safeGetFile } from "../../utils/fileHandleCompat";
-import { fetchAsset } from "../../services/APIService";
+import { fetchAsset, fetchDatabase } from "../../services/APIService";
+import { validateFiles, ValidationResult } from "../../utils/fileExtensionValidation";
 
 // Maximum preview file size (5MB)
 const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
@@ -154,6 +155,9 @@ export default function ModifyAssetsUploadsPage() {
     const [folderPath, setFolderPath] = useState<string>("");
     const [keyPrefix, setKeyPrefix] = useState<string>("");
     const [multiFileSelectKey, setMultiFileSelectKey] = useState<number>(0); // Key to force MultiFileSelect re-render
+    const [restrictFileUploadsToExtensions, setRestrictFileUploadsToExtensions] =
+        useState<string>("");
+    const [fileValidationResult, setFileValidationResult] = useState<ValidationResult | null>(null);
 
     // Update assetDetail when fileItems change
     useEffect(() => {
@@ -250,6 +254,45 @@ export default function ModifyAssetsUploadsPage() {
 
         fetchAssetInfo();
     }, [assetId, databaseId, assetDetail.assetName]);
+
+    // Fetch database restrictions
+    useEffect(() => {
+        const fetchDatabaseRestrictions = async () => {
+            if (databaseId) {
+                try {
+                    console.log("ModifyAssetsUploads - Fetching database restrictions");
+                    const databaseInfo = await fetchDatabase({ databaseId });
+
+                    console.log("ModifyAssetsUploads - Database response:", databaseInfo);
+
+                    if (databaseInfo && databaseInfo !== false) {
+                        console.log(
+                            "ModifyAssetsUploads - restrictFileUploadsToExtensions:",
+                            databaseInfo.restrictFileUploadsToExtensions
+                        );
+
+                        setRestrictFileUploadsToExtensions(
+                            databaseInfo.restrictFileUploadsToExtensions || ""
+                        );
+                    }
+                } catch (error) {
+                    console.error("ModifyAssetsUploads - Error fetching database info:", error);
+                }
+            }
+        };
+
+        fetchDatabaseRestrictions();
+    }, [databaseId]);
+
+    // Validate files whenever fileItems or restrictions change
+    useEffect(() => {
+        if (fileItems && fileItems.length > 0) {
+            const validationResult = validateFiles(fileItems, restrictFileUploadsToExtensions);
+            setFileValidationResult(validationResult);
+        } else {
+            setFileValidationResult(null);
+        }
+    }, [fileItems, restrictFileUploadsToExtensions]);
 
     // Clear preview file when not uploading to root path
     useEffect(() => {
@@ -406,6 +449,61 @@ export default function ModifyAssetsUploadsPage() {
                             </SpaceBetween>
                         </Container>
 
+                        {/* Display warning about file extension restrictions if they exist */}
+                        {restrictFileUploadsToExtensions &&
+                            restrictFileUploadsToExtensions.trim() !== "" &&
+                            restrictFileUploadsToExtensions.toLowerCase() !== ".all" && (
+                                <Container>
+                                    <Alert header="File Upload Restrictions" type="warning">
+                                        <SpaceBetween direction="vertical" size="xs">
+                                            <div>
+                                                This database has file upload restrictions in place.
+                                                Only files with the following extensions are
+                                                allowed:
+                                            </div>
+                                            <div style={{ marginTop: "8px" }}>
+                                                <strong>{restrictFileUploadsToExtensions}</strong>
+                                            </div>
+                                            <div style={{ fontSize: "0.9em", marginTop: "8px" }}>
+                                                <em>
+                                                    Note: Preview files (containing .previewFile. in
+                                                    the filename) are exempt from these
+                                                    restrictions.
+                                                </em>
+                                            </div>
+                                        </SpaceBetween>
+                                    </Alert>
+                                </Container>
+                            )}
+
+                        {/* Display file extension validation errors */}
+                        {fileValidationResult && !fileValidationResult.isValid && (
+                            <Container>
+                                <Alert header="Invalid Files Selected" type="error">
+                                    <SpaceBetween direction="vertical" size="xs">
+                                        <div>
+                                            The following files cannot be uploaded because their
+                                            extensions are not allowed for this database:
+                                        </div>
+                                        <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
+                                            {fileValidationResult.invalidFiles.map(
+                                                (file, index) => (
+                                                    <li key={index}>
+                                                        <strong>{file.fileName}</strong> - Extension{" "}
+                                                        {file.extension} not allowed
+                                                    </li>
+                                                )
+                                            )}
+                                        </ul>
+                                        <div>
+                                            <strong>Allowed extensions:</strong>{" "}
+                                            {fileValidationResult.allowedExtensions?.join(", ")}
+                                        </div>
+                                    </SpaceBetween>
+                                </Alert>
+                            </Container>
+                        )}
+
                         {/* Show upload workflow or file selection UI */}
                         {showUploadWorkflow ? (
                             <AssetUploadWorkflow
@@ -529,7 +627,11 @@ export default function ModifyAssetsUploadsPage() {
                                                 disabled={
                                                     (fileItems.length === 0 &&
                                                         (isRootPath ? !previewFile : true)) ||
-                                                    !!previewFileError
+                                                    !!previewFileError ||
+                                                    !!(
+                                                        fileValidationResult &&
+                                                        !fileValidationResult.isValid
+                                                    )
                                                 }
                                             >
                                                 Finalize and Upload

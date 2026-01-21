@@ -27,7 +27,6 @@ from typing import List, Set, Tuple
 from ....assets import create as assets_create
 from ....file import upload as file_upload
 from ....asset_links import create as asset_link_create
-from ....asset_links_metadata import create as asset_link_metadata_create
 from ....search import simple as search_simple
 from datetime import datetime
 import re
@@ -335,7 +334,7 @@ def create_single_metadata(
     asset_id: str,
     component: Dict[str, Any]
 ) -> Tuple[bool, Optional[str]]:
-    """Create metadata for a single asset (thread-safe)."""
+    """Create metadata for a single asset (thread-safe) using new API."""
     try:
         metadata = {}
         skip_fields = {"id", "children", "parentRef", "sanitized_asset_id", "actual_asset_id"}
@@ -351,7 +350,18 @@ def create_single_metadata(
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
-        api_client.create_metadata(database_id, asset_id, metadata)
+        # Convert to new API format (bulk operation with metadata items)
+        metadata_items = [
+            {
+                'metadataKey': key,
+                'metadataValue': value,
+                'metadataValueType': 'string'  # PLM metadata is all string type
+            }
+            for key, value in metadata.items()
+        ]
+        
+        # Use new bulk API (update mode for upsert behavior)
+        api_client.update_asset_metadata_v2(database_id, asset_id, metadata_items, 'update')
         return (True, None)
     
     except Exception as e:
@@ -700,17 +710,22 @@ def create_single_link_metadata(
     value: str,
     metadata_type: str
 ) -> Tuple[bool, Optional[str]]:
-    """Create metadata for a single asset link (thread-safe)."""
+    """Create metadata for a single asset link (thread-safe) using new API."""
     try:
-        ctx.invoke(
-            asset_link_metadata_create,
-            asset_link_id=link_id,
-            key=key,
-            value=value,
-            metadata_type=metadata_type,
-            json_input=None,
-            json_output=False
-        )
+        # Get API client
+        profile_manager = get_profile_manager_from_context(ctx)
+        config = profile_manager.load_config()
+        api_client = APIClient(config['api_gateway_url'], profile_manager)
+        
+        # Prepare metadata item in new format
+        metadata_items = [{
+            'metadataKey': key,
+            'metadataValue': value,
+            'metadataValueType': metadata_type
+        }]
+        
+        # Use new bulk API (update mode for upsert behavior)
+        api_client.update_asset_link_metadata_v2(link_id, metadata_items, 'update')
         
         return (True, None)
     

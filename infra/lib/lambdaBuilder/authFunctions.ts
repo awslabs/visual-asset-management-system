@@ -19,6 +19,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     kmsKeyPolicyStatementGenerator,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
@@ -77,7 +78,7 @@ export function buildAuthConstraintsFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "authConstraintsService";
-    const authServiceFun = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -92,18 +93,14 @@ export function buildAuthConstraintsFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-        },
+        environment: {},
     });
-    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(authServiceFun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(authServiceFun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(authServiceFun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(authServiceFun, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(authServiceFun, config);
-    return authServiceFun;
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
 }
 
 export function buildAuthLoginProfile(
@@ -116,7 +113,7 @@ export function buildAuthLoginProfile(
     environment?: { [key: string]: string }
 ): lambda.Function {
     const name = "authLoginProfile";
-    const authLoginProfileFunc = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -132,9 +129,6 @@ export function buildAuthLoginProfile(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
             EXTERNAL_OATH_IDP_URL: config.app.authProvider.useExternalOAuthIdp.enabled
                 ? config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl
@@ -143,17 +137,13 @@ export function buildAuthLoginProfile(
         },
     });
 
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(authLoginProfileFunc);
-    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(authLoginProfileFunc);
-    storageResources.dynamo.rolesStorageTable.grantReadData(authLoginProfileFunc);
-    storageResources.dynamo.userStorageTable.grantReadWriteData(authLoginProfileFunc);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        authLoginProfileFunc,
-        storageResources.encryption.kmsKey
-    );
-    globalLambdaEnvironmentsAndPermissions(authLoginProfileFunc, config);
+    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.userStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
-    return authLoginProfileFunc;
+    return fun;
 }
 
 export function buildRoutesService(
@@ -166,7 +156,7 @@ export function buildRoutesService(
     environment?: { [key: string]: string }
 ): lambda.Function {
     const name = "routes";
-    const routesFunc = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -182,25 +172,21 @@ export function buildRoutesService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ...environment,
         },
     });
 
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(routesFunc);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(routesFunc);
-    storageResources.dynamo.rolesStorageTable.grantReadData(routesFunc);
-    kmsKeyLambdaPermissionAddToResourcePolicy(routesFunc, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(routesFunc, config);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
-    return routesFunc;
+    return fun;
 }
 
 export function buildApiGatewayAuthorizerHttpFunction(
     scope: Construct,
     lambdaAuthorizerLayer: LayerVersion,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -238,7 +224,7 @@ export function buildApiGatewayAuthorizerHttpFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
     }
 
-    const authorizerFunc = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -257,17 +243,19 @@ export function buildApiGatewayAuthorizerHttpFunction(
     });
 
     // Grant API Gateway invoke permissions
-    authorizerFunc.grantInvoke(Service("APIGATEWAY").Principal);
+    fun.grantInvoke(Service("APIGATEWAY").Principal);
 
     // Add global permissions
-    globalLambdaEnvironmentsAndPermissions(authorizerFunc, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
-    return authorizerFunc;
+    return fun;
 }
 
 export function buildApiGatewayAuthorizerWebsocketFunction(
     scope: Construct,
     lambdaAuthorizerLayer: LayerVersion,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -304,7 +292,7 @@ export function buildApiGatewayAuthorizerWebsocketFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
     }
 
-    const authorizerFunc = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -323,10 +311,11 @@ export function buildApiGatewayAuthorizerWebsocketFunction(
     });
 
     // Grant API Gateway invoke permissions
-    authorizerFunc.grantInvoke(Service("APIGATEWAY").Principal);
+    fun.grantInvoke(Service("APIGATEWAY").Principal);
 
     // Add global permissions
-    globalLambdaEnvironmentsAndPermissions(authorizerFunc, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
-    return authorizerFunc;
+    return fun;
 }

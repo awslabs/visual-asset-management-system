@@ -136,6 +136,30 @@ vamscli auth login --user-id john.doe@example.com --token-override "token123" --
 -   **Validation**: All tokens validated with login profile API
 -   **Feature Switches**: Automatically fetches enabled features after authentication
 -   **Secure Storage**: Tokens stored securely in profile-specific files
+-   **Authentication Type Detection**: Automatically detects if Cognito is configured
+
+**Authentication Type Detection:**
+
+VamsCLI automatically detects the authentication type based on the Amplify configuration:
+
+-   **Cognito**: If `cognitoUserPoolId` is configured in the Amplify config, Cognito authentication is available
+-   **External**: If `cognitoUserPoolId` is not configured (null/undefined/empty), only token override authentication is available
+
+**Important:** If your VAMS deployment uses external authentication (no Cognito), you **must** use token override:
+
+```bash
+# This will fail if Cognito is not configured:
+vamscli auth login -u user@example.com
+
+# Error message:
+# Cognito authentication is not configured for this environment.
+# This deployment uses external authentication.
+# Please use token override authentication with:
+# 'vamscli auth login --user-id <user-id> --token-override <token>'
+
+# Use token override instead:
+vamscli auth login --user-id user@example.com --token-override "your-external-token"
+```
 
 ### `vamscli auth logout`
 
@@ -166,6 +190,8 @@ vamscli auth status
 -   Token validity status
 -   Expiration information
 -   Saved credentials status
+-   Web Deployed URL (if available)
+-   Location Service URL (if available)
 -   Feature switches information (count and enabled features)
 
 ### `vamscli auth refresh`
@@ -419,9 +445,52 @@ vamscli profile info staging
 **Output includes:**
 
 -   Profile directory location
--   Configuration details
--   Authentication information
+-   Configuration details (API Gateway URL, CLI version)
+-   Full Amplify configuration (region, Cognito settings, stack name)
+-   Authentication type (Cognito or External)
+-   Authentication information (user ID, token type, status)
 -   Token expiration details
+-   Web Deployed URL (if available)
+-   Location Service URL (if available)
+
+**Example output:**
+
+```
+Profile: production
+Active: Yes
+Directory: ~/.config/vamscli/profiles/production
+
+Configuration:
+  API Gateway: https://api.example.com
+  CLI Version: 2.2.0
+
+  Amplify Configuration:
+    Region: us-east-1
+    API: https://api.example.com
+    Cognito User Pool ID: us-east-1_abc123
+    Cognito App Client ID: 7tpmiss09sb0lqevmmv15hm88l
+    Cognito Identity Pool ID: us-east-1:identity-pool-id
+    External OAuth IDP URL: Not configured
+    External OAuth IDP Client ID: Not configured
+    External OAuth IDP Scope: Not configured
+    External OAuth IDP Scope MFA: Not configured
+    External OAuth IDP Token Endpoint: Not configured
+    External OAuth IDP Authorization Endpoint: Not configured
+    External OAuth IDP Discovery Endpoint: Not configured
+    Stack Name: vams-core-prod-us-east-1
+    Content Security Policy: Not set
+    Banner HTML Message: AWS Sandbox System. Do not upload sensitive information.
+  Auth Type: Cognito
+
+Authentication:
+  User ID: john.doe@example.com
+  Type: Cognito
+  Status: ✓ Authenticated
+  Expires: 2024-12-12 15:30:00 UTC
+  Web Deployed URL: https://d1234567890.cloudfront.net
+  Location Service URL: https://maps.geo.us-east-1.amazonaws.com/...
+  Saved Credentials: Yes
+```
 
 ### `vamscli profile current`
 

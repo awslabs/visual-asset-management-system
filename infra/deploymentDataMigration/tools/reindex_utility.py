@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-VAMS OpenSearch Reindexing Utility - Lambda Invocation Wrapper
+VAMS Indexer and OpenSearch Reindexing Utility - Lambda Invocation Wrapper
 
-This utility script provides a simple wrapper for triggering OpenSearch reindexing
+This utility script provides a simple wrapper for triggering the global indexing and OpenSearch reindexing
 by invoking the deployed Lambda function. All reindexing logic now runs in the cloud
 via the deployed Lambda function, eliminating the need for local execution with
 direct AWS resource access.
@@ -38,7 +38,7 @@ import time
 from typing import Dict, Optional
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ReadTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +217,25 @@ def invoke_reindexer_lambda(
                     'error': error_msg
                 }
     
+    except ReadTimeoutError as e:
+        logger.warning("=" * 80)
+        logger.warning("LAMBDA INVOCATION TIMED OUT")
+        logger.warning("=" * 80)
+        logger.warning(f"The Lambda function '{function_name}' invocation timed out after waiting for a response.")
+        logger.warning("However, the Lambda function is still processing in the background and will continue until completion.")
+        logger.warning(f"To monitor progress and verify completion:")
+        logger.warning(f"  1. Check CloudWatch Logs for function: {function_name}")
+        logger.warning(f"  2. Look for log streams with recent timestamps")
+        logger.warning(f"  3. Verify the reindexing completed successfully in the logs")
+        logger.warning("=" * 80)
+        
+        return {
+            'timeout': True,
+            'warning': str(e),
+            'function_name': function_name,
+            'message': 'Lambda invocation timed out but function is still processing'
+        }
+    
     except ClientError as e:
         error_code = e.response['Error']['Code']
         error_message = e.response['Error']['Message']
@@ -325,7 +344,12 @@ Notes:
     )
     
     # Return appropriate exit code
-    if 'error' in result:
+    # Treat timeout as a warning, not a failure (Lambda continues processing in background)
+    if 'timeout' in result and result.get('timeout'):
+        logger.warning("Reindexing invocation timed out - Lambda function continues processing in background")
+        logger.warning("Check CloudWatch Logs to verify completion")
+        return 0  # Exit successfully since the Lambda is still processing
+    elif 'error' in result:
         logger.error("Reindexing failed")
         return 1
     else:

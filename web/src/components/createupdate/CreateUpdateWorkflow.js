@@ -17,6 +17,7 @@ import {
     Container,
     Header,
     BreadcrumbGroup,
+    Toggle,
 } from "@cloudscape-design/components";
 import React, { useEffect, useState, Suspense } from "react";
 import { useNavigate } from "react-router";
@@ -56,6 +57,9 @@ export default function CreateUpdateWorkflow(props) {
     const [workflowDescription, setWorkflowDescription] = useState("");
     const [workflowIdError, setWorkflowIDError] = useState("");
     const [workflowDescriptionError, setWorkflowDescriptionError] = useState("");
+    const [autoTriggerEnabled, setAutoTriggerEnabled] = useState(false);
+    const [autoTriggerExtensions, setAutoTriggerExtensions] = useState("");
+    const [autoTriggerExtensionsError, setAutoTriggerExtensionsError] = useState("");
     const [pipelinesError, setPipelinesError] = useState("");
     // state
     const [createUpdateWorkflowError, setCreateUpdateWorkflowError] = useState("");
@@ -64,6 +68,7 @@ export default function CreateUpdateWorkflow(props) {
     const clearWorkflowErrors = () => {
         setWorkflowIDError("");
         setWorkflowDescriptionError("");
+        setAutoTriggerExtensionsError("");
         setPipelinesError("");
         setCreateUpdateWorkflowError("");
         setRunWorkflowError("");
@@ -77,6 +82,17 @@ export default function CreateUpdateWorkflow(props) {
                 const currentItem = items.find(({ workflowId }) => workflowId === workflowIdNew);
                 setWorkflowIDNew(currentItem.workflowId);
                 setWorkflowDescription(currentItem.description);
+
+                // Load auto-trigger settings
+                const autoTriggerValue = currentItem.autoTriggerOnFileExtensionsUpload || "";
+                if (autoTriggerValue && autoTriggerValue.trim() !== "") {
+                    setAutoTriggerEnabled(true);
+                    setAutoTriggerExtensions(autoTriggerValue);
+                } else {
+                    setAutoTriggerEnabled(false);
+                    setAutoTriggerExtensions("");
+                }
+
                 const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
                     return {
                         value: item.name,
@@ -119,6 +135,40 @@ export default function CreateUpdateWorkflow(props) {
         }
     }, [activeTab]);
 
+    const validateAutoTriggerExtensions = (extensions) => {
+        if (!extensions || extensions.trim() === "") {
+            return false;
+        }
+
+        const trimmedValue = extensions.trim().toLowerCase();
+
+        // Check for special "all" case
+        if (trimmedValue === ".all" || trimmedValue === "all") {
+            return true;
+        }
+
+        // Split by comma and validate each extension
+        const extArray = extensions.split(",");
+        for (let ext of extArray) {
+            ext = ext.trim();
+
+            // Skip empty strings
+            if (ext === "") {
+                continue;
+            }
+
+            // Remove leading dot if present
+            ext = ext.replace(/^\.+/, "");
+
+            // Check if extension contains only alphanumeric, dash, and underscore
+            if (!/^[a-zA-Z0-9_-]+$/.test(ext)) {
+                return false;
+            }
+        }
+
+        return true;
+    };
+
     const handleOpenCreatePipeline = () => {
         setOpenCreatePipeline(true);
     };
@@ -142,6 +192,12 @@ export default function CreateUpdateWorkflow(props) {
             setWorkflowIDError("");
             setWorkflowDescriptionError(
                 "Invalid prop description. Value exceeds maximum length of 256."
+            );
+            setActiveTab("details");
+        } else if (autoTriggerEnabled && !validateAutoTriggerExtensions(autoTriggerExtensions)) {
+            setWorkflowDescriptionError("");
+            setAutoTriggerExtensionsError(
+                "Invalid extensions format. Use comma-delimited extensions (e.g., 'jpg,png,pdf') or '.all' for all files."
             );
             setActiveTab("details");
         } else if (workflowPipelines.length === 0 || workflowPipelines[0] === null) {
@@ -169,6 +225,9 @@ export default function CreateUpdateWorkflow(props) {
                     databaseId: databaseId,
                     description: workflowDescription,
                     specifiedPipelines: { functions: functions },
+                    autoTriggerOnFileExtensionsUpload: autoTriggerEnabled
+                        ? autoTriggerExtensions.trim()
+                        : "",
                 },
             };
             const result = await saveWorkflow({ config: config });
@@ -350,6 +409,45 @@ export default function CreateUpdateWorkflow(props) {
                                                                     }
                                                                 />
                                                             </FormField>
+                                                            <FormField
+                                                                label={"Auto-Trigger - File Upload"}
+                                                            >
+                                                                <Toggle
+                                                                    checked={autoTriggerEnabled}
+                                                                    onChange={({ detail }) =>
+                                                                        setAutoTriggerEnabled(
+                                                                            detail.checked
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    Enable auto-trigger on file
+                                                                    upload
+                                                                </Toggle>
+                                                            </FormField>
+                                                            {autoTriggerEnabled && (
+                                                                <FormField
+                                                                    label={"File Extensions"}
+                                                                    constraintText={
+                                                                        "Comma-delimited extensions to trigger on. Use '.all' for all files."
+                                                                    }
+                                                                    errorText={
+                                                                        autoTriggerExtensionsError
+                                                                    }
+                                                                >
+                                                                    <Input
+                                                                        placeholder="e.g., jpg,png,pdf or .all"
+                                                                        name="autoTriggerExtensions"
+                                                                        value={
+                                                                            autoTriggerExtensions
+                                                                        }
+                                                                        onChange={(event) =>
+                                                                            setAutoTriggerExtensions(
+                                                                                event.detail.value
+                                                                            )
+                                                                        }
+                                                                    />
+                                                                </FormField>
+                                                            )}
                                                         </SpaceBetween>
                                                     </Form>
                                                 ),

@@ -319,6 +319,96 @@ All commands provide comprehensive error handling with user-friendly messages:
    This may cause compatibility issues.
 ```
 
+### JSON Error Output Format
+
+When using `--json-output`, errors are returned as pure JSON objects with no additional text:
+
+**CLI Mode Error (default):**
+
+```bash
+$ vamscli auth login -u user@example.com -p wrongpassword
+
+✗ Cognito Authentication Error: Invalid username or password
+Please run 'vamscli auth login' to re-authenticate.
+```
+
+**JSON Mode Error:**
+
+```bash
+$ vamscli auth login -u user@example.com -p wrongpassword --json-output
+
+{
+  "error": "Invalid username or password",
+  "error_type": "AuthenticationError"
+}
+```
+
+**JSON Error Format Structure:**
+
+-   `error`: Human-readable error message
+-   `error_type`: Exception class name for programmatic handling
+
+**Common Error Types in JSON:**
+
+```json
+{
+    "error": "Configuration not found for profile 'default'",
+    "error_type": "ConfigurationError"
+}
+```
+
+```json
+{
+    "error": "Asset 'my-asset' not found",
+    "error_type": "AssetNotFoundError"
+}
+```
+
+```json
+{
+    "error": "VAMS API is not currently available",
+    "error_type": "APIUnavailableError"
+}
+```
+
+**Parsing JSON Errors in Scripts:**
+
+```bash
+# Bash example
+result=$(vamscli assets get my-db my-asset --json-output 2>&1)
+if [ $? -ne 0 ]; then
+    error_msg=$(echo "$result" | jq -r '.error')
+    error_type=$(echo "$result" | jq -r '.error_type')
+    echo "Error ($error_type): $error_msg"
+fi
+```
+
+```python
+# Python example
+import subprocess
+import json
+
+try:
+    result = subprocess.run(
+        ["vamscli", "assets", "get", "my-db", "my-asset", "--json-output"],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    data = json.loads(result.stdout)
+except subprocess.CalledProcessError as e:
+    error_data = json.loads(e.stdout)
+    print(f"Error ({error_data['error_type']}): {error_data['error']}")
+```
+
+```powershell
+# PowerShell example
+$result = vamscli assets get my-db my-asset --json-output 2>&1 | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error ($($result.error_type)): $($result.error)"
+}
+```
+
 ### Debug Mode
 
 For detailed error information, add `--debug` to any command:

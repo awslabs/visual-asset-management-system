@@ -3,34 +3,56 @@ ALLOWED_ASSET_LINKS = {
     "RELATED": "related"
 }
 
+# Constraint field validation constants
+ALLOWED_CONSTRAINT_PERMISSIONS = ['GET', 'PUT', 'POST', 'DELETE']
+
+ALLOWED_CONSTRAINT_PERMISSION_TYPES = ['allow', 'deny']
+
+ALLOWED_CONSTRAINT_OBJECT_TYPES = [
+    'database',
+    'asset',
+    'api',
+    'web',
+    'tag',
+    'tagType',
+    'role',
+    'userRole',
+    'pipeline',
+    'workflow',
+    'metadataSchema'
+]
+
+ALLOWED_CONSTRAINT_OPERATORS = [
+    'equals',
+    'contains',
+    'does_not_contain',
+    'starts_with',
+    'ends_with',
+    'is_one_of',
+    'is_not_one_of'
+]
+
+# Role field validation constants
+ALLOWED_ROLE_SOURCES = ['INTERNAL_SYSTEM']
+
 #Unallowed file extension list
 UNALLOWED_FILE_EXTENSION_LIST = [
     ".jar",
-    ".py",
     ".java",
     ".com",
-    ".sh",
     ".php",
     ".reg",
-    ".ini",
-    ".inf",
-    ".reg",
-    ".sql",
     ".pif",
     ".bak",
-    ".py",
     ".java",
     ".dll",
     ".exe",
-    ".docx",
     ".nat",
     ".cmd",
     ".exe",
     ".lnk",
     ".docm",
-    ".js",
     ".vbs",
-    ".ps1",
     ".bat"
 ] 
 
@@ -82,7 +104,9 @@ PERMISSION_CONSTRAINT_FIELDS = {
 
             "workflowId": "",
 
-            "field": "",
+            "metadataSchemaName": "",
+            "metadataSchemaEntityType": "",
+            #"field": "", //deprecated, old metadata schema
 
             "object__type": "",
             "route__path": "",

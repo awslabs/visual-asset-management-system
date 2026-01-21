@@ -55,6 +55,12 @@ class TestFileUploadCommand:
     def test_upload_success(self, cli_runner, file_command_mocks):
         """Test successful file upload."""
         with file_command_mocks as mocks:
+            # Mock database config (no restrictions)
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-db',
+                'restrictFileUploadsToExtensions': ''
+            }
+            
             # Use isolated filesystem to create actual test files
             with cli_runner.isolated_filesystem():
                 # Create a test file
@@ -160,6 +166,12 @@ class TestFileUploadCommand:
     def test_upload_json_input(self, cli_runner, file_command_mocks):
         """Test upload with JSON input."""
         with file_command_mocks as mocks:
+            # Mock database config (no restrictions)
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-db',
+                'restrictFileUploadsToExtensions': ''
+            }
+            
             with cli_runner.isolated_filesystem():
                 # Create a test file
                 with open('test_file.gltf', 'w') as f:
@@ -326,8 +338,9 @@ class TestFileListCommand:
         assert 'List files in an asset' in result.output
         assert '--prefix' in result.output
         assert '--include-archived' in result.output
+        assert '--basic' in result.output
         assert '--max-items' in result.output
-        assert '--page-size' in result.output
+        assert '--auto-paginate' in result.output
     
     def test_list_success(self, cli_runner, file_command_mocks):
         """Test successful file listing."""
@@ -362,11 +375,8 @@ class TestFileListCommand:
             assert '📄 /model.gltf (1024 bytes) [primary]' in result.output
             assert '📁 /textures/' in result.output
             
-            # Verify API call
-            expected_params = {
-                'maxItems': 1000,
-                'pageSize': 100
-            }
+            # Verify API call - no params when not specified (uses API defaults)
+            expected_params = {}
             mocks['api_client'].list_asset_files.assert_called_once_with(
                 'test-db', 'test-asset', expected_params
             )
@@ -406,23 +416,233 @@ class TestFileListCommand:
                 '-a', 'test-asset',
                 '--prefix', 'models/',
                 '--include-archived',
-                '--max-items', '50'
+                '--page-size', '50'
             ])
             
             assert result.exit_code == 0
             assert 'Found 1 file(s):' in result.output
             assert '(archived)' in result.output
             
-            # Verify API call with filters
+            # Verify API call with filters (pageSize passed, maxItems NOT passed)
             expected_params = {
-                'maxItems': 50,
-                'pageSize': 100,
+                'pageSize': 50,
                 'prefix': 'models/',
                 'includeArchived': 'true'
             }
             mocks['api_client'].list_asset_files.assert_called_once_with(
                 'test-db', 'test-asset', expected_params
             )
+    
+    def test_list_with_basic_mode(self, cli_runner, file_command_mocks):
+        """Test file listing with basic mode."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {
+                        'fileName': 'model.gltf',
+                        'relativePath': '/model.gltf',
+                        'isFolder': False,
+                        'size': 1024,
+                        'isArchived': False
+                    }
+                ]
+            }
+            
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--basic'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 file(s):' in result.output
+            
+            # Verify API call includes basic flag
+            expected_params = {
+                'basic': 'true'
+            }
+            mocks['api_client'].list_asset_files.assert_called_once_with(
+                'test-db', 'test-asset', expected_params
+            )
+    
+    def test_list_with_auto_paginate(self, cli_runner, file_command_mocks):
+        """Test file listing with auto-pagination."""
+        with file_command_mocks as mocks:
+            # Mock multiple pages
+            mocks['api_client'].list_asset_files.side_effect = [
+                {
+                    'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False, 'size': 1024} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False, 'size': 1024} for i in range(100, 200)],
+                    'NextToken': 'token2'
+                },
+                {
+                    'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False, 'size': 1024} for i in range(200, 250)],
+                    'NextToken': None
+                }
+            ]
+            
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 250 items in 3 page(s)' in result.output
+            assert 'Found 250 file(s):' in result.output
+            
+            # Verify API was called 3 times
+            assert mocks['api_client'].list_asset_files.call_count == 3
+    
+    def test_list_auto_paginate_with_basic(self, cli_runner, file_command_mocks):
+        """Test auto-pagination with basic mode."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False} for i in range(150)],
+                'NextToken': None
+            }
+            
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate',
+                '--basic'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 1 page(s)' in result.output
+            
+            # Verify API call includes basic flag but NOT maxItems
+            call_args = mocks['api_client'].list_asset_files.call_args
+            assert call_args[0][2]['basic'] == 'true'
+            assert 'maxItems' not in call_args[0][2]  # maxItems NOT passed to API
+    
+    def test_list_auto_paginate_conflict(self, cli_runner, file_command_mocks):
+        """Test that auto-paginate conflicts with starting-token."""
+        with file_command_mocks as mocks:
+            # --max-items with --auto-paginate is now ALLOWED (controls total limit)
+            # Only --starting-token conflicts with --auto-paginate
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate',
+                '--starting-token', 'token123'
+            ])
+            
+            assert result.exit_code == 1
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+    
+    def test_list_manual_pagination(self, cli_runner, file_command_mocks):
+        """Test manual pagination with starting token and page size."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [{'fileName': 'file.gltf', 'relativePath': '/file.gltf', 'isFolder': False, 'size': 1024}],
+                'NextToken': 'next-token-456'
+            }
+            
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--page-size', '100',
+                '--starting-token', 'token-123'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Next token: next-token-456' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+            
+            # Verify API call includes pageSize and startingToken (NOT maxItems)
+            expected_params = {
+                'pageSize': 100,
+                'startingToken': 'token-123'
+            }
+            mocks['api_client'].list_asset_files.assert_called_once_with(
+                'test-db', 'test-asset', expected_params
+            )
+    
+    def test_list_auto_paginate_with_max_items(self, cli_runner, file_command_mocks):
+        """Test auto-pagination with custom max-items limit."""
+        with file_command_mocks as mocks:
+            # Mock two pages
+            mocks['api_client'].list_asset_files.side_effect = [
+                {
+                    'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False} for i in range(100)],
+                    'NextToken': 'token1'
+                },
+                {
+                    'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False} for i in range(100, 150)],
+                    'NextToken': 'token2'
+                }
+            ]
+            
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate',
+                '--max-items', '150'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 150 items in 2 page(s)' in result.output
+            
+            # Verify API was called twice and maxItems was NOT passed
+            assert mocks['api_client'].list_asset_files.call_count == 2
+            for call in mocks['api_client'].list_asset_files.call_args_list:
+                assert 'maxItems' not in call[0][2]  # maxItems NOT passed to API
+    
+    def test_list_auto_paginate_with_page_size(self, cli_runner, file_command_mocks):
+        """Test auto-pagination with custom page size."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [{'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False} for i in range(50)],
+                'NextToken': None
+            }
+            
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate',
+                '--page-size', '50'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 50 items in 1 page(s)' in result.output
+            
+            # Verify API call includes pageSize but NOT maxItems
+            call_args = mocks['api_client'].list_asset_files.call_args
+            assert call_args[0][2]['pageSize'] == 50
+            assert 'maxItems' not in call_args[0][2]
+    
+    def test_list_max_items_without_auto_paginate_warning(self, cli_runner, file_command_mocks):
+        """Test that max-items without auto-paginate shows warning and is ignored."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [{'fileName': 'file.gltf', 'relativePath': '/file.gltf', 'isFolder': False}]
+            }
+            
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--max-items', '100'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Warning: --max-items only applies with --auto-paginate' in result.output
+            
+            # Verify maxItems was NOT passed to API
+            call_args = mocks['api_client'].list_asset_files.call_args
+            assert 'maxItems' not in call_args[0][2]
     
     def test_list_json_output(self, cli_runner, file_command_mocks):
         """Test file listing with JSON output."""

@@ -10,6 +10,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_auth_other
 from common.validators import validate
 
 logger = safeLogger(service_name="AuthLoginProfile")
@@ -121,14 +122,32 @@ def lambda_handler(event, _):
                 #POST
                 #Create or update user
                 logger.info("Create or update user")
-                response["body"] = json.dumps(create_update_user(pathUserId, emailBody, event))
+                result = create_update_user(pathUserId, emailBody, event)
+                
+                # AUDIT LOG: User profile created/updated
+                log_auth_other(event, "userProfileUpdate", {
+                    "userId": pathUserId,
+                    "operation": "create_update",
+                    "selfAccess": True
+                })
+                
+                response["body"] = json.dumps(result)
                 response["statusCode"] = 200
                 return response
             elif method == "GET":
                 #GET
                 #Get user
                 logger.info("Get user")
-                response["body"] = json.dumps(get_user(pathUserId))
+                result = get_user(pathUserId)
+                
+                # AUDIT LOG: User profile retrieved
+                log_auth_other(event, "userProfileGet", {
+                    "userId": pathUserId,
+                    "operation": "get",
+                    "selfAccess": True
+                })
+                
+                response["body"] = json.dumps(result)
                 response["statusCode"] = 200
                 return response
 
@@ -146,4 +165,3 @@ def lambda_handler(event, _):
         response["body"] = json.dumps({"message": "Internal Server Error"})
 
         return response
-

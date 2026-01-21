@@ -6,6 +6,36 @@ This document covers common issues with database management and tag operations i
 
 ### Metadata Schema Issues
 
+#### Schema Not Found
+
+**Error:**
+
+```
+✗ Metadata Schema Not Found: Metadata schema 'schema-123' not found
+```
+
+**Solutions:**
+
+1. Verify the schema ID is correct
+2. Use `vamscli metadata-schema list -d <database-id>` to see available schemas
+3. Check if you have permission to access the schema
+4. Ensure the schema hasn't been deleted
+
+**Troubleshooting Steps:**
+
+```bash
+# 1. List all schemas for the database
+vamscli metadata-schema list -d my-database
+
+# 2. List schemas with JSON output to see IDs
+vamscli metadata-schema list -d my-database --json-output | jq '.Items[] | .metadataSchemaId'
+
+# 3. Try getting the schema with correct ID
+vamscli metadata-schema get -d my-database -s <correct-schema-id>
+```
+
+#### Database Not Found (Metadata Schema Operations)
+
 **Error:**
 
 ```
@@ -17,7 +47,85 @@ This document covers common issues with database management and tag operations i
 1. Verify the database ID is correct and exists
 2. Use `vamscli database list` to see available databases
 3. Check if you have permission to access the database
-4. Ensure the database hasn't been deleted or archived
+4. Ensure the database hasn't been deleted
+
+**Troubleshooting Steps:**
+
+```bash
+# 1. Verify database exists
+vamscli database list
+
+# 2. Check database details
+vamscli database get -d my-database
+
+# 3. Try listing schemas without database filter
+vamscli metadata-schema list
+
+# 4. Check if schemas exist for other databases
+vamscli metadata-schema list --json-output | jq '.Items[] | .databaseId' | sort -u
+```
+
+#### Empty Schema Results
+
+**Error:**
+
+```
+No metadata schemas found.
+```
+
+**Solutions:**
+
+1. Verify you're filtering correctly (database ID, entity type)
+2. Check if schemas exist in the system
+3. Try listing without filters to see all schemas
+4. Verify you have permissions to view schemas
+
+**Troubleshooting Steps:**
+
+```bash
+# 1. List all schemas (no filters)
+vamscli metadata-schema list
+
+# 2. Try different entity types
+vamscli metadata-schema list -e assetMetadata
+vamscli metadata-schema list -e fileMetadata
+vamscli metadata-schema list -e databaseMetadata
+
+# 3. Check specific database
+vamscli metadata-schema list -d my-database
+
+# 4. Verify with JSON output
+vamscli metadata-schema list --json-output
+```
+
+#### Entity Type Filter Issues
+
+**Error:**
+
+```
+✗ Invalid value for '-e' / '--entity-type': 'AssetMetadata' is not one of 'databaseMetadata', 'assetMetadata', 'fileMetadata', 'fileAttribute', 'assetLinkMetadata'.
+```
+
+**Solutions:**
+
+1. Use exact entity type names (case-sensitive)
+2. Valid types: `databaseMetadata`, `assetMetadata`, `fileMetadata`, `fileAttribute`, `assetLinkMetadata`
+3. Don't use uppercase or mixed case
+
+**Correct Usage:**
+
+```bash
+# Correct (lowercase with camelCase)
+vamscli metadata-schema list -e assetMetadata
+vamscli metadata-schema list -e fileMetadata
+vamscli metadata-schema list -e fileAttribute
+
+# Incorrect
+vamscli metadata-schema list -e AssetMetadata  # Wrong case
+vamscli metadata-schema list -e asset_metadata  # Wrong format
+```
+
+#### Authentication and Permission Errors
 
 **Error:**
 
@@ -27,41 +135,115 @@ This document covers common issues with database management and tag operations i
 
 **Solutions:**
 
-1. Verify you have permissions to view metadata schema
+1. Verify you have permissions to view metadata schemas
 2. Contact your administrator for schema access permissions
 3. Check if you're using the correct profile
-4. Re-authenticate: `vamscli auth login -u <username>`
+4. Re-authenticate: `vamscli auth login`
+
+**Troubleshooting Steps:**
+
+```bash
+# 1. Check authentication status
+vamscli auth status
+
+# 2. Re-authenticate if needed
+vamscli auth login
+
+# 3. Try with different profile
+vamscli --profile production metadata-schema list
+
+# 4. Verify API access
+vamscli --debug metadata-schema list
+```
+
+#### Pagination Issues
 
 **Error:**
 
 ```
-✗ API Error: Failed to get metadata schema
+✗ API Error: Invalid pagination token
+```
+
+**Solutions:**
+
+1. Pagination tokens are temporary and may expire
+2. Always use the `NextToken` from the most recent response
+3. Don't reuse old tokens
+4. Start a new query if token is invalid
+
+**Troubleshooting Steps:**
+
+```bash
+# 1. Start fresh without token
+vamscli metadata-schema list -d my-database
+
+# 2. Use the NextToken from response
+vamscli metadata-schema list -d my-database --starting-token "<token-from-response>"
+
+# 3. Adjust page size if needed
+vamscli metadata-schema list -d my-database --page-size 50
+
+# 4. Use JSON output to see exact token
+vamscli metadata-schema list -d my-database --json-output | jq '.NextToken'
+```
+
+#### API Connectivity Issues
+
+**Error:**
+
+```
+✗ API Error: Failed to list metadata schemas
 ```
 
 **Solutions:**
 
 1. Check API connectivity: `vamscli auth status`
 2. Verify the API Gateway URL is correct
-3. Check if the VAMS API version supports metadata schema operations
-4. Try with debug mode: `vamscli --debug metadata-schema get -d <database>`
+3. Check if the VAMS API version supports metadata schema V2 operations
+4. Try with verbose mode: `vamscli --verbose metadata-schema list`
 
-**Troubleshooting Workflow:**
+**Troubleshooting Steps:**
 
 ```bash
-# 1. Verify database exists
+# 1. Check API version
+vamscli auth status
+
+# 2. Test basic API connectivity
 vamscli database list
 
-# 2. Check database details
-vamscli database get -d <database-id>
+# 3. Try metadata schema operation with debug
+vamscli --debug metadata-schema list
 
-# 3. Test metadata schema access
-vamscli metadata-schema get -d <database-id>
+# 4. Check network connectivity
+curl -I <api-gateway-url>/api/version
+```
 
-# 4. Try with different pagination
-vamscli metadata-schema get -d <database-id> --max-items 10
+#### Complete Metadata Schema Troubleshooting Workflow
 
-# 5. Use JSON output for debugging
-vamscli metadata-schema get -d <database-id> --json-output
+```bash
+# 1. Verify setup and authentication
+vamscli auth status
+
+# 2. Check database access
+vamscli database list
+
+# 3. List all metadata schemas
+vamscli metadata-schema list
+
+# 4. Filter by database
+vamscli metadata-schema list -d my-database
+
+# 5. Filter by entity type
+vamscli metadata-schema list -e assetMetadata
+
+# 6. Get specific schema details
+vamscli metadata-schema get -d my-database -s schema-id
+
+# 7. Use JSON output for debugging
+vamscli metadata-schema list --json-output
+
+# 8. Enable debug mode for detailed logs
+vamscli --debug metadata-schema list -d my-database
 ```
 
 ### Database Not Found
@@ -107,6 +289,100 @@ vamscli metadata-schema get -d <database-id> --json-output
 2. Check if the default bucket ID is valid
 3. Use `vamscli database list-buckets` to see available buckets
 4. Ensure you have permissions to create databases
+
+### Database Configuration Issues
+
+**Error:**
+
+```
+✗ Invalid Database Data: Extension '.pdf' must start with a dot
+```
+
+**Solutions:**
+
+1. Ensure all file extensions start with a dot (e.g., ".pdf" not "pdf")
+2. Use comma-separated format: ".pdf,.docx,.jpg"
+3. Check for empty values in the comma-separated list
+4. Verify extensions contain only alphanumeric characters and dots
+
+**Valid extension formats:**
+
+-   `.pdf,.docx,.jpg`
+-   `.step,.stp,.iges`
+-   `.png,.jpg,.jpeg,.gif`
+-   `.all` (special bypass value)
+
+**Invalid extension formats:**
+
+-   `pdf,docx` (missing dots)
+-   `.pdf, .docx` (spaces after commas)
+-   `.pdf,,.docx` (empty value)
+-   `.pdf!` (special characters)
+
+**Error:**
+
+```
+✗ Invalid Database Data: Extension list contains empty values
+```
+
+**Solutions:**
+
+1. Remove extra commas from the extension list
+2. Ensure no trailing or leading commas
+3. Check for double commas in the list
+4. Use proper format: ".ext1,.ext2,.ext3"
+
+**Error:**
+
+```
+✗ Invalid Database Data: Cannot use both --restrict-file-uploads-to-extensions and --clear-file-extensions
+```
+
+**Solutions:**
+
+1. Choose one operation: either set extensions or clear them
+2. To change extensions, use `--restrict-file-uploads-to-extensions` with new value
+3. To remove restrictions, use `--clear-file-extensions` alone
+4. Don't combine conflicting flags
+
+**Error:**
+
+```
+✗ Invalid Database Data: Cannot use both --restrict-metadata-outside-schemas and --no-restrict-metadata-outside-schemas
+```
+
+**Solutions:**
+
+1. Choose one operation: either enable or disable metadata restriction
+2. To enable, use `--restrict-metadata-outside-schemas`
+3. To disable, use `--no-restrict-metadata-outside-schemas`
+4. Don't combine conflicting flags
+
+**Troubleshooting Database Configuration:**
+
+```bash
+# 1. Check current database configuration
+vamscli database get -d <database-id>
+
+# 2. Verify file extension format before updating
+# Valid: .pdf,.docx,.jpg
+# Invalid: pdf,docx,jpg
+
+# 3. Update file extensions correctly
+vamscli database update -d <database-id> --restrict-file-uploads-to-extensions ".pdf,.docx"
+
+# 4. Clear restrictions if needed
+vamscli database update -d <database-id> --clear-file-extensions
+
+# 5. Enable metadata restriction
+vamscli database update -d <database-id> --restrict-metadata-outside-schemas
+
+# 6. Disable metadata restriction
+vamscli database update -d <database-id> --no-restrict-metadata-outside-schemas
+
+# 7. Verify changes
+vamscli database get -d <database-id>
+```
 
 ### Database Deletion Failed
 

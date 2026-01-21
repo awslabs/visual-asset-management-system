@@ -1,3 +1,7 @@
 e1c98b305f30304676e5c9a9181eb96d8a33c4ac:backend/backend/handlers/assets/createAsset.py:generic-api-key:465
-cccc376a41d5e7f1de9d2f5c22129ecd2b823979:tools/VamsCLI/docs/commands/metadata-management.md:generic-api-key:55
 af7864ca01f62b097ab2b3544252996d8e251958:backend/backend/handlers/assets/createAsset.py:generic-api-key:421
+cccc376a41d5e7f1de9d2f5c22129ecd2b823979:tools/VamsCLI/docs/commands/metadata-management.md:generic-api-key:55
+a90b37a8b81897dc0120a565cf613bbf77f95d24:tools/VamsCLI/docs/commands/setup-auth.md:generic-api-key:471
+a90b37a8b81897dc0120a565cf613bbf77f95d24:tools/VamsCLI/docs/commands/asset-export.md:generic-api-key:391
+fb8c7201cdd6a3c82b0c93f25f9d70509bc0bd51:tools/VamsCLI/docs/commands/asset-export.md:generic-api-key:391
+06b32e2ea03375df2f56dea71e50315c7922be40:tools/VamsCLI/docs/commands/asset-export.md:generic-api-key:391

@@ -52,9 +52,6 @@ try:
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -407,7 +404,7 @@ class DatabaseAccessManager:
 #######################
 
 class FieldClassifier:
-    """Classifies fields as core, metadata, or excluded for dual-index system"""
+    """Classifies fields as core, metadata, attribute, or excluded for dual-index system"""
     
     # Core fields for asset index
     ASSET_CORE_FIELDS = {
@@ -428,12 +425,18 @@ class FieldClassifier:
     }
     
     EXCLUDED_PREFIXES = ['VAMS_', '_']  # Skip these entirely
-    METADATA_PREFIX = 'MD_'  # Metadata fields prefix
+    METADATA_PREFIX = 'MD_'  # Metadata fields prefix (both asset and file)
+    ATTRIBUTE_PREFIX = 'AB_'  # Attribute fields prefix (FILE ONLY)
     
     @staticmethod
     def is_metadata_field(field_name: str) -> bool:
         """Check if field is a metadata field"""
         return field_name.startswith(FieldClassifier.METADATA_PREFIX)
+    
+    @staticmethod
+    def is_attribute_field(field_name: str) -> bool:
+        """Check if field is an attribute field (FILE ONLY)"""
+        return field_name.startswith(FieldClassifier.ATTRIBUTE_PREFIX)
     
     @staticmethod
     def is_core_field(field_name: str, index_type: str = "asset") -> bool:
@@ -497,6 +500,42 @@ class SimpleSearchQueryBuilder:
     def __init__(self, database_access_manager: DatabaseAccessManager):
         self.database_access_manager = database_access_manager
         self.field_classifier = FieldClassifier()
+    
+    def _extract_metadata_field_name(self, field_with_prefix: str) -> tuple[str, str]:
+        """
+        Extract field name and determine if it's MD_ or AB_.
+        Supports backward compatibility for all these formats:
+        - MD_str_product -> (MD_, product)
+        - MD_product -> (MD_, product)
+        - AB_str_field -> (AB_, field)
+        - AB_field -> (AB_, field)
+        - product -> (MD_, product)  # Defaults to MD_ if no prefix
+        
+        Returns:
+            tuple: (prefix, field_name) where prefix is 'MD_' or 'AB_'
+        """
+        # Check for MD_ or AB_ prefix
+        if field_with_prefix.startswith('MD_'):
+            field_without_prefix = field_with_prefix[3:]  # Remove 'MD_'
+            prefix = 'MD_'
+        elif field_with_prefix.startswith('AB_'):
+            field_without_prefix = field_with_prefix[3:]  # Remove 'AB_'
+            prefix = 'AB_'
+        else:
+            # No prefix, assume MD_ for backward compatibility
+            field_without_prefix = field_with_prefix
+            prefix = 'MD_'
+        
+        # Now check if there's a type prefix to remove
+        # Type prefixes: str_, num_, bool_, date_, list_, gp_, gs_
+        type_prefixes = ['str_', 'num_', 'bool_', 'date_', 'list_', 'gp_', 'gs_']
+        for type_prefix in type_prefixes:
+            if field_without_prefix.startswith(type_prefix):
+                # Remove the type prefix and return
+                return prefix, field_without_prefix[len(type_prefix):]
+        
+        # No type prefix found, return field name as-is
+        return prefix, field_without_prefix
     
     def _build_field_query(self, field_name: str, value: str, use_keyword: bool = True) -> Dict[str, Any]:
         """Build a query for a specific field with proper wildcard handling
@@ -714,52 +753,59 @@ class SimpleSearchQueryBuilder:
                     }
                 })
         
-        # Metadata searches (use wildcards for discovery)
+        # Metadata searches with backward compatibility for MD_/AB_ prefixes
         if request.metadataKey:
+            # Extract field name with backward compatibility
+            prefix, field_name = self._extract_metadata_field_name(request.metadataKey)
+            
             # Check if user provided wildcards
-            has_wildcards = '*' in request.metadataKey or '?' in request.metadataKey
+            has_wildcards = '*' in field_name or '?' in field_name
+            
             if has_wildcards:
-                escaped_key = self.field_classifier.escape_opensearch_query_string(request.metadataKey, preserve_wildcards=True)
+                escaped_key = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=True)
+                # For wildcards, use wildcard query on the flat object field path
                 search_queries.append({
                     "wildcard": {
-                        "_field_names": {
-                            "value": f"MD_{escaped_key}",
-                            "case_insensitive": True
+                        f"{prefix}.{escaped_key}": {
+                            "value": "*"
                         }
                     }
                 })
             else:
-                # Exact field name match
+                # Exact field name - use exists query on the flat object field path
                 search_queries.append({
-                    "wildcard": {
-                        "_field_names": {
-                            "value": f"MD_*{request.metadataKey}*",
-                            "case_insensitive": True
-                        }
+                    "exists": {
+                        "field": f"{prefix}.{field_name}"
                     }
                 })
         
         if request.metadataValue:
             # Check if user provided wildcards
             has_wildcards = '*' in request.metadataValue or '?' in request.metadataValue
+            
+            # Search across all values in flat objects
+            fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
+            
             if has_wildcards:
                 escaped_value = self.field_classifier.escape_opensearch_query_string(request.metadataValue, preserve_wildcards=True)
                 search_queries.append({
                     "query_string": {
                         "query": escaped_value,
-                        "fields": ["MD_*"],
+                        "fields": fields,
                         "default_operator": "OR",
                         "analyze_wildcard": True,
                         "lenient": True
                     }
                 })
             else:
-                # Exact value match in metadata fields
+                # Exact value match across all metadata/attribute values
                 escaped_value = self.field_classifier.escape_opensearch_query_string(request.metadataValue, preserve_wildcards=False)
                 search_queries.append({
                     "query_string": {
-                        "query": f'MD_*:"{escaped_value}"',
+                        "query": f"*{escaped_value}*",
+                        "fields": fields,
                         "default_operator": "OR",
+                        "analyze_wildcard": True,
                         "lenient": True
                     }
                 })
@@ -822,28 +868,34 @@ class SimpleSearchQueryBuilder:
     
     def _build_simple_highlight_config(self, index_type: str) -> Dict[str, Any]:
         """Build simple highlight configuration"""
+        fields = {
+            "str_*": {},
+            "MD_*": {},
+            "list_*": {}
+        }
+        
+        # Add AB_* only for file index
+        if index_type == "file":
+            fields["AB_*"] = {}
+        
         return {
             "pre_tags": ["@opensearch-dashboards-highlighted-field@"],
             "post_tags": ["@/opensearch-dashboards-highlighted-field@"],
-            "fields": {
-                "str_*": {},
-                "MD_*": {},
-                "list_*": {}
-            },
+            "fields": fields,
             "fragment_size": 2147483647
         }
     
     def _get_simple_searchable_fields(self, index_type: str) -> List[str]:
-        """Get searchable fields for simple search"""
+        """Get searchable fields for simple search - includes flat object _value fields"""
         if index_type == "asset":
             return [
                 "str_assetname", "str_description", "str_assettype",
-                "list_tags", "str_asset_version_comment", "MD_*"
+                "list_tags", "str_asset_version_comment", "MD_._value"
             ]
         elif index_type == "file":
             return [
                 "str_key", "str_assetname", "str_fileext", "str_etag", 
-                "list_tags", "MD_*"
+                "list_tags", "MD_._value", "AB_._value"
             ]
         return []
 
@@ -857,6 +909,42 @@ class DualIndexQueryBuilder:
     def __init__(self, database_access_manager: DatabaseAccessManager):
         self.database_access_manager = database_access_manager
         self.field_classifier = FieldClassifier()
+    
+    def _extract_metadata_field_name(self, field_with_prefix: str) -> tuple[str, str]:
+        """
+        Extract field name and determine if it's MD_ or AB_.
+        Supports backward compatibility for all these formats:
+        - MD_str_product -> (MD_, product)
+        - MD_product -> (MD_, product)
+        - AB_str_field -> (AB_, field)
+        - AB_field -> (AB_, field)
+        - product -> (MD_, product)  # Defaults to MD_ if no prefix
+        
+        Returns:
+            tuple: (prefix, field_name) where prefix is 'MD_' or 'AB_'
+        """
+        # Check for MD_ or AB_ prefix
+        if field_with_prefix.startswith('MD_'):
+            field_without_prefix = field_with_prefix[3:]  # Remove 'MD_'
+            prefix = 'MD_'
+        elif field_with_prefix.startswith('AB_'):
+            field_without_prefix = field_with_prefix[3:]  # Remove 'AB_'
+            prefix = 'AB_'
+        else:
+            # No prefix, assume MD_ for backward compatibility
+            field_without_prefix = field_with_prefix
+            prefix = 'MD_'
+        
+        # Now check if there's a type prefix to remove
+        # Type prefixes: str_, num_, bool_, date_, list_, gp_, gs_
+        type_prefixes = ['str_', 'num_', 'bool_', 'date_', 'list_', 'gp_', 'gs_']
+        for type_prefix in type_prefixes:
+            if field_without_prefix.startswith(type_prefix):
+                # Remove the type prefix and return
+                return prefix, field_without_prefix[len(type_prefix):]
+        
+        # No type prefix found, return field name as-is
+        return prefix, field_without_prefix
     
     def build_dual_index_queries(self, request: SearchRequestModel, claims_and_roles: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Build queries for both asset and file indexes"""
@@ -944,7 +1032,7 @@ class DualIndexQueryBuilder:
         
         # Add dedicated metadata search
         if request.metadataQuery:
-            metadata_search_query = self._build_metadata_search_query(request.metadataQuery, request.metadataSearchMode)
+            metadata_search_query = self._build_metadata_search_query(request.metadataQuery, request.metadataSearchMode, index_type)
             if metadata_search_query:
                 if request.query:
                     must_clauses.append(metadata_search_query)
@@ -1033,8 +1121,17 @@ class DualIndexQueryBuilder:
             }
         }
     
-    def _build_metadata_search_query(self, metadata_query: str, search_mode: str) -> Dict[str, Any]:
-        """Build dedicated metadata search query"""
+    def _build_metadata_search_query(self, metadata_query: str, search_mode: str, index_type: str = "asset") -> Dict[str, Any]:
+        """Build dedicated metadata search query with backward compatibility for flat objects
+        
+        Args:
+            metadata_query: The metadata query string
+            search_mode: Search mode (key, value, or both)
+            index_type: Type of index being searched (asset or file)
+            
+        Returns:
+            OpenSearch query dict
+        """
         if not metadata_query:
             return {}
         
@@ -1058,9 +1155,8 @@ class DualIndexQueryBuilder:
                     field_part = parts[0].strip()
                     value_part = parts[1].strip() if len(parts) > 1 else ''
                     
-                    # Ensure field has MD_ prefix
-                    if not field_part.startswith('MD_'):
-                        field_part = f'MD_{field_part}'
+                    # Extract field name with backward compatibility
+                    prefix, field_name = self._extract_metadata_field_name(field_part)
                     
                     # Check if user provided wildcards
                     has_wildcards = '*' in value_part or '?' in value_part
@@ -1068,12 +1164,12 @@ class DualIndexQueryBuilder:
                     # Escape the value part (preserve wildcards if user provided them)
                     escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
                     
-                    # Build query - use exact match unless user provided wildcards
+                    # Build flat object query
                     if has_wildcards:
-                        query_str = f"{field_part}:{escaped_value}"
+                        query_str = f"{prefix}.{field_name}:{escaped_value}"
                     else:
                         # Exact match - quote the value for phrase matching
-                        query_str = f'{field_part}:"{escaped_value}"'
+                        query_str = f'{prefix}.{field_name}:"{escaped_value}"'
                     
                     # Build query for this specific field:value pair
                     pair_queries.append({
@@ -1112,9 +1208,8 @@ class DualIndexQueryBuilder:
             field_part = parts[0].strip()
             value_part = parts[1].strip() if len(parts) > 1 else ''
             
-            # Ensure field has MD_ prefix
-            if not field_part.startswith('MD_'):
-                field_part = f'MD_{field_part}'
+            # Extract field name with backward compatibility
+            prefix, field_name = self._extract_metadata_field_name(field_part)
             
             # Check if user provided wildcards
             has_wildcards = '*' in value_part or '?' in value_part
@@ -1122,12 +1217,12 @@ class DualIndexQueryBuilder:
             # Escape the value part for query_string (preserve wildcards if user provided them)
             escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
             
-            # Build query - use exact match unless user provided wildcards
+            # Build flat object query
             if has_wildcards:
-                query_str = f"{field_part}:{escaped_value}"
+                query_str = f"{prefix}.{field_name}:{escaped_value}"
             else:
                 # Exact match - quote the value for phrase matching
-                query_str = f'{field_part}:"{escaped_value}"'
+                query_str = f'{prefix}.{field_name}:"{escaped_value}"'
             
             # Build query for specific field:value pair
             return {
@@ -1145,38 +1240,42 @@ class DualIndexQueryBuilder:
         
         if search_mode == "key":
             # Search for documents that have metadata fields matching the pattern
-            # The query comes as "MD_str_product" from frontend
+            # Extract field name with backward compatibility
+            prefix, field_name = self._extract_metadata_field_name(metadata_query)
+            
             if has_wildcards:
-                # With wildcards, search for any value in fields matching the pattern
-                # Use query_string with wildcard on field name
+                escaped_key = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=True)
+                # For wildcards, use wildcard query on the flat object field path
                 return {
-                    "query_string": {
-                        "query": f"{escaped_query}:*",
-                        "analyze_wildcard": True,
-                        "lenient": True
+                    "wildcard": {
+                        f"{prefix}.{escaped_key}": {
+                            "value": "*"
+                        }
                     }
                 }
             else:
-                # Exact field name - use exists query
+                # Exact field name - use exists query on the flat object field path
                 return {
                     "exists": {
-                        "field": escaped_query
+                        "field": f"{prefix}.{field_name}"
                     }
                 }
         
         elif search_mode == "value":
-            # Search only metadata field values across all MD_ fields
-            # Don't search field names, only values
+            # Search only metadata field values across all values in flat objects
             if has_wildcards:
                 query_str = escaped_query
             else:
                 # For value-only search, use wildcards to find partial matches
                 query_str = f"*{escaped_query}*"
             
+            # Search across all values in flat objects
+            fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
+            
             return {
                 "query_string": {
                     "query": query_str,
-                    "fields": ["MD_*"],
+                    "fields": fields,
                     "default_operator": "OR",
                     "analyze_wildcard": True,
                     "lenient": True
@@ -1184,18 +1283,20 @@ class DualIndexQueryBuilder:
             }
         
         else:  # search_mode == "both"
-            # Search both field names and values
-            # For "both" mode, use exact match unless user provides wildcards
+            # Search both field names and values in flat objects
             if has_wildcards:
                 query_str = escaped_query
             else:
                 # Exact match for "both" mode
                 query_str = f'"{escaped_query}"'
             
+            # Search across all values in flat objects
+            fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
+            
             return {
                 "query_string": {
                     "query": query_str,
-                    "fields": ["MD_*"],
+                    "fields": fields,
                     "default_operator": "OR",
                     "analyze_wildcard": True,
                     "lenient": True
@@ -1272,14 +1373,20 @@ class DualIndexQueryBuilder:
     
     def _build_highlight_config(self, index_type: str) -> Dict[str, Any]:
         """Build highlight configuration for specific index"""
+        fields = {
+            "str_*": {},
+            "MD_*": {},
+            "list_*": {}
+        }
+        
+        # Add AB_* only for file index
+        if index_type == "file":
+            fields["AB_*"] = {}
+        
         return {
             "pre_tags": ["@opensearch-dashboards-highlighted-field@"],
             "post_tags": ["@/opensearch-dashboards-highlighted-field@"],
-            "fields": {
-                "str_*": {},
-                "MD_*": {},
-                "list_*": {}
-            },
+            "fields": fields,
             "fragment_size": 2147483647
         }
     
@@ -1380,13 +1487,18 @@ class DualIndexQueryBuilder:
         return {}
     
     def _get_searchable_fields(self, include_metadata: bool, index_type: str) -> List[str]:
-        """Get list of fields that should be included in general text search"""
+        """Get list of fields that should be included in general text search - uses flat object _value fields"""
         # Get core searchable fields for the index type
         core_fields = self.field_classifier.get_searchable_core_fields(index_type)
         
         if include_metadata:
-            # Add metadata field patterns
-            return core_fields + ["MD_*"]
+            # Add flat object _value fields to search all metadata/attribute values
+            if index_type == "file":
+                # Files have both MD_ and AB_ flat objects
+                return core_fields + ["MD_._value", "AB_._value"]
+            else:
+                # Assets only have MD_ flat object
+                return core_fields + ["MD_._value"]
         else:
             return core_fields
 
@@ -1663,10 +1775,10 @@ def handle_get_request(event: Dict[str, Any], search_manager: DualIndexSearchMan
         return success(body={"mappings": mappings})
         
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 
                        query_builder: DualIndexQueryBuilder, response_processor: DualIndexResponseProcessor,
@@ -1682,7 +1794,7 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1690,12 +1802,12 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate request model
         request_model = parse(body, model=SearchRequestModel)
@@ -1717,13 +1829,13 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 
                               simple_query_builder: SimpleSearchQueryBuilder, response_processor: DualIndexResponseProcessor,
@@ -1739,7 +1851,7 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
         # Parse request body
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1747,12 +1859,12 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string or dict")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse and validate simple search request model
         request_model = parse(body, model=SimpleSearchRequestModel)
@@ -1785,13 +1897,13 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling simple POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 #######################
 # Lambda Handler
@@ -1830,7 +1942,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if path == '/search':
                 return handle_get_request(event, search_manager)
             else:
-                return validation_error(body={'message': "GET method only supported on /search endpoint"})
+                return validation_error(body={'message': "GET method only supported on /search endpoint"}, event=event)
         
         elif method == 'POST':
             if path == '/search':
@@ -1844,17 +1956,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_simple_post_request(event, search_manager, simple_query_builder, response_processor, claims_and_roles)
             
             else:
-                return validation_error(body={'message': f"POST method not supported on path: {path}"})
+                return validation_error(body={'message': f"POST method not supported on path: {path}"}, event=event)
         
         else:
-            return validation_error(body={'message': f"Method {method} not allowed"})
+            return validation_error(body={'message': f"Method {method} not allowed"}, event=event)
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

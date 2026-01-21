@@ -19,6 +19,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
@@ -60,13 +61,14 @@ TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'  # Prefix for temporary uploads
 PREVIEW_PREFIX = 'previews/'
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
-MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 10
+MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
 LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
 allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
 
 # Load environment variables
 try:
     s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
@@ -149,6 +151,58 @@ def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token
         ExpiresIn=expiration
     )
     return url
+
+def get_database_details(databaseId):
+    """Get database details from DynamoDB including file upload restrictions
+    
+    Args:
+        databaseId: The database ID
+        
+    Returns:
+        Database details dictionary with restrictFileUploadsToExtensions field
+    """
+    try:
+        database_table = dynamodb.Table(database_storage_table_name)
+        response = database_table.get_item(
+            Key={'databaseId': databaseId}
+        )
+        return response.get('Item')
+    except Exception as e:
+        logger.exception(f"Error getting database details: {e}")
+        raise VAMSGeneralErrorResponse("Error retrieving database configuration")
+
+def validate_file_extension_against_database(file_path: str, allowed_extensions: str) -> tuple:
+    """Validate file extension against database restrictions
+    
+    Args:
+        file_path: The file path to validate
+        allowed_extensions: Comma-delimited list of allowed extensions (e.g., ".pdf,.jpg,.png")
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+        - is_valid: True if extension is allowed, False otherwise
+        - error_message: Error message if validation fails, None otherwise
+    """
+    # Handle empty or None allowed_extensions (no restrictions)
+    if not allowed_extensions or allowed_extensions.strip() == "":
+        return True, None
+    
+    # Parse comma-delimited extensions and normalize to lowercase
+    allowed_list = [ext.strip().lower() for ext in allowed_extensions.split(',') if ext.strip()]
+    
+    # Check for ".all" bypass
+    if ".all" in allowed_list:
+        return True, None
+    
+    # Extract file extension (case-insensitive)
+    file_extension = os.path.splitext(file_path)[1].lower()
+    
+    # Validate extension
+    if file_extension not in allowed_list:
+        error_message = f"Database does not allow this file extension. Allowed extensions: {', '.join(allowed_list)}"
+        return False, error_message
+    
+    return True, None
 
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
@@ -907,6 +961,26 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     asset = get_asset_details(databaseId, assetId)
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found")
+    
+    # Get database details to check file upload restrictions
+    database = get_database_details(databaseId)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    
+    allowed_extensions = database.get('restrictFileUploadsToExtensions', '')
+    
+    # Validate file extensions if restrictions are configured
+    # Only apply to regular asset files, not asset previews or file preview files
+    if allowed_extensions and allowed_extensions.strip() != "" and uploadType == "assetFile":
+        for file in request_model.files:
+            # Skip validation for .previewFile. files (they have their own extension restrictions)
+            if not is_preview_file(file.relativeKey):
+                is_valid, error_message = validate_file_extension_against_database(
+                    file.relativeKey, 
+                    allowed_extensions
+                )
+                if not is_valid:
+                    raise VAMSGeneralErrorResponse(error_message)
         
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
@@ -1039,7 +1113,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         message="Upload initialized successfully"
     )
 
-def complete_external_upload(uploadId: str, request_model: CompleteExternalUploadRequestModel, claims_and_roles):
+def complete_external_upload(uploadId: str, request_model: CompleteExternalUploadRequestModel, event):
     """Complete an external upload and update the asset"""
     assetId = request_model.assetId
     databaseId = request_model.databaseId
@@ -1089,6 +1163,13 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
+    # Get database details to check file upload restrictions
+    database = get_database_details(databaseId)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    
+    allowed_extensions = database.get('restrictFileUploadsToExtensions', '')
+    
     # Track file completion results
     file_results = []
     successful_files = []
@@ -1097,6 +1178,25 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     # Process each file in the request
     for file in request_model.files:
         try:
+            # Validate file extension if restrictions are configured
+            # Only apply to regular asset files, not asset previews or file preview files
+            if allowed_extensions and allowed_extensions.strip() != "" and uploadType == "assetFile":
+                # Skip validation for .previewFile. files (they have their own extension restrictions)
+                if not is_preview_file(file.relativeKey):
+                    is_valid, error_message = validate_file_extension_against_database(
+                        file.relativeKey, 
+                        allowed_extensions
+                    )
+                    if not is_valid:
+                        file_results.append(FileCompletionResult(
+                            relativeKey=file.relativeKey,
+                            uploadIdS3="external",
+                            success=False,
+                            error=error_message
+                        ))
+                        has_failures = True
+                        continue
+            
             # Verify the temporary key starts with the expected prefix
             if not file.tempKey.startswith(upload_details['temporaryPrefix']):
                 file_results.append(FileCompletionResult(
@@ -1453,13 +1553,33 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         largeFileAsynchronousHandling=has_async_files
     )
     
+    # AUDIT LOG: Upload completed - log all successful files
+    if successful_files:
+        successful_file_paths = [f['relativeKey'] for f in successful_files]
+        log_file_upload(
+            event,
+            databaseId,
+            assetId,
+            ", ".join(successful_file_paths),
+            False,  # Not denied
+            None,
+            {
+                "uploadId": uploadId,
+                "uploadType": uploadType,
+                "status": "completed",
+                "successfulFiles": len(successful_files),
+                "totalFiles": len(request_model.files),
+                "hasFailures": has_failures
+            }
+        )
+    
     # Return 409 status if all files failed, otherwise return 200
     if all_files_failed:
-        return general_error(status_code=409, body=response.dict())
+        return general_error(status_code=409, body=response.dict(), event=event)
     else:
         return response
 
-def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, claims_and_roles):
+def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, event):
     """Complete a multipart upload and update the asset"""
     assetId = request_model.assetId
     databaseId = request_model.databaseId
@@ -1501,6 +1621,13 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
+    # Get database details to check file upload restrictions
+    database = get_database_details(databaseId)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    
+    allowed_extensions = database.get('restrictFileUploadsToExtensions', '')
+    
     # Track file completion results
     file_results = []
     successful_files = []
@@ -1509,6 +1636,42 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     # Complete multipart uploads for each file
     for file in request_model.files:
         try:
+            # Validate file extension if restrictions are configured
+            # Only apply to regular asset files, not asset previews or file preview files
+            if allowed_extensions and allowed_extensions.strip() != "" and uploadType == "assetFile":
+                # Skip validation for .previewFile. files (they have their own extension restrictions)
+                if not is_preview_file(file.relativeKey):
+                    is_valid, error_message = validate_file_extension_against_database(
+                        file.relativeKey, 
+                        allowed_extensions
+                    )
+                    if not is_valid:
+                        # Mark this file as failed
+                        file_results.append(FileCompletionResult(
+                            relativeKey=file.relativeKey,
+                            uploadIdS3=file.uploadIdS3,
+                            success=False,
+                            error=error_message
+                        ))
+                        has_failures = True
+                        
+                        # Abort the multipart upload if it exists
+                        if file.uploadIdS3 != "zero-byte":
+                            try:
+                                # Construct temp key to abort the upload
+                                asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+                                final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                                temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+                                
+                                s3.abort_multipart_upload(
+                                    Bucket=bucket_name,
+                                    Key=temp_s3_key,
+                                    UploadId=file.uploadIdS3
+                                )
+                            except Exception as abort_error:
+                                logger.warning(f"Error aborting multipart upload for invalid extension: {abort_error}")
+                        continue
+            
             # Construct the temporary S3 key directly (same logic as initialization)
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
@@ -1798,6 +1961,20 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 # Delete the uploaded file
                 delete_s3_object(bucket_name, temp_s3_key)
                 
+                # AUDIT LOG: Malicious file detected and upload denied
+                log_file_upload(
+                    event,
+                    databaseId,
+                    assetId,
+                    file.relativeKey,
+                    True,  # Upload denied
+                    "File contains potentially malicious executable type",
+                    {
+                        "uploadId": uploadId,
+                        "uploadType": uploadType
+                    }
+                )
+                
                 file_results.append(FileCompletionResult(
                     relativeKey=file.relativeKey,
                     uploadIdS3=file.uploadIdS3,
@@ -2071,9 +2248,29 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         largeFileAsynchronousHandling=has_async_files
     )
     
+    # AUDIT LOG: Upload completed - log all successful files
+    if successful_files:
+        successful_file_paths = [f['relativeKey'] for f in successful_files]
+        log_file_upload(
+            event,
+            databaseId,
+            assetId,
+            ", ".join(successful_file_paths),
+            False,  # Not denied
+            None,
+            {
+                "uploadId": uploadId,
+                "uploadType": uploadType,
+                "status": "completed",
+                "successfulFiles": len(successful_files),
+                "totalFiles": len(request_model.files),
+                "hasFailures": has_failures
+            }
+        )
+    
     # Return 409 status if all files failed, otherwise return 200
     if all_files_failed:
-        return general_error(status_code=409, body=response.dict())
+        return general_error(status_code=409, body=response.dict(), event=event)
     else:
         return response
 
@@ -2090,7 +2287,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2098,12 +2295,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Get API path and method
         path = event['requestContext']['http']['path']
@@ -2117,7 +2314,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
             if not asset:
-                return validation_error(body={'message': "Asset not found"})
+                return validation_error(body={'message': "Asset not found"}, event=event)
             
             asset["object__type"] = "asset"
             
@@ -2128,12 +2325,29 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             # Process request
             response = initialize_upload(request_model, claims_and_roles)
+            
+            # AUDIT LOG: Upload initialized
+            log_file_upload(
+                event,
+                request_model.databaseId,
+                request_model.assetId,
+                f"{len(request_model.files)} files",
+                False,  # Not denied
+                None,
+                {
+                    "uploadId": response.uploadId,
+                    "uploadType": request_model.uploadType,
+                    "status": "initialized",
+                    "fileCount": len(request_model.files)
+                }
+            )
+            
             return success(body=response.dict())
             
         elif method == 'POST' and '/uploads/' in path and path.endswith('/complete/external'):
             # External Complete Upload API - Extract uploadId from path parameters
             if not event.get('pathParameters') or not event['pathParameters'].get('uploadId'):
-                return validation_error(body={'message': "Missing uploadId in path parameters"})
+                return validation_error(body={'message': "Missing uploadId in path parameters"}, event=event)
                 
             uploadId = event['pathParameters']['uploadId']
             
@@ -2143,7 +2357,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
             if not asset:
-                return validation_error(body={'message': "Asset not found"})
+                return validation_error(body={'message': "Asset not found"}, event=event)
             
             asset["object__type"] = "asset"
             
@@ -2153,7 +2367,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     return authorization_error()
             
             # Process request
-            response = complete_external_upload(uploadId, request_model, claims_and_roles)
+            response = complete_external_upload(uploadId, request_model, event)
             # Check if response is already an APIGatewayProxyResponseV2 (error case)
             if isinstance(response, dict) and 'statusCode' in response and 'body' in response:
                 return response
@@ -2163,7 +2377,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'POST' and '/uploads/' in path and path.endswith('/complete'):
             # Complete Upload API - Extract uploadId from path parameters
             if not event.get('pathParameters') or not event['pathParameters'].get('uploadId'):
-                return validation_error(body={'message': "Missing uploadId in path parameters"})
+                return validation_error(body={'message': "Missing uploadId in path parameters"}, event=event)
                 
             uploadId = event['pathParameters']['uploadId']
             
@@ -2173,7 +2387,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
             if not asset:
-                return validation_error(body={'message': "Asset not found"})
+                return validation_error(body={'message': "Asset not found"}, event=event)
             
             asset["object__type"] = "asset"
             
@@ -2183,7 +2397,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     return authorization_error()
             
             # Process request
-            response = complete_upload(uploadId, request_model, claims_and_roles)
+            response = complete_upload(uploadId, request_model, event)
             # Check if response is already an APIGatewayProxyResponseV2 (error case)
             if isinstance(response, dict) and 'statusCode' in response and 'body' in response:
                 return response
@@ -2191,14 +2405,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return success(body=response.dict())
             
         else:
-            return validation_error(body={'message': "Invalid API path or method"})
+            return validation_error(body={'message': "Invalid API path or method"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         
@@ -2214,7 +2428,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 'body': json.dumps({'message': str(v)})
             }
         else:
-            return general_error(body={'message': str(v)})
+            return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

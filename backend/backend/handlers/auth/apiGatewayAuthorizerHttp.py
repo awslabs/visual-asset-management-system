@@ -12,13 +12,15 @@ from typing import Dict, Any, Optional, List, Tuple
 from aws_lambda_powertools import Logger
 
 # Import libraries for different JWT verification methods
-from jose import jwk, jwt as jose_jwt
-from jose.utils import base64url_decode
+from joserfc import jwt as joserfc_jwt
+from joserfc import jwk as joserfc_jwk
+from joserfc import jws as joserfc_jws
 import jwt as pyjwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 import base64
+from customLogging.auditLogging import log_authorization_gateway
 
 # Configure AWS Lambda Powertools logger
 logger = Logger()
@@ -81,6 +83,8 @@ def lambda_handler(event, context):
         # Validate IP ranges first (before authentication for performance)
         if not is_ip_authorized(source_ip):
             logger.info(f"IP {source_ip} not in allowed ranges")
+            # AUDIT LOG: IP address not authorized
+            log_authorization_gateway(event, False, "IP address not authorized")
             return {"isAuthorized": False}
         
         # Check if path should be ignored
@@ -93,6 +97,8 @@ def lambda_handler(event, context):
         token = extract_token_from_header(event)
         if not token:
             logger.info("Token not found in Authorization header")
+            # AUDIT LOG: Token missing or invalid format
+            log_authorization_gateway(event, False, "Token missing or invalid format")
             return {"isAuthorized": False}
         
         if AUTH_MODE == 'cognito':
@@ -101,10 +107,14 @@ def lambda_handler(event, context):
             claims = verify_external_jwt(token)
         else:
             logger.error(f"Invalid AUTH_MODE: {AUTH_MODE}")
+            # AUDIT LOG: Invalid auth mode configuration
+            log_authorization_gateway(event, False, "Token verification failed")
             return {"isAuthorized": False}
         
         if not claims:
             logger.error("Token verification failed")
+            # AUDIT LOG: Token verification failed (generic reason for security)
+            log_authorization_gateway(event, False, "Token verification failed")
             return {"isAuthorized": False}
         
         logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
@@ -119,10 +129,16 @@ def lambda_handler(event, context):
             if value is not None:
                 context[key] = str(value)
         
-        return {
+        # Build response with context for audit logging
+        response = {
             "isAuthorized": True,
             "context": context
         }
+        
+        # # AUDIT LOG: Authorization successful (with verified user context) - Captured in casbin checks instead
+        # log_authorization_gateway(response, True, None)
+    
+        return response
         
     except Exception as e:
         logger.error(f"Authorizer error: {str(e)}")
@@ -178,8 +194,7 @@ def extract_token_from_header(event: Dict[str, Any]) -> Optional[str]:
 
 def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
-    Verify Cognito JWT token using python-jose library (AWS best practices)
-    Based on: https://github.com/awslabs/aws-support-tools/blob/master/Cognito/decode-verify-jwt/decode-verify-jwt.py
+    Verify Cognito JWT token using joserfc library
     """
     try:
         if not USER_POOL_ID or not APP_CLIENT_ID:
@@ -187,7 +202,8 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             return None
         
         # Get the kid from the headers prior to verification
-        headers = jose_jwt.get_unverified_headers(token)
+        token_obj = joserfc_jws.extract_compact(token.encode())
+        headers = token_obj.protected
         kid = headers.get('kid')
         
         if not kid:
@@ -208,24 +224,16 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Public key not found in jwks.json for kid: {kid}")
             return None
         
-        # Construct the public key
-        public_key = jwk.construct(keys[key_index])
+        # Import the public key using joserfc
+        public_key = joserfc_jwk.import_key(keys[key_index])
         
-        # Get the last two sections of the token (message and signature)
-        message, encoded_signature = str(token).rsplit('.', 1)
-        
-        # Decode the signature
-        decoded_signature = base64url_decode(encoded_signature.encode('utf-8'))
-        
-        # Verify the signature
-        if not public_key.verify(message.encode("utf8"), decoded_signature):
-            logger.error('JWT signature verification failed')
-            return None
+        # Decode and verify the token using joserfc
+        token_result = joserfc_jwt.decode(token, public_key)
         
         logger.info('JWT signature successfully verified')
         
-        # Since we passed the verification, we can now safely use the unverified claims
-        claims = jose_jwt.get_unverified_claims(token)
+        # Extract claims from the verified token
+        claims = token_result.claims
         
         # Verify the token expiration
         current_time = time.time()

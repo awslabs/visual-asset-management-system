@@ -37,6 +37,7 @@ os.environ['ASSET_BUCKET_NAME'] = 'test-asset-bucket'
 os.environ['ASSET_LINKS_STORAGE_TABLE_NAME'] = 'assetLinksStorageTable'
 os.environ['TABLE_NAME'] = 'example-constraints-table'
 os.environ['AUTH_TABLE_NAME'] = 'example-auth-table'
+os.environ['CONSTRAINTS_TABLE_NAME'] = 'test-constraint-table'
 os.environ['USER_ROLES_TABLE_NAME'] = 'example-user-roles-table'
 
 # AWS credentials for testing

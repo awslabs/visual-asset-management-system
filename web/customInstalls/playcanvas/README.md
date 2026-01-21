@@ -4,7 +4,7 @@ This directory contains the installation and bundling configuration for the Play
 
 ## Overview
 
-The PlayCanvas plugin now follows the same dynamic loading pattern as Vntana, Cesium, Potree, Online3DViewer, and BabylonJS, loading the library from the public directory at runtime instead of bundling it with the main application.
+The PlayCanvas plugin now follows the same dynamic loading pattern for viewers, loading the library from the public directory at runtime instead of bundling it with the main application.
 
 ## Implementation Details
 

@@ -45,19 +45,23 @@ import { OptionDefinition } from "@cloudscape-design/components/internal/compone
 import { validateNonZeroLengthTextAsYouType, validateRequiredTagTypeSelected } from "./validations";
 import { DisplayKV, FileUpload } from "./components";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
-import ControlledMetadata from "../../components/metadata/ControlledMetadata";
+import { MetadataContainer } from "../../components/metadataV2";
 import Synonyms from "../../synonyms";
 import onSubmit, { onUploadRetry, UploadExecutionProps } from "./onSubmit";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import localforage from "localforage";
-import { fetchTags, fetchAllAssets, fetchtagTypes } from "../../services/APIService";
-import CustomTable from "../../components/table/CustomTable";
+import { fetchTags, fetchtagTypes } from "../../services/APIService";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { TagType } from "../Tag/TagType.interface";
 import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
 import Alert from "@cloudscape-design/components/alert";
 import { safeGetFile } from "../../utils/fileHandleCompat";
+import {
+    validateFiles,
+    formatValidationErrors,
+    ValidationResult,
+} from "../../utils/fileExtensionValidation";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
 var tags: any[] = [];
@@ -70,6 +74,8 @@ export class AssetDetail {
     assetId?: string;
     assetName?: string;
     databaseId?: string;
+    restrictMetadataOutsideSchemas?: boolean;
+    restrictFileUploadsToExtensions?: string;
     description?: string;
     frontendTags?: { label: string; value: string }[];
     tags?: string[];
@@ -106,7 +112,11 @@ type UpdateAssetIdAction = {
 
 type UpdateAssetDatabaseAction = {
     type: "UPDATE_ASSET_DATABASE";
-    payload: string;
+    payload: {
+        databaseId: string;
+        restrictMetadataOutsideSchemas?: boolean;
+        restrictFileUploadsToExtensions?: string;
+    };
 };
 
 type UpdateAssetDistributableAction = {
@@ -232,7 +242,11 @@ const assetDetailReducer = (
         case "UPDATE_ASSET_DATABASE":
             return {
                 ...assetDetailState,
-                databaseId: assetDetailAction.payload,
+                databaseId: assetDetailAction.payload.databaseId,
+                restrictMetadataOutsideSchemas:
+                    assetDetailAction.payload.restrictMetadataOutsideSchemas || false,
+                restrictFileUploadsToExtensions:
+                    assetDetailAction.payload.restrictFileUploadsToExtensions || "",
             };
         case "UPDATE_ASSET_DISTRIBUTABLE":
             return {
@@ -489,7 +503,15 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                         onChange={(x: any) => {
                             assetDetailDispatch({
                                 type: "UPDATE_ASSET_DATABASE",
-                                payload: x.detail.selectedOption.value,
+                                payload: {
+                                    databaseId: x.detail.selectedOption.value,
+                                    restrictMetadataOutsideSchemas:
+                                        x.detail.selectedDatabase?.restrictMetadataOutsideSchemas ||
+                                        false,
+                                    restrictFileUploadsToExtensions:
+                                        x.detail.selectedDatabase
+                                            ?.restrictFileUploadsToExtensions || "",
+                                },
                             });
                         }}
                         selectedOption={{
@@ -680,6 +702,7 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
             onAssetLinksChange={handleAssetLinksChange}
             initialData={initialData}
             databaseId={assetDetailState.databaseId}
+            restrictMetadataOutsideSchemas={assetDetailState.restrictMetadataOutsideSchemas}
         />
     );
 };
@@ -697,26 +720,91 @@ const AssetMetadataInfo = ({
 }) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState } = assetDetailContext;
+    const [hasPendingChanges, setHasPendingChanges] = useState(false);
+    const [hasRequiredFieldsFilled, setHasRequiredFieldsFilled] = useState(true);
+
+    // Memoize the metadata array to prevent creating new array on every render
+    const metadataArray = useMemo(() => {
+        return Object.entries(metadata).map(([key, value]) => {
+            // Check if value is an object with metadataValue and metadataValueType
+            if (typeof value === "object" && value !== null && "metadataValue" in value) {
+                return {
+                    metadataKey: key,
+                    metadataValue: (value as any).metadataValue,
+                    metadataValueType: (value as any).metadataValueType || "string",
+                };
+            }
+            // Otherwise treat as simple string value
+            return {
+                metadataKey: key,
+                metadataValue: String(value),
+                metadataValueType: "string" as const,
+            };
+        });
+    }, [metadata]);
+
+    // Memoize the change handler to prevent creating new function on every render
+    const handleMetadataChange = useCallback(
+        (data: any[]) => {
+            const metadataObj: Metadata = {};
+            data.forEach((item) => {
+                if (item.metadataKey) {
+                    // Store the full metadata record (with type) as the value
+                    metadataObj[item.metadataKey] = {
+                        metadataValue: item.metadataValue || "",
+                        metadataValueType: item.metadataValueType || "string",
+                    } as any;
+                }
+            });
+            setMetadata(metadataObj);
+        },
+        [setMetadata]
+    );
+
+    // Handle changes to pending changes state from MetadataContainer
+    // Use useCallback with empty deps to ensure stable reference
+    const handleHasChangesChange = useCallback((hasChanges: boolean) => {
+        setHasPendingChanges(hasChanges);
+    }, []);
+
+    // Handle changes to validation state from MetadataContainer
+    // Use useCallback with empty deps to ensure stable reference
+    const handleValidationChange = useCallback((isValid: boolean) => {
+        setHasRequiredFieldsFilled(isValid);
+    }, []);
+
+    // Use ref to track previous validation state to prevent unnecessary setValid calls
+    const prevValidRef = useRef<boolean>();
+
+    // Update validation state based on both pending changes AND required fields
+    useEffect(() => {
+        // Invalid if:
+        // 1. There are pending changes that need to be committed, OR
+        // 2. Required fields are not filled
+        // Valid only if no pending changes AND all required fields are filled
+        const isValid = !hasPendingChanges && hasRequiredFieldsFilled;
+
+        // Only call setValid if the value actually changed
+        if (prevValidRef.current !== isValid) {
+            prevValidRef.current = isValid;
+            setValid(isValid);
+        }
+    }, [hasPendingChanges, hasRequiredFieldsFilled, setValid]);
 
     return (
-        <Container header={<Header variant="h2">{Synonyms.Asset} Metadata</Header>}>
-            <SpaceBetween direction="vertical" size="l">
-                <ControlledMetadata
-                    assetId={assetDetailState.assetId || ""}
-                    databaseId={assetDetailState.databaseId || ""}
-                    initialState={metadata}
-                    store={(databaseId, assetId, record) => {
-                        return new Promise((resolve) => {
-                            setMetadata(record);
-                            resolve(null);
-                        });
-                    }}
-                    showErrors={showErrors}
-                    setValid={setValid}
-                    data-testid="controlled-metadata-grid"
-                />
-            </SpaceBetween>
-        </Container>
+        <MetadataContainer
+            entityType="asset"
+            entityId={assetDetailState.assetId || "temp-asset-id"}
+            databaseId={assetDetailState.databaseId}
+            mode="offline"
+            initialData={metadataArray}
+            onDataChange={handleMetadataChange}
+            onHasChangesChange={handleHasChangesChange}
+            onValidationChange={handleValidationChange}
+            restrictMetadataOutsideSchemas={
+                assetDetailState.restrictMetadataOutsideSchemas || false
+            }
+        />
     );
 };
 
@@ -775,6 +863,7 @@ const AssetFileInfo = ({
         assetDetailState.isMultiFile ? "folder" : "files"
     );
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
+    const [fileValidationResult, setFileValidationResult] = useState<ValidationResult | null>(null);
 
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
@@ -782,11 +871,23 @@ const AssetFileInfo = ({
         return assetDetailState.Asset.some((item) => item.name.includes(".previewFile."));
     }, [assetDetailState.Asset]);
 
+    // Validate files whenever Asset files or restrictions change
     useEffect(() => {
-        // Always set as valid since files are now optional for asset creation
-        setValid(true);
+        if (assetDetailState.Asset && assetDetailState.Asset.length > 0) {
+            const validationResult = validateFiles(
+                assetDetailState.Asset,
+                assetDetailState.restrictFileUploadsToExtensions
+            );
+            setFileValidationResult(validationResult);
+            // Set valid to false if there are validation errors
+            setValid(validationResult.isValid);
+        } else {
+            // No files selected, clear validation and set as valid
+            setFileValidationResult(null);
+            setValid(true);
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [assetDetailState]);
+    }, [assetDetailState.Asset, assetDetailState.restrictFileUploadsToExtensions]);
 
     // Function to remove a file
     const handleRemoveFile = (index: number) => {
@@ -837,6 +938,55 @@ const AssetFileInfo = ({
     return (
         <Container>
             <SpaceBetween direction="vertical" size="l">
+                {/* Display warning about file extension restrictions if they exist */}
+                {assetDetailState.restrictFileUploadsToExtensions &&
+                    assetDetailState.restrictFileUploadsToExtensions.trim() !== "" &&
+                    assetDetailState.restrictFileUploadsToExtensions.toLowerCase() !== ".all" && (
+                        <Alert header="File Upload Restrictions" type="warning">
+                            <SpaceBetween direction="vertical" size="xs">
+                                <div>
+                                    This database has file upload restrictions in place. Only files
+                                    with the following extensions are allowed:
+                                </div>
+                                <div style={{ marginTop: "8px" }}>
+                                    <strong>
+                                        {assetDetailState.restrictFileUploadsToExtensions}
+                                    </strong>
+                                </div>
+                                <div style={{ fontSize: "0.9em", marginTop: "8px" }}>
+                                    <em>
+                                        Note: Preview files (containing .previewFile. in the
+                                        filename) are exempt from these restrictions.
+                                    </em>
+                                </div>
+                            </SpaceBetween>
+                        </Alert>
+                    )}
+
+                {/* Display file extension validation errors */}
+                {fileValidationResult && !fileValidationResult.isValid && (
+                    <Alert header="Invalid Files Selected" type="error">
+                        <SpaceBetween direction="vertical" size="xs">
+                            <div>
+                                The following files cannot be uploaded because their extensions are
+                                not allowed for this database:
+                            </div>
+                            <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
+                                {fileValidationResult.invalidFiles.map((file, index) => (
+                                    <li key={index}>
+                                        <strong>{file.fileName}</strong> - Extension{" "}
+                                        {file.extension} not allowed
+                                    </li>
+                                ))}
+                            </ul>
+                            <div>
+                                <strong>Allowed extensions:</strong>{" "}
+                                {fileValidationResult.allowedExtensions?.join(", ")}
+                            </div>
+                        </SpaceBetween>
+                    </Alert>
+                )}
+
                 <Alert header="Preview File Information" type="info">
                     <p>
                         Files with <strong>.previewFile.</strong> in the filename will be ingested
@@ -1106,9 +1256,15 @@ const AssetUploadReview = ({
 
             <Container header={<Header variant="h2">{Synonyms.Asset} Metadata</Header>}>
                 <ColumnLayout columns={2} variant="text-grid">
-                    {Object.keys(metadata).map((k) => (
-                        <DisplayKV key={k} label={k} value={metadata[k as keyof Metadata]} />
-                    ))}
+                    {Object.keys(metadata).map((k) => {
+                        const value = metadata[k as keyof Metadata];
+                        // Check if value is an object with metadataValue
+                        const displayValue =
+                            typeof value === "object" && value !== null && "metadataValue" in value
+                                ? (value as any).metadataValue
+                                : String(value);
+                        return <DisplayKV key={k} label={k} value={displayValue} />;
+                    })}
                 </ColumnLayout>
             </Container>
             {allFiles.length > 0 && (
@@ -1126,13 +1282,23 @@ const AssetUploadReview = ({
                                 return "Asset File";
                             },
                             sortingField: "type",
+                            sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) => {
+                                const getType = (item: FileUploadTableItem) => {
+                                    if (item.index === 99999) return "Preview File";
+                                    if (item.name.includes(".previewFile.")) return "Preview File";
+                                    return "Asset File";
+                                };
+                                return getType(a).localeCompare(getType(b));
+                            },
                             isRowHeader: false,
                         },
                         {
                             id: "filepath",
                             header: "Path",
                             cell: (item: FileUploadTableItem) => item.relativePath,
-                            sortingField: "filepath",
+                            sortingField: "relativePath",
+                            sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+                                a.relativePath.localeCompare(b.relativePath),
                             isRowHeader: true,
                         },
                         {
@@ -1140,7 +1306,9 @@ const AssetUploadReview = ({
                             header: "Size",
                             cell: (item: FileUploadTableItem) =>
                                 item.total ? shortenBytes(item.total) : "0b",
-                            sortingField: "filesize",
+                            sortingField: "total",
+                            sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+                                a.total - b.total,
                             isRowHeader: false,
                         },
                     ]}
@@ -1371,7 +1539,7 @@ const UploadForm = () => {
                                     showErrors={showErrorsForPage >= 2}
                                 />
                             ),
-                            isOptional: false,
+                            isOptional: true,
                         },
                         {
                             title: "Select Files to upload",

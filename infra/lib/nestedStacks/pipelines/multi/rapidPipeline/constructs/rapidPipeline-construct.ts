@@ -293,7 +293,7 @@ export class RapidPipelineConstruct extends NestedStack {
         // })
 
         const containerImage = ecs.ContainerImage.fromRegistry(
-            props.config.app.pipelines.useRapidPipeline.ecrContainerImageURI
+            props.config.app.pipelines.useRapidPipeline.useEcs.ecrContainerImageURI
         );
 
         // Overriding cluster name bc AWS Marketplace team is having issues with long cluster names
@@ -454,7 +454,7 @@ export class RapidPipelineConstruct extends NestedStack {
         this.pipelineVamsLambdaFunctionName = rapidPipelineExecuteFunction.functionName;
 
         // Create custom resource to automatically register pipeline and workflow
-        if (props.config.app.pipelines.useRapidPipeline.autoRegisterWithVAMS === true) {
+        if (props.config.app.pipelines.useRapidPipeline.useEcs.autoRegisterWithVAMS === true) {
             const importFunction = lambda.Function.fromFunctionArn(
                 this,
                 "ImportFunction",
@@ -487,6 +487,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     workflowId: "rapid-pipeline-to-glb",
                     workflowDescription:
                         "Automated workflow for GLTF to GLB optimization using RapidPipeline 3D Processor",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -511,6 +512,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     workflowId: "rapid-pipeline-obj-to-gltf",
                     workflowDescription:
                         "Automated workflow for X to GLTF optimization using RapidPipeline 3D Processor",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -535,6 +537,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     workflowId: "rapid-pipeline-to-glb",
                     workflowDescription:
                         "Automated workflow for X to GLB optimization using RapidPipeline 3D Processor",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -560,6 +563,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     workflowId: "rapid-pipeline-to-gltf",
                     workflowDescription:
                         "Automated workflow for X to GLTF optimization using RapidPipeline 3D Processor",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 

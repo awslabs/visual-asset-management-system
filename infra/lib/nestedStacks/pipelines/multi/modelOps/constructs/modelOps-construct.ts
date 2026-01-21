@@ -450,6 +450,7 @@ export class ModelOpsConstruct extends NestedStack {
                     workflowId: "vntana-model-ops-to-usdz",
                     workflowDescription:
                         "Automated workflow for X to USDZ optimization using ModelOps 3D Task Handler",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -494,6 +495,7 @@ export class ModelOpsConstruct extends NestedStack {
                     workflowId: "vntana-model-ops-to-glb",
                     workflowDescription:
                         "Automated workflow for X to GLB optimization using ModelOps 3D Task Handler",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -538,6 +540,7 @@ export class ModelOpsConstruct extends NestedStack {
                     workflowId: "vntana-model-ops-to-gltf",
                     workflowDescription:
                         "Automated workflow for X to GLTF optimization using ModelOps 3D Task Handler",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -581,6 +584,7 @@ export class ModelOpsConstruct extends NestedStack {
                     workflowId: "vntana-model-ops-to-glb",
                     workflowDescription:
                         "Automated workflow for X to GLB optimization using ModelOps 3D Task Handler",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 

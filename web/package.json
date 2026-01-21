@@ -89,7 +89,7 @@
         "build.lowmem": "GENERATE_SOURCEMAP=false react-scripts --max_old_space_size=4096 build",
         "test": "react-scripts test --coverage",
         "eject": "react-scripts eject",
-        "postinstall": "node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js && patch-package"
+        "postinstall": "node ./customInstalls/veerum/veerumInstall.js && node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js && patch-package"
     },
     "eslintConfig": {
         "extends": [

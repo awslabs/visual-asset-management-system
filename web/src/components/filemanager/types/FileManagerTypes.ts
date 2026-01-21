@@ -33,15 +33,27 @@ export interface FileTree {
     previewFile?: string;
 }
 
+export type LoadingPhase =
+    | "initial"
+    | "basic-loading"
+    | "basic-complete"
+    | "detailed-loading"
+    | "complete";
+
 export interface FileManagerStateValues {
-    fileTree: FileTree;
+    fileTree: FileTree; // Displayed tree (may be filtered)
+    unfilteredFileTree: FileTree; // Unfiltered tree (always contains all data)
     selectedItem: FileTree | null;
     selectedItems: FileTree[]; // Array of selected items for multi-selection
+    selectedItemPath: string | null; // Path of selected item for preservation during updates
+    selectedItemPaths: string[]; // Paths of selected items for preservation during updates
     multiSelectMode: boolean; // Track if we're in multi-select mode
     lastSelectedIndex: number; // For shift-click range selection
     assetId: string;
     databaseId: string;
     loading: boolean;
+    loadingPhase: LoadingPhase; // Track which phase of loading we're in
+    loadingProgress: { current: number; total: number | null }; // Track loading progress
     error: string | null;
     searchTerm: string;
     searchResults: FileTree[];
@@ -51,6 +63,7 @@ export interface FileManagerStateValues {
     showNonIncluded: boolean; // Toggle to show/hide non-included files
     flattenedItems: FileTree[]; // Flattened array of all items for shift-selection
     totalAssetSize: number; // Total size of all files in the asset (excluding folders)
+    paginationTokens: { basic: string | null; detailed: string | null }; // Track pagination tokens
 }
 
 export type FileManagerState = FileManagerStateValues;

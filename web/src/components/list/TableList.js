@@ -225,6 +225,26 @@ export default function TableList(props) {
                 itemNames[i] = selectedItems[i]?.userId || "unknown";
             }
         }
+        if (pluralName === "constraints") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.name || "unknown";
+            }
+        }
+        if (pluralName === "fields") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.field || "unknown";
+            }
+        }
+        if (pluralName === "pipelines") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.pipelineId || "unknown";
+            }
+        }
+        if (pluralName === "workflows") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.workflowId || "unknown";
+            }
+        }
         const showFeatureComingSoonModal = shouldHideCancelButton;
         return (
             <>
@@ -248,9 +268,7 @@ export default function TableList(props) {
                 >
                     <div>
                         <p>
-                            {`Do you want to delete ${title}?: '`}
-                            <i>{itemNames.join(", ")}</i>
-                            {`' ?`}
+                            Do you want to delete {title}: <i>{itemNames.join(", ")}</i>?
                         </p>
                     </div>
                 </Modal>
@@ -381,7 +399,6 @@ export default function TableList(props) {
                                         pluralName !== "tag types" &&
                                         pluralName !== "tags" &&
                                         pluralName !== "Subscriptions" &&
-                                        pluralName !== "Roles" &&
                                         pluralName !== "User Roles"
                                     )
                                         return (

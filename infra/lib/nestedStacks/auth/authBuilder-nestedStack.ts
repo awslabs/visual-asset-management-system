@@ -120,7 +120,7 @@ export class AuthBuilderNestedStack extends NestedStack {
                 new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
                     actions: ["dynamodb:PutItem"],
-                    resources: [props.storageResources.dynamo.authEntitiesStorageTable.tableArn],
+                    resources: [props.storageResources.dynamo.constraintsStorageTable.tableArn],
                 }),
             ],
         });

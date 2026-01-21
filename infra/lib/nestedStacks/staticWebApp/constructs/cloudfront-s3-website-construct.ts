@@ -15,6 +15,9 @@ import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import { Service } from "../../../helper/service-helper";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { generateUniqueNameHash } from "../../../helper/security";
+import * as route53 from "aws-cdk-lib/aws-route53";
+import * as route53targets from "aws-cdk-lib/aws-route53-targets";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
 
 export interface CloudFrontS3WebSiteConstructProps extends cdk.StackProps {
     /**
@@ -111,6 +114,22 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             }
         );
 
+        // Configure custom domain if enabled
+        let certificate: acm.ICertificate | undefined;
+        let domainNames: string[] | undefined;
+
+        if (props.config.app.useCloudFront.customDomain.enabled) {
+            // Import ACM certificate (must be in us-east-1 for CloudFront)
+            certificate = acm.Certificate.fromCertificateArn(
+                this,
+                "CloudFrontCertificate",
+                props.config.app.useCloudFront.customDomain.certificateArn
+            );
+
+            // Set custom domain name
+            domainNames = [props.config.app.useCloudFront.customDomain.domainHost];
+        }
+
         const cloudFrontDistribution = new cloudfront.Distribution(this, "WebAppDistribution", {
             defaultBehavior: {
                 compress: true,
@@ -146,6 +165,9 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             enableLogging: true,
             logBucket: props.webAppAccessLogsBucket,
             logFilePrefix: "cloudfront-access-logs/",
+            // Custom domain configuration (optional)
+            certificate: certificate,
+            domainNames: domainNames,
         });
 
         // Attach the OriginAccessControl to the CloudFront Distribution and remove any OriginAccessIdentity
@@ -168,13 +190,39 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             memoryLimit: 1024,
         });
 
+        // Optional: Add Route53 alias if custom domain is enabled and hosted zone ID is provided
+        if (
+            props.config.app.useCloudFront.customDomain.enabled &&
+            props.config.app.useCloudFront.customDomain.optionalHostedZoneId &&
+            props.config.app.useCloudFront.customDomain.optionalHostedZoneId != "" &&
+            props.config.app.useCloudFront.customDomain.optionalHostedZoneId != "UNDEFINED"
+        ) {
+            // Extract zone name from domain host (e.g., "vams.example.com" -> "example.com")
+            const domainHost = props.config.app.useCloudFront.customDomain.domainHost;
+            const zoneName = domainHost.substring(domainHost.indexOf(".") + 1, domainHost.length);
+
+            const zone = route53.HostedZone.fromHostedZoneAttributes(this, "CloudFrontHostedZone", {
+                zoneName: zoneName,
+                hostedZoneId: props.config.app.useCloudFront.customDomain.optionalHostedZoneId,
+            });
+
+            // Create Route53 A record alias pointing to CloudFront distribution
+            new route53.ARecord(this, "CloudFrontAliasRecord", {
+                zone: zone,
+                recordName: `${domainHost}.`,
+                target: route53.RecordTarget.fromAlias(
+                    new route53targets.CloudFrontTarget(cloudFrontDistribution)
+                ),
+            });
+        }
+
         //Nag supressions
         NagSuppressions.addResourceSuppressions(
             cloudFrontDistribution,
             [
                 {
                     id: "AwsSolutions-CFR4",
-                    reason: "This requires use of a custom viewer certificate which should be provided by customers.",
+                    reason: "Custom domain support is now available through configuration. When custom domain is disabled, CloudFront uses the default certificate. When enabled, customers must provide their own ACM certificate in us-east-1.",
                 },
             ],
             true
@@ -194,9 +242,21 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
         new cdk.CfnOutput(this, "CloudFrontDistributionUrl", {
             value: `https://${cloudFrontDistribution.distributionDomainName}`,
         });
+
+        // Add custom domain URL output if enabled
+        if (props.config.app.useCloudFront.customDomain.enabled) {
+            new cdk.CfnOutput(this, "CloudFrontCustomDomainUrl", {
+                value: `https://${props.config.app.useCloudFront.customDomain.domainHost}`,
+                description: "Custom domain URL for CloudFront distribution",
+            });
+        }
+
         // assign public properties
         this.cloudFrontDistribution = cloudFrontDistribution;
-        this.endPointURL = `https://${cloudFrontDistribution.distributionDomainName}`;
+        // Use custom domain if enabled, otherwise use CloudFront domain
+        this.endPointURL = props.config.app.useCloudFront.customDomain.enabled
+            ? `https://${props.config.app.useCloudFront.customDomain.domainHost}`
+            : `https://${cloudFrontDistribution.distributionDomainName}`;
     }
 }
 

@@ -16,9 +16,9 @@ export const ConstraintsListDefinition = new ListDefinition({
     visibleColumns: ["name", "description"],
     filterColumns: [{ name: "name", placeholder: "Name" }],
     elementId: "name",
-    deleteFunction: (item: any): [boolean, string, string] => {
+    deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = API.del("api", `auth/constraints/${item.constraintId}`, {});
+            const response: any = await API.del("api", `auth/constraints/${item.constraintId}`, {});
             return [true, response.message, ""];
         } catch (error: any) {
             console.log(error);

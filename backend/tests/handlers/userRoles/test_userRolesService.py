@@ -502,7 +502,7 @@ def test_user_roles_unauthorized(get_user_roles_event, monkeypatch):
         # Verify the enforcer was called
         mock_enforcer.enforceAPI.assert_called_once()
 
-def test_user_roles_validation_error(create_user_roles_event, mock_casbin_enforcer, monkeypatch):
+def test_user_roles_validation_error(create_user_roles_event, mock_casbin_enforcer, monkeypatch, event=event):
     pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
     """
     Test the userRolesService lambda handler with invalid input

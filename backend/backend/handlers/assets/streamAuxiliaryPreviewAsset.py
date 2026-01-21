@@ -5,23 +5,30 @@ import os
 import boto3
 import json
 import base64
-import sys
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_file_download_streamed
 from common.s3 import validateUnallowedFileExtensionAndContentType
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+
+# Set environment variable for S3 client configuration
+# 'regional' set to add region descriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
+os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional"
 
 # Standardized retry configuration merged with existing S3 config
 s3_config = Config(
     signature_version='s3v4', 
     s3={'addressing_style': 'path'},
     retries={
-        'max_attempts': 3,
+        'max_attempts': 5,
         'mode': 'adaptive'
     }
 )
@@ -33,6 +40,7 @@ logger = safeLogger(service_name="StreamAuxiliaryPreviewAsset")
 try:
     auxasset_bucket_name = os.environ["ASSET_AUXILIARY_BUCKET_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -43,16 +51,19 @@ asset_table = dynamodb.Table(asset_storage_table_name)
 def get_asset_details(databaseId, assetId):
     """Get asset details from DynamoDB"""
     try:
-        response = asset_table.get_item(
-            Key={
-                'databaseId': databaseId,
-                'assetId': assetId
-            }
+        response = asset_table.query(
+            KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('assetId').eq(assetId),
+            ScanIndexForward=False
         )
-        return response.get('Item')
+        
+        if not response.get('Items'):
+            return None
+            
+        # Return the first (most recent) item
+        return response['Items'][0]
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
-        raise Exception(f"Error retrieving asset.")
+        raise VAMSGeneralErrorResponse("Error retrieving asset")
 
 def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
     """
@@ -84,66 +95,26 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
-def lambda_handler(event, context):
-    response = STANDARD_JSON_RESPONSE
-    #logger.info(str(event))
-
-    global claims_and_roles
-    claims_and_roles = request_to_claims(event)
-
-    # Get the request headers from the API Gateway event
-    try:
-        request_headers = event['headers']
-    except:
-        request_headers = ""
-
-    # # Error if no headers provided (API Gateway problem or manual testing error)
-    # if not request_headers or request_headers == None or request_headers == "":
-    #     message = "No Range Headers Provided"
-    #     error_response = {
-    #         'statusCode': 400,
-    #         'body': json.dumps({"message": message}),
-    #         'headers': {
-    #             'Access-Control-Allow-Headers': 'Range',
-    #         }
-    #     }
-    #     logger.error(error_response)
-    #     return error_response
-
-    # Get the "Range" header from the request headers
-    try:
-        range_header = request_headers.get('range')
-    except:
-        range_header = ""
-
-    # # Get the "content-type" header from the request headers
-    # try:
-    #     content_type_header = request_headers.get('content-type')
-    # except:
-    #     content_type_header = ""
-
+def handle_head_request(event, claims_and_roles):
+    """Handle HEAD requests to check file availability and permissions
+    
+    Returns metadata headers without file content, following HTTP best practices.
+    HEAD requests do not check file size thresholds or generate redirects.
+    """
     path_parameters = event.get('pathParameters', {})
-
+    
     # Get the object key which comes after the base path of the API Call
     assetId = path_parameters.get('assetId', "") 
     databaseId = path_parameters.get('databaseId', "") 
-    object_key = path_parameters.get('proxy', "")  
-
-
+    object_key = path_parameters.get('proxy', "")
+    
     # Error if no object key in path
     if not object_key or object_key == None or object_key == "":
         message = "No Auxiliary Preview File Object Key Provided in Path"
-        error_response = {
-            'statusCode': 400,
-            'body': json.dumps({"message": message}),
-            'headers': {
-                'Access-Control-Allow-Headers': 'Range',
-            }
-        }
-        logger.error(error_response)
-        return error_response
-
-    logger.info("Validating parameters")
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
+    
+    logger.info("Validating parameters for HEAD request")
     (valid, message) = validate({
         'databaseId': {
             'value': databaseId,
@@ -160,149 +131,357 @@ def lambda_handler(event, context):
     })
     if not valid:
         logger.error(message)
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        return response
-
-
-    http_method = "GET"
-    operation_allowed_on_asset = False
-
+        return validation_error(body={'message': message}, event=event)
+    
+    # Get asset details and check if it exists
     asset_object = get_asset_details(databaseId, assetId)
+    if not asset_object:
+        message = f"Asset not found in database"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=404, event=event)
+    
     asset_object.update({"object__type": "asset"})
-
-    logger.info(asset_object)
-
+    
+    # Check authorization
+    operation_allowed_on_asset = False
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforce(asset_object, http_method) and casbin_enforcer.enforceAPI(event, http_method):
-            operation_allowed_on_asset = True
+        if casbin_enforcer.enforceAPI(event, "GET"):
+            if casbin_enforcer.enforce(asset_object, "GET"):
+                operation_allowed_on_asset = True
+    
+    if not operation_allowed_on_asset:
+        return authorization_error()
+    
+    # Get the location of the base asset key
+    assetLocationKey = asset_object.get('assetLocation', {}).get("Key")
+    if not assetLocationKey:
+        message = "Asset location not found"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=404, event=event)
+    
+    # Resolve the full S3 key
+    object_key = resolve_asset_file_path(assetLocationKey, object_key)
+    
+    try:
+        # Use head_object to get metadata without downloading file content
+        head_response = s3_client.head_object(
+            Bucket=auxasset_bucket_name,
+            Key=object_key
+        )
+        
+        # Validate file extension and content type
+        content_type = head_response.get('ContentType', 'application/octet-stream')
+        if not validateUnallowedFileExtensionAndContentType(object_key, content_type):
+            message = "Unallowed file extension or content type in auxiliary preview file"
+            logger.error(message)
+            return validation_error(body={'message': message}, event=event)
+        
+        # Build response headers following HTTP best practices
+        response_headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Range',
+            'Cache-Control': 'no-cache, no-store',
+            'Content-Type': content_type,
+            'Content-Length': str(head_response.get('ContentLength', 0)),
+            'Accept-Ranges': 'bytes',
+        }
+        
+        # Add optional headers if available
+        if 'LastModified' in head_response:
+            response_headers['Last-Modified'] = head_response['LastModified'].strftime('%a, %d %b %Y %H:%M:%S GMT')
+        
+        if 'ETag' in head_response:
+            response_headers['ETag'] = head_response['ETag']
+        
+        if 'VersionId' in head_response:
+            response_headers['x-amz-version-id'] = head_response['VersionId']
+        
+        if 'StorageClass' in head_response:
+            response_headers['x-amz-storage-class'] = head_response['StorageClass']
+        
+        logger.info(f"HEAD request successful for {object_key}")
+        return {
+            'statusCode': 200,
+            'headers': response_headers,
+            'body': ''  # Always empty for HEAD requests
+        }
+        
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == '404' or error_code == 'NoSuchKey':
+            logger.error(f"File not found: {object_key}")
+            return general_error(body={'message': 'File not found'}, status_code=404, event=event)
+        else:
+            logger.exception(f"S3 ClientError during HEAD request: {e}")
+            return internal_error(event=event)
 
-    if operation_allowed_on_asset:
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for auxiliary preview asset streaming APIs"""
+    global claims_and_roles
+    
+    try:
+        claims_and_roles = request_to_claims(event)
+        
+        # Detect HTTP method
+        http_method = event['requestContext']['http']['method']
+        
+        # Handle HEAD requests
+        if http_method == 'HEAD':
+            logger.info("Processing HEAD request")
+            return handle_head_request(event, claims_and_roles)
+        
+        # Handle GET requests (existing logic)
+        # Get the request headers from the API Gateway event
         try:
-            #Get the location of the base asset key and normalize the object_key we are passing in (also ensures security of not fetching an asset key files outside of provided asset ID)
-            assetLocationKey = asset_object.get('assetLocation').get("Key")
-            object_key = resolve_asset_file_path(assetLocationKey, object_key)
+            request_headers = event['headers']
+        except:
+            request_headers = ""
 
-            # Prepare the S3 GetObject request parameters
-            s3_params = {
-                'Bucket': auxasset_bucket_name,
-                'Key': object_key
+        # Get the "Range" header from the request headers
+        try:
+            range_header = request_headers.get('range')
+        except:
+            range_header = ""
+
+        path_parameters = event.get('pathParameters', {})
+
+        # Get the object key which comes after the base path of the API Call
+        assetId = path_parameters.get('assetId', "") 
+        databaseId = path_parameters.get('databaseId', "") 
+        object_key = path_parameters.get('proxy', "")  
+
+        # Error if no object key in path
+        if not object_key or object_key == None or object_key == "":
+            message = "No Auxiliary Preview File Object Key Provided in Path"
+            logger.error(message)
+            # Create custom headers for streaming response
+            streaming_headers = {
+                'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Origin': '*',
+                'Cache-Control': 'no-cache, no-store',
             }
+            error_response = validation_error(body={'message': message}, event=event)
+            error_response['headers'].update(streaming_headers)
+            return error_response
 
-            # Add the "Range" header to the S3 GetObject request if it exists
-            if range_header and range_header != None and range_header != "":
-                s3_params['Range'] = range_header
+        logger.info("Validating parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': databaseId,
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': assetId,
+                'validator': 'ASSET_ID'
+            },
+            'auxiliaryPreviewAssetPathKey': {
+                'value': object_key,
+                'validator': 'ASSET_AUXILIARYPREVIEW_PATH'
+            },
+        })
+        if not valid:
+            logger.error(message)
+            return validation_error(body={'message': message}, event=event)
 
-            # # Add the "content-type" header to the S3 GetObject request if it exists
-            # if content_type_header and content_type_header != None and content_type_header != "":
-            #     s3_params['ResponseContentType'] = content_type_header
+        operation_allowed_on_asset = False
 
-            #logger.info(s3_params)
+        # Get asset details and check if it exists
+        asset_object = get_asset_details(databaseId, assetId)
+        if not asset_object:
+            message = f"Asset not found in database"
+            logger.error(message)
+            # Create custom headers for streaming response
+            streaming_headers = {
+                'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Origin': '*',
+            }
+            error_response = general_error(body={"message": message}, status_code=404, event=event)
+            error_response['headers'].update(streaming_headers)
+            return error_response
 
-            # Fetch the file from S3
-            response = s3_client.get_object(**s3_params)
-            logger.info(response)
+        asset_object.update({"object__type": "asset"})
 
-            #Validate for malicious content type
-            if not validateUnallowedFileExtensionAndContentType(object_key, response['ContentType']):
-                message = "Error: Potentially malicious content type detected in asset file"
-                error_response = {
-                    'statusCode': 400,
-                    'body': json.dumps({"message": message}),
-                    'headers': {
+        logger.info(asset_object)
+
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforceAPI(event, http_method):
+                # Check object-level authorization
+                if casbin_enforcer.enforce(asset_object, http_method):
+                    operation_allowed_on_asset = True
+
+        if operation_allowed_on_asset:
+            try:
+                # Get the location of the base asset key and normalize the object_key we are passing in
+                # (also ensures security of not fetching asset key files outside of provided asset ID)
+                assetLocationKey = asset_object.get('assetLocation', {}).get("Key")
+                if not assetLocationKey:
+                    message = "Asset location not found"
+                    logger.error(message)
+                    # Create custom headers for streaming response
+                    streaming_headers = {
                         'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
+                    }
+                    error_response = general_error(body={"message": message}, status_code=404, event=event)
+                    error_response['headers'].update(streaming_headers)
+                    return error_response
+
+                object_key = resolve_asset_file_path(assetLocationKey, object_key)
+
+                # Prepare the S3 GetObject request parameters
+                s3_params = {
+                    'Bucket': auxasset_bucket_name,
+                    'Key': object_key
+                }
+
+                # Add the "Range" header to the S3 GetObject request if it exists
+                if range_header and range_header != None and range_header != "":
+                    s3_params['Range'] = range_header
+
+                # Fetch the file metadata from S3 first
+                s3_response = s3_client.get_object(**s3_params)
+                logger.info(s3_response)
+
+                # Validate file extension and content type using the ContentType from S3 response
+                content_type = s3_response.get('ContentType', 'application/octet-stream')
+                if not validateUnallowedFileExtensionAndContentType(object_key, content_type):
+                    message = "Unallowed file extension or content type in auxiliary preview file"
+                    logger.error(message)
+                    # Create custom headers for streaming response
+                    streaming_headers = {
+                        'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
+                    }
+                    error_response = validation_error(body={"message": message}, event=event)
+                    error_response['headers'].update(streaming_headers)
+                    return error_response
+
+                # Get the content length from S3 metadata
+                content_length = s3_response.get('ContentLength', 0)
+                
+                # Set conservative limit for streaming (4.4MB raw = ~5.87MB base64 encoded, safely under 6MB Lambda limit)
+                MAX_STREAMING_SIZE = int(4.4 * 1024 * 1024)  # 4.4MB
+                
+                # If file is larger than 4.4MB, generate presigned URL and redirect
+                if content_length > MAX_STREAMING_SIZE:
+                    logger.info(f"File size ({content_length / (1024*1024):.2f}MB) exceeds streaming limit. Generating presigned URL.")
+                    
+                    # Generate presigned URL
+                    presigned_url = s3_client.generate_presigned_url(
+                        'get_object',
+                        Params=s3_params,
+                        ExpiresIn=int(token_timeout)
+                    )
+                    
+                    # AUDIT LOG: Auxiliary preview stream (presigned URL redirect)
+                    log_file_download_streamed(
+                        event,
+                        databaseId,
+                        assetId,
+                        object_key,
+                        {
+                            "streamType": "auxiliary_preview_presigned_url_redirect",
+                            "fileSize": content_length,
+                            "rangeHeader": range_header if range_header else None
+                        }
+                    )
+                    
+                    # Return 307 redirect to presigned URL
+                    return {
+                        'statusCode': 307,
+                        'headers': {
+                            'Location': presigned_url,
+                            'Access-Control-Allow-Headers': 'Range',
+                            'Access-Control-Allow-Origin': '*',
+                            'Cache-Control': 'no-cache, no-store',
+                        },
+                        'body': ''
+                    }
+
+                # For files 4MB and under, stream with base64 encoding
+                # AUDIT LOG: Auxiliary preview stream (direct streaming)
+                log_file_download_streamed(
+                    event,
+                    databaseId,
+                    assetId,
+                    object_key,
+                    {
+                        "streamType": "auxiliary_preview_direct_stream",
+                        "fileSize": content_length,
+                        "rangeHeader": range_header if range_header else None
+                    }
+                )
+                
+                # Extract the file data
+                file_data = s3_response['Body'].read()
+
+                # Prepare the API Gateway response
+                api_gateway_response = {
+                    'statusCode': 200,
+                    'body': '',
+                    'headers': {
+                            'Access-Control-Allow-Headers': 'Range',
+                            'Access-Control-Allow-Origin': '*',
+                            'Cache-Control': 'no-cache, no-store',
+                            'Accept-Ranges': s3_response['ResponseMetadata']['HTTPHeaders']['accept-ranges'],
+                            'Content-Type': s3_response['ResponseMetadata']['HTTPHeaders']['content-type'],
+                            'Content-Length': s3_response['ResponseMetadata']['HTTPHeaders']['content-length'],
                     }
                 }
-                logger.error(error_response)
-                return error_response
 
-            # Extract the file data
-            file_data = response['Body'].read()
+                # Add the "Range" header if returned
+                try:
+                    response_header_range = s3_response['ResponseMetadata']['HTTPHeaders']['content-range']
+                except:
+                    response_header_range = ""
 
-            # Prepare the API Gateway response
-            api_gateway_response = {
-                'statusCode': 200,
-                'body': '',
-                'headers': {
-                        'Access-Control-Allow-Headers': 'Range',
-                        'Accept-Ranges': response['ResponseMetadata']['HTTPHeaders']['accept-ranges'],
-                        'Content-Type': response['ResponseMetadata']['HTTPHeaders']['content-type'],
-                        'Content-Length': response['ResponseMetadata']['HTTPHeaders']['content-length'],
-                }
-            }
+                if response_header_range != None and response_header_range != "":
+                    api_gateway_response['headers']['Content-Range'] = response_header_range
 
-            # Add the "Range" header if returned
-            try:
-                response_header_range = response['ResponseMetadata']['HTTPHeaders']['content-range']
-            except:
-                response_header_range = ""
+                # Add the "ContentEncoding" header if returned
+                try:
+                    response_header_content_encoding = s3_response['ResponseMetadata']['HTTPHeaders']['content-encoding']
+                except:
+                    response_header_content_encoding = ""
 
-            if response_header_range != None and response_header_range != "":
-                api_gateway_response['headers']['Content-Range'] = response_header_range
+                if response_header_content_encoding != None and response_header_content_encoding != "":
+                    api_gateway_response['headers']['Content-Encoding'] = response_header_content_encoding
 
-            # Add the "ContentEncoding" header if returned
-            try:
-                response_header_content_encoding = response['ResponseMetadata']['HTTPHeaders']['content-encoding']
-            except:
-                response_header_content_encoding = ""
+                # If returned data is binary, return the file contents as a base64 encoded string in the body
+                if isinstance(file_data, bytes):
+                    api_gateway_response['body'] = base64.b64encode(file_data).decode('utf-8')
+                    api_gateway_response['isBase64Encoded'] = True
+                    logger.info("Return is Binary so BaseEncode64")
+                else:
+                    # else return as regular string
+                    api_gateway_response['body'] = file_data.decode('utf-8')
 
-            if response_header_content_encoding != None and response_header_content_encoding != "":
-                api_gateway_response['headers']['Content-Encoding'] = response_header_content_encoding
+                return api_gateway_response
 
-            #logger.info(logger.info(str(api_gateway_response)))
-
-            # Get the size of the file data in bytes and return error if larger than ~5.9MB (accounting for header space)
-            file_size = sys.getsizeof(file_data)
-            if file_size > 5.9 * 1024 * 1024:
-                # NOTE: 6MB is a hard limit for Lambda functions. API Gateway has a 10MB hard limit.
-                message = "Error: Auxiliary Preview File Size Chunk is Larger than ~5.9MB, a AWS service limit. Use a smaller header file Range for auxiliary preview asset streaming retrieval."
-                error_response = {
-                    'statusCode': 400,
-                    'body': json.dumps({"message": message}),
-                    'headers': {
-                        'Access-Control-Allow-Headers': 'Range',
-                    }
-                }
-                logger.error(error_response)
-                return error_response
-
-            # If returned data is binary, return the file contents as a base64 encoded string in the body
-            if isinstance(file_data, bytes):
-                api_gateway_response['body'] = base64.b64encode(file_data).decode('utf-8')
-                api_gateway_response['isBase64Encoded'] = True
-                logger.info("Return is Binary so BaseEncode64")
-            else:
-                # else return as regular string
-                api_gateway_response['body'] = file_data.decode('utf-8')
-
-            return api_gateway_response
-
-        except ClientError as e:
-            logger.exception(e)
-            message = "Error Fetching Auxiliary Preview File from Path Provided"
-            error_response = {
-                'statusCode': 400,
-                'body': json.dumps({"message": message}),
-                'headers': {
+            except ClientError as e:
+                logger.exception(f"S3 ClientError: {e}")
+                message = "Error Fetching Auxiliary Preview File from Path Provided"
+                # Create custom headers for streaming response
+                streaming_headers = {
                     'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                    'Cache-Control': 'no-cache, no-store',
                 }
-            }
-            logger.exception(error_response)
-            return error_response
-        except Exception as e:
-            # If other error occurs, return an error response
-            message = "Internal Server Error"
-            error_response = {
-                'statusCode': 500,
-                'body': json.dumps({"message": message}),
-                'headers': {
-                    'Access-Control-Allow-Headers': 'Range',
-                }
-            }
-            logger.exception(error_response)
-            return error_response
-    else:
-        response['statusCode'] = 403
-        response['body'] = json.dumps({"message": "Not Authorized"})
-        return response
+                error_response = general_error(body={"message": message}, event=event)
+                error_response['headers'].update(streaming_headers)
+                return error_response
+        else:
+            return authorization_error()
+            
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error(event=event)

@@ -134,6 +134,7 @@ This software includes third party software subject to the following copyrights:
 | Package                | Version                                                              | License           |
 | :--------------------- | :------------------------------------------------------------------- | :---------------- |
 | VNTANA 3D Model Viewer | [@vntana/viewer@2.2.0](https://www.npmjs.com/package/@vntana/viewer) | PAID - Commercial |
+| Veerum 3D Model Viewer | [@veerum/viewer@2.0.12](https://veerum.github.io/veerum-viewer/)     | PAID - Commercial |
 
 ---
 
@@ -194,6 +195,33 @@ This software includes third party software subject to the following copyrights:
 | PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                | BSD-2-Clause |
 | Blender         | [master-latest](https://github.com/blender)                                                                                                               | GENAI 3D METADATA GENERATION | GNU GPLv3    |
 | SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                | MIT          |
+
+### Isaac Lab Training Pipeline
+
+**Isaac Lab Training Pipeline Dependencies**
+
+| Name                  | Version | License            | Notes                                          |
+| :-------------------- | :------ | :----------------- | :--------------------------------------------- |
+| NVIDIA Isaac Lab      | 2.0+    | Apache-2.0         | Robot learning framework                       |
+| RSL-RL                | 2.3.0+  | BSD-3-Clause       | Reinforcement learning library from ETH Zurich |
+| NVIDIA Isaac Sim      | 4.5+    | NVIDIA Proprietary | Base container image (NVIDIA EULA)             |
+| PyTorch               | 2.0+    | BSD-3-Clause       | Deep learning framework                        |
+| aws-lambda-powertools | ^3.2.0  | MIT-0              | Lambda utilities                               |
+| boto3                 | ^1.34.0 | Apache-2.0         | AWS SDK for Python                             |
+
+**Container Base Image**
+
+The Isaac Lab Training Pipeline uses NVIDIA Isaac Sim container images which are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA to use this pipeline.
+
+**RSL-RL License Notice**
+
+RSL-RL is developed by ETH Zurich and NVIDIA Corporation. The library is licensed under BSD-3-Clause:
+
+```
+Copyright (c) 2025, ETH Zurich
+Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES
+All rights reserved.
+```
 
 ---
 

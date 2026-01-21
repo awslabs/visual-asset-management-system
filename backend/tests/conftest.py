@@ -129,6 +129,7 @@ os.environ["PIPELINE_STORAGE_TABLE_NAME"] = "pipelineStorageTable"
 os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"] = "assetLinksStorageTableV2"
 os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"] = "assetLinksMetadataStorageTable"
 os.environ["AUTH_TABLE_NAME"] = "authTable"
+os.environ['CONSTRAINTS_TABLE_NAME'] = 'constraintTable'
 os.environ["USER_ROLES_TABLE_NAME"] = "userRolesTable"
 os.environ["ROLES_TABLE_NAME"] = "rolesTable"
 

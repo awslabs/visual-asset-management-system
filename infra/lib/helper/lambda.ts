@@ -15,6 +15,7 @@ export function layerBundlingCommand(): string {
         "pip install --upgrade pip",
         "pip install poetry",
         "pip install poetry-plugin-export",
+        "if [ ! -f poetry.lock ]; then poetry lock; fi",
         "poetry export --without-hashes --format=requirements.txt > requirements.txt",
         "pip install -r requirements.txt -t /asset-output/python",
         "rsync -rLv ./ /asset-output/python",

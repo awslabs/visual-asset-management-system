@@ -44,6 +44,30 @@ export default function AssetUploadWorkflow({
     const [uploadResponse, setUploadResponse] = useState<CompleteUploadResponse | null>(null);
     const navigate = useNavigate();
 
+    // Add Asset Preview file to fileItems if it exists
+    // It will be marked with a special index (99999) to identify it as an asset preview
+    const allFileItems = React.useMemo(() => {
+        const items = [...fileItems];
+
+        // Add the Asset Overall Preview file if it exists
+        if (assetDetail.Preview) {
+            const previewItem: FileUploadTableItem = {
+                handle: { getFile: () => Promise.resolve(assetDetail.Preview as File) },
+                index: 99999, // Special index to identify as asset preview
+                name: assetDetail.Preview.name,
+                size: assetDetail.Preview.size,
+                relativePath: assetDetail.Preview.name, // Just filename, no path
+                progress: 0,
+                status: "Queued",
+                loaded: 0,
+                total: assetDetail.Preview.size,
+            };
+            items.push(previewItem);
+        }
+
+        return items;
+    }, [fileItems, assetDetail.Preview]);
+
     // Handle upload completion
     const handleUploadComplete = (response: CompleteUploadResponse) => {
         // Only mark as complete if there are no preview errors in the message
@@ -76,7 +100,7 @@ export default function AssetUploadWorkflow({
                 <UploadManager
                     assetDetail={assetDetail}
                     metadata={metadata}
-                    fileItems={fileItems}
+                    fileItems={allFileItems}
                     onUploadComplete={handleUploadComplete}
                     onError={(error) => {
                         // Just log the error but don't switch to error state
@@ -90,15 +114,6 @@ export default function AssetUploadWorkflow({
                 {uploadComplete && (
                     <Box>
                         <SpaceBetween direction="vertical" size="m">
-                            {/* Display large file processing alert if applicable */}
-                            {uploadResponse?.largeFileAsynchronousHandling && (
-                                <Alert type="info" header="Large File Processing">
-                                    This upload contains large files that are undergoing separate
-                                    processing. The files may take additional time to appear in the
-                                    asset files list. Please check back in a few minutes.
-                                </Alert>
-                            )}
-
                             {isExistingAsset ? (
                                 // Message for existing assets
                                 uploadResponse?.message?.includes("Preview file upload failed") ? (

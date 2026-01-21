@@ -48,7 +48,7 @@ class TestAssetExportCommand:
         assert '--asset-id' in result.output
         assert '--auto-paginate' in result.output
         assert '--max-assets' in result.output
-        assert '--next-token' in result.output
+        assert '--starting-token' in result.output
         assert '--generate-presigned-urls' in result.output
         assert '--no-fetch-relationships' in result.output
         assert '--fetch-entire-subtrees' in result.output
@@ -108,19 +108,19 @@ class TestAssetExportCommand:
                 {
                     'assets': [{'assetid': f'asset-{i}', 'databaseid': 'test-db', 'assetname': f'Asset {i}', 'files': []} for i in range(500)],
                     'relationships': [{'parentAssetId': 'root', 'childAssetId': 'asset-1'}],
-                    'nextToken': 'token-page-2',
+                    'NextToken': 'token-page-2',
                     'totalAssetsInTree': 1234,
                     'assetsInThisPage': 500
                 },
                 {
                     'assets': [{'assetid': f'asset-{i}', 'databaseid': 'test-db', 'assetname': f'Asset {i}', 'files': []} for i in range(500, 1000)],
-                    'nextToken': 'token-page-3',
+                    'NextToken': 'token-page-3',
                     'totalAssetsInTree': 1234,
                     'assetsInThisPage': 500
                 },
                 {
                     'assets': [{'assetid': f'asset-{i}', 'databaseid': 'test-db', 'assetname': f'Asset {i}', 'files': []} for i in range(1000, 1234)],
-                    'nextToken': None,
+                    'NextToken': None,
                     'totalAssetsInTree': 1234,
                     'assetsInThisPage': 234
                 }
@@ -150,13 +150,13 @@ class TestAssetExportCommand:
                 {
                     'assets': [{'assetid': 'asset-1', 'databaseid': 'test-db', 'files': []}],
                     'relationships': [{'parentAssetId': 'root', 'childAssetId': 'asset-1'}],
-                    'nextToken': 'token-2',
+                    'NextToken': 'token-2',
                     'totalAssetsInTree': 2,
                     'assetsInThisPage': 1
                 },
                 {
                     'assets': [{'assetid': 'asset-2', 'databaseid': 'test-db', 'files': []}],
-                    'nextToken': None,
+                    'NextToken': None,
                     'totalAssetsInTree': 2,
                     'assetsInThisPage': 1
                 }
@@ -186,7 +186,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'asset-1', 'databaseid': 'test-db', 'files': []}],
                 'relationships': [{'parentAssetId': 'root', 'childAssetId': 'asset-1'}],
-                'nextToken': 'token-page-2',
+                'NextToken': 'token-page-2',
                 'totalAssetsInTree': 100,
                 'assetsInThisPage': 1
             }
@@ -212,7 +212,7 @@ class TestAssetExportCommand:
         with assets_export_command_mocks as mocks:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'asset-2', 'databaseid': 'test-db', 'files': []}],
-                'nextToken': 'token-page-3',
+                'NextToken': 'token-page-3',
                 'totalAssetsInTree': 100,
                 'assetsInThisPage': 1
             }
@@ -222,7 +222,7 @@ class TestAssetExportCommand:
                 '-d', 'test-db',
                 '-a', 'root-asset',
                 '--no-auto-paginate',
-                '--next-token', 'token-page-2'
+                '--starting-token', 'token-page-2'
             ])
             
             assert result.exit_code == 0
@@ -231,9 +231,10 @@ class TestAssetExportCommand:
             assert 'token-page-3' in result.output
             
             # Verify API call includes token
+            # Note: API response returns 'NextToken', but API request expects 'startingToken'
             call_args = mocks['api_client'].export_asset.call_args[0]
             call_kwargs = mocks['api_client'].export_asset.call_args[0][2]
-            assert call_kwargs.get('nextToken') == 'token-page-2'
+            assert call_kwargs.get('startingToken') == 'token-page-2'
     
     def test_export_with_filters(self, cli_runner, assets_export_command_mocks):
         """Test export with various filters."""
@@ -241,7 +242,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'asset-1', 'databaseid': 'test-db', 'files': []}],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -274,7 +275,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'asset-1', 'databaseid': 'test-db', 'files': []}],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -302,7 +303,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'asset-1', 'databaseid': 'test-db', 'files': []}],
                 'relationships': None,
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -333,7 +334,7 @@ class TestAssetExportCommand:
                     {'parentAssetId': 'asset-1', 'childAssetId': 'asset-2'},
                     {'parentAssetId': 'asset-2', 'childAssetId': 'asset-3'}
                 ],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 3,
                 'assetsInThisPage': 3
             }
@@ -366,7 +367,7 @@ class TestAssetExportCommand:
                     }
                 ],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -404,7 +405,7 @@ class TestAssetExportCommand:
                         'assetLinkType': 'parentChild'
                     }
                 ],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 2,
                 'assetsInThisPage': 2
             }
@@ -435,7 +436,7 @@ class TestAssetExportCommand:
                         'assetLinkType': 'parentChild'
                     }
                 ],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -464,7 +465,7 @@ class TestAssetExportCommand:
                         'assetLinkType': 'parentChild'
                     }
                 ],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -491,7 +492,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'asset-1', 'databaseid': 'test-db', 'files': []}],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -521,7 +522,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'json-asset', 'databaseid': 'json-db', 'files': []}],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -565,7 +566,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'asset-1', 'databaseid': 'test-db', 'files': []}],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -596,7 +597,7 @@ class TestAssetExportCommand:
                 'assets', 'export',
                 '-d', 'test-db',
                 '-a', 'root-asset',
-                '--next-token', 'some-token'
+                '--starting-token', 'some-token'
             ])
             
             assert result.exit_code == 1
@@ -609,7 +610,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'asset-1', 'databaseid': 'test-db', 'files': []}],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -658,7 +659,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 0,
                 'assetsInThisPage': 0
             }
@@ -681,7 +682,7 @@ class TestAssetExportCommand:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 0,
                 'assetsInThisPage': 0
             }
@@ -795,7 +796,7 @@ class TestAssetExportCommand:
                     }
                 ],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -888,7 +889,7 @@ class TestAssetExportUtilityFunctions:
         data = {
             'assets': [{'assetid': 'asset-1', 'assetname': 'Asset 1', 'databaseid': 'db-1', 'files': []}],
             'relationships': [],
-            'nextToken': 'token-123',
+            'NextToken': 'token-123',
             'totalAssetsInTree': 100,
             'assetsInThisPage': 1
         }
@@ -910,7 +911,7 @@ class TestAssetExportEdgeCases:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 0,
                 'assetsInThisPage': 0
             }
@@ -949,7 +950,7 @@ class TestAssetExportEdgeCases:
                     }
                 ],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 3,
                 'assetsInThisPage': 3
             }
@@ -982,7 +983,7 @@ class TestAssetExportEdgeCases:
                     }
                 ],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 2,
                 'assetsInThisPage': 2
             }
@@ -1003,7 +1004,7 @@ class TestAssetExportEdgeCases:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [{'assetid': 'asset-1', 'databaseid': 'test-db', 'files': []}],
                 'relationships': [],
-                'nextToken': None,  # No more pages
+                'NextToken': None,  # No more pages
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -1109,7 +1110,7 @@ class TestAssetExportWithDownload:
                     }
                 ],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 2,
                 'assetsInThisPage': 2
             }
@@ -1164,7 +1165,7 @@ class TestAssetExportWithDownload:
                     }
                 ],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -1218,7 +1219,7 @@ class TestAssetExportWithDownload:
             mocks['api_client'].export_asset.return_value = {
                 'assets': [],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 0,
                 'assetsInThisPage': 0
             }
@@ -1293,7 +1294,7 @@ class TestAssetExportWithDownload:
                     }
                 ],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }
@@ -1348,7 +1349,7 @@ class TestAssetExportWithDownload:
                     }
                 ],
                 'relationships': [],
-                'nextToken': None,
+                'NextToken': None,
                 'totalAssetsInTree': 1,
                 'assetsInThisPage': 1
             }

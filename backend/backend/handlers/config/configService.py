@@ -83,6 +83,7 @@ def lambda_handler(event, context):
         
         #Set response initially to empty
         response['locationServiceApiUrl'] = ""
+        response['webDeployedUrl'] = ""
 
         if location_service_api_key_arn_ssm_param and location_service_url_format and location_service_url_format != "":
             try:
@@ -134,6 +135,36 @@ def lambda_handler(event, context):
                 logger.warning(f"Unexpected error retrieving Location Service API Key from SSM: {e}")
         else:
             logger.info("Location Service API Key SSM parameter name or location service URL not configured")
+
+        # Attempt to retrieve Web Deployed URL from SSM Parameter Store
+        web_deployed_url_ssm_param = os.getenv("WEB_DEPLOYED_URL_SSM_PARAM", None)
+        
+        if web_deployed_url_ssm_param:
+            try:
+                logger.info(f"Attempting to retrieve Web Deployed URL from SSM: {web_deployed_url_ssm_param}")
+                ssm_response = ssm_client.get_parameter(
+                    Name=web_deployed_url_ssm_param,
+                    WithDecryption=False
+                )
+                
+                web_url = ssm_response.get('Parameter', {}).get('Value', None)
+                
+                if web_url and web_url.strip():
+                    logger.info("Successfully retrieved Web Deployed URL from SSM")
+                    response['webDeployedUrl'] = web_url.strip()
+                else:
+                    logger.info("Web Deployed URL SSM parameter exists but has no value")
+                    
+            except ClientError as e:
+                error_code = e.response.get('Error', {}).get('Code', '')
+                if error_code == 'ParameterNotFound':
+                    logger.info("Web Deployed URL SSM parameter not found - web deployment may not be configured")
+                else:
+                    logger.warning(f"Error retrieving Web Deployed URL from SSM: {e}")
+            except Exception as e:
+                logger.warning(f"Unexpected error retrieving Web Deployed URL from SSM: {e}")
+        else:
+            logger.info("Web Deployed URL SSM parameter name not configured")
 
         logger.info("Success")
         return {

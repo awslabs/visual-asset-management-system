@@ -9,6 +9,12 @@ import { OAuth2Client, OAuth2Token, generateCodeVerifier } from "@badgateway/oau
 import { getSecureConfig, getAmplifyConfig } from "../services/APIService";
 import { default as vamsConfig } from "../config";
 import { Authenticator } from "@aws-amplify/ui-react";
+import {
+    setOAuth2ClientInstance,
+    getExternalOAuth2Token,
+    externalTokenValidation,
+    setExternalOauth2Token,
+} from "../utils/authTokenUtils";
 
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
@@ -184,7 +190,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                     region: config.region,
                     custom_header: async () => {
                         if (window.DISABLE_COGNITO) {
-                            const accessToken = getOAuth2Token().accessToken;
+                            const accessToken = getExternalOAuth2Token().accessToken;
                             return { Authorization: `Bearer ${accessToken}` };
                         } else {
                             return {
@@ -267,6 +273,14 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin }) => {
 //External OAUTH components
 let oauth2Client: OAuth2Client;
 
+/**
+ * Gets the OAuth2Client instance for use by other modules
+ * Returns null if not initialized
+ */
+export function getOAuth2Client(): OAuth2Client | null {
+    return oauth2Client || null;
+}
+
 const Auth: React.FC<AuthProps> = (props) => {
     //External Oauth Configuration Function
     function configureOAuthClient(config: Config) {
@@ -285,6 +299,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                 authorizationEndpoint: config.externalOAuthIdpAuthorizationEndpoint,
                 discoveryEndpoint: config.externalOAuthIdpDiscoveryEndpoint,
             });
+            // Make OAuth2Client available to authTokenUtils
+            setOAuth2ClientInstance(oauth2Client);
         } else {
             localStorage.setItem(
                 "auth_error",
@@ -374,7 +390,7 @@ const Auth: React.FC<AuthProps> = (props) => {
         if (window.DISABLE_COGNITO === true) {
             // Check if access token or refresh token still valid
             // ( This check is needed on initial login or if a user refreshes the page )
-            const [accessTokenValid, refreshTokenValid] = tokenValidation();
+            const [accessTokenValid, refreshTokenValid] = externalTokenValidation();
             if (accessTokenValid) {
                 setisLoggedIn(true); // Since access token has been validated, can deem as logged in
                 startAccessTokenRefreshTimer(); // Restart refresh timer
@@ -382,10 +398,10 @@ const Auth: React.FC<AuthProps> = (props) => {
                 // If access token not valid but refresh token exists, attempt to refresh the token
                 setIsLoading(true); // show loading page while it's still refreshing the token
                 oauth2Client
-                    .refreshToken(getOAuth2Token())
+                    .refreshToken(getExternalOAuth2Token())
                     .then((oauth2Token) => {
                         // Successful token refresh. Update token & user session accordingly
-                        setOauth2Token(oauth2Token);
+                        setExternalOauthLoginAndRefreshTimer(oauth2Token);
                         setisLoggedIn(true); // Since access token has been validated, can deem as logged in
                     })
                     .catch((error) => {
@@ -454,7 +470,7 @@ const Auth: React.FC<AuthProps> = (props) => {
     useEffect(() => {
         if (window.DISABLE_COGNITO === true) {
             // Try request access token
-            const accessToken = getOAuth2Token().accessToken;
+            const accessToken = getExternalOAuth2Token().accessToken;
             if (accessToken) {
                 //already have access token, accessToken
                 return;
@@ -476,7 +492,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                     codeVerifier: localStorage.getItem("code_verifier")!,
                 })
                 .then((oauth2Token) => {
-                    setOauth2Token(oauth2Token);
+                    setExternalOauthLoginAndRefreshTimer(oauth2Token);
                     document.location = localStorage.getItem("auth_state")!;
                     // Cleanup localstorage items after they have been used & no longer needed
                     localStorage.removeItem("auth_state");
@@ -544,7 +560,7 @@ const Auth: React.FC<AuthProps> = (props) => {
 
         // Check if access token or refresh token still valid
         // ( This check is needed in case the oauth2_token wasnt cleaned up properly / still exists when clicking login button )
-        const [accessTokenValid, refreshTokenValid] = tokenValidation();
+        const [accessTokenValid, refreshTokenValid] = externalTokenValidation();
         if (accessTokenValid) {
             // Access token still valid, continue login process
             setTriggerExternalOAuth(true);
@@ -554,8 +570,10 @@ const Auth: React.FC<AuthProps> = (props) => {
         // If access token not valid but refresh token exists, attempt to refresh the token
         if (refreshTokenValid) {
             try {
-                const oauth2TokenResponse = await oauth2Client.refreshToken(getOAuth2Token());
-                setOauth2Token(oauth2TokenResponse); // Set when previous line is successful
+                const oauth2TokenResponse = await oauth2Client.refreshToken(
+                    getExternalOAuth2Token()
+                );
+                setExternalOauthLoginAndRefreshTimer(oauth2TokenResponse); // Set when previous line is successful
                 setTriggerExternalOAuth(true); // Access token is now valid, continue login process
                 return;
             } catch (error) {
@@ -789,7 +807,7 @@ const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
         refreshTimer = null;
     }
 
-    const oauth2Token = getOAuth2Token();
+    const oauth2Token = getExternalOAuth2Token();
     const accessToken = oauth2Token.accessToken;
 
     let refreshTimeLength = 5 * 60 * 1000; // Default to 5 minutes, if no expiresAt timestamp found below
@@ -815,7 +833,7 @@ const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
 
             try {
                 const oauth2TokenResponse = await oauth2Client.refreshToken(oauth2Token);
-                setOauth2Token(oauth2TokenResponse); // Set when previous line is successful and within here, restart this timer
+                setExternalOauth2Token(oauth2TokenResponse); // Set when previous line is successful and within here, restart this timer
             } catch (error) {
                 console.error("error: ", error);
                 signOutWithError("auth_error", "Failed to refresh access token.");
@@ -845,56 +863,16 @@ const resetSession = () => {
     Cache.removeItem("loginProfile");
 };
 
-const setOauth2Token = (oauth2Token: OAuth2Token) => {
-    localStorage.setItem("oauth2_token", JSON.stringify(oauth2Token)); // Update token in local storage
-
-    const jwt = parseJwt(oauth2Token.accessToken); // Decoding access token to get user id
-    localStorage.setItem("user", JSON.stringify({ username: jwt.sub })); // Update user in local storage
-
-    // @ts-expect-error
-    AmplifyAuth.setUserSession({ username: jwt.sub }, oauth2Token.accessToken); // Update Amplify User Session with latest access token
-
+// Wrapper for setExternalOauth2Token that also handles timer restart and error clearing
+// This function should be used within Auth.tsx for login flows
+const setExternalOauthLoginAndRefreshTimer = (oauth2Token: OAuth2Token) => {
+    setExternalOauth2Token(oauth2Token); // Use utility function
     clearPreviousLoginErrors(); // Can remove old login errors since have token
     startAccessTokenRefreshTimer(true); // Restart timer upon successfully setting the new oauth token
 };
 
-function getOAuth2Token() {
-    let oauth2Token = {} as OAuth2Token;
-    const oauth2TokenStr = localStorage.getItem("oauth2_token");
-    if (oauth2TokenStr) {
-        try {
-            oauth2Token = JSON.parse(oauth2TokenStr);
-        } catch (error) {
-            // Catch if token not valid json
-            console.error("error: ", error);
-        }
-    }
-    return oauth2Token;
-}
-
 function clearPreviousLoginErrors() {
     localStorage.removeItem("auth_error");
-}
-
-// Centralize logic for access & refresh token validation
-function tokenValidation() {
-    let accessTokenValid: boolean = false;
-    let refreshTokenValid: boolean = false;
-    const oauth2Token = getOAuth2Token();
-    // If access token exists and not expired, deem it as still valid
-    if (
-        oauth2Token.accessToken &&
-        oauth2Token.accessToken.length > 0 &&
-        oauth2Token.expiresAt &&
-        Date.now() < oauth2Token.expiresAt
-    ) {
-        accessTokenValid = true;
-    }
-    // If access token expired and refresh token exists, deem it as still valid
-    else if (oauth2Token.refreshToken) {
-        refreshTokenValid = true;
-    }
-    return [accessTokenValid, refreshTokenValid];
 }
 
 export default Auth;

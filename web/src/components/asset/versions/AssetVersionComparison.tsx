@@ -16,16 +16,12 @@ import {
     TextFilter,
     Pagination,
     CollectionPreferences,
+    Tabs,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams } from "react-router";
-
-import {
-    fetchAssetVersion,
-    fetchAssetS3Files,
-    compareAssetVersions,
-} from "../../../services/AssetVersionService";
-import { downloadAsset } from "../../../services/APIService";
-import { AssetVersionContext, AssetVersion } from "./AssetVersionManager";
+import { fetchAssetVersion, compareAssetVersions } from "../../../services/AssetVersionService";
+import { fetchAssetS3Files } from "../../../services/APIService";
+import { AssetVersionContext, AssetVersion, AssetVersionMetadataItem } from "./AssetVersionManager";
 
 // TypeScript interfaces - using imported AssetVersion from AssetVersionManager
 
@@ -69,6 +65,17 @@ interface FileComparison {
     status: "added" | "removed" | "modified" | "unchanged";
     version1File?: FileVersion;
     version2File?: FileVersion;
+}
+
+interface MetadataComparison {
+    key: string; // Composite key: type:filePath:metadataKey
+    status: "added" | "removed" | "modified" | "unchanged";
+    type: "metadata" | "attribute";
+    filePath: string;
+    metadataKey: string;
+    version1Value?: string;
+    version2Value?: string;
+    valueType?: string;
 }
 
 // Shared utility functions
@@ -184,6 +191,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                         databaseId,
                         assetId,
                         includeArchived: false,
+                        basic: false,
                     });
 
                     if (success && files) {
@@ -453,7 +461,9 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
             id: "fileName",
             header: "File Name",
             cell: (item: FileComparison) => {
-                const fileName = item.relativeKey.split("/").pop() || item.relativeKey;
+                const fileName = item.relativeKey
+                    ? item.relativeKey.split("/").pop() || item.relativeKey
+                    : "Unknown";
                 return (
                     <Box>
                         <div
@@ -817,11 +827,21 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [comparison, setComparison] = useState<any | null>(null);
+    const [metadataComparisons, setMetadataComparisons] = useState<MetadataComparison[]>([]);
+
+    // State for tabs
+    const [activeTabId, setActiveTabId] = useState<string>("files");
 
     // State for table pagination and filtering - moved to top level
     const [comparisonFilterText, setComparisonFilterText] = useState<string>("");
     const [comparisonCurrentPage, setComparisonCurrentPage] = useState<number>(1);
     const [comparisonPageSize, setComparisonPageSize] = useState<number>(10);
+
+    // State for metadata comparison pagination and filtering
+    const [metadataFilterText, setMetadataFilterText] = useState<string>("");
+    const [metadataCurrentPage, setMetadataCurrentPage] = useState<number>(1);
+    const [metadataPageSize, setMetadataPageSize] = useState<number>(25);
+    const [showMetadataChangesOnly, setShowMetadataChangesOnly] = useState(false);
 
     // State for table preferences - moved to top level
     const [preferences, setPreferences] = useState<{
@@ -854,6 +874,7 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                 setLoading(true);
                 setError(null);
 
+                // Fetch file comparison
                 const [success, result] = await compareAssetVersions({
                     databaseId,
                     assetId,
@@ -864,6 +885,81 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                 if (success && result) {
                     console.log("Comparison result:", result);
                     setComparison(result);
+
+                    // Fetch both version details to get metadata
+                    const [v1Success, v1Details] = await fetchAssetVersion({
+                        databaseId,
+                        assetId,
+                        assetVersionId: versionToCompare.Version,
+                    });
+
+                    const [v2Success, v2Details] = await fetchAssetVersion({
+                        databaseId,
+                        assetId,
+                        assetVersionId: selectedVersion.Version,
+                    });
+
+                    // Compare metadata if both versions have it
+                    if (v1Success && v2Success && v1Details && v2Details) {
+                        const v1Metadata = v1Details.versionedMetadata || [];
+                        const v2Metadata = v2Details.versionedMetadata || [];
+
+                        // Create a map for quick lookup
+                        const v1Map = new Map<string, AssetVersionMetadataItem>();
+                        const v2Map = new Map<string, AssetVersionMetadataItem>();
+
+                        v1Metadata.forEach((item: AssetVersionMetadataItem) => {
+                            const key = `${item.type}:${item.filePath}:${item.metadataKey}`;
+                            v1Map.set(key, item);
+                        });
+
+                        v2Metadata.forEach((item: AssetVersionMetadataItem) => {
+                            const key = `${item.type}:${item.filePath}:${item.metadataKey}`;
+                            v2Map.set(key, item);
+                        });
+
+                        // Get all unique keys
+                        const allKeys = new Set([
+                            ...Array.from(v1Map.keys()),
+                            ...Array.from(v2Map.keys()),
+                        ]);
+
+                        // Create metadata comparisons
+                        const metadataComps: MetadataComparison[] = [];
+                        allKeys.forEach((key) => {
+                            const v1Item = v1Map.get(key);
+                            const v2Item = v2Map.get(key);
+
+                            let status: "added" | "removed" | "modified" | "unchanged" =
+                                "unchanged";
+
+                            if (v1Item && !v2Item) {
+                                status = "removed";
+                            } else if (!v1Item && v2Item) {
+                                status = "added";
+                            } else if (v1Item && v2Item) {
+                                if (v1Item.metadataValue !== v2Item.metadataValue) {
+                                    status = "modified";
+                                }
+                            }
+
+                            const item = v1Item || v2Item;
+                            if (item) {
+                                metadataComps.push({
+                                    key,
+                                    status,
+                                    type: item.type,
+                                    filePath: item.filePath,
+                                    metadataKey: item.metadataKey,
+                                    version1Value: v1Item?.metadataValue,
+                                    version2Value: v2Item?.metadataValue,
+                                    valueType: item.metadataValueType,
+                                });
+                            }
+                        });
+
+                        setMetadataComparisons(metadataComps);
+                    }
                 } else {
                     setError("Failed to compare versions");
                 }
@@ -922,6 +1018,105 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
         const startIndex = (comparisonCurrentPage - 1) * comparisonPageSize;
         return searchFilteredComparisons.slice(startIndex, startIndex + comparisonPageSize);
     }, [searchFilteredComparisons, comparisonCurrentPage, comparisonPageSize]);
+
+    // Filter metadata comparisons
+    const filteredMetadataComparisons = useMemo(() => {
+        let filtered = metadataComparisons;
+
+        // Filter to show only changes if selected
+        if (showMetadataChangesOnly) {
+            filtered = filtered.filter((item) => item.status !== "unchanged");
+        }
+
+        // Apply text search
+        if (metadataFilterText.trim()) {
+            const searchLower = metadataFilterText.toLowerCase();
+            filtered = filtered.filter(
+                (item) =>
+                    item.metadataKey.toLowerCase().includes(searchLower) ||
+                    item.filePath.toLowerCase().includes(searchLower) ||
+                    (item.version1Value &&
+                        item.version1Value.toLowerCase().includes(searchLower)) ||
+                    (item.version2Value && item.version2Value.toLowerCase().includes(searchLower))
+            );
+        }
+
+        return filtered;
+    }, [metadataComparisons, showMetadataChangesOnly, metadataFilterText]);
+
+    // Paginate metadata comparisons
+    const paginatedMetadataComparisons = useMemo(() => {
+        const startIndex = (metadataCurrentPage - 1) * metadataPageSize;
+        return filteredMetadataComparisons.slice(startIndex, startIndex + metadataPageSize);
+    }, [filteredMetadataComparisons, metadataCurrentPage, metadataPageSize]);
+
+    // Metadata comparison columns
+    const metadataColumns = [
+        {
+            id: "status",
+            header: "Status",
+            cell: (item: MetadataComparison) => (
+                <Box>
+                    <div style={{ display: "flex", alignItems: "center" }}>
+                        {getStatusIcon(item.status)}
+                        {getStatusBadge(item.status)}
+                    </div>
+                </Box>
+            ),
+        },
+        {
+            id: "type",
+            header: "Type",
+            cell: (item: MetadataComparison) => (
+                <Badge color={item.type === "metadata" ? "blue" : "grey"}>
+                    {item.type === "metadata" ? "Metadata" : "Attribute"}
+                </Badge>
+            ),
+        },
+        {
+            id: "location",
+            header: "Location",
+            cell: (item: MetadataComparison) => (
+                <Box>
+                    {item.filePath === "/" ? (
+                        <Badge color="green">Asset</Badge>
+                    ) : (
+                        <div style={{ fontFamily: "monospace", fontSize: "0.9em" }}>
+                            {item.filePath}
+                        </div>
+                    )}
+                </Box>
+            ),
+        },
+        {
+            id: "key",
+            header: "Key",
+            cell: (item: MetadataComparison) => (
+                <div style={{ fontWeight: "500" }}>{item.metadataKey}</div>
+            ),
+        },
+        {
+            id: "value1",
+            header: `Value (v${versionToCompare?.Version})`,
+            cell: (item: MetadataComparison) => (
+                <div style={{ wordBreak: "break-word" }}>{item.version1Value || "N/A"}</div>
+            ),
+        },
+        {
+            id: "value2",
+            header: `Value (v${selectedVersion?.Version})`,
+            cell: (item: MetadataComparison) => (
+                <div style={{ wordBreak: "break-word" }}>{item.version2Value || "N/A"}</div>
+            ),
+        },
+        {
+            id: "valueType",
+            header: "Value Type",
+            cell: (item: MetadataComparison) => (
+                <div style={{ fontSize: "0.9em", color: "#5f6b7a" }}>{item.valueType || "N/A"}</div>
+            ),
+        },
+    ];
 
     // Render loading state
     if (loading) {
@@ -1033,7 +1228,9 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
             id: "fileName",
             header: "File Name",
             cell: (item: FileComparison) => {
-                const fileName = item.relativeKey.split("/").pop() || item.relativeKey;
+                const fileName = item.relativeKey
+                    ? item.relativeKey.split("/").pop() || item.relativeKey
+                    : "Unknown";
                 return (
                     <Box>
                         <div
@@ -1062,7 +1259,7 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                             wordBreak: "break-all",
                         }}
                     >
-                        {item.relativeKey}
+                        {item.relativeKey || "Unknown"}
                     </div>
                 </Box>
             ),
@@ -1148,6 +1345,238 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
         },
     ];
 
+    // Render files tab
+    const renderFilesTab = () => (
+        <SpaceBetween direction="vertical" size="l">
+            {/* Filter options */}
+            <SpaceBetween direction="horizontal" size="xs">
+                <Toggle
+                    onChange={({ detail }: { detail: { checked: boolean } }) =>
+                        setShowArchivedFiles(detail.checked)
+                    }
+                    checked={showArchivedFiles}
+                >
+                    Show archived files
+                </Toggle>
+                <Toggle
+                    onChange={({ detail }: { detail: { checked: boolean } }) =>
+                        setShowMismatchedOnly(detail.checked)
+                    }
+                    checked={showMismatchedOnly}
+                >
+                    Show only changed files
+                </Toggle>
+            </SpaceBetween>
+
+            {/* File comparison table */}
+            <Table
+                columnDefinitions={columns}
+                items={paginatedComparisons}
+                loading={loading}
+                loadingText="Loading comparison data"
+                empty={
+                    <Box textAlign="center" padding="l">
+                        <div>No files match the current filter criteria</div>
+                    </Box>
+                }
+                header={<Header counter={`(${totalComparisonFiles})`}>File Comparison</Header>}
+                filter={
+                    <TextFilter
+                        filteringText={comparisonFilterText}
+                        filteringPlaceholder="Find files"
+                        filteringAriaLabel="Filter files"
+                        onChange={({ detail }) => setComparisonFilterText(detail.filteringText)}
+                    />
+                }
+                pagination={
+                    <Pagination
+                        currentPageIndex={comparisonCurrentPage}
+                        pagesCount={Math.max(
+                            1,
+                            Math.ceil(totalComparisonFiles / comparisonPageSize)
+                        )}
+                        onChange={({ detail }) => setComparisonCurrentPage(detail.currentPageIndex)}
+                        ariaLabels={{
+                            nextPageLabel: "Next page",
+                            previousPageLabel: "Previous page",
+                            pageLabel: (pageNumber) =>
+                                `Page ${pageNumber} of ${Math.max(
+                                    1,
+                                    Math.ceil(totalComparisonFiles / comparisonPageSize)
+                                )}`,
+                        }}
+                    />
+                }
+                preferences={
+                    <CollectionPreferences
+                        title="Preferences"
+                        confirmLabel="Confirm"
+                        cancelLabel="Cancel"
+                        preferences={preferences}
+                        onConfirm={({ detail }) => {
+                            const newPreferences = {
+                                pageSize: detail.pageSize || preferences.pageSize,
+                                visibleContent: detail.visibleContent
+                                    ? [...detail.visibleContent]
+                                    : preferences.visibleContent,
+                            };
+                            setPreferences(newPreferences);
+
+                            if (
+                                detail.pageSize !== undefined &&
+                                detail.pageSize !== comparisonPageSize
+                            ) {
+                                setComparisonPageSize(detail.pageSize);
+                                setComparisonCurrentPage(1);
+                            }
+                        }}
+                        pageSizePreference={{
+                            title: "Page size",
+                            options: [
+                                { value: 10, label: "10 files" },
+                                { value: 20, label: "20 files" },
+                                { value: 50, label: "50 files" },
+                                { value: 100, label: "100 files" },
+                            ],
+                        }}
+                        visibleContentPreference={{
+                            title: "Select visible columns",
+                            options: [
+                                {
+                                    label: "File information",
+                                    options: [
+                                        { id: "status", label: "Status" },
+                                        { id: "fileName", label: "File Name" },
+                                        { id: "path", label: "Path" },
+                                        {
+                                            id: "size1",
+                                            label: `Size (v${versionToCompare?.Version})`,
+                                        },
+                                        {
+                                            id: "size2",
+                                            label: `Size (v${selectedVersion?.Version})`,
+                                        },
+                                        {
+                                            id: "lastModified1",
+                                            label: `Last Modified (v${versionToCompare?.Version})`,
+                                        },
+                                        {
+                                            id: "lastModified2",
+                                            label: `Last Modified (v${selectedVersion?.Version})`,
+                                        },
+                                    ],
+                                },
+                                {
+                                    label: "Actions",
+                                    options: [{ id: "actions", label: "Actions" }],
+                                },
+                            ],
+                        }}
+                    />
+                }
+                visibleColumns={preferences.visibleContent}
+            />
+        </SpaceBetween>
+    );
+
+    // Render metadata tab
+    const renderMetadataTab = () => {
+        if (metadataComparisons.length === 0) {
+            return (
+                <Box textAlign="center" padding="l">
+                    <div>No metadata snapshots available for comparison</div>
+                </Box>
+            );
+        }
+
+        return (
+            <SpaceBetween direction="vertical" size="l">
+                <Toggle
+                    onChange={({ detail }) => setShowMetadataChangesOnly(detail.checked)}
+                    checked={showMetadataChangesOnly}
+                >
+                    Show only changes
+                </Toggle>
+
+                <Table
+                    columnDefinitions={metadataColumns}
+                    items={paginatedMetadataComparisons}
+                    loading={loading}
+                    loadingText="Loading metadata comparison"
+                    empty={
+                        <Box textAlign="center" padding="l">
+                            <div>No metadata matches the current filters</div>
+                        </Box>
+                    }
+                    header={
+                        <Header counter={`(${filteredMetadataComparisons.length})`}>
+                            Metadata Comparison
+                        </Header>
+                    }
+                    filter={
+                        <TextFilter
+                            filteringText={metadataFilterText}
+                            filteringPlaceholder="Search metadata keys, values, or file paths"
+                            filteringAriaLabel="Filter metadata"
+                            onChange={({ detail }) => {
+                                setMetadataFilterText(detail.filteringText);
+                                setMetadataCurrentPage(1);
+                            }}
+                        />
+                    }
+                    pagination={
+                        <Pagination
+                            currentPageIndex={metadataCurrentPage}
+                            pagesCount={Math.max(
+                                1,
+                                Math.ceil(filteredMetadataComparisons.length / metadataPageSize)
+                            )}
+                            onChange={({ detail }) =>
+                                setMetadataCurrentPage(detail.currentPageIndex)
+                            }
+                            ariaLabels={{
+                                nextPageLabel: "Next page",
+                                previousPageLabel: "Previous page",
+                                pageLabel: (pageNumber) =>
+                                    `Page ${pageNumber} of ${Math.max(
+                                        1,
+                                        Math.ceil(
+                                            filteredMetadataComparisons.length / metadataPageSize
+                                        )
+                                    )}`,
+                            }}
+                        />
+                    }
+                    preferences={
+                        <CollectionPreferences
+                            title="Preferences"
+                            confirmLabel="Confirm"
+                            cancelLabel="Cancel"
+                            preferences={{
+                                pageSize: metadataPageSize,
+                            }}
+                            onConfirm={({ detail }) => {
+                                if (detail.pageSize !== undefined) {
+                                    setMetadataPageSize(detail.pageSize);
+                                    setMetadataCurrentPage(1);
+                                }
+                            }}
+                            pageSizePreference={{
+                                title: "Page size",
+                                options: [
+                                    { value: 10, label: "10 items" },
+                                    { value: 25, label: "25 items" },
+                                    { value: 50, label: "50 items" },
+                                    { value: 100, label: "100 items" },
+                                ],
+                            }}
+                        />
+                    }
+                />
+            </SpaceBetween>
+        );
+    };
+
     // Render comparison results
     return (
         <Container
@@ -1193,12 +1622,18 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                                         <strong>Total Files:</strong> {comparison.summary.total}
                                     </div>
                                 )}
+                                {metadataComparisons.length > 0 && (
+                                    <div>
+                                        <strong>Total Metadata Items:</strong>{" "}
+                                        {metadataComparisons.length}
+                                    </div>
+                                )}
                             </SpaceBetween>
                         </div>
 
                         <div>
                             <SpaceBetween direction="vertical" size="s">
-                                <Box variant="h4">Changes</Box>
+                                <Box variant="h4">File Changes</Box>
                                 {comparison.summary && (
                                     <>
                                         <div>
@@ -1233,137 +1668,22 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                     </ColumnLayout>
                 </Container>
 
-                {/* Filter options */}
-                <SpaceBetween direction="horizontal" size="xs">
-                    <Toggle
-                        onChange={({ detail }: { detail: { checked: boolean } }) =>
-                            setShowArchivedFiles(detail.checked)
-                        }
-                        checked={showArchivedFiles}
-                    >
-                        Show archived files
-                    </Toggle>
-                    <Toggle
-                        onChange={({ detail }: { detail: { checked: boolean } }) =>
-                            setShowMismatchedOnly(detail.checked)
-                        }
-                        checked={showMismatchedOnly}
-                    >
-                        Show only changed files
-                    </Toggle>
-                </SpaceBetween>
-
-                {/* File comparison table */}
-                <Table
-                    columnDefinitions={columns}
-                    items={paginatedComparisons}
-                    loading={loading}
-                    loadingText="Loading comparison data"
-                    empty={
-                        <Box textAlign="center" padding="l">
-                            <div>No files match the current filter criteria</div>
-                        </Box>
-                    }
-                    header={<Header counter={`(${totalComparisonFiles})`}>File Comparison</Header>}
-                    filter={
-                        <TextFilter
-                            filteringText={comparisonFilterText}
-                            filteringPlaceholder="Find files"
-                            filteringAriaLabel="Filter files"
-                            onChange={({ detail }) => setComparisonFilterText(detail.filteringText)}
-                        />
-                    }
-                    pagination={
-                        <Pagination
-                            currentPageIndex={comparisonCurrentPage}
-                            pagesCount={Math.max(
-                                1,
-                                Math.ceil(totalComparisonFiles / comparisonPageSize)
-                            )}
-                            onChange={({ detail }) =>
-                                setComparisonCurrentPage(detail.currentPageIndex)
-                            }
-                            ariaLabels={{
-                                nextPageLabel: "Next page",
-                                previousPageLabel: "Previous page",
-                                pageLabel: (pageNumber) =>
-                                    `Page ${pageNumber} of ${Math.max(
-                                        1,
-                                        Math.ceil(totalComparisonFiles / comparisonPageSize)
-                                    )}`,
-                            }}
-                        />
-                    }
-                    preferences={
-                        <CollectionPreferences
-                            title="Preferences"
-                            confirmLabel="Confirm"
-                            cancelLabel="Cancel"
-                            preferences={preferences}
-                            onConfirm={({ detail }) => {
-                                // Create a new preferences object with the correct types
-                                const newPreferences = {
-                                    pageSize: detail.pageSize || preferences.pageSize,
-                                    visibleContent: detail.visibleContent
-                                        ? [...detail.visibleContent]
-                                        : preferences.visibleContent,
-                                };
-                                setPreferences(newPreferences);
-
-                                // Update page size if changed
-                                if (
-                                    detail.pageSize !== undefined &&
-                                    detail.pageSize !== comparisonPageSize
-                                ) {
-                                    setComparisonPageSize(detail.pageSize);
-                                    setComparisonCurrentPage(1); // Reset to first page when changing page size
-                                }
-                            }}
-                            pageSizePreference={{
-                                title: "Page size",
-                                options: [
-                                    { value: 10, label: "10 files" },
-                                    { value: 20, label: "20 files" },
-                                    { value: 50, label: "50 files" },
-                                    { value: 100, label: "100 files" },
-                                ],
-                            }}
-                            visibleContentPreference={{
-                                title: "Select visible columns",
-                                options: [
-                                    {
-                                        label: "File information",
-                                        options: [
-                                            { id: "status", label: "Status" },
-                                            { id: "fileName", label: "File Name" },
-                                            { id: "path", label: "Path" },
-                                            {
-                                                id: "size1",
-                                                label: `Size (v${versionToCompare?.Version})`,
-                                            },
-                                            {
-                                                id: "size2",
-                                                label: `Size (v${selectedVersion?.Version})`,
-                                            },
-                                            {
-                                                id: "lastModified1",
-                                                label: `Last Modified (v${versionToCompare?.Version})`,
-                                            },
-                                            {
-                                                id: "lastModified2",
-                                                label: `Last Modified (v${selectedVersion?.Version})`,
-                                            },
-                                        ],
-                                    },
-                                    {
-                                        label: "Actions",
-                                        options: [{ id: "actions", label: "Actions" }],
-                                    },
-                                ],
-                            }}
-                        />
-                    }
-                    visibleColumns={preferences.visibleContent}
+                {/* Tabs for Files and Metadata */}
+                <Tabs
+                    activeTabId={activeTabId}
+                    onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
+                    tabs={[
+                        {
+                            id: "files",
+                            label: `Files (${totalComparisonFiles})`,
+                            content: renderFilesTab(),
+                        },
+                        {
+                            id: "metadata",
+                            label: `Metadata (${metadataComparisons.length})`,
+                            content: renderMetadataTab(),
+                        },
+                    ]}
                 />
             </SpaceBetween>
         </Container>

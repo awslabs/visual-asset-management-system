@@ -141,22 +141,40 @@ export class AssetUploadService {
     }
 
     /**
-     * Adds metadata to an existing asset
+     * Adds metadata to an existing asset using the new bulk metadata API
      * @param databaseId Database ID
      * @param assetId Asset ID
-     * @param metadata Metadata to add
+     * @param metadata Metadata to add (can be old format or new format)
      * @returns Promise with the result
      */
     async addMetadata(databaseId: string, assetId: string, metadata: Metadata): Promise<any> {
         try {
+            // Convert metadata to array format for new bulk API
+            const metadataArray = Object.entries(metadata).map(([key, value]) => {
+                // Check if value is an object with metadataValue and metadataValueType
+                if (typeof value === "object" && value !== null && "metadataValue" in value) {
+                    return {
+                        metadataKey: key,
+                        metadataValue: (value as any).metadataValue,
+                        metadataValueType: (value as any).metadataValueType || "string",
+                    };
+                }
+                // Otherwise treat as simple string value (backwards compatibility)
+                return {
+                    metadataKey: key,
+                    metadataValue: String(value),
+                    metadataValueType: "string",
+                };
+            });
+
+            // Use new bulk metadata API
             const response = await API.post(
                 "api",
                 `database/${databaseId}/assets/${assetId}/metadata`,
                 {
                     "Content-type": "application/json",
                     body: {
-                        metadata,
-                        version: "1", // Required by the backend API
+                        metadata: metadataArray, // New bulk API format
                     },
                 }
             );
@@ -219,23 +237,26 @@ export class AssetUploadService {
     }
 
     /**
-     * Creates metadata for an asset link
+     * Creates metadata for an asset link using the new bulk metadata API
      * @param assetLinkId Asset link ID
-     * @param metadata Metadata to create
+     * @param metadataArray Array of metadata items to create
      * @returns Promise with the result
      */
     async createAssetLinkMetadata(
         assetLinkId: string,
-        metadata: {
+        metadataArray: Array<{
             metadataKey: string;
             metadataValue: string;
-            metadataValueType: "XYZ" | "String";
-        }
+            metadataValueType: string;
+        }>
     ): Promise<any> {
         try {
+            // Use new bulk metadata API
             const response = await API.post("api", `asset-links/${assetLinkId}/metadata`, {
                 "Content-type": "application/json",
-                body: metadata,
+                body: {
+                    metadata: metadataArray, // New bulk API format
+                },
             });
             return response;
         } catch (error) {

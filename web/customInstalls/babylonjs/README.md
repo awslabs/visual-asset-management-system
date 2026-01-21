@@ -4,7 +4,7 @@ This directory contains the installation and bundling configuration for the Baby
 
 ## Overview
 
-The BabylonJS plugin now follows the same dynamic loading pattern as Vntana, Cesium, Potree, and Online3DViewer, loading the library from the public directory at runtime instead of bundling it with the main application.
+The BabylonJS plugin now follows the a dynamic loading pattern for the viewer, loading the library from the public directory at runtime instead of bundling it with the main application.
 
 ## Implementation Details
 

@@ -727,7 +727,7 @@ class TestFeatureSwitchIntegration:
             
             # Mock command APIClient
             mocks['api_client'].call_login_profile.return_value = {'success': True}
-            mocks['api_client'].get_feature_switches.return_value = {
+            mocks['api_client'].get_secure_config.return_value = {
                 'featuresEnabled': 'GOVCLOUD,LOCATIONSERVICES'
             }
             
@@ -743,7 +743,7 @@ class TestFeatureSwitchIntegration:
                 result = cli_runner.invoke(cli, ['auth', 'login', '-u', 'test@example.com', '-p', 'password'])
                 
                 # Verify feature switches were fetched and saved
-                mocks['api_client'].get_feature_switches.assert_called_once()
+                mocks['api_client'].get_secure_config.assert_called_once()
                 mocks['profile_manager'].save_feature_switches.assert_called_once_with({
                     'featuresEnabled': 'GOVCLOUD,LOCATIONSERVICES'
                 })
@@ -761,7 +761,7 @@ class TestFeatureSwitchIntegration:
             
             # Mock command APIClient
             mocks['api_client'].call_login_profile.return_value = {'success': True}
-            mocks['api_client'].get_feature_switches.return_value = {
+            mocks['api_client'].get_secure_config.return_value = {
                 'featuresEnabled': 'GOVCLOUD,LOCATIONSERVICES'
             }
             
@@ -772,7 +772,7 @@ class TestFeatureSwitchIntegration:
             ])
             
             # Verify feature switches were fetched and saved
-            mocks['api_client'].get_feature_switches.assert_called_once()
+            mocks['api_client'].get_secure_config.assert_called_once()
             mocks['profile_manager'].save_feature_switches.assert_called_once_with({
                 'featuresEnabled': 'GOVCLOUD,LOCATIONSERVICES'
             })

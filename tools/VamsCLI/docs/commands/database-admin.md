@@ -13,29 +13,52 @@ List all databases in the VAMS system.
 **Options:**
 
 -   `--show-deleted`: Include deleted databases
--   `--max-items`: Maximum number of items to return (default: 1000)
--   `--page-size`: Number of items per page (default: 1000)
--   `--starting-token`: Token for pagination
+-   `--page-size`: Number of items per page
+-   `--max-items`: Maximum total items to fetch (only with --auto-paginate, default: 10000)
+-   `--starting-token`: Token for pagination (manual pagination)
+-   `--auto-paginate`: Automatically fetch all items
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# List all databases
+# Basic listing (uses API defaults)
 vamscli database list
 
 # Include deleted databases
 vamscli database list --show-deleted
 
-# List with pagination
-vamscli database list --max-items 50 --page-size 25
+# Auto-pagination to fetch all items (default: up to 10,000)
+vamscli database list --auto-paginate
 
-# Continue pagination
-vamscli database list --starting-token "next-page-token"
+# Auto-pagination with custom limit
+vamscli database list --auto-paginate --max-items 5000
+
+# Auto-pagination with custom page size
+vamscli database list --auto-paginate --page-size 500
+
+# Manual pagination with page size
+vamscli database list --page-size 200
+vamscli database list --starting-token "token123" --page-size 200
 
 # JSON output for automation
 vamscli database list --json-output
 ```
+
+**Pagination Features:**
+
+-   **Auto-Pagination**: Use `--auto-paginate` to automatically fetch all items up to the limit
+-   **Manual Pagination**: Use `--page-size` and `--starting-token` for manual page-by-page control
+-   **CLI-Side Limit**: `--max-items` is a CLI-side limit (not passed to API) that controls total items fetched
+-   **API-Side Control**: `--page-size` is passed to the API to control items per request
+-   **Default Limit**: Auto-pagination defaults to 10,000 items maximum
+-   **Progress Display**: Shows progress during auto-pagination in CLI mode
+
+**Pagination Restrictions:**
+
+-   Cannot use `--auto-paginate` with `--starting-token` (choose one pagination mode)
+-   `--max-items` only applies with `--auto-paginate` (warning shown if used without it)
+-   When using manual pagination, use the `NextToken` from the response as `--starting-token` for the next page
 
 ### `vamscli database create`
 
@@ -49,6 +72,8 @@ Create a new database in VAMS.
 
 -   `--description`: Database description (required unless using --json-input)
 -   `--default-bucket-id`: Default bucket ID (optional - will prompt if not provided)
+-   `--restrict-metadata-outside-schemas`: Restrict metadata to defined schemas only (flag)
+-   `--restrict-file-uploads-to-extensions`: Comma-separated list of allowed file extensions (e.g., ".pdf,.docx,.jpg")
 -   `--json-input`: JSON input file path or JSON string with all database data
 -   `--json-output`: Output raw JSON response
 
@@ -61,8 +86,17 @@ vamscli database create -d my-database --description "My Database"
 # Create database with specific bucket
 vamscli database create -d my-database --description "My Database" --default-bucket-id "bucket-uuid"
 
+# Create with metadata restriction enabled
+vamscli database create -d my-database --description "My Database" --default-bucket-id "bucket-uuid" --restrict-metadata-outside-schemas
+
+# Create with file extension restrictions
+vamscli database create -d my-database --description "My Database" --default-bucket-id "bucket-uuid" --restrict-file-uploads-to-extensions ".pdf,.docx,.jpg"
+
+# Create with both restrictions
+vamscli database create -d my-database --description "My Database" --default-bucket-id "bucket-uuid" --restrict-metadata-outside-schemas --restrict-file-uploads-to-extensions ".pdf,.png"
+
 # Create with JSON input string
-vamscli database create -d my-database --json-input '{"description":"Test Database","defaultBucketId":"bucket-uuid"}'
+vamscli database create -d my-database --json-input '{"description":"Test Database","defaultBucketId":"bucket-uuid","restrictMetadataOutsideSchemas":true}'
 
 # Create with JSON input from file
 vamscli database create -d my-database --json-input @database-config.json --json-output
@@ -74,9 +108,19 @@ vamscli database create -d my-database --json-input @database-config.json --json
 {
     "databaseId": "my-database",
     "description": "Database description",
-    "defaultBucketId": "550e8400-e29b-41d4-a716-446655440000"
+    "defaultBucketId": "550e8400-e29b-41d4-a716-446655440000",
+    "restrictMetadataOutsideSchemas": true,
+    "restrictFileUploadsToExtensions": ".pdf,.docx,.jpg"
 }
 ```
+
+**Configuration Options:**
+
+-   **Metadata Restriction**: When enabled, only metadata fields defined in the database schema can be added to assets
+-   **File Extension Restriction**: When set, only files with the specified extensions can be uploaded to assets in this database
+    -   Use comma-separated list with dots (e.g., ".pdf,.docx,.jpg")
+    -   Special value ".all" bypasses restrictions
+    -   Empty string or omitted means no restrictions
 
 **Features:**
 
@@ -84,6 +128,7 @@ vamscli database create -d my-database --json-input @database-config.json --json
 -   Validates database ID format (lowercase, alphanumeric, hyphens, underscores)
 -   Validates bucket existence before creation
 -   Comprehensive error handling
+-   Backend validates file extension format
 
 ### `vamscli database update`
 
@@ -97,6 +142,10 @@ Update an existing database in VAMS.
 
 -   `--description`: New database description
 -   `--default-bucket-id`: New default bucket ID
+-   `--restrict-metadata-outside-schemas`: Enable metadata restriction to defined schemas
+-   `--no-restrict-metadata-outside-schemas`: Disable metadata restriction
+-   `--restrict-file-uploads-to-extensions`: Set allowed file extensions (e.g., ".pdf,.docx,.jpg")
+-   `--clear-file-extensions`: Clear file extension restrictions
 -   `--json-input`: JSON input file path or JSON string with update data
 -   `--json-output`: Output raw JSON response
 
@@ -109,11 +158,26 @@ vamscli database update -d my-database --description "Updated description"
 # Update default bucket
 vamscli database update -d my-database --default-bucket-id "new-bucket-uuid"
 
+# Enable metadata restriction
+vamscli database update -d my-database --restrict-metadata-outside-schemas
+
+# Disable metadata restriction
+vamscli database update -d my-database --no-restrict-metadata-outside-schemas
+
+# Set file extension restrictions
+vamscli database update -d my-database --restrict-file-uploads-to-extensions ".pdf,.png"
+
+# Clear file extension restrictions
+vamscli database update -d my-database --clear-file-extensions
+
 # Update multiple fields
-vamscli database update -d my-database --description "New desc" --default-bucket-id "new-bucket"
+vamscli database update -d my-database --description "New desc" --default-bucket-id "new-bucket" --restrict-metadata-outside-schemas
+
+# Update only configuration fields
+vamscli database update -d my-database --restrict-metadata-outside-schemas --restrict-file-uploads-to-extensions ".pdf,.docx"
 
 # Update with JSON input
-vamscli database update -d my-database --json-input '{"description":"Updated","defaultBucketId":"new-uuid"}'
+vamscli database update -d my-database --json-input '{"description":"Updated","restrictMetadataOutsideSchemas":true}'
 ```
 
 **JSON Input Format:**
@@ -122,9 +186,29 @@ vamscli database update -d my-database --json-input '{"description":"Updated","d
 {
     "databaseId": "my-database",
     "description": "Updated description",
-    "defaultBucketId": "550e8400-e29b-41d4-a716-446655440000"
+    "defaultBucketId": "550e8400-e29b-41d4-a716-446655440000",
+    "restrictMetadataOutsideSchemas": false,
+    "restrictFileUploadsToExtensions": ".pdf,.docx"
 }
 ```
+
+**Configuration Options:**
+
+-   **Metadata Restriction**: Control whether metadata can be added outside defined schemas
+    -   Use `--restrict-metadata-outside-schemas` to enable
+    -   Use `--no-restrict-metadata-outside-schemas` to disable
+    -   Cannot use both flags simultaneously
+-   **File Extension Restriction**: Control which file types can be uploaded
+    -   Use `--restrict-file-uploads-to-extensions` to set allowed extensions
+    -   Use `--clear-file-extensions` to remove restrictions
+    -   Cannot use both flags simultaneously
+    -   Format: comma-separated list with dots (e.g., ".pdf,.docx,.jpg")
+
+**Update Requirements:**
+
+-   At least one field must be provided for update
+-   Can update traditional fields (description, bucket) or new configuration fields independently
+-   All fields are optional - update only what you need
 
 ### `vamscli database get`
 
@@ -158,6 +242,23 @@ vamscli database get -d my-database --json-output
 -   Creation date and asset count
 -   Default bucket information
 -   S3 bucket name and base prefix
+-   Metadata restriction status (True/False)
+-   File upload extension restrictions (comma-separated list or "(none)")
+
+**Example Output:**
+
+```
+Database Details:
+  ID: my-database
+  Description: My Database
+  Date Created: 2024-01-01T00:00:00Z
+  Asset Count: 5
+  Default Bucket ID: 550e8400-e29b-41d4-a716-446655440000
+  Bucket Name: my-bucket
+  Base Assets Prefix: assets/
+  Restrict Metadata Outside Schemas: True
+  Restrict File Uploads To Extensions: .pdf,.docx,.jpg
+```
 
 ### `vamscli database delete`
 
@@ -206,23 +307,46 @@ List available S3 bucket configurations for use with databases.
 
 **Options:**
 
--   `--max-items`: Maximum number of items to return (default: 1000)
--   `--page-size`: Number of items per page (default: 1000)
--   `--starting-token`: Token for pagination
+-   `--page-size`: Number of items per page
+-   `--max-items`: Maximum total items to fetch (only with --auto-paginate, default: 10000)
+-   `--starting-token`: Token for pagination (manual pagination)
+-   `--auto-paginate`: Automatically fetch all items
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# List all bucket configurations
+# Basic listing (uses API defaults)
 vamscli database list-buckets
 
-# List with pagination
-vamscli database list-buckets --max-items 10
+# Auto-pagination to fetch all items (default: up to 10,000)
+vamscli database list-buckets --auto-paginate
+
+# Auto-pagination with custom limit
+vamscli database list-buckets --auto-paginate --max-items 5000
+
+# Manual pagination with page size
+vamscli database list-buckets --page-size 200
+vamscli database list-buckets --starting-token "token123" --page-size 200
 
 # JSON output for automation
 vamscli database list-buckets --json-output
 ```
+
+**Pagination Features:**
+
+-   **Auto-Pagination**: Use `--auto-paginate` to automatically fetch all items up to the limit
+-   **Manual Pagination**: Use `--page-size` and `--starting-token` for manual page-by-page control
+-   **CLI-Side Limit**: `--max-items` is a CLI-side limit (not passed to API) that controls total items fetched
+-   **API-Side Control**: `--page-size` is passed to the API to control items per request
+-   **Default Limit**: Auto-pagination defaults to 10,000 items maximum
+-   **Progress Display**: Shows progress during auto-pagination in CLI mode
+
+**Pagination Restrictions:**
+
+-   Cannot use `--auto-paginate` with `--starting-token` (choose one pagination mode)
+-   `--max-items` only applies with `--auto-paginate` (warning shown if used without it)
+-   When using manual pagination, use the `NextToken` from the response as `--starting-token` for the next page
 
 **Output includes:**
 
@@ -400,6 +524,91 @@ vamscli database list-buckets --json-output > bucket-configs.json
 
 # After migration, recreate databases using saved configurations
 # (This would be part of a larger migration script)
+```
+
+### Database Configuration Management
+
+```bash
+# Create a database with strict metadata schema enforcement
+vamscli database create -d schema-enforced-db \
+  --description "Schema-Enforced Database" \
+  --default-bucket-id "bucket-uuid" \
+  --restrict-metadata-outside-schemas
+
+# Create a database that only accepts specific file types
+vamscli database create -d documents-db \
+  --description "Documents Database" \
+  --default-bucket-id "bucket-uuid" \
+  --restrict-file-uploads-to-extensions ".pdf,.docx,.xlsx"
+
+# Create a database with both restrictions for compliance
+vamscli database create -d compliance-db \
+  --description "Compliance Database" \
+  --default-bucket-id "bucket-uuid" \
+  --restrict-metadata-outside-schemas \
+  --restrict-file-uploads-to-extensions ".pdf,.docx"
+
+# Update existing database to add restrictions
+vamscli database update -d existing-db --restrict-metadata-outside-schemas
+vamscli database update -d existing-db --restrict-file-uploads-to-extensions ".jpg,.png,.gif"
+
+# Remove restrictions from a database
+vamscli database update -d existing-db --no-restrict-metadata-outside-schemas
+vamscli database update -d existing-db --clear-file-extensions
+
+# Verify configuration changes
+vamscli database get -d existing-db
+```
+
+### Use Cases for Database Restrictions
+
+**Metadata Schema Enforcement:**
+
+```bash
+# For databases requiring strict metadata compliance
+vamscli database create -d regulated-assets \
+  --description "Regulated Assets Database" \
+  --default-bucket-id "bucket-uuid" \
+  --restrict-metadata-outside-schemas
+
+# This ensures all metadata follows predefined schemas
+# Useful for: compliance, data governance, standardization
+```
+
+**File Type Control:**
+
+```bash
+# For databases with specific file type requirements
+vamscli database create -d cad-models \
+  --description "CAD Models Database" \
+  --default-bucket-id "bucket-uuid" \
+  --restrict-file-uploads-to-extensions ".step,.stp,.iges,.igs"
+
+# For document management databases
+vamscli database create -d documents \
+  --description "Documents Database" \
+  --default-bucket-id "bucket-uuid" \
+  --restrict-file-uploads-to-extensions ".pdf,.docx,.xlsx,.pptx"
+
+# For image databases
+vamscli database create -d images \
+  --description "Images Database" \
+  --default-bucket-id "bucket-uuid" \
+  --restrict-file-uploads-to-extensions ".jpg,.jpeg,.png,.gif,.svg"
+```
+
+**Combined Restrictions:**
+
+```bash
+# For highly controlled databases
+vamscli database create -d secure-assets \
+  --description "Secure Assets Database" \
+  --default-bucket-id "bucket-uuid" \
+  --restrict-metadata-outside-schemas \
+  --restrict-file-uploads-to-extensions ".pdf,.docx"
+
+# This provides both metadata and file type control
+# Useful for: security, compliance, data quality
 ```
 
 ## Database Administration Best Practices

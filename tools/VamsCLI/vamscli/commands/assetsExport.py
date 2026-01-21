@@ -94,7 +94,7 @@ def export_with_auto_pagination(
         
         # Add pagination token to params
         if next_token:
-            export_params['nextToken'] = next_token
+            export_params['startingToken'] = next_token
         
         # Fetch page
         result = api_client.export_asset(database_id, asset_id, export_params)
@@ -107,7 +107,7 @@ def export_with_auto_pagination(
             all_relationships = result.get('relationships', [])
         
         total_assets_in_tree = result.get('totalAssetsInTree', 0)
-        next_token = result.get('nextToken')
+        next_token = result.get('NextToken')
         
         # Break if no more pages
         if not next_token:
@@ -149,9 +149,9 @@ def export_single_page(
     result = api_client.export_asset(database_id, asset_id, export_params)
     
     # Add pagination hint if more data exists (only for CLI mode)
-    if result.get('nextToken') and not json_output:
+    if result.get('NextToken') and not json_output:
         result['paginationHint'] = (
-            "More data available. Use --next-token with the returned token "
+            "More data available. Use --starting-token with the returned token "
             "or use --auto-paginate to fetch all pages automatically."
         )
     
@@ -376,10 +376,10 @@ def format_export_result_cli(data: Dict[str, Any]) -> str:
             lines.append(f"  Unauthorized assets (skipped): {unauthorized_count:,}")
         
         # Show pagination info
-        if data.get('nextToken'):
+        if data.get('NextToken'):
             lines.append("")
-            lines.append("More data available. Use the nextToken below for the next page:")
-            lines.append(f"{data['nextToken']}")
+            lines.append("More data available. Use the NextToken below for the next page:")
+            lines.append(f"{data['NextToken']}")
             lines.append("")
             lines.append("Or use --auto-paginate to fetch all pages automatically.")
     
@@ -444,7 +444,7 @@ def assets_export():
               help='[OPTIONAL, default: True] Automatically fetch all pages and combine results')
 @click.option('--max-assets', type=int, default=100,
               help='[OPTIONAL, default: 100] Maximum assets per page (1-1000)')
-@click.option('--next-token', 
+@click.option('--starting-token', 
               help='[OPTIONAL] Pagination token from previous response (manual pagination)')
 @click.option('--generate-presigned-urls', is_flag=True,
               help='[OPTIONAL] Generate presigned download URLs for files')
@@ -494,7 +494,7 @@ def export_command(
     asset_id: str,
     auto_paginate: bool,
     max_assets: int,
-    next_token: Optional[str],
+    starting_token: Optional[str],
     generate_presigned_urls: bool,
     download_files: bool,
     local_path: Optional[str],
@@ -533,7 +533,7 @@ def export_command(
        Fetch one page at a time using pagination tokens.
        Use --no-auto-paginate to enable manual pagination.
        Example: vamscli assets export -d my-db -a root-asset --no-auto-paginate --max-assets 100
-       Then: vamscli assets export -d my-db -a root-asset --no-auto-paginate --next-token "..."
+       Then: vamscli assets export -d my-db -a root-asset --no-auto-paginate --starting-token "..."
     
     The export includes:
     - Complete asset metadata (name, description, tags, version info)
@@ -577,7 +577,7 @@ def export_command(
         vamscli assets export -d my-db -a my-asset --no-auto-paginate --max-assets 100
         
         # Manual pagination (subsequent page)
-        vamscli assets export -d my-db -a my-asset --no-auto-paginate --next-token "eyJ..."
+        vamscli assets export -d my-db -a my-asset --no-auto-paginate --starting-token "eyJ..."
         
         # JSON output for downstream processing
         vamscli assets export -d my-db -a my-asset --json-output
@@ -600,7 +600,7 @@ def export_command(
             asset_id = json_data.get('assetId', asset_id)
             auto_paginate = json_data.get('autoPaginate', auto_paginate)
             max_assets = json_data.get('maxAssets', max_assets)
-            next_token = json_data.get('nextToken', next_token)
+            starting_token = json_data.get('startingToken', starting_token)
             generate_presigned_urls = json_data.get('generatePresignedUrls', generate_presigned_urls)
             download_files = json_data.get('downloadFiles', download_files)
             local_path = json_data.get('localPath', local_path)
@@ -644,10 +644,10 @@ def export_command(
             output_info("Auto-enabling --generate-presigned-urls for file downloads", json_output)
         
         # Validate mutually exclusive options
-        if auto_paginate and next_token:
+        if auto_paginate and starting_token:
             raise click.ClickException(
-                "Options --auto-paginate and --next-token cannot be used together. "
-                "Use --auto-paginate for automatic pagination or --next-token for manual pagination."
+                "Options --auto-paginate and --starting-token cannot be used together. "
+                "Use --auto-paginate for automatic pagination or --starting-token for manual pagination."
             )
         
         # Validate max_assets range
@@ -677,8 +677,8 @@ def export_command(
             export_params['fileExtensions'] = normalize_file_extensions(list(file_extensions))
         
         # Add next token if provided (manual pagination)
-        if next_token:
-            export_params['nextToken'] = next_token
+        if starting_token:
+            export_params['startingToken'] = starting_token
         
         # Execute export based on pagination mode
         if auto_paginate:

@@ -280,7 +280,7 @@ raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}
 #### **Example: Secure Model with Validator Integration**
 
 ```python
-class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
+class CreateAssetRequestModel(BaseModel, extra='ignore'):
     """Secure request model with proper validation"""
     assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
@@ -387,13 +387,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 ### **Rule 2: Pydantic Models MUST Follow assetsV3.py Patterns**
@@ -401,11 +401,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 ```python
 # ✅ CORRECT - Follow assetsV3.py patterns
 from typing import Dict, List, Optional, Literal
-from pydantic import Field, Extra
+from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import validate, id_pattern, object_name_pattern
 
-class [Domain]RequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]RequestModel(BaseModel, extra='ignore'):
     """Request model for [operation] [domain]"""
     requiredField: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=id_pattern)
     optionalField: Optional[str] = Field(None, min_length=1, max_length=256)
@@ -425,7 +425,7 @@ class [Domain]RequestModel(BaseModel, extra=Extra.ignore):
             raise ValueError(message)
         return values
 
-class [Domain]ResponseModel(BaseModel, extra=Extra.ignore):
+class [Domain]ResponseModel(BaseModel, extra='ignore'):
     """Response model for [domain] data"""
     id: str
     name: str
@@ -459,6 +459,7 @@ export function build[Domain]Service(
             REQUIRED_TABLE_NAME: storageResources.dynamo.requiredTable.tableName,
             REQUIRED_BUCKET_NAME: storageResources.s3.requiredBucket.bucketName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -468,6 +469,7 @@ export function build[Domain]Service(
     storageResources.dynamo.requiredTable.grantReadWriteData(fun);
     storageResources.s3.requiredBucket.grantReadWrite(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
@@ -502,7 +504,7 @@ def handle_get_request(event):
         })
         if not valid:
             logger.error(message)
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
 
         # Get the resource
         resource = get_resource_details(path_parameters['databaseId'], path_parameters['assetId'])
@@ -523,13 +525,13 @@ def handle_get_request(event):
                 logger.exception(f"Error converting to response model: {v}")
                 return success(body={"message": resource})
         else:
-            return general_error(body={"message": "Resource not found"}, status_code=404)
+            return general_error(body={"message": "Resource not found"}, status_code=404, event=event)
 
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
@@ -841,6 +843,7 @@ def mock_environment():
         'REQUIRED_TABLE_NAME': 'test-table',
         'REQUIRED_BUCKET_NAME': 'test-bucket',
         'AUTH_TABLE_NAME': 'test-auth-table',
+        'CONSTRAINTS_TABLE_NAME': 'test-constraint-table',
         'USER_ROLES_TABLE_NAME': 'test-user-roles-table',
         'ROLES_TABLE_NAME': 'test-roles-table',
     }):
@@ -893,7 +896,7 @@ class Test[Domain]Handler:
                 body = json.loads(response['body'])
                 assert 'message' in body or '[expectedField]' in body
 
-    def test_[operation]_validation_error(self, mock_environment, mock_claims_and_roles):
+    def test_[operation]_validation_error(self, mock_environment, mock_claims_and_roles, event=event):
         """Test [operation] with validation error."""
         with patch('handlers.[domain].[handler].request_to_claims') as mock_claims:
             mock_claims.return_value = mock_claims_and_roles
@@ -990,18 +993,12 @@ claims_and_roles = {}
 try:
     required_table_name = os.environ["REQUIRED_TABLE_NAME"]
     required_bucket_name = os.environ["REQUIRED_BUCKET_NAME"]
-    auth_table_name = os.environ["AUTH_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
 
 # Initialize resources
 required_table = dynamodb.Table(required_table_name)
-auth_table = dynamodb.Table(auth_table_name)
-user_roles_table = dynamodb.Table(user_roles_table_name)
-roles_table = dynamodb.Table(roles_table_name)
 
 #######################
 # Business Logic Functions
@@ -1093,12 +1090,12 @@ def handle_get_request(event):
                     body = json.loads(body)
                 except json.JSONDecodeError as e:
                     logger.exception(f"Invalid JSON in request body: {e}")
-                    return validation_error(body={'message': "Invalid JSON in request body"})
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
             elif isinstance(body, dict):
                 body = body
             else:
                 logger.error("Request body is not a string or dict")
-                return validation_error(body={'message': "Request body cannot be parsed"})
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
         # Case 1: Get a specific [domain]
         if '[domain]Id' in path_parameters:
@@ -1113,14 +1110,14 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
 
             # Parse query parameters if needed
             try:
                 request_model = parse(query_parameters, model=[Domain]RequestModel)
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)})
+                return validation_error(body={'message': str(v)}, event=event)
 
             # Get the [domain]
             [domain] = get_[domain]_details(path_parameters['[domain]Id'])
@@ -1141,7 +1138,7 @@ def handle_get_request(event):
                     logger.exception(f"Error converting [domain] to response model: {v}")
                     return success(body={"message": [domain]})
             else:
-                return general_error(body={"message": "[Domain] not found"}, status_code=404)
+                return general_error(body={"message": "[Domain] not found"}, status_code=404, event=event)
 
         # Case 2: List all [domain]s
         else:
@@ -1179,10 +1176,10 @@ def handle_get_request(event):
             return success(body=response)
 
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_post_request(event):
     """Handle POST requests to create [domain]
@@ -1197,7 +1194,7 @@ def handle_post_request(event):
         # Parse request body with enhanced error handling (Pattern 1: Required Body)
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
 
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1205,12 +1202,12 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
         # Parse and validate the request model
         request_model = parse(body, model=[Domain]CreateRequestModel)
@@ -1226,13 +1223,13 @@ def handle_post_request(event):
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for [domain] service APIs"""
@@ -1264,17 +1261,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 ### **New Pydantic Models Template**
@@ -1283,7 +1280,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 """[Domain] API models for VAMS."""
 
 from typing import Dict, List, Optional, Literal
-from pydantic import Field, Extra
+from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger
@@ -1292,18 +1289,18 @@ logger = safeLogger(service_name="[Domain]Models")
 
 ######################## [Domain] API Models ##########################
 
-class [Domain]RequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]RequestModel(BaseModel, extra='ignore'):
     """Request model for getting a [domain]"""
     includeDeleted: Optional[bool] = False
 
-class [Domain]ListRequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]ListRequestModel(BaseModel, extra='ignore'):
     """Request model for listing [domain]s"""
-    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
-    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    maxItems: Optional[int] = Field(default=30000, ge=1)
+    pageSize: Optional[int] = Field(default=3000, ge=1)
     startingToken: Optional[str] = None
     includeDeleted: Optional[bool] = False
 
-class [Domain]CreateRequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]CreateRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a [domain]"""
     [domain]Id: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     [domain]Name: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
@@ -1327,7 +1324,7 @@ class [Domain]CreateRequestModel(BaseModel, extra=Extra.ignore):
                 raise ValueError(message)
         return values
 
-class [Domain]UpdateRequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]UpdateRequestModel(BaseModel, extra='ignore'):
     """Request model for updating a [domain]"""
     [domain]Name: Optional[str] = Field(None, min_length=1, max_length=256, pattern=object_name_pattern)
     description: Optional[str] = Field(None, min_length=4, max_length=256)
@@ -1355,7 +1352,7 @@ class [Domain]UpdateRequestModel(BaseModel, extra=Extra.ignore):
 
         return values
 
-class [Domain]DeleteRequestModel(BaseModel, extra=Extra.ignore):
+class [Domain]DeleteRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting a [domain]"""
     confirmDelete: bool = Field(default=False)
     reason: Optional[str] = Field(None, max_length=256)
@@ -1367,7 +1364,7 @@ class [Domain]DeleteRequestModel(BaseModel, extra=Extra.ignore):
             raise ValueError("confirmDelete must be true for deletion")
         return v
 
-class [Domain]ResponseModel(BaseModel, extra=Extra.ignore):
+class [Domain]ResponseModel(BaseModel, extra='ignore'):
     """Response model for [domain] data"""
     [domain]Id: str
     [domain]Name: str
@@ -1377,7 +1374,7 @@ class [Domain]ResponseModel(BaseModel, extra=Extra.ignore):
     dateCreated: Optional[str] = None
     createdBy: Optional[str] = None
 
-class [Domain]OperationResponseModel(BaseModel, extra=Extra.ignore):
+class [Domain]OperationResponseModel(BaseModel, extra='ignore'):
     """Response model for [domain] operations (create, update, delete)"""
     success: bool
     message: str
@@ -1438,6 +1435,7 @@ export function build[Domain]Service(
         environment: {
             [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -1446,6 +1444,7 @@ export function build[Domain]Service(
     // Grant permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
@@ -1485,6 +1484,7 @@ export function buildCreate[Domain]Function(
         environment: {
             [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
@@ -1493,6 +1493,7 @@ export function buildCreate[Domain]Function(
     // Grant permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
@@ -1525,6 +1526,7 @@ def mock_environment():
     with patch.dict('os.environ', {
         '[DOMAIN]_STORAGE_TABLE_NAME': 'test-[domain]-table',
         'AUTH_TABLE_NAME': 'test-auth-table',
+        'CONSTRAINTS_TABLE_NAME': 'test-constraint-table',
         'USER_ROLES_TABLE_NAME': 'test-user-roles-table',
         'ROLES_TABLE_NAME': 'test-roles-table',
     }):
@@ -1690,7 +1692,7 @@ class Test[Domain]Handler:
 
                 assert response['statusCode'] == 403
 
-    def test_validation_error(self, mock_environment, mock_claims_and_roles):
+    def test_validation_error(self, mock_environment, mock_claims_and_roles, event=event):
         """Test validation error handling."""
         with patch('handlers.[domain].[handler].request_to_claims') as mock_claims:
             mock_claims.return_value = mock_claims_and_roles
@@ -1784,7 +1786,7 @@ def handle_post_request(event):
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
 
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1792,18 +1794,18 @@ def handle_post_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
         # Optional: Validate required fields in the request body
         required_fields = ['databaseId', 'assetName', 'description', 'isDistributable']
         for field in required_fields:
             if field not in body:
-                return validation_error(body={'message': f"Missing required field: {field}"})
+                return validation_error(body={'message': f"Missing required field: {field}"}, event=event)
 
         # Parse and validate the request model
         request_model = parse(body, model=CreateAssetRequestModel)
@@ -1812,10 +1814,10 @@ def handle_post_request(event):
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 #### **Pattern 2: Optional Event Body (GET operations or optional body)**
@@ -1836,12 +1838,12 @@ def handle_get_request(event):
                     body = json.loads(body)
                 except json.JSONDecodeError as e:
                     logger.exception(f"Invalid JSON in request body: {e}")
-                    return validation_error(body={'message': "Invalid JSON in request body"})
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
             elif isinstance(body, dict):
                 body = body
             else:
                 logger.error("Request body is not a string or dict")
-                return validation_error(body={'message': "Request body cannot be parsed"})
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
         # Now body is always a dict (either parsed or empty)
         # Parse request model (works with both empty and populated body)
@@ -1851,10 +1853,10 @@ def handle_get_request(event):
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 ```
 
 #### **Key Validation Rules:**
@@ -1949,34 +1951,154 @@ except ValidationError as v:
     query_params = query_parameters
 ```
 
-### **DynamoDB Query Pattern**
+### **DynamoDB Query Pattern (for API responses)**
 
 ```python
-# Standard DynamoDB query with pagination
+# Standard DynamoDB query with proper pagination using LastEvaluatedKey
+# NOTE: This pattern is for main API query results. For internal data fetching to construct
+# larger query sets, use the regular paginator as larger datasets are required.
+
+# Build query parameters
+query_params_dict = {
+    'TableName': table_name,
+    'KeyConditionExpression': 'partitionKey = :pkValue',
+    'ExpressionAttributeValues': {
+        ':pkValue': {'S': partition_value}
+    },
+    'ScanIndexForward': False,
+    'Limit': int(query_params['pageSize'])
+}
+
+# Add ExclusiveStartKey if startingToken provided (decode base64)
+if query_params.get('startingToken'):
+    try:
+        decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+        query_params_dict['ExclusiveStartKey'] = json.loads(decoded_token)
+    except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+        logger.exception(f"Invalid startingToken format: {e}")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+# Single query call with pagination
+response = dynamodb_client.query(**query_params_dict)
+
+# Process items with authorization filtering
+authorized_items = []
+deserializer = TypeDeserializer()
+for item in response.get('Items', []):
+    # Deserialize the item
+    deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+
+    # Add object type for Casbin enforcement
+    deserialized_item.update({"object__type": "[objectType]"})
+
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(deserialized_item, "GET"):
+            authorized_items.append(deserialized_item)
+
+# Build response with nextToken
+result = {"Items": authorized_items}
+
+# Return LastEvaluatedKey as nextToken if present (base64 encoded)
+if 'LastEvaluatedKey' in response:
+    json_str = json.dumps(response['LastEvaluatedKey'])
+    result["NextToken"] = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+```
+
+### **DynamoDB Scan Pattern (for API responses)**
+
+```python
+# Standard DynamoDB scan with proper pagination using LastEvaluatedKey
+# NOTE: This pattern is for main API scan results. For internal data fetching to construct
+# larger query sets, use the regular paginator as larger datasets are required.
+
+# Build scan parameters
+scan_params = {
+    'TableName': table_name,
+    'Limit': int(query_params['pageSize'])
+}
+
+# Add filter if needed
+if filter_expression:
+    scan_params['ScanFilter'] = filter_expression
+
+# Add ExclusiveStartKey if startingToken provided (decode base64)
+if query_params.get('startingToken'):
+    try:
+        decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+        scan_params['ExclusiveStartKey'] = json.loads(decoded_token)
+    except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+        logger.exception(f"Invalid startingToken format: {e}")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+# Single scan call with pagination
+response = dynamodb_client.scan(**scan_params)
+
+# Process items with authorization filtering
+authorized_items = []
+deserializer = TypeDeserializer()
+for item in response.get('Items', []):
+    # Deserialize the item
+    deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+
+    # Add object type for Casbin enforcement
+    deserialized_item.update({"object__type": "[objectType]"})
+
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(deserialized_item, "GET"):
+            authorized_items.append(deserialized_item)
+
+# Build response with nextToken
+result = {"Items": authorized_items}
+
+# Return LastEvaluatedKey as nextToken if present (base64 encoded)
+if 'LastEvaluatedKey' in response:
+    json_str = json.dumps(response['LastEvaluatedKey'])
+    result["NextToken"] = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+```
+
+### **Internal Data Fetching Pattern (for constructing larger datasets)**
+
+```python
+# Pattern for internal data fetching where complete datasets are needed
+# Use this when you need to fetch ALL items to construct response data, not for API pagination
+# Examples: Getting bucket details for each database, fetching related metadata, etc.
+
+# For Query operations - fetch all items
 paginator = dynamodb.meta.client.get_paginator('query')
 page_iterator = paginator.paginate(
     TableName=table_name,
     KeyConditionExpression=Key('partitionKey').eq(partition_value),
-    ScanIndexForward=False,
-    PaginationConfig={
-        'MaxItems': int(query_params['maxItems']),
-        'PageSize': int(query_params['pageSize']),
-        'StartingToken': query_params.get('startingToken')
-    }
+    ScanIndexForward=False
 ).build_full_result()
 
-# Process items with authorization filtering
-authorized_items = []
+all_items = []
 for item in page_iterator.get('Items', []):
-    item.update({"object__type": "[objectType]"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforce(item, "GET"):
-            authorized_items.append(item)
+    all_items.append(item)
 
-result = {"Items": authorized_items}
-if 'NextToken' in page_iterator:
-    result["NextToken"] = page_iterator['NextToken']
+# For Scan operations - fetch all items
+paginator = dynamodb_client.get_paginator('scan')
+page_iterator = paginator.paginate(
+    TableName=table_name,
+    ScanFilter=filter_expression
+).build_full_result()
+
+all_items = []
+for item in page_iterator.get('Items', []):
+    deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+    all_items.append(deserialized_item)
+
+# For S3 operations - fetch all objects under prefix
+paginator = s3_client.get_paginator('list_objects_v2')
+all_objects = []
+for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+    if 'Contents' in page:
+        for obj in page['Contents']:
+            all_objects.append(obj)
+
+# IMPORTANT: Only use this pattern when you genuinely need ALL items for internal processing.
+# For API responses that return lists to users, always use the LastEvaluatedKey pattern above.
 ```
 
 ## 🔍 **Code Review Checklist**
@@ -2093,7 +2215,7 @@ vamscli --help
 """[Domain] API models for VAMS."""
 
 from typing import Dict, List, Optional, Literal
-from pydantic import Field, Extra
+from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import validate, id_pattern, object_name_pattern
 from customLogging.logger import safeLogger

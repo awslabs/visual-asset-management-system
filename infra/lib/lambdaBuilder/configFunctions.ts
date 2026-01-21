@@ -16,22 +16,23 @@ import * as Service from "../helper/service-helper";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
 export function buildConfigService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    appFeatureEnabledStorageTable: dynamodb.Table,
+    storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "configService";
-
     let urlFormat = "";
 
     //Only fill in if we have locaiton services enabled since this is not in all aws partitions
@@ -41,7 +42,7 @@ export function buildConfigService(
         }/v2/styles/Standard/descriptor?key=<apiKey>`;
     }
 
-    const configService = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.config.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -57,17 +58,19 @@ export function buildConfigService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            APPFEATUREENABLED_STORAGE_TABLE_NAME: appFeatureEnabledStorageTable.tableName,
+            APPFEATUREENABLED_STORAGE_TABLE_NAME:
+                storageResources.dynamo.appFeatureEnabledStorageTable.tableName,
             LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM: config.locationServiceApiKeyArnSSMParam,
             LOCATION_SERVICE_URL_FORMAT: urlFormat,
+            WEB_DEPLOYED_URL_SSM_PARAM: config.webUrlDeploymentSSMParam,
         },
     });
 
-    appFeatureEnabledStorageTable.grantReadData(configService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(configService, kmsKey);
+    storageResources.dynamo.appFeatureEnabledStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
     // Grant SSM read permissions for Location Service API Key parameter
-    configService.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["ssm:GetParameter", "ssm:GetParameters"],
@@ -76,7 +79,7 @@ export function buildConfigService(
     );
 
     // Grant Location Services permissions to describe API keys
-    configService.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["geo:DescribeKey"],
@@ -84,6 +87,7 @@ export function buildConfigService(
         })
     );
 
-    globalLambdaEnvironmentsAndPermissions(configService, config);
-    return configService;
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    return fun;
 }

@@ -23,6 +23,7 @@ def mock_environment(monkeypatch):
     monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
     monkeypatch.setenv("WORKFLOW_EXECUTION_ROLE_ARN", "arn:aws:iam::123456789012:role/test-role")
     monkeypatch.setenv("AUTH_TABLE_NAME", "test-auth-table")
+    monkeypatch.setenv("CONSTRAINTS_TABLE_NAME", "test-constraint-table")
     monkeypatch.setenv("USER_ROLES_TABLE_NAME", "test-user-roles-table")
     monkeypatch.setenv("ROLES_TABLE_NAME", "test-roles-table")
 

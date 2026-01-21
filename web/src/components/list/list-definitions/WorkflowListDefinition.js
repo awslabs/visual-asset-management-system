@@ -12,7 +12,13 @@ import Synonyms from "../../../synonyms";
 export const WorkflowListDefinition = new ListDefinition({
     pluralName: "workflows",
     pluralNameTitleCase: "Workflows",
-    visibleColumns: ["workflowId", "databaseId", "description", "pipelines"],
+    visibleColumns: [
+        "workflowId",
+        "databaseId",
+        "description",
+        "pipelines",
+        "autoTriggerOnFileExtensionsUpload",
+    ],
     filterColumns: [{ name: "databaseId", placeholder: Synonyms.Database }],
     elementId: "workflowId",
     deleteRoute: "database/{databaseId}/workflows/{workflowId}",
@@ -58,6 +64,15 @@ export const WorkflowListDefinition = new ListDefinition({
                 ));
                 return <>{displayPipelines}</>;
             },
+        }),
+        new ColumnDefinition({
+            id: "autoTriggerOnFileExtensionsUpload",
+            header: "Auto-Trigger on File Upload (Extensions)",
+            cellWrapper: (props) => {
+                const extensions = props?.item?.autoTriggerOnFileExtensionsUpload || "";
+                return <>{extensions || "-"}</>;
+            },
+            sortingField: "autoTriggerOnFileExtensionsUpload",
         }),
     ],
 });

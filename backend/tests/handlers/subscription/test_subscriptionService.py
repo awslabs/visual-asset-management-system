@@ -537,7 +537,7 @@ def test_subscription_unauthorized(get_subscriptions_event, monkeypatch):
         # Verify the enforcer was called
         mock_enforcer.enforceAPI.assert_called_once()
 
-def test_subscription_validation_error(create_subscription_event, mock_casbin_enforcer, monkeypatch):
+def test_subscription_validation_error(create_subscription_event, mock_casbin_enforcer, monkeypatch, event=event):
     """
     Test the subscriptionService lambda handler with invalid input
     

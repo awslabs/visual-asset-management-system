@@ -494,7 +494,7 @@ def test_workflow_unauthorized(get_workflow_event, mock_workflow_table, monkeypa
         # Verify the enforcer was called
         mock_enforcer.enforceAPI.assert_called_once()
 
-def test_workflow_validation_error(get_workflow_event, mock_casbin_enforcer, monkeypatch):
+def test_workflow_validation_error(get_workflow_event, mock_casbin_enforcer, monkeypatch, event=event):
     pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
     """
     Test the workflowService lambda handler with invalid input

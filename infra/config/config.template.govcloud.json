@@ -58,6 +58,15 @@
             "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null
         },
+        "useCloudFront": {
+            "enabled": false,
+            "customDomain": {
+                "enabled": false,
+                "domainHost": "",
+                "certificateArn": "",
+                "optionalHostedZoneId": ""
+            }
+        },
         "pipelines": {
             "useConversion3dBasic": {
                 "enabled": true,
@@ -65,31 +74,69 @@
             },
             "useConversionCadMeshMetadataExtraction": {
                 "enabled": false,
-                "autoRegisterWithVAMS": true
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
                 "autoRegisterWithVAMS": false,
-                "sqsAutoRunOnAssetModified": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "sqsAutoRunOnAssetModified": false
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,
                 "bedrockModelId": "global.anthropic.claude-sonnet-4-20250514-v1:0",
-                "autoRegisterWithVAMS": true
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true
             },
             "useSplatToolbox": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true
             },
             "useRapidPipeline": {
-                "enabled": false,
-                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
-                "autoRegisterWithVAMS": true
+                "useEcs": {
+                    "enabled": false,
+                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                    "autoRegisterWithVAMS": true
+                },
+                "useEks": {
+                    "enabled": false,
+                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                    "autoRegisterWithVAMS": true,
+                    "eksClusterVersion": "1.31",
+                    "nodeInstanceType": "m5.2xlarge",
+                    "minNodes": 1,
+                    "maxNodes": 10,
+                    "desiredNodes": 2,
+                    "jobTimeout": 7200,
+                    "jobMemory": "16Gi",
+                    "jobCpu": "2000m",
+                    "jobBackoffLimit": 2,
+                    "jobTTLSecondsAfterFinished": 600,
+                    "observability": {
+                        "enableControlPlaneLogs": false,
+                        "enableContainerInsights": false
+                    }
+                }
             },
             "useModelOps": {
                 "enabled": false,
                 "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
                 "autoRegisterWithVAMS": true
+            },
+            "useIsaacLabTraining": {
+                "enabled": false,
+                "acceptNvidiaEula": false,
+                "autoRegisterWithVAMS": true,
+                "keepWarmInstance": false
+            }
+        },
+        "addons": {
+            "useGarnetFramework": {
+                "enabled": false,
+                "garnetApiEndpoint": "",
+                "garnetApiToken": "",
+                "garnetIngestionQueueSqsUrl": ""
             }
         },
         "authProvider": {
@@ -124,6 +171,12 @@
         "api": {
             "globalRateLimit": 50,
             "globalBurstLimit": 100
+        },
+        "metadataSchema": {
+            "autoLoadDefaultAssetLinksSchema": true,
+            "autoLoadDefaultDatabaseSchema": true,
+            "autoLoadDefaultAssetSchema": true,
+            "autoLoadDefaultAssetFileSchema": true
         }
     }
 }

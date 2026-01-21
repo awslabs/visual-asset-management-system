@@ -216,6 +216,7 @@ class TestLoggingWithExceptions:
 class TestLoggingFileCreation:
     """Test that logging creates log files properly."""
     
+    @pytest.mark.no_mock_logging
     @patch('vamscli.utils.logging.get_log_dir')
     def test_log_directory_creation(self, mock_get_log_dir):
         """Test that log directory is created."""

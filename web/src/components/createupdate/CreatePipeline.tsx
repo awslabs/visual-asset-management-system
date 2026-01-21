@@ -327,7 +327,7 @@ export default function CreatePipeline({
                             <FormField
                                 label="Pipeline Name"
                                 errorText={validatePipelineName(formState.pipelineId)}
-                                constraintText="Required. No special chars or spaces except - and _ min 3 and max 64"
+                                constraintText="Required. No special chars or spaces except - and _ min 4 and max 64"
                             >
                                 <Input
                                     value={formState.pipelineId}

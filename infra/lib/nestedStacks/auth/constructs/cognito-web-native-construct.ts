@@ -56,7 +56,7 @@ export class CognitoWebNativeConstructStack extends Construct {
 
         //Check if GovCloud is enabled and set the handler to v1 instead (GovCloud does not support advanced security mode which can use the v2 pretokengen lambdas)
         const handlerName = props.config.app.govCloud.enabled ? "pretokengenv1" : "pretokengenv2";
-        const preTokenGeneration = new lambda.Function(this, handlerName, {
+        const fun = new lambda.Function(this, handlerName, {
             code: lambda.Code.fromAsset(path.join(__dirname, `../../../../../backend/backend`)),
             handler: `handlers.auth.${handlerName}.lambda_handler`,
             runtime: LAMBDA_PYTHON_RUNTIME,
@@ -65,21 +65,19 @@ export class CognitoWebNativeConstructStack extends Construct {
             memorySize: Config.LAMBDA_MEMORY_SIZE,
             environment: {
                 AUTH_TABLE_NAME: props.storageResources.dynamo.authEntitiesStorageTable.tableName,
+                CONSTRAINTS_TABLE_NAME:
+                    props.storageResources.dynamo.constraintsStorageTable.tableName,
                 USER_ROLES_TABLE_NAME:
                     props.storageResources.dynamo.userRolesStorageTable.tableName,
                 ROLES_TABLE_NAME: props.storageResources.dynamo.rolesStorageTable.tableName,
             },
         });
-        props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(
-            preTokenGeneration
-        );
-        props.storageResources.dynamo.userRolesStorageTable.grantReadData(preTokenGeneration);
-        props.storageResources.dynamo.rolesStorageTable.grantReadData(preTokenGeneration);
-        kmsKeyLambdaPermissionAddToResourcePolicy(
-            preTokenGeneration,
-            props.storageResources.encryption.kmsKey
-        );
-        globalLambdaEnvironmentsAndPermissions(preTokenGeneration, props.config);
+        props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+        props.storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
+        props.storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+        props.storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+        kmsKeyLambdaPermissionAddToResourcePolicy(fun, props.storageResources.encryption.kmsKey);
+        globalLambdaEnvironmentsAndPermissions(fun, props.config);
 
         const messageVerification =
             "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is: {####}";
@@ -126,13 +124,13 @@ export class CognitoWebNativeConstructStack extends Construct {
         //(GovCloud) Add pretokengen lambda trigger (V1) - this will generate claims for only Access token claims (ID token will not have claims and can't be used)
         cfnUserPool.lambdaConfig = {
             preTokenGenerationConfig: {
-                lambdaArn: preTokenGeneration.functionArn,
+                lambdaArn: fun.functionArn,
                 lambdaVersion: props.config.app.govCloud.enabled ? "V1_0" : "V2_0",
             },
         };
 
-        userPool.node.addDependency(preTokenGeneration);
-        preTokenGeneration.grantInvoke(Service("COGNITO_IDP").Principal);
+        userPool.node.addDependency(fun);
+        fun.grantInvoke(Service("COGNITO_IDP").Principal);
 
         //Only enable advanced security for non-govcloud environments (currently no supported by cognito)
         if (!props.config.app.govCloud.enabled) {
@@ -299,6 +297,17 @@ export class CognitoWebNativeConstructStack extends Construct {
                 {
                     id: "AwsSolutions-IAM5",
                     reason: "Intend to use Cognito SMS Role as-is.",
+                },
+            ],
+            true
+        );
+
+        NagSuppressions.addResourceSuppressions(
+            fun,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Not providing IAM wildcard permissions to constraint tables.",
                 },
             ],
             true

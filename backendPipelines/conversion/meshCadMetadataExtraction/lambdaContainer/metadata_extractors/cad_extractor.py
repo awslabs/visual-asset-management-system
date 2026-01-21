@@ -62,24 +62,24 @@ def extract_step_metadata(model: cq.Shape, file_path: str) -> Dict[str, Any]:
     metadata = {}
     
     # Extract geometric metadata
-    metadata['AB_geometric_metadata'] = extract_geometric_metadata(model)
+    metadata['geometric_metadata'] = extract_geometric_metadata(model)
     
     # Extract assembly hierarchy if it's a compound
     if model.ShapeType() == 'Compound':
-        metadata['AB_assembly_hierarchy'] = extract_assembly_hierarchy(model)
+        metadata['assembly_hierarchy'] = extract_assembly_hierarchy(model)
     
     # Extract shape statistics
-    metadata['AB_shape_statistics'] = extract_shape_statistics(model)
+    metadata['shape_statistics'] = extract_shape_statistics(model)
     
     # Try to extract materials
     try:
-        metadata['AB_materials'] = extract_materials(model)
+        metadata['materials'] = extract_materials(model)
     except:
         pass
     
     # Try to extract custom metadata
     try:
-        metadata['AB_custom_metadata'] = extract_custom_metadata(model)
+        metadata['custom_metadata'] = extract_custom_metadata(model)
     except:
         pass
     
@@ -99,16 +99,16 @@ def extract_dxf_metadata(model: cq.Workplane, file_path: str) -> Dict[str, Any]:
     metadata = {}
     
     # Extract 2D geometric metadata
-    metadata['AB_geometric_metadata'] = extract_2d_geometric_metadata(model)
+    metadata['geometric_metadata'] = extract_2d_geometric_metadata(model)
     
     # Extract layers if available
     try:
-        metadata['AB_layers'] = extract_layers(model)
+        metadata['layers'] = extract_layers(model)
     except:
         pass
     
     # Extract entity counts
-    metadata['AB_entity_statistics'] = extract_entity_statistics(model)
+    metadata['entity_statistics'] = extract_entity_statistics(model)
     
     return metadata
 

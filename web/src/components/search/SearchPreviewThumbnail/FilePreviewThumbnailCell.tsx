@@ -101,6 +101,7 @@ export const FilePreviewThumbnailCell: React.FC<FilePreviewThumbnailCellProps> =
                         databaseId,
                         assetId,
                         fileKey,
+                        includeVersions: false,
                     });
 
                     if (!success || !fileInfo) {
@@ -118,7 +119,7 @@ export const FilePreviewThumbnailCell: React.FC<FilePreviewThumbnailCellProps> =
                     if (filePreviewKey) {
                         // If there's a dedicated preview file, use it
                         keyToUse = filePreviewKey;
-                        currentDownloadType = "assetPreview";
+                        currentDownloadType = "assetFile";
                         setPreviewKey(filePreviewKey);
                         setDownloadType(currentDownloadType);
 

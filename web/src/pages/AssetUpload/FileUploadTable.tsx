@@ -11,6 +11,7 @@ import {
     SpaceBetween,
     Table,
     TextFilter,
+    Popover,
 } from "@cloudscape-design/components";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
@@ -26,20 +27,26 @@ const FileUploadTableColumnDefinitions = [
                 additionalInfo={" Time Remaining: " + getTimeRemaining(item)}
             />
         ),
+        sortingField: "progress",
+        sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+            a.progress - b.progress,
         isRowHeader: true,
     },
     {
         id: "filepath",
         header: "Path",
         cell: (item: FileUploadTableItem) => item.relativePath,
-        sortingField: "filepath",
+        sortingField: "relativePath",
+        sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+            a.relativePath.localeCompare(b.relativePath),
         isRowHeader: true,
     },
     {
         id: "filesize",
         header: "Size",
         cell: (item: FileUploadTableItem) => (item.total ? shortenBytes(item.total) : "0b"),
-        sortingField: "filesize",
+        sortingField: "total",
+        sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) => a.total - b.total,
         isRowHeader: true,
     },
     {
@@ -52,6 +59,8 @@ const FileUploadTableColumnDefinitions = [
             </StatusIndicator>
         ),
         sortingField: "status",
+        sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+            statusPriority[a.status] - statusPriority[b.status],
         isRowHeader: true,
     },
 ];
@@ -60,6 +69,10 @@ interface FileUploadTableProps {
     allItems: FileUploadTableItem[];
     onRetry?: () => void;
     onRetryItem?: (index: number) => void;
+    onCancelItem?: (index: number) => void;
+    cancelConfirmFileIndex?: number | null;
+    onConfirmCancel?: (index: number) => void;
+    onDismissCancel?: () => void;
     resume: boolean;
     columnDefinitions?: typeof FileUploadTableColumnDefinitions;
     showCount?: boolean;
@@ -87,7 +100,7 @@ export interface FileUploadTableItem {
     index: number;
     size: number;
     relativePath: string;
-    status: "Queued" | "In Progress" | "Completed" | "Failed";
+    status: "Queued" | "In Progress" | "Completed" | "Failed" | "Cancelled";
     progress: number;
     startedAt?: number;
     loaded: number;
@@ -107,9 +120,20 @@ const getStatusIndicator = (status?: string) => {
             return "success";
         case "Failed":
             return "error";
+        case "Cancelled":
+            return "stopped";
         default:
             return "info";
     }
+};
+
+// Status priority for sorting (lower number = higher priority)
+const statusPriority: Record<string, number> = {
+    Failed: 0,
+    "In Progress": 1,
+    Queued: 2,
+    Cancelled: 3,
+    Completed: 4,
 };
 
 function formatTime(remainingTime: number) {
@@ -249,6 +273,10 @@ export const FileUploadTable = ({
     allItems,
     onRetry,
     onRetryItem,
+    onCancelItem,
+    cancelConfirmFileIndex,
+    onConfirmCancel,
+    onDismissCancel,
     resume,
     columnDefinitions,
     showCount,
@@ -288,6 +316,8 @@ export const FileUploadTable = ({
                     <div>{item.finalDownloadPath || "Select folder first"}</div>
                 ),
                 sortingField: "finalDownloadPath",
+                sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+                    (a.finalDownloadPath || "").localeCompare(b.finalDownloadPath || ""),
                 isRowHeader: false,
             };
 
@@ -299,6 +329,8 @@ export const FileUploadTable = ({
                     <div>{item.versionId && item.versionId.trim() ? item.versionId : "Latest"}</div>
                 ),
                 sortingField: "versionId",
+                sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+                    (a.versionId || "").localeCompare(b.versionId || ""),
                 isRowHeader: false,
             };
 
@@ -316,8 +348,8 @@ export const FileUploadTable = ({
             }
         }
 
-        // Add actions column if we need retry or removal functionality
-        if (onRetryItem || (allowRemoval && onRemoveItem)) {
+        // Add actions column if we need retry, cancel, or removal functionality
+        if (onRetryItem || onCancelItem || (allowRemoval && onRemoveItem)) {
             customColumnDefinitions.push({
                 id: "actions",
                 header: "Actions",
@@ -331,6 +363,49 @@ export const FileUploadTable = ({
                                 ariaLabel={`Retry ${item.name}`}
                             />
                         )}
+                        {(item.status === "Queued" || item.status === "In Progress") &&
+                            onCancelItem &&
+                            onConfirmCancel &&
+                            onDismissCancel &&
+                            (cancelConfirmFileIndex === item.index ? (
+                                <Popover
+                                    dismissButton={false}
+                                    position="top"
+                                    size="medium"
+                                    triggerType="custom"
+                                    content={
+                                        <SpaceBetween direction="vertical" size="xs">
+                                            <Box variant="p">
+                                                Are you sure you want to cancel this file upload?
+                                            </Box>
+                                            <SpaceBetween direction="horizontal" size="xs">
+                                                <Button
+                                                    variant="primary"
+                                                    onClick={() => onConfirmCancel(item.index)}
+                                                >
+                                                    Confirm Cancel
+                                                </Button>
+                                                <Button variant="normal" onClick={onDismissCancel}>
+                                                    Keep Uploading
+                                                </Button>
+                                            </SpaceBetween>
+                                        </SpaceBetween>
+                                    }
+                                >
+                                    <Button
+                                        iconName="close"
+                                        variant="icon"
+                                        ariaLabel={`Cancel ${item.name}`}
+                                    />
+                                </Popover>
+                            ) : (
+                                <Button
+                                    iconName="close"
+                                    variant="icon"
+                                    onClick={() => onCancelItem(item.index)}
+                                    ariaLabel={`Cancel ${item.name}`}
+                                />
+                            ))}
                         {allowRemoval && onRemoveItem && (
                             <Button
                                 iconName="remove"
@@ -341,7 +416,9 @@ export const FileUploadTable = ({
                         )}
                     </SpaceBetween>
                 ),
-                sortingField: "actions",
+                sortingField: "index",
+                sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) =>
+                    a.index - b.index,
                 isRowHeader: false,
             });
         }
@@ -356,19 +433,25 @@ export const FileUploadTable = ({
         pageSize: 10,
         visibleContent: visibleContent,
     });
-    const { items, filterProps, paginationProps } = useCollection(allItems, {
+    const { items, filterProps, paginationProps, collectionProps } = useCollection(allItems, {
         filtering: {
             empty: <EmptyState title="No matches" subtitle="No Files to display." />,
-            noMatch: <EmptyState title="No matches" subtitle="We can’t find a match." />,
+            noMatch: <EmptyState title="No matches" subtitle="We can't find a match." />,
         },
         pagination: { pageSize: preferences.pageSize },
-        sorting: {},
+        sorting: {
+            defaultState: {
+                sortingColumn: { sortingField: "status" },
+                isDescending: false,
+            },
+        },
         selection: {},
     });
     return (
         <Box>
             <SpaceBetween size="l" direction={"vertical"}>
                 <Table
+                    {...collectionProps}
                     header={
                         <Header
                             counter={
@@ -384,6 +467,9 @@ export const FileUploadTable = ({
                     columnDefinitions={columnDefinitions}
                     visibleColumns={preferences.visibleContent}
                     items={items}
+                    sortingDescending={collectionProps.sortingDescending}
+                    sortingColumn={collectionProps.sortingColumn}
+                    onSortingChange={collectionProps.onSortingChange}
                     pagination={<Pagination {...paginationProps} ariaLabels={paginationLabels} />}
                     filter={<TextFilter {...filterProps} filteringAriaLabel="Filter Files" />}
                     preferences={

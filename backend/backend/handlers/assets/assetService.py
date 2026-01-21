@@ -4,6 +4,7 @@
 import os
 import boto3
 import json
+import base64
 import uuid
 import time
 from datetime import datetime, timedelta
@@ -24,9 +25,9 @@ from common.dynamodb import validate_pagination_info
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.assetsV3 import (
     GetAssetRequestModel, GetAssetsRequestModel, UpdateAssetRequestModel,
-    ArchiveAssetRequestModel, DeleteAssetRequestModel, AssetResponseModel,
-    AssetOperationResponseModel, CurrentVersionModel, AssetLocationModel,
-    AssetPreviewLocationModel
+    ArchiveAssetRequestModel, UnarchiveAssetRequestModel, DeleteAssetRequestModel, 
+    AssetResponseModel, AssetOperationResponseModel, CurrentVersionModel, 
+    AssetLocationModel, AssetPreviewLocationModel
 )
 
 # Configure AWS clients with retry configuration
@@ -58,7 +59,9 @@ try:
     s3_assetAuxiliary_bucket = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
     asset_upload_table_name = os.environ.get("ASSET_UPLOAD_TABLE_NAME")
     asset_links_table_name = os.environ.get("ASSET_LINKS_STORAGE_TABLE_NAME")
-    metadata_table_name = os.environ.get("METADATA_STORAGE_TABLE_NAME")
+    asset_links_metadata_table_name = os.environ.get("ASSET_LINKS_METADATA_STORAGE_TABLE_NAME")
+    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
+    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
     asset_versions_files_table_name = os.environ.get("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME")
     comment_table_name = os.environ.get("COMMENT_STORAGE_TABLE_NAME")
@@ -75,7 +78,9 @@ asset_table = dynamodb.Table(asset_database)
 db_table = dynamodb.Table(db_database)
 asset_upload_table = dynamodb.Table(asset_upload_table_name) if asset_upload_table_name else None
 asset_links_table = dynamodb.Table(asset_links_table_name) if asset_links_table_name else None
-metadata_table = dynamodb.Table(metadata_table_name) if metadata_table_name else None
+asset_links_metadata_table = dynamodb.Table(asset_links_metadata_table_name) if asset_links_metadata_table_name else None
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
+file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribute_table_name else None
 versions_table = dynamodb.Table(asset_versions_table_name) if asset_versions_table_name else None
 comment_table = dynamodb.Table(comment_table_name) if comment_table_name else None
 asset_versions_files_table = dynamodb.Table(asset_versions_files_table_name) if asset_versions_files_table_name else None
@@ -164,7 +169,7 @@ def get_current_version_info(asset):
                 Comment=version_item.get('comment', ''),
                 description=version_item.get('description', ''),
                 specifiedPipelines=version_item.get('specifiedPipelines', []),
-                createdBy=version_item.get('createdBy', 'system')
+                createdBy=version_item.get('createdBy', 'SYSTEM_USER')
             )
     except Exception as e:
         logger.exception(f"Error fetching current version from versions table: {e}")
@@ -387,6 +392,92 @@ def archive_file_preview(location, bucket):
         logger.exception(f"Error archiving file {key}: {e}")
     return
 
+def unarchive_multi_assetFiles(location, bucket):
+    """Unarchive all files in a multi-file asset by removing delete markers
+    
+    Args:
+        location: The asset location object with Key and optional Bucket (dict or AssetLocationModel)
+    """
+    # Convert to AssetLocationModel if it's a dictionary
+    if isinstance(location, dict):
+        try:
+            location_model = AssetLocationModel(**location)
+        except ValidationError as e:
+            logger.warning(f"Invalid asset location format: {e}")
+            return
+    elif isinstance(location, AssetLocationModel):
+        location_model = location
+    else:
+        logger.warning("Invalid asset location type")
+        return
+
+    prefix = location_model.Key
+    if not prefix:
+        return
+    
+    logger.info(f'Unarchiving folder with multiple files from bucket: {bucket}')
+
+    try:
+        # List all versions to find delete markers
+        paginator = s3.get_paginator('list_object_versions')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            # Remove delete markers
+            for delete_marker in page.get('DeleteMarkers', []):
+                if delete_marker.get('IsLatest'):
+                    logger.info(f"Removing delete marker for {delete_marker['Key']}")
+                    s3.delete_object(
+                        Bucket=bucket,
+                        Key=delete_marker['Key'],
+                        VersionId=delete_marker['VersionId']
+                    )
+    except Exception as e:
+        logger.exception(f"Error unarchiving files: {e}")
+
+    return
+
+def unarchive_file_preview(location, bucket):
+    """Unarchive a single file by removing delete marker
+    
+    Args:
+        location: The asset location object with Key and optional Bucket (dict or AssetPreviewLocationModel)
+    """
+    # Convert to AssetPreviewLocationModel if it's a dictionary
+    if isinstance(location, dict):
+        try:
+            location_model = AssetPreviewLocationModel(**location)
+        except ValidationError as e:
+            logger.warning(f"Invalid preview location format: {e}")
+            return
+    elif isinstance(location, AssetPreviewLocationModel):
+        location_model = location
+    else:
+        logger.warning("Invalid preview location type")
+        return
+
+    key = location_model.Key
+    if not key:
+        return
+    
+    logger.info(f"Unarchiving item: {bucket}:{key}")
+
+    try:
+        # List versions to find the delete marker
+        response = s3.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
+        
+        # Remove delete marker if it exists
+        for delete_marker in response.get('DeleteMarkers', []):
+            if delete_marker.get('IsLatest') and delete_marker['Key'] == key:
+                logger.info(f"Removing delete marker for {key}")
+                s3.delete_object(
+                    Bucket=bucket,
+                    Key=key,
+                    VersionId=delete_marker['VersionId']
+                )
+    except Exception as e:
+        logger.exception(f"Error unarchiving file {key}: {e}")
+    
+    return
+
 def delete_s3_objects(prefix, bucket):
     """Delete all S3 objects with the given prefix
     
@@ -432,6 +523,168 @@ def delete_s3_objects(prefix, bucket):
         raise VAMSGeneralErrorResponse(f"Error deleting S3 objects.")
     
     return deleted_keys
+
+def delete_asset_link_metadata_for_permanent_deletion(asset_link_id: str):
+    """Delete all metadata associated with an asset link during permanent asset deletion
+    
+    Args:
+        asset_link_id: The asset link ID
+    """
+    if not asset_links_metadata_table:
+        return
+    
+    try:
+        # Query all metadata for this asset link
+        response = asset_links_metadata_table.query(
+            KeyConditionExpression=Key('assetLinkId').eq(asset_link_id)
+        )
+        
+        # Delete all metadata items
+        for item in response.get('Items', []):
+            asset_links_metadata_table.delete_item(
+                Key={
+                    'assetLinkId': item['assetLinkId'],
+                    'metadataKey': item['metadataKey']
+                }
+            )
+        
+        logger.info(f"Deleted {len(response.get('Items', []))} metadata items for asset link {asset_link_id}")
+        
+    except Exception as e:
+        logger.exception(f"Error deleting asset link metadata: {e}")
+        # Don't fail the whole operation if metadata deletion fails
+        pass
+
+
+def delete_asset_metadata_for_permanent_deletion(database_id: str, asset_id: str):
+    """Delete all metadata and file metadata/attributes for an asset during permanent deletion
+    
+    This deletes:
+    - Asset-level metadata (where filePath = '/')
+    - All file metadata for files in this asset
+    - All file attributes for files in this asset
+    
+    Args:
+        database_id: The database ID
+        asset_id: The asset ID
+    """
+    try:
+        # Construct the composite key prefix for querying
+        # This will match all metadata for the asset and its files
+        composite_key_prefix = f"{database_id}:{asset_id}:"
+        
+        deleted_metadata_count = 0
+        deleted_attribute_count = 0
+        
+        # Delete from asset_file_metadata_table (asset and file metadata)
+        if asset_file_metadata_table:
+            try:
+                # Use scan with filter to get ALL metadata items for this asset
+                # We must use scan because begins_with only works on sort keys, not partition keys
+                paginator = dynamodb_client.get_paginator('scan')
+                page_iterator = paginator.paginate(
+                    TableName=asset_file_metadata_table_name,
+                    FilterExpression='begins_with(#sk, :prefix)',
+                    ExpressionAttributeNames={
+                        '#sk': 'databaseId:assetId:filePath'
+                    },
+                    ExpressionAttributeValues={
+                        ':prefix': {'S': composite_key_prefix}
+                    }
+                ).build_full_result()
+                
+                # Delete all metadata items in batches
+                items_to_delete = []
+                deserializer = TypeDeserializer()
+                
+                for item in page_iterator.get('Items', []):
+                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                    items_to_delete.append({
+                        'DeleteRequest': {
+                            'Key': {
+                                'metadataKey': {'S': deserialized['metadataKey']},
+                                'databaseId:assetId:filePath': {'S': deserialized['databaseId:assetId:filePath']}
+                            }
+                        }
+                    })
+                
+                # Delete in batches of 25
+                for i in range(0, len(items_to_delete), 25):
+                    batch = items_to_delete[i:i+25]
+                    try:
+                        dynamodb_client.batch_write_item(
+                            RequestItems={
+                                asset_file_metadata_table_name: batch
+                            }
+                        )
+                        deleted_metadata_count += len(batch)
+                    except Exception as e:
+                        logger.warning(f"Error in batch delete for metadata: {e}")
+                
+                if deleted_metadata_count > 0:
+                    logger.info(f"Deleted {deleted_metadata_count} metadata items for asset {asset_id}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting asset/file metadata: {e}")
+        
+        # Delete from file_attribute_table (file attributes)
+        if file_attribute_table:
+            try:
+                # Use scan with filter to get ALL attribute items for this asset
+                # We must use scan because begins_with only works on sort keys, not partition keys
+                paginator = dynamodb_client.get_paginator('scan')
+                page_iterator = paginator.paginate(
+                    TableName=file_attribute_table_name,
+                    FilterExpression='begins_with(#sk, :prefix)',
+                    ExpressionAttributeNames={
+                        '#sk': 'databaseId:assetId:filePath'
+                    },
+                    ExpressionAttributeValues={
+                        ':prefix': {'S': composite_key_prefix}
+                    }
+                ).build_full_result()
+                
+                # Delete all attribute items in batches
+                items_to_delete = []
+                deserializer = TypeDeserializer()
+                
+                for item in page_iterator.get('Items', []):
+                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+                    items_to_delete.append({
+                        'DeleteRequest': {
+                            'Key': {
+                                'attributeKey': {'S': deserialized['attributeKey']},
+                                'databaseId:assetId:filePath': {'S': deserialized['databaseId:assetId:filePath']}
+                            }
+                        }
+                    })
+                
+                # Delete in batches of 25
+                for i in range(0, len(items_to_delete), 25):
+                    batch = items_to_delete[i:i+25]
+                    try:
+                        dynamodb_client.batch_write_item(
+                            RequestItems={
+                                file_attribute_table_name: batch
+                            }
+                        )
+                        deleted_attribute_count += len(batch)
+                    except Exception as e:
+                        logger.warning(f"Error in batch delete for attributes: {e}")
+                
+                if deleted_attribute_count > 0:
+                    logger.info(f"Deleted {deleted_attribute_count} attribute items for asset {asset_id}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file attributes: {e}")
+        
+        if deleted_metadata_count == 0 and deleted_attribute_count == 0:
+            logger.info(f"No metadata or attributes found for asset {asset_id}")
+        
+    except Exception as e:
+        logger.exception(f"Error deleting asset metadata: {e}")
+        # Don't fail the whole operation if metadata deletion fails
+        pass
 
 #######################
 # Business Logic Functions
@@ -481,8 +734,6 @@ def get_assets(databaseId, query_params, showArchived=False):
     Returns:
         Dictionary with Items and optional NextToken
     """
-    paginator = dynamodb.meta.client.get_paginator('query')
-    
     # If showArchived is True, we need to query both active and archived assets
     db_ids = [databaseId]
     if showArchived:
@@ -494,35 +745,51 @@ def get_assets(databaseId, query_params, showArchived=False):
     # Query for each database ID (active and possibly archived)
     for db_id in db_ids:
         try:
-            page_iterator = paginator.paginate(
-                TableName=asset_database,
-                KeyConditionExpression=Key('databaseId').eq(db_id),
-                ScanIndexForward=False,
-                PaginationConfig={
-                    'MaxItems': int(query_params['maxItems']),
-                    'PageSize': int(query_params['pageSize']),
-                    'StartingToken': query_params.get('startingToken')
-                }
-            ).build_full_result()
+            # Build query parameters
+            query_params_dict = {
+                'TableName': asset_database,
+                'KeyConditionExpression': 'databaseId = :dbId',
+                'ExpressionAttributeValues': {
+                    ':dbId': {'S': db_id}
+                },
+                'ScanIndexForward': False,
+                'Limit': int(query_params['pageSize'])
+            }
+            
+            # Add ExclusiveStartKey if startingToken provided
+            if query_params.get('startingToken'):
+                try:
+                    decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+                    query_params_dict['ExclusiveStartKey'] = json.loads(decoded_token)
+                except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+                    logger.exception(f"Invalid startingToken format: {e}")
+                    raise VAMSGeneralErrorResponse("Invalid pagination token")
+            
+            # Single query call with pagination
+            response = dynamodb_client.query(**query_params_dict)
             
             # Process items and check permissions
-            for item in page_iterator.get('Items', []):
+            for item in response.get('Items', []):
+                # Deserialize the item
+                deserialized_item = {k: TypeDeserializer().deserialize(v) for k, v in item.items()}
+                
                 # Add status field for archived assets if not present
-                if db_id.endswith('#deleted') and 'status' not in item:
-                    item['status'] = 'archived'
+                if db_id.endswith('#deleted') and 'status' not in deserialized_item:
+                    deserialized_item['status'] = 'archived'
                 
                 # Add object type for Casbin enforcement
-                item.update({"object__type": "asset"})
+                deserialized_item.update({"object__type": "asset"})
                 
                 # Check if user has permission to GET the asset
                 if len(claims_and_roles["tokens"]) > 0:
                     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if casbin_enforcer.enforce(item, "GET"):
-                        all_items.append(item)
+                    if casbin_enforcer.enforce(deserialized_item, "GET"):
+                        all_items.append(deserialized_item)
             
-            # Keep track of the next token from the last query
-            if 'NextToken' in page_iterator:
-                next_token = page_iterator['NextToken']
+            # Keep track of the next token from the last query (base64 encoded)
+            if 'LastEvaluatedKey' in response:
+                json_str = json.dumps(response['LastEvaluatedKey'])
+                next_token = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
                 
         except Exception as e:
             logger.exception(f"Error querying assets for database {db_id}: {e}")
@@ -546,7 +813,6 @@ def get_all_assets(query_params, showArchived=False):
         Dictionary with Items and optional NextToken
     """
     deserializer = TypeDeserializer()
-    paginator = dynamodb_client.get_paginator('scan')
     
     # Set up the filter based on showArchived
     operator = "NOT_CONTAINS"
@@ -561,21 +827,29 @@ def get_all_assets(query_params, showArchived=False):
     }
     
     try:
-        page_iterator = paginator.paginate(
-            TableName=asset_database,
-            ScanFilter=filter_expression,
-            PaginationConfig={
-                'MaxItems': int(query_params['maxItems']),
-                'PageSize': int(query_params['pageSize']),
-                'StartingToken': query_params.get('startingToken')
-            }
-        ).build_full_result()
+        # Build scan parameters
+        scan_params = {
+            'TableName': asset_database,
+            'ScanFilter': filter_expression,
+            'Limit': int(query_params['pageSize'])
+        }
+        
+        # Add ExclusiveStartKey if startingToken provided
+        if query_params.get('startingToken'):
+            try:
+                decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+                scan_params['ExclusiveStartKey'] = json.loads(decoded_token)
+            except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+                logger.exception(f"Invalid startingToken format: {e}")
+                raise VAMSGeneralErrorResponse("Invalid pagination token")
+        
+        # Single scan call with pagination
+        response = dynamodb_client.scan(**scan_params)
         
         # Process results
-        result = {}
         items = []
         
-        for item in page_iterator.get('Items', []):
+        for item in response.get('Items', []):
             # Deserialize the DynamoDB item
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
             
@@ -592,10 +866,13 @@ def get_all_assets(query_params, showArchived=False):
                 if casbin_enforcer.enforce(deserialized_document, "GET"):
                     items.append(deserialized_document)
         
-        result['Items'] = items
+        # Build response with nextToken
+        result = {'Items': items}
         
-        if 'NextToken' in page_iterator:
-            result['NextToken'] = page_iterator['NextToken']
+        # Return LastEvaluatedKey as nextToken if present (base64 encoded)
+        if 'LastEvaluatedKey' in response:
+            json_str = json.dumps(response['LastEvaluatedKey'])
+            result['NextToken'] = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
             
         return result
         
@@ -710,7 +987,7 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         
         # Update asset record with archived status
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("username", "system")
+        username = claims_and_roles.get("tokens", ["system"])[0]
         
         # Add archive metadata
         asset['status'] = 'archived'
@@ -746,6 +1023,99 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     except Exception as e:
         logger.exception(f"Error archiving asset: {e}")
         raise VAMSGeneralErrorResponse(f"Error archiving asset.")
+
+def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
+    """Unarchive an asset (restore from soft delete)
+    
+    Args:
+        databaseId: The database ID (may contain #deleted suffix)
+        assetId: The asset ID
+        request_model: UnarchiveAssetRequestModel with unarchive options
+        claims_and_roles: User claims and roles for authorization
+        
+    Returns:
+        AssetOperationResponseModel with operation result
+    """
+    # Normalize databaseId - remove #deleted if present
+    original_db_id = databaseId.replace("#deleted", "")
+    archived_db_id = f"{original_db_id}#deleted"
+    
+    # Get the asset from archived location
+    asset = get_asset_details(archived_db_id, assetId, showArchived=True)
+    if not asset:
+        # Try without #deleted suffix in case user provided clean ID
+        asset = get_asset_details(original_db_id, assetId, showArchived=True)
+        if not asset:
+            raise VAMSGeneralErrorResponse("Asset not found")
+        # If found in original location, check if it's actually archived
+        if asset.get('status') != 'archived':
+            raise VAMSGeneralErrorResponse("Asset is not archived")
+    
+    # Check authorization
+    asset.update({"object__type": "asset"})
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(asset, "PUT"):
+            raise authorization_error()
+    
+    # Get bucket details for asset
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucket_name = bucketDetails['bucketName']
+    
+    # Unarchive S3 files
+    logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
+    
+    try:
+        # Unarchive asset files in S3
+        if "assetLocation" in asset:
+            unarchive_multi_assetFiles(asset['assetLocation'], bucket_name)
+
+        # Unarchive preview if exists
+        if "previewLocation" in asset:
+            unarchive_file_preview(asset['previewLocation'], bucket_name)
+        
+        # Update asset record
+        now = datetime.utcnow().isoformat()
+        username = claims_and_roles.get("tokens", ["system"])[0]
+        
+        # Remove archive metadata - INCLUDING status field
+        asset.pop('status', None)  # Remove status entirely
+        asset.pop('archivedAt', None)
+        asset.pop('archivedBy', None)
+        asset.pop('archivedReason', None)
+        
+        # Add unarchive metadata
+        asset['unarchivedAt'] = now
+        asset['unarchivedBy'] = username
+        if request_model.reason:
+            asset['unarchivedReason'] = request_model.reason
+        
+        # Move back to original database ID
+        asset['databaseId'] = original_db_id
+        
+        # Save to original location
+        asset_table.put_item(Item=asset)
+        
+        # Delete from archived location
+        asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
+        
+        # Update asset count
+        update_asset_count(db_database, asset_database, {}, original_db_id)
+
+        # Send email notification
+        send_subscription_email(original_db_id, assetId)
+        
+        # Return success response
+        return AssetOperationResponseModel(
+            success=True,
+            message=f"Asset {assetId} unarchived successfully",
+            assetId=assetId,
+            operation="unarchive",
+            timestamp=now
+        )
+    except Exception as e:
+        logger.exception(f"Error unarchiving asset: {e}")
+        raise VAMSGeneralErrorResponse("Error unarchiving asset")
 
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems
@@ -853,10 +1223,12 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
         deleted_items["dynamodb_tables"].append(f"{asset_database} (databaseId={archived_db_id})")
         
-        # 3. Delete from metadata table if available
-        if metadata_table:
-            metadata_table.delete_item(Key={'databaseId': original_db_id, 'assetId': assetId})
-            deleted_items["dynamodb_tables"].append(f"{metadata_table_name} (databaseId={original_db_id})")
+        # 3. Delete from NEW metadata tables (asset metadata and all file metadata/attributes)
+        delete_asset_metadata_for_permanent_deletion(original_db_id, assetId)
+        if asset_file_metadata_table:
+            deleted_items["dynamodb_tables"].append(f"{asset_file_metadata_table_name} (asset and file metadata)")
+        if file_attribute_table:
+            deleted_items["dynamodb_tables"].append(f"{file_attribute_table_name} (file attributes)")
         
         # 4. Delete from asset links table if available
         if asset_links_table:
@@ -868,6 +1240,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 
                 for item in response.get('Items', []):
                     if 'assetIdTo' in item:
+                        # Delete associated metadata first
+                        if 'assetLinkId' in item:
+                            delete_asset_link_metadata_for_permanent_deletion(item['assetLinkId'])
+                        
+                        # Then delete the link
                         asset_links_table.delete_item(Key={
                             'assetIdFrom': assetId,
                             'assetIdTo': item['assetIdTo']
@@ -886,6 +1263,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 
                 for item in response.get('Items', []):
                     if 'assetIdFrom' in item:
+                        # Delete associated metadata first
+                        if 'assetLinkId' in item:
+                            delete_asset_link_metadata_for_permanent_deletion(item['assetLinkId'])
+                        
+                        # Then delete the link
                         asset_links_table.delete_item(Key={
                             'assetIdFrom': item['assetIdFrom'],
                             'assetIdTo': assetId
@@ -1017,7 +1399,7 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
             
             # Parse and validate query parameters using GetAssetRequestModel
             try:
@@ -1031,13 +1413,13 @@ def handle_get_request(event):
                             query_parameters['showArchived'] = False
                         else:
                             logger.error(f"Invalid showArchived parameter: {show_archived_value}")
-                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"})
+                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"}, event=event)
                 
                 request_model = parse(query_parameters, model=GetAssetRequestModel)
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)})
+                return validation_error(body={'message': str(v)}, event=event)
             
             # Get the asset
             asset = get_asset_details(path_parameters['databaseId'], path_parameters['assetId'], show_archived)
@@ -1066,7 +1448,7 @@ def handle_get_request(event):
                     # Fall back to raw response if conversion fails
                     return success(body={"message": enhanced_asset})
             else:
-                return general_error(body={"message": "Asset not found"}, status_code=404)
+                return general_error(body={"message": "Asset not found"}, status_code=404, event=event)
         
         # Case 2: Get assets for a specific database
         elif 'databaseId' in path_parameters:
@@ -1081,7 +1463,7 @@ def handle_get_request(event):
             })
             if not valid:
                 logger.error(message)
-                return validation_error(body={'message': message})
+                return validation_error(body={'message': message}, event=event)
             
             # Parse and validate query parameters using GetAssetsRequestModel
             try:
@@ -1095,7 +1477,7 @@ def handle_get_request(event):
                             query_parameters['showArchived'] = False
                         else:
                             logger.error(f"Invalid showArchived parameter: {show_archived_value}")
-                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"})
+                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"}, event=event)
                 
                 request_model = parse(query_parameters, model=GetAssetsRequestModel)
                 # Extract validated parameters for the query
@@ -1108,7 +1490,7 @@ def handle_get_request(event):
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
                 error_msg = str(v)
-                return validation_error(body={'message': f"Invalid parameter: {error_msg}"})
+                return validation_error(body={'message': f"Invalid parameter: {error_msg}"}, event=event)
                 # # Fall back to default pagination with validation
                 # validate_pagination_info(query_parameters)
                 # query_params = query_parameters
@@ -1163,7 +1545,7 @@ def handle_get_request(event):
                             query_parameters['showArchived'] = False
                         else:
                             logger.error(f"Invalid showArchived parameter: {show_archived_value}")
-                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"})
+                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"}, event=event)
                 
                 request_model = parse(query_parameters, model=GetAssetsRequestModel)
                 # Extract validated parameters for the query
@@ -1176,7 +1558,7 @@ def handle_get_request(event):
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
                 error_msg = str(v)
-                return validation_error(body={'message': f"Invalid parameter: {error_msg}"})
+                return validation_error(body={'message': f"Invalid parameter: {error_msg}"}, event=event)
                 # # Fall back to default pagination with validation
                 # validate_pagination_info(query_parameters)
                 # query_params = query_parameters
@@ -1216,10 +1598,10 @@ def handle_get_request(event):
             return success(body=response)
             
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)})
+        return general_error(body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling GET request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_put_request(event):
     """Handle PUT requests to update assets
@@ -1230,19 +1612,23 @@ def handle_put_request(event):
     Returns:
         APIGatewayProxyResponseV2 response
     """
+    path = event['requestContext']['http']['path']
     path_parameters = event.get('pathParameters', {})
     
     # Validate required path parameters
     if 'databaseId' not in path_parameters:
-        return validation_error(body={'message': "No database ID in API Call"})
+        return validation_error(body={'message': "No database ID in API Call"}, event=event)
     
     if 'assetId' not in path_parameters:
-        return validation_error(body={'message': "No asset ID in API Call"})
+        return validation_error(body={'message': "No asset ID in API Call"}, event=event)
+    
+    # Normalize databaseId for validation - remove #deleted suffix if present
+    normalized_database_id = path_parameters['databaseId'].replace("#deleted", "")
     
     # Validate path parameters
     (valid, message) = validate({
         'databaseId': {
-            'value': path_parameters['databaseId'],
+            'value': normalized_database_id,
             'validator': 'ID'
         },
         'assetId': {
@@ -1252,13 +1638,13 @@ def handle_put_request(event):
     })
     if not valid:
         logger.error(message)
-        return validation_error(body={'message': message})
+        return validation_error(body={'message': message}, event=event)
     
     try:
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1266,14 +1652,25 @@ def handle_put_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
-        # Parse and validate the update model
+        # Check if this is an unarchive request
+        if path.endswith('/unarchiveAsset'):
+            request_model = parse(body, model=UnarchiveAssetRequestModel)
+            result = unarchive_asset(
+                path_parameters['databaseId'],
+                path_parameters['assetId'],
+                request_model,
+                claims_and_roles
+            )
+            return success(body=result.dict())
+        
+        # Otherwise, handle regular update
         update_model = parse(body, model=UpdateAssetRequestModel)
         
         # Update the asset
@@ -1289,13 +1686,13 @@ def handle_put_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_delete_request(event):
     """Handle DELETE requests for assets
@@ -1311,10 +1708,10 @@ def handle_delete_request(event):
     
     # Validate required path parameters
     if 'databaseId' not in path_parameters:
-        return validation_error(body={'message': "No database ID in API Call"})
+        return validation_error(body={'message': "No database ID in API Call"}, event=event)
     
     if 'assetId' not in path_parameters:
-        return validation_error(body={'message': "No asset ID in API Call"})
+        return validation_error(body={'message': "No asset ID in API Call"}, event=event)
     
     # Validate path parameters
     (valid, message) = validate({
@@ -1329,13 +1726,13 @@ def handle_delete_request(event):
     })
     if not valid:
         logger.error(message)
-        return validation_error(body={'message': message})
+        return validation_error(body={'message': message}, event=event)
     
     try:
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -1343,12 +1740,12 @@ def handle_delete_request(event):
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Determine which operation to perform based on the path
         if path.endswith('/archiveAsset'):
@@ -1386,13 +1783,13 @@ def handle_delete_request(event):
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset service APIs"""
@@ -1422,14 +1819,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'DELETE':
             return handle_delete_request(event)
         else:
-            return validation_error(body={'message': "Method not allowed"})
+            return validation_error(body={'message': "Method not allowed"}, event=event)
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)

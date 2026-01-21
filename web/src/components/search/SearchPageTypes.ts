@@ -12,6 +12,7 @@ import Synonyms from "../../synonyms";
 export interface SearchPageViewProps {
     state: any;
     dispatch: Dispatch<ReducerAction<any>>;
+    onShowToast?: (title: string, message: string) => void;
 }
 
 /**

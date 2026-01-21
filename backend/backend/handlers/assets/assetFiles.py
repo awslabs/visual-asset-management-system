@@ -51,7 +51,8 @@ try:
     asset_database_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"] 
     asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
-    asset_metadata_table_name = os.environ.get("METADATA_STORAGE_TABLE_NAME")
+    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
+    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
@@ -61,7 +62,8 @@ except Exception as e:
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_database_table_name)
 asset_version_files_table = dynamodb.Table(asset_version_files_table_name)
-asset_metadata_table = dynamodb.Table(asset_metadata_table_name)
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
+file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribute_table_name else None
 
 # Define allowed extensions
 allowed_previewFile_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
@@ -771,6 +773,97 @@ def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
         logger.exception(f"Error moving S3 object from {source_key} to {dest_key}: {e}")
         return False
 
+def process_preview_files(
+    operation: str,
+    bucket: str,
+    source_key: str,
+    dest_key: str,
+    base_key: str,
+    source_asset_id: str = None,
+    source_database_id: str = None,
+    dest_asset_id: str = None,
+    dest_database_id: str = None
+) -> List[str]:
+    """Process preview files for move, copy, or rename operations
+    
+    Args:
+        operation: Operation type ('move', 'copy', or 'rename')
+        bucket: The S3 bucket
+        source_key: Source file key
+        dest_key: Destination file key
+        base_key: Base key for relative path calculation
+        source_asset_id: Source asset ID (for copy operations)
+        source_database_id: Source database ID (for copy operations)
+        dest_asset_id: Destination asset ID (for copy operations)
+        dest_database_id: Destination database ID (for copy operations)
+        
+    Returns:
+        List of affected preview file paths (source and destination for move/rename)
+    """
+    affected_preview_files = []
+    
+    # Find preview files for the source file
+    logger.info(f"Looking for preview files for base file: {source_key}")
+    preview_files = find_preview_files_for_base(bucket, source_key)
+    logger.info(f"Found {len(preview_files)} preview files: {preview_files}")
+    
+    for preview_file in preview_files:
+        # Calculate the destination preview file path
+        source_dir = os.path.dirname(source_key)
+        dest_dir = os.path.dirname(dest_key)
+        preview_filename = os.path.basename(preview_file)
+        source_filename = os.path.basename(source_key)
+        dest_filename = os.path.basename(dest_key)
+        new_preview_filename = preview_filename.replace(source_filename, dest_filename, 1)
+        preview_dest = os.path.join(dest_dir, new_preview_filename).replace('\\', '/')
+        
+        logger.info(f"{operation.capitalize()}ing preview file from {preview_file} to {preview_dest}")
+        
+        # Perform the operation based on type
+        if operation == 'move' or operation == 'rename':
+            # Use move_s3_object for move and rename operations
+            operation_success = move_s3_object(bucket, preview_file, bucket, preview_dest)
+        elif operation == 'copy':
+            # Use copy_s3_object for copy operations
+            operation_success = copy_s3_object(
+                bucket,
+                preview_file,
+                bucket,
+                preview_dest,
+                source_asset_id=source_asset_id,
+                source_database_id=source_database_id,
+                dest_asset_id=dest_asset_id,
+                dest_database_id=dest_database_id
+            )
+        else:
+            logger.error(f"Unknown operation type: {operation}")
+            continue
+        
+        if operation_success:
+            # Get relative paths for reporting
+            if preview_file.startswith(base_key):
+                rel_preview_source = '/' + preview_file[len(base_key):]
+            else:
+                rel_preview_source = '/' + preview_file
+                
+            if preview_dest.startswith(base_key):
+                rel_preview_dest = '/' + preview_dest[len(base_key):]
+            else:
+                rel_preview_dest = '/' + preview_dest
+            
+            # For move/rename, include both source and dest; for copy, only dest
+            if operation == 'move' or operation == 'rename':
+                affected_preview_files.append(rel_preview_source)
+                affected_preview_files.append(rel_preview_dest)
+            else:  # copy
+                affected_preview_files.append(rel_preview_dest)
+                
+            logger.info(f"Successfully {operation}d preview file from {rel_preview_source} to {rel_preview_dest}")
+        else:
+            logger.error(f"Failed to {operation} preview file from {preview_file} to {preview_dest}")
+    
+    return affected_preview_files
+
 # Function removed as asset versioning is now a standalone capability
 
 def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False) -> Dict:
@@ -931,7 +1024,7 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                 raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
         raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
 
-def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False) -> Dict:
+def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False, basic_mode: bool = False) -> Dict:
     """List S3 objects with pagination and archive status
     
     Args:
@@ -939,21 +1032,12 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         prefix: The S3 key prefix
         query_params: Dictionary containing pagination parameters
         include_archived: Whether to include archived files
+        basic_mode: If True, skip expensive head_object calls and return only S3 list data
         
     Returns:
         Dictionary containing the list of files and pagination token if applicable
     """
-    logger.info(f"Listing files from bucket: {bucket}, prefix: {prefix}")
-    
-    # Configure pagination
-    pagination_config = {
-        'MaxItems': int(query_params.get('maxItems', 1000)),
-        'PageSize': int(query_params.get('pageSize', 1000))
-    }
-    
-    # Add starting token if provided
-    if query_params.get('startingToken'):
-        pagination_config['StartingToken'] = query_params['startingToken']
+    logger.info(f"Listing files from bucket: {bucket}, prefix: {prefix}, basic_mode: {basic_mode}")
     
     # If prefix filter is provided, append it to the base prefix
     if query_params.get('prefix'):
@@ -967,43 +1051,58 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     }
     
     try:
-        # First, get current objects (non-archived)
-        paginator = s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(
-            Bucket=bucket,
-            Prefix=prefix,
-            PaginationConfig=pagination_config
-        ):
-            for obj in page.get('Contents', []):
-                # Extract filename from key
-                file_name = os.path.basename(obj['Key'])
-                
-                # Determine if it's a folder (key ends with '/' or fileName is empty)
-                is_folder = obj['Key'].endswith('/') or not file_name
-                
-                # Get relative path by removing the prefix
-                relative_path = obj['Key']
-                if relative_path.startswith(prefix):
-                    relative_path = relative_path[len(prefix):]
-                    # Ensure relative path starts with /
-                    if not relative_path.startswith('/'):
-                        relative_path = '/' + relative_path
-                
-                # Create the item with all required fields
-                item = {
-                    'fileName': file_name,
-                    'key': obj['Key'],
-                    'relativePath': relative_path,
-                    'isFolder': is_folder,
-                    'dateCreatedCurrentVersion': obj['LastModified'].isoformat(),
-                    'storageClass': obj.get('StorageClass', 'STANDARD')
-                }
-                
-                # Add size for non-folders
-                if not is_folder:
-                    item['size'] = obj['Size']
-                
-                # Get version ID and check archive status
+        # Make a single S3 API call with proper pagination
+        list_params = {
+            'Bucket': bucket,
+            'Prefix': prefix,
+            'MaxKeys': int(query_params.get('pageSize', 1500 if basic_mode else 100))
+        }
+        
+        # Add continuation token if provided
+        if query_params.get('startingToken'):
+            list_params['ContinuationToken'] = query_params['startingToken']
+        
+        # Single S3 list call
+        page = s3_client.list_objects_v2(**list_params)
+        
+        # Process objects from this single page
+        for obj in page.get('Contents', []):
+            # Extract filename from key
+            file_name = os.path.basename(obj['Key'])
+            
+            # Determine if it's a folder (key ends with '/' or fileName is empty)
+            is_folder = obj['Key'].endswith('/') or not file_name
+            
+            # Get relative path by removing the prefix
+            relative_path = obj['Key']
+            if relative_path.startswith(prefix):
+                relative_path = relative_path[len(prefix):]
+                # Ensure relative path starts with /
+                if not relative_path.startswith('/'):
+                    relative_path = '/' + relative_path
+            
+            # Create the item with fields available from S3 list operation
+            item = {
+                'fileName': file_name,
+                'key': obj['Key'],
+                'relativePath': relative_path,
+                'isFolder': is_folder,
+                'dateCreatedCurrentVersion': obj['LastModified'].isoformat(),
+                'storageClass': obj.get('StorageClass', 'STANDARD')
+            }
+            
+            # Add size for non-folders
+            if not is_folder:
+                item['size'] = obj['Size']
+            
+            if basic_mode:
+                # Basic mode: Skip expensive head_object calls
+                # Set fields to None/defaults that require head_object
+                item['versionId'] = None
+                item['isArchived'] = False  # Can't determine without head_object
+                item['primaryType'] = None
+            else:
+                # Full mode: Get version ID, archive status, and metadata
                 try:
                     version_info = s3_client.head_object(
                         Bucket=bucket,
@@ -1027,21 +1126,27 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                     item['versionId'] = 'null'
                     item['isArchived'] = False
                     item['primaryType'] = None
-                
-                # Only add non-archived files unless include_archived is True
-                if not item['isArchived'] or include_archived:
-                    result["items"].append(item)
             
-            # Add next token if available
-            if 'NextToken' in page:
-                result['nextToken'] = page['NextToken']
+            # Only add non-archived files unless include_archived is True
+            if not item['isArchived'] or include_archived:
+                result["items"].append(item)
+        
+        # Return the NextContinuationToken directly from S3
+        if 'NextContinuationToken' in page:
+            result['NextToken'] = page['NextContinuationToken']
         
         # If include_archived is True, also get objects with delete markers
         if include_archived:
             logger.info("Including archived files with delete markers")
             # Use list_object_versions to get delete markers
             try:
-                # Create a new paginator for versions
+                # Configure pagination for versions
+                pagination_config = {
+                    'MaxItems': int(query_params.get('maxItems', 1000)),
+                    'PageSize': int(query_params.get('pageSize', 100))
+                }
+                
+                # Create a paginator for versions
                 version_paginator = s3_client.get_paginator('list_object_versions')
                 
                 # Track keys we've already processed to avoid duplicates
@@ -1379,10 +1484,10 @@ def get_asset_file_versions(assetId: str, assetVersionId: str, relativeFileKey: 
 #######################
 
 def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str) -> bool:
-    """Delete metadata record for a file
+    """Delete metadata and attributes for a file from new metadata tables
     
     Args:
-        databaseId: The database ID (partition key)
+        databaseId: The database ID
         assetId: The asset ID
         relative_file_path: The relative file path (without leading slash)
         
@@ -1395,30 +1500,68 @@ def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str)
             logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
             return True
         
-        # Construct the metadata sort key: /<assetId>/<relative_file_path>
-        metadata_sort_key = f"/{assetId}/{relative_file_path}"
+        # Construct the composite key for new metadata tables
+        # Format: {databaseId}:{assetId}:{relative_file_path}
+        composite_key = f"{databaseId}:{assetId}:{relative_file_path}"
         
-        # Query for the metadata record
-        response = asset_metadata_table.get_item(
-            Key={
-                'databaseId': databaseId,
-                'assetId': metadata_sort_key
-            }
-        )
+        deleted_count = 0
         
-        # If record exists, delete it
-        if 'Item' in response:
-            asset_metadata_table.delete_item(
-                Key={
-                    'databaseId': databaseId,
-                    'assetId': metadata_sort_key
-                }
-            )
-            logger.info(f"Deleted metadata for {metadata_sort_key}")
-            return True
-        else:
-            logger.info(f"No metadata found for {metadata_sort_key}")
-            return True
+        # Delete from asset_file_metadata_table (file metadata)
+        if asset_file_metadata_table:
+            try:
+                # Query all metadata for this file using GSI
+                response = asset_file_metadata_table.query(
+                    IndexName='DatabaseIdAssetIdFilePathIndex',
+                    KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+                )
+                
+                # Delete all metadata items
+                for item in response.get('Items', []):
+                    asset_file_metadata_table.delete_item(
+                        Key={
+                            'metadataKey': item['metadataKey'],
+                            'databaseId:assetId:filePath': composite_key
+                        }
+                    )
+                    deleted_count += 1
+                
+                if deleted_count > 0:
+                    logger.info(f"Deleted {deleted_count} metadata items for file {composite_key}")
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file metadata: {e}")
+        
+        # Delete from file_attribute_table (file attributes)
+        if file_attribute_table:
+            try:
+                # Query all attributes for this file using GSI
+                response = file_attribute_table.query(
+                    IndexName='DatabaseIdAssetIdFilePathIndex',
+                    KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+                )
+                
+                # Delete all attribute items
+                attribute_count = 0
+                for item in response.get('Items', []):
+                    file_attribute_table.delete_item(
+                        Key={
+                            'attributeKey': item['attributeKey'],
+                            'databaseId:assetId:filePath': composite_key
+                        }
+                    )
+                    attribute_count += 1
+                
+                if attribute_count > 0:
+                    logger.info(f"Deleted {attribute_count} attribute items for file {composite_key}")
+                    deleted_count += 1
+                    
+            except Exception as e:
+                logger.warning(f"Error deleting file attributes: {e}")
+        
+        if deleted_count == 0:
+            logger.info(f"No metadata or attributes found for file {composite_key}")
+        
+        return True
             
     except Exception as e:
         logger.exception(f"Error deleting metadata for file: {e}")
@@ -1859,6 +2002,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     Returns:
         FileOperationResponseModel with the result of the operation
     """
+    # Validate that source and destination paths are different
+    if source_path == dest_path and (dest_asset_id is None or dest_asset_id == assetId):
+        raise VAMSGeneralErrorResponse("Source and destination paths must be different for copy operation")
+    
     # Get source asset and verify permissions
     source_asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
     
@@ -1914,48 +2061,18 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     if not success:
         raise VAMSGeneralErrorResponse(f"Failed to copy file.")
     
-    # Find and copy any preview files associated with this file
-    logger.info(f"Looking for preview files for base file: {source_key}")
-    preview_files = find_preview_files_for_base(source_bucket, source_key)
-    logger.info(f"Found {len(preview_files)} preview files: {preview_files}")
-    copied_preview_files = []
-    
-    for preview_file in preview_files:
-        # Calculate the destination preview file path properly
-        source_dir = os.path.dirname(source_key)
-        dest_dir = os.path.dirname(dest_key)
-        preview_filename = os.path.basename(preview_file)
-        # Replace the base filename in the preview filename
-        source_filename = os.path.basename(source_key)
-        dest_filename = os.path.basename(dest_key)
-        new_preview_filename = preview_filename.replace(source_filename, dest_filename, 1)
-        preview_dest = os.path.join(dest_dir, new_preview_filename).replace('\\', '/')
-        
-        logger.info(f"Copying preview file from {preview_file} to {preview_dest}")
-        
-        # Copy the preview file
-        copy_success = copy_s3_object(
-            source_bucket, 
-            preview_file, 
-            dest_bucket, 
-            preview_dest,
-            source_asset_id=assetId,
-            source_database_id=databaseId,
-            dest_asset_id=dest_asset_id if is_cross_asset else assetId,
-            dest_database_id=databaseId
-        )
-        
-        if copy_success:
-            # Get relative paths for reporting
-            if preview_dest.startswith(dest_base_key):
-                rel_preview_dest = '/' + preview_dest[len(dest_base_key):]
-            else:
-                rel_preview_dest = '/' + preview_dest
-                
-            copied_preview_files.append(rel_preview_dest)
-            logger.info(f"Successfully copied preview file to {rel_preview_dest}")
-        else:
-            logger.error(f"Failed to copy preview file from {preview_file} to {preview_dest}")
+    # Process preview files using centralized helper
+    copied_preview_files = process_preview_files(
+        operation='copy',
+        bucket=source_bucket,
+        source_key=source_key,
+        dest_key=dest_key,
+        base_key=dest_base_key,
+        source_asset_id=assetId,
+        source_database_id=databaseId,
+        dest_asset_id=dest_asset_id if is_cross_asset else assetId,
+        dest_database_id=databaseId
+    )
     
     # Copy auxiliary files if they exist
     copy_auxiliary_files(source_key, dest_key)
@@ -1974,7 +2091,9 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     )
 
 def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, claims_and_roles: Dict) -> FileOperationResponseModel:
-    """Move a file within an asset
+    """Move or rename a file within an asset
+    
+    This function handles both moving files to different paths and renaming files in place.
     
     Args:
         databaseId: The database ID
@@ -1986,12 +2105,16 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     Returns:
         FileOperationResponseModel with the result of the operation
     """
+    # Validate that source and destination paths are different
+    if source_path == dest_path:
+        raise VAMSGeneralErrorResponse("Source and destination paths must be different")
+    
     # Get asset and verify permissions (need POST permission to modify)
     asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
     
     # Check if this is a preview file - don't allow direct operations on preview files
     if is_preview_file(source_path):
-        raise VAMSGeneralErrorResponse(f"Cannot directly move preview files. Move the base file instead.")
+        raise VAMSGeneralErrorResponse("Cannot directly move or rename preview files. Move or rename the base file instead.")
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
@@ -2000,63 +2123,73 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     source_key = resolve_asset_file_path(base_key, source_path)
     dest_key = resolve_asset_file_path(base_key, dest_path)
     
-    # Check if source exists
+    # Check if source exists and is not archived
     try:
-        s3_client.head_object(Bucket=bucket, Key=source_key)
+        source_object = s3_client.head_object(Bucket=bucket, Key=source_key)
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
-            raise VAMSGeneralErrorResponse(f"Source file not found.")
-        raise VAMSGeneralErrorResponse(f"Error checking source file.")
+            # Check if file is archived
+            if is_file_archived(bucket, source_key):
+                raise VAMSGeneralErrorResponse("Cannot move or rename archived file. Unarchive it first.")
+            else:
+                raise VAMSGeneralErrorResponse("Source file not found.")
+        raise VAMSGeneralErrorResponse("Error checking source file.")
     
-    # Check if destination already exists using the helper function
-    if check_destination_file_exists(bucket, dest_key, dest_path):
-        raise VAMSGeneralErrorResponse(f"Destination file already exists")
+    # Check if file is archived (even if it exists)
+    if is_file_archived(bucket, source_key):
+        raise VAMSGeneralErrorResponse("Cannot move or rename archived file. Unarchive it first.")
+    
+    # Check if destination already exists (including archived versions)
+    try:
+        # Check current version
+        try:
+            s3_client.head_object(Bucket=bucket, Key=dest_key)
+            raise VAMSGeneralErrorResponse("Destination file already exists.")
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'NoSuchKey' and e.response['Error']['Code'] != '404':
+                # Only raise for errors other than "file not found"
+                logger.exception(f"Error checking destination file: {e}")
+                raise VAMSGeneralErrorResponse("Error checking destination file.")
+            # If NoSuchKey or 404, file doesn't exist - this is what we want, continue
+        
+        # Check for archived versions
+        versions_response = s3_client.list_object_versions(
+            Bucket=bucket,
+            Prefix=dest_key,
+            MaxKeys=10
+        )
+        
+        # Check if any versions or delete markers exist for this exact key
+        has_versions = any(version['Key'] == dest_key for version in versions_response.get('Versions', []))
+        has_delete_markers = any(marker['Key'] == dest_key for marker in versions_response.get('DeleteMarkers', []))
+        
+        if has_versions or has_delete_markers:
+            raise VAMSGeneralErrorResponse("Destination file already exists (including archived versions).")
+            
+    except VAMSGeneralErrorResponse:
+        raise
+    except ClientError as e:
+        # Handle any ClientError from list_object_versions
+        logger.exception(f"Error checking destination file versions: {e}")
+        raise VAMSGeneralErrorResponse("Error checking destination file.")
+    except Exception as e:
+        logger.exception(f"Unexpected error checking destination file: {e}")
+        raise VAMSGeneralErrorResponse("Error checking destination file.")
     
     # Move the file
     success = move_s3_object(bucket, source_key, bucket, dest_key)
     
     if not success:
-        raise VAMSGeneralErrorResponse(f"Failed to move file ")
+        raise VAMSGeneralErrorResponse("Failed to move file.")
     
-    # Find and move any preview files associated with this file
-    logger.info(f"Looking for preview files for base file: {source_key}")
-    preview_files = find_preview_files_for_base(bucket, source_key)
-    logger.info(f"Found {len(preview_files)} preview files: {preview_files}")
-    moved_preview_files = []
-    
-    for preview_file in preview_files:
-        # Calculate the destination preview file path properly
-        source_dir = os.path.dirname(source_key)
-        dest_dir = os.path.dirname(dest_key)
-        preview_filename = os.path.basename(preview_file)
-        # Replace the base filename in the preview filename
-        source_filename = os.path.basename(source_key)
-        dest_filename = os.path.basename(dest_key)
-        new_preview_filename = preview_filename.replace(source_filename, dest_filename, 1)
-        preview_dest = os.path.join(dest_dir, new_preview_filename).replace('\\', '/')
-        
-        logger.info(f"Moving preview file from {preview_file} to {preview_dest}")
-        
-        # Move the preview file
-        move_success = move_s3_object(bucket, preview_file, bucket, preview_dest)
-        
-        if move_success:
-            # Get relative paths for reporting
-            if preview_file.startswith(base_key):
-                rel_preview_source = '/' + preview_file[len(base_key):]
-            else:
-                rel_preview_source = '/' + preview_file
-                
-            if preview_dest.startswith(base_key):
-                rel_preview_dest = '/' + preview_dest[len(base_key):]
-            else:
-                rel_preview_dest = '/' + preview_dest
-                
-            moved_preview_files.append(rel_preview_source)
-            moved_preview_files.append(rel_preview_dest)
-            logger.info(f"Successfully moved preview file from {rel_preview_source} to {rel_preview_dest}")
-        else:
-            logger.error(f"Failed to move preview file from {preview_file} to {preview_dest}")
+    # Process preview files using centralized helper
+    moved_preview_files = process_preview_files(
+        operation='move',
+        bucket=bucket,
+        source_key=source_key,
+        dest_key=dest_key,
+        base_key=base_key
+    )
     
     # Move auxiliary files if they exist
     move_auxiliary_files(source_key, dest_key)
@@ -2390,120 +2523,149 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
     # Get asset location
     bucket, key = get_asset_s3_location(asset)
     
-    # Parse query parameters
+    # Parse basic flag first to determine defaults
+    basic_mode = query_params.get('basic', 'false').lower() == 'true'
+    
+    # Parse query parameters with conditional defaults based on basic mode
+    # Convert string values to appropriate types
+    max_items = query_params.get('maxItems')
+    page_size = query_params.get('pageSize')
+
     request_model = ListAssetFilesRequestModel(
-        maxItems=query_params.get('maxItems', 1000),
-        pageSize=query_params.get('pageSize', 1000),
+        maxItems=max_items,
+        pageSize=page_size,
         startingToken=query_params.get('startingToken'),
         prefix=query_params.get('prefix'),
-        includeArchived=query_params.get('includeArchived', False)
+        includeArchived=query_params.get('includeArchived', 'false').lower() == 'true',
+        basic=basic_mode
     )
     
-    # List files with archive status
+    # Create resolved query params for S3 listing
+    resolved_query_params = {
+        'maxItems': request_model.maxItems,
+        'pageSize': request_model.pageSize,
+        'startingToken': request_model.startingToken,
+        'prefix': request_model.prefix
+    }
+    
+    # List files with archive status, passing basic_mode flag
     result = list_s3_objects_with_archive_status(
         bucket, 
         key, 
-        request_model.dict(),
-        request_model.includeArchived
+        resolved_query_params,
+        request_model.includeArchived,
+        basic_mode=request_model.basic
     )
     
     # Convert to response model
     file_items = []
-    preview_files = []
-    base_files = {}
     
-    # First pass: separate preview files and base files
-    for item in result.get('items', []):
-        if is_preview_file(item['key']):
-            # This is a preview file
-            preview_files.append(item)
-        else:
-            # This is a base file
-            file_items.append(AssetFileItemModel(**item))
-            # Store in lookup dictionary for preview file matching
-            base_files[item['key']] = len(file_items) - 1
-    
-    # Process preview files
-    orphaned_preview_files = []
-    
-    for preview_item in preview_files:
-        # Get the base file key for this preview file
-        base_key = get_base_file_for_preview(preview_item['key'])
+    if request_model.basic:
+        # Basic mode: Skip preview file processing and version checks
+        # Just convert items directly to response models
+        for item in result.get('items', []):
+            # Skip preview files in basic mode
+            if not is_preview_file(item['key']):
+                # Set previewFile to empty string for basic mode
+                item['previewFile'] = ""
+                file_items.append(AssetFileItemModel(**item))
+    else:
+        # Full mode: Process preview files and version checks
+        preview_files = []
+        base_files = {}
         
-        # Check if the base file exists
-        if base_key in base_files:
-            # Base file exists, add this preview file to it if it has an allowed extension
-            if is_allowed_preview_extension(preview_item['key']):
-                base_file_index = base_files[base_key]
-                
-                # Only add if the base file doesn't already have a preview file
-                if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
-                    # Add relative path to the preview file
-                    if preview_item['key'].startswith(key):
-                        relative_preview_path = '/' + preview_item['key'][len(key):]
-                    else:
-                        relative_preview_path = '/' + preview_item['key']
-                    
-                    # Add preview file to base file
-                    file_items[base_file_index].previewFile = relative_preview_path
-        else:
-            # Base file doesn't exist, this is an orphaned preview file
-            orphaned_preview_files.append(preview_item['key'])
-    
-    # Log orphaned preview files
-    if orphaned_preview_files:
-        logger.warning(f"Found {len(orphaned_preview_files)} orphaned preview files: {orphaned_preview_files}")
-    
-    # Initialize previewFile field for files that don't have one
-    for file_item in file_items:
-        if not hasattr(file_item, 'previewFile'):
-            file_item.previewFile = ""
-    
-    # Check for Asset Version Mismatch
-    # Get current asset version ID if available
-    current_version_id = None
-    if asset.get('currentVersionId'):
-        current_version_id = asset.get('currentVersionId', '0')
-    
-    # If we have a current version, check file versions against asset version files
-    if current_version_id:
-        # Get all file versions for the current asset version
-        asset_file_versions = get_asset_file_versions(assetId, current_version_id, None)
-        
-        # Create a lookup dictionary for faster matching
-        file_version_lookup = {}
-        if asset_file_versions and asset_file_versions.get('files'):
-            for file_version in asset_file_versions.get('files'):
-                relative_key = file_version.get('relativeKey')
-                if relative_key:
-                    file_version_lookup[relative_key] = file_version
-        
-        # Check each file against the asset version files
-        for file_item in file_items:
-            # Separate Folder assets are not included ever in asset versions
-            if file_item.isFolder:
-                continue
-                
-            # If file is archived, it's automatically a mismatch
-            if file_item.isArchived:
-                file_item.currentAssetVersionFileVersionMismatch = True
-                continue
-            
-            # Get the relative path without leading slash for comparison
-            relative_path = file_item.relativePath.lstrip('/')
-            
-            # Find matching record in asset file versions
-            matching_version = file_version_lookup.get(relative_path)
-            
-            # Set mismatch flag
-            if matching_version and matching_version.get('versionId') == file_item.versionId:
-                file_item.currentAssetVersionFileVersionMismatch = False
+        # First pass: separate preview files and base files
+        for item in result.get('items', []):
+            if is_preview_file(item['key']):
+                # This is a preview file
+                preview_files.append(item)
             else:
-                file_item.currentAssetVersionFileVersionMismatch = True
+                # This is a base file
+                file_items.append(AssetFileItemModel(**item))
+                # Store in lookup dictionary for preview file matching
+                base_files[item['key']] = len(file_items) - 1
+        
+        # Process preview files
+        orphaned_preview_files = []
+        
+        for preview_item in preview_files:
+            # Get the base file key for this preview file
+            base_key = get_base_file_for_preview(preview_item['key'])
+            
+            # Check if the base file exists
+            if base_key in base_files:
+                # Base file exists, add this preview file to it if it has an allowed extension
+                if is_allowed_preview_extension(preview_item['key']):
+                    base_file_index = base_files[base_key]
+                    
+                    # Only add if the base file doesn't already have a preview file
+                    if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
+                        # Add relative path to the preview file
+                        if preview_item['key'].startswith(key):
+                            relative_preview_path = '/' + preview_item['key'][len(key):]
+                        else:
+                            relative_preview_path = '/' + preview_item['key']
+                        
+                        # Add preview file to base file
+                        file_items[base_file_index].previewFile = relative_preview_path
+            else:
+                # Base file doesn't exist, this is an orphaned preview file
+                orphaned_preview_files.append(preview_item['key'])
+        
+        # Log orphaned preview files
+        if orphaned_preview_files:
+            logger.warning(f"Found {len(orphaned_preview_files)} orphaned preview files: {orphaned_preview_files}")
+        
+        # Initialize previewFile field for files that don't have one
+        for file_item in file_items:
+            if not hasattr(file_item, 'previewFile'):
+                file_item.previewFile = ""
+        
+        # Check for Asset Version Mismatch
+        # Get current asset version ID if available
+        current_version_id = None
+        if asset.get('currentVersionId'):
+            current_version_id = asset.get('currentVersionId', '0')
+        
+        # If we have a current version, check file versions against asset version files
+        if current_version_id:
+            # Get all file versions for the current asset version
+            asset_file_versions = get_asset_file_versions(assetId, current_version_id, None)
+            
+            # Create a lookup dictionary for faster matching
+            file_version_lookup = {}
+            if asset_file_versions and asset_file_versions.get('files'):
+                for file_version in asset_file_versions.get('files'):
+                    relative_key = file_version.get('relativeKey')
+                    if relative_key:
+                        file_version_lookup[relative_key] = file_version
+            
+            # Check each file against the asset version files
+            for file_item in file_items:
+                # Separate Folder assets are not included ever in asset versions
+                if file_item.isFolder:
+                    continue
+                    
+                # If file is archived, it's automatically a mismatch
+                if file_item.isArchived:
+                    file_item.currentAssetVersionFileVersionMismatch = True
+                    continue
+                
+                # Get the relative path without leading slash for comparison
+                relative_path = file_item.relativePath.lstrip('/')
+                
+                # Find matching record in asset file versions
+                matching_version = file_version_lookup.get(relative_path)
+                
+                # Set mismatch flag
+                if matching_version and matching_version.get('versionId') == file_item.versionId:
+                    file_item.currentAssetVersionFileVersionMismatch = False
+                else:
+                    file_item.currentAssetVersionFileVersionMismatch = True
     
     return ListAssetFilesResponseModel(
         items=file_items,
-        nextToken=result.get('nextToken')
+        NextToken=result.get('NextToken')
     )
 
 def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
@@ -2529,10 +2691,10 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2547,12 +2709,12 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2560,12 +2722,12 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
 
     
         # Parse request model
@@ -2585,13 +2747,13 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /unarchiveFile requests
@@ -2616,10 +2778,10 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2634,12 +2796,12 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2647,12 +2809,12 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=UnarchiveFileRequestModel)
@@ -2669,13 +2831,13 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle DELETE /archiveFile requests
@@ -2700,10 +2862,10 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2718,12 +2880,12 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2731,12 +2893,12 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=ArchiveFileRequestModel)
@@ -2754,13 +2916,13 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /copyFile requests
@@ -2785,10 +2947,10 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2803,12 +2965,12 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2816,12 +2978,12 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=CopyFileRequestModel)
@@ -2840,13 +3002,13 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /moveFile requests
@@ -2871,10 +3033,10 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2889,12 +3051,12 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -2902,12 +3064,12 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=MoveFileRequestModel)
@@ -2925,13 +3087,13 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     """Handle GET /fileInfo requests
@@ -2956,10 +3118,10 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -2974,7 +3136,7 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Get query parameters
         query_params = event.get('queryStringParameters', {}) or {}
@@ -2991,19 +3153,19 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
                     body = json.loads(body)
                 except json.JSONDecodeError as e:
                     logger.exception(f"Invalid JSON in request body: {e}")
-                    return validation_error(body={'message': "Invalid JSON in request body"})
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
             elif isinstance(body, dict):
                 body = body
             else:
                 logger.error("Request body is not a string")
-                return validation_error(body={'message': "Request body cannot be parsed"})
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
                 
             # Parse request model
             request_model = parse(body, model=FileInfoRequestModel)
         else:
             # If no body, require filePath in query parameters
             if 'filePath' not in query_params:
-                return validation_error(body={'message': "filePath is required in query parameters or request body"})
+                return validation_error(body={'message': "filePath is required in query parameters or request body"}, event=event)
             
             # Create request model from query parameters
             request_model = FileInfoRequestModel(
@@ -3024,13 +3186,13 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /revertVersion requests
@@ -3055,13 +3217,13 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         if 'versionId' not in path_params:
-            return validation_error(body={'message': "No version ID in API Call"})
+            return validation_error(body={'message': "No version ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3080,12 +3242,12 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -3093,12 +3255,12 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=RevertFileVersionRequestModel)
@@ -3116,13 +3278,13 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /createFolder requests
@@ -3147,10 +3309,10 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3165,12 +3327,12 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -3178,12 +3340,12 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=CreateFolderRequestModel)
@@ -3200,13 +3362,13 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_path: str, claims_and_roles: Dict) -> DeleteAuxiliaryPreviewAssetFilesResponseModel:
     """Delete auxiliary preview asset files for a specific file path
@@ -3333,10 +3495,10 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3351,7 +3513,7 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Process request
         response = delete_asset_preview(
@@ -3364,13 +3526,13 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayProxyResponseV2:
     """Handle DELETE /deleteAuxiliaryPreviewAssetFiles requests
@@ -3395,10 +3557,10 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3413,12 +3575,12 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -3426,12 +3588,12 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=DeleteAuxiliaryPreviewAssetFilesRequestModel)
@@ -3448,13 +3610,13 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle PUT /setPrimaryFile requests
@@ -3479,10 +3641,10 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3497,12 +3659,12 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:
-            return validation_error(body={'message': "Request body is required"})
+            return validation_error(body={'message': "Request body is required"}, event=event)
         
         # Parse JSON body safely
         if isinstance(body, str):
@@ -3510,12 +3672,12 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
                 body = json.loads(body)
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': "Invalid JSON in request body"})
+                return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         elif isinstance(body, dict):
             body = body
         else:
             logger.error("Request body is not a string")
-            return validation_error(body={'message': "Request body cannot be parsed"})
+            return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Parse request model
         request_model = parse(body, model=SetPrimaryFileRequestModel)
@@ -3534,13 +3696,13 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     """Handle GET /listFiles requests
@@ -3565,10 +3727,10 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         # Get path parameters
         path_params = event.get('pathParameters', {})
         if 'databaseId' not in path_params:
-            return validation_error(body={'message': "No database ID in API Call"})
+            return validation_error(body={'message': "No database ID in API Call"}, event=event)
         
         if 'assetId' not in path_params:
-            return validation_error(body={'message': "No asset ID in API Call"})
+            return validation_error(body={'message': "No asset ID in API Call"}, event=event)
         
         # Validate path parameters
         (valid, message) = validate({
@@ -3583,11 +3745,29 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         })
         
         if not valid:
-            return validation_error(body={'message': message})
+            return validation_error(body={'message': message}, event=event)
         
         # Get query parameters
         query_params = event.get('queryStringParameters', {}) or {}
-        validate_pagination_info(query_params)
+
+        # Apply defaults: maxItems=10000 for both modes, pageSize=1500 for basic, 100 for full
+        # Parse basic flag first to determine defaults
+        basic_mode = query_params.get('basic', 'false').lower() == 'true'
+        
+        # Parse query parameters with conditional defaults based on basic mode
+        # Convert string values to appropriate types
+        max_items = query_params.get('maxItems')
+        page_size = query_params.get('pageSize')
+        if max_items is not None:
+            query_params['maxItems'] = int(max_items)
+        else:
+            query_params['maxItems']  = 10000  # Same for both modes
+        
+        if page_size is not None:
+            query_params['pageSize'] = int(page_size)
+        else:
+            query_params['pageSize'] = 1500 if basic_mode else 100  # 1500 for basic, 100 for full
+
         
         # Process request
         response = list_asset_files(
@@ -3601,13 +3781,13 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)})
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
-        return internal_error()
+        return internal_error(event=event)
 
 #######################
 # Lambda Handler
@@ -3654,8 +3834,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         elif method == 'PUT' and path.endswith('/setPrimaryFile'):
             return handle_set_primary_file(event, context)
         else:
-            return validation_error(body={'message': "Invalid API path or method"})
+            return validation_error(body={'message': "Invalid API path or method"}, event=event)
     
     except Exception as e:
         logger.exception(f"Unhandled error in lambda_handler: {e}")
-        return internal_error()
+        return internal_error(event=event)

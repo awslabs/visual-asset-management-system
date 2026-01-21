@@ -408,6 +408,7 @@ export class SplatToolboxConstruct extends Construct {
                     workflowId: "3dRecon-splat-toolbox-objects",
                     workflowDescription:
                         "3D Gaussian Splat Pipeline - Auto process images and 2D videos into 3D splat objects - .zip (2D video), mov, .mp4 inputs",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
 
@@ -430,6 +431,7 @@ export class SplatToolboxConstruct extends Construct {
                     workflowId: "3dRecon-splat-toolbox-environments-360",
                     workflowDescription:
                         "3D Gaussian Splat Pipeline - Auto process 360 videos into 3D splat objects - .zip (360 video), mov, .mp4 inputs",
+                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
         }

@@ -663,10 +663,15 @@ def get(ctx: click.Context, asset_id: str, database_id: str, show_archived: bool
 @assets.command()
 @click.option('-d', '--database-id', help='Database ID to list assets from (optional for all assets)')
 @click.option('--show-archived', is_flag=True, help='Include archived assets')
+@click.option('--page-size', type=int, help='Number of items per page')
+@click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
+@click.option('--starting-token', help='Token for pagination (manual pagination)')
+@click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, json_output: bool):
+def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, page_size: int, 
+         max_items: int, starting_token: str, auto_paginate: bool, json_output: bool):
     """
     List assets in a database or all assets.
     
@@ -674,8 +679,24 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, js
     all databases if no database ID is specified.
     
     Examples:
+        # Basic listing (uses API defaults)
         vamscli assets list -d my-database
-        vamscli assets list --show-archived
+        
+        # Auto-pagination to fetch all items (default: up to 10,000)
+        vamscli assets list -d my-database --auto-paginate
+        
+        # Auto-pagination with custom limit
+        vamscli assets list -d my-database --auto-paginate --max-items 5000
+        
+        # Auto-pagination with custom page size
+        vamscli assets list -d my-database --auto-paginate --page-size 500
+        
+        # Manual pagination with page size
+        vamscli assets list -d my-database --page-size 200
+        vamscli assets list -d my-database --starting-token "token123" --page-size 200
+        
+        # With filters
+        vamscli assets list -d my-database --show-archived
         vamscli assets list --json-output
     """
     # Setup/auth already validated by decorator
@@ -684,6 +705,18 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, js
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
+        # Validate pagination options
+        if auto_paginate and starting_token:
+            raise click.ClickException(
+                "Cannot use --auto-paginate with --starting-token. "
+                "Use --auto-paginate for automatic pagination, or --starting-token for manual pagination."
+            )
+        
+        # Warn if max-items used without auto-paginate
+        if max_items and not auto_paginate:
+            output_status("Warning: --max-items only applies with --auto-paginate. Ignoring --max-items.", json_output)
+            max_items = None
+        
         if database_id:
             endpoint = API_DATABASE_ASSETS.format(databaseId=database_id)
             status_msg = f"Listing assets in database '{database_id}'..."
@@ -691,15 +724,77 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, js
             endpoint = API_ASSETS
             status_msg = "Listing all assets..."
         
-        params = {}
-        if show_archived:
-            params['showArchived'] = 'true'
-        
-        output_status(status_msg, json_output)
-        
-        # Get the assets
-        response = api_client.get(endpoint, include_auth=True, params=params)
-        result = response.json()
+        if auto_paginate:
+            # Auto-pagination mode: fetch all items up to max_items (default 10,000)
+            max_total_items = max_items or 10000
+            output_status(f"{status_msg[:-3]} (auto-paginating up to {max_total_items} items)...", json_output)
+            
+            all_items = []
+            next_token = None
+            total_fetched = 0
+            page_count = 0
+            
+            while True:
+                page_count += 1
+                
+                # Prepare query parameters for this page
+                params = {}
+                if show_archived:
+                    params['showArchived'] = 'true'
+                if page_size:
+                    params['pageSize'] = page_size  # Pass pageSize to API
+                if next_token:
+                    params['startingToken'] = next_token
+                
+                # Note: maxItems is NOT passed to API - it's CLI-side limit only
+                
+                # Make API call
+                response = api_client.get(endpoint, include_auth=True, params=params)
+                page_result = response.json()
+                
+                # Aggregate items
+                items = page_result.get('Items', [])
+                all_items.extend(items)
+                total_fetched += len(items)
+                
+                # Show progress in CLI mode
+                if not json_output:
+                    output_status(f"Fetched {total_fetched} assets (page {page_count})...", False)
+                
+                # Check if we should continue
+                next_token = page_result.get('NextToken')
+                if not next_token or total_fetched >= max_total_items:
+                    break
+            
+            # Create final result
+            result = {
+                'Items': all_items,
+                'totalItems': len(all_items),
+                'autoPaginated': True,
+                'pageCount': page_count
+            }
+            
+            if total_fetched >= max_total_items and next_token:
+                result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
+            
+        else:
+            # Manual pagination mode: single API call
+            output_status(status_msg, json_output)
+            
+            # Prepare query parameters
+            params = {}
+            if show_archived:
+                params['showArchived'] = 'true'
+            if page_size:
+                params['pageSize'] = page_size  # Pass pageSize to API
+            if starting_token:
+                params['startingToken'] = starting_token
+            
+            # Note: maxItems is NOT passed to API in manual mode
+            
+            # Get the assets
+            response = api_client.get(endpoint, include_auth=True, params=params)
+            result = response.json()
         
         def format_assets_list(data):
             """Format assets list for CLI display."""
@@ -707,7 +802,17 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, js
             if not items:
                 return "No assets found."
             
-            lines = [f"\nFound {len(items)} asset(s):", "-" * 80]
+            lines = []
+            
+            # Show auto-pagination info if present
+            if data.get('autoPaginated'):
+                lines.append(f"\nAuto-paginated: Retrieved {data.get('totalItems', 0)} items in {data.get('pageCount', 0)} page(s)")
+                if data.get('note'):
+                    lines.append(f"⚠️  {data['note']}")
+                lines.append("")
+            
+            lines.append(f"Found {len(items)} asset(s):")
+            lines.append("-" * 80)
             
             for asset in items:
                 lines.append(f"ID: {asset.get('assetId', 'N/A')}")
@@ -723,9 +828,10 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, js
                 
                 lines.append("-" * 80)
             
-            # Show pagination info if available
-            if data.get('NextToken'):
-                lines.append("More results available. Use pagination to see additional assets.")
+            # Show nextToken for manual pagination
+            if not data.get('autoPaginated') and data.get('NextToken'):
+                lines.append(f"\nNext token: {data['NextToken']}")
+                lines.append("Use --starting-token to get the next page")
             
             return '\n'.join(lines)
         

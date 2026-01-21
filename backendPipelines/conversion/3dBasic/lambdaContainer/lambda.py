@@ -28,7 +28,7 @@ def download(bucket_name, object_key, file_path):
             s3_client.download_fileobj(bucket_name, object_key, data)
     except ClientError as e:
         logger.exception(e)
-        return None
+        raise Exception("Could not download input file from S3 bucket")
     return file_path
 
 
@@ -51,7 +51,7 @@ def uploadV2(bucket_name, object_key, file_path):
                                    )
     except ClientError as e:
         logger.exception(e)
-        return None
+        raise Exception("Could not upload output file to S3 bucket")
     return object_key
     
 def convert_input_output(input_path, output_path, output_filetype):
@@ -64,12 +64,7 @@ def convert_input_output(input_path, output_path, output_filetype):
 
     #Folder check
     if (input_key.endswith("/")):
-        return {
-            'statusCode': 400,
-            'body': {
-                "message": "Input S3 URI cannot be a folder"
-            }
-        }
+        raise ValueError("Input S3 URI cannot be a folder")
 
     # Check input and output formats
     input_s3_asset_file_root, input_s3_asset_extension = os.path.splitext(input_key)
@@ -112,10 +107,8 @@ def lambda_handler(event, context):
     # Parse request body
     if not event.get('body'):
         message = 'Request body is required'
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        logger.error(response)
-        return response
+        logger.error(message)
+        raise ValueError(message)
 
     if isinstance(event['body'], str):
         data = json.loads(event['body'])

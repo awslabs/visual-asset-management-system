@@ -4,9 +4,10 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Auth, Cache } from "aws-amplify";
+import { Cache } from "aws-amplify";
 import { ViewerPluginProps } from "../../core/types";
 import { PotreeDependencyManager } from "./dependencies";
+import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 
 const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({ assetId, databaseId, assetKey }) => {
     const engineElement = useRef<HTMLDivElement>(null);
@@ -41,8 +42,10 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({ assetId, databaseI
                 let fileKey = assetKey + "/preview/PotreeViewer/metadata.json";
                 let url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
 
+                // Get a valid, fresh authorization header (automatically refreshes token if expired)
+                const authorizationHeader = await getDualAuthorizationHeader();
                 const authHeader = {
-                    Authorization: `Bearer ${Auth.Credentials.Auth.user.signInUserSession.idToken.jwtToken}`,
+                    Authorization: authorizationHeader,
                 };
 
                 // If we get here, the files are available, proceed with loading

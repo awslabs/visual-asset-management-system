@@ -4,7 +4,7 @@ This directory contains the installation script for the Online3DViewer plugin, w
 
 ## Overview
 
-The Online3DViewer plugin now follows the same dynamic loading pattern as Vntana, Cesium, and Potree viewers, loading the library from the public directory at runtime instead of bundling it with the main application.
+The Online3DViewer plugin follows the adynamic loading pattern for viewers, loading the library from the public directory at runtime instead of bundling it with the main application.
 
 ## Implementation Details
 

@@ -12,8 +12,6 @@ from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from botocore.exceptions import ClientError
-
 from common.dynamodb import to_update_expr
 from handlers.workflows import update_pipeline_workflows
 

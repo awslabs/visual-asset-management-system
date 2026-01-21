@@ -206,22 +206,19 @@ export function DirectoryTree({}: DirectoryTreeProps) {
     }
     const { state, dispatch } = context;
 
-    if (state.loading) {
-        return (
-            <Box textAlign="center" padding="m">
-                <Spinner size="normal" />
-                <div>Loading files...</div>
-            </Box>
-        );
-    }
-
-    if (state.error) {
-        return (
-            <Box textAlign="center" padding="m" color="text-status-error">
-                <div>Error loading files: {state.error}</div>
-            </Box>
-        );
-    }
+    // Show loading progress for streaming phases
+    // Only show spinner during active loading phases, not during transition phases
+    const isStreaming =
+        state.loading &&
+        (state.loadingPhase === "basic-loading" || state.loadingPhase === "detailed-loading");
+    const loadingMessage =
+        state.loadingPhase === "basic-loading"
+            ? "Loading files..."
+            : state.loadingPhase === "basic-complete"
+            ? "Loading files..."
+            : state.loadingPhase === "detailed-loading"
+            ? "Loading details..."
+            : "";
 
     return (
         <div className="directory-tree-container">
@@ -241,14 +238,36 @@ export function DirectoryTree({}: DirectoryTreeProps) {
                             state.isSearching ? `${state.searchResults.length} matches` : undefined
                         }
                     />
-                    <Button
-                        iconName="refresh"
-                        variant="icon"
-                        ariaLabel="Refresh files"
-                        onClick={() => dispatch({ type: "REFRESH_FILES", payload: null })}
-                        disabled={state.loading}
-                    />
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        {isStreaming ? (
+                            <Spinner size="normal" />
+                        ) : (
+                            <Button
+                                iconName="refresh"
+                                variant="icon"
+                                ariaLabel="Refresh files"
+                                onClick={() => dispatch({ type: "REFRESH_FILES", payload: null })}
+                            />
+                        )}
+                    </div>
                 </div>
+                {isStreaming && state.loadingProgress.current > 0 && (
+                    <div
+                        style={{
+                            fontSize: "12px",
+                            color: "#666",
+                            marginTop: "4px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                        }}
+                    >
+                        <span>{loadingMessage}</span>
+                        <span style={{ color: "#0972d3" }}>
+                            Page {state.loadingProgress.current}
+                        </span>
+                    </div>
+                )}
             </div>
 
             {state.isSearching ? (

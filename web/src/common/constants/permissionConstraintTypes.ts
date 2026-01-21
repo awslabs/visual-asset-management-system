@@ -52,6 +52,7 @@ export const fieldNamesToObjectTypeMapping: { [key: string]: Record<string, stri
     ],
     metadataSchema: [
         { label: "Database ID", value: "databaseId" },
-        { label: "Metadata Field", value: "field" },
+        { label: "Metadata Schema Name", value: "metadataSchemaName" },
+        { label: "Metadata Schema Entity Type", value: "metadataSchemaEntityType" },
     ],
 };

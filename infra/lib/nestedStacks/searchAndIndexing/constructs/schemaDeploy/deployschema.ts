@@ -41,76 +41,13 @@ const setEndpointSSM = async (paramName: string, value: string | undefined) => {
 };
 
 /**
- * Get the OpenSearch index mapping schema for dual-index system
- * This schema supports both asset and file indexes with enhanced field support
+ * Get the OpenSearch index mapping schema for dual-index system with flat object fields
+ * This schema uses flat_object type for metadata (MD_) and attributes (AB_) to prevent field explosion
  */
 const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
     const baseMapping = {
         mappings: {
             dynamic_templates: [
-                {
-                    metadata_strings: {
-                        match_mapping_type: "string",
-                        match: "MD_str_*",
-                        mapping: {
-                            type: "text",
-                            fields: {
-                                keyword: {
-                                    type: "keyword",
-                                },
-                            },
-                        },
-                    },
-                },
-                {
-                    metadata_numeric: {
-                        match: "MD_num_*",
-                        mapping: {
-                            type: "double",
-                        },
-                    },
-                },
-                {
-                    metadata_boolean: {
-                        match: "MD_bool_*",
-                        mapping: {
-                            type: "boolean",
-                        },
-                    },
-                },
-                {
-                    metadata_dates: {
-                        match: "MD_date_*",
-                        mapping: {
-                            type: "date",
-                            format: "yyyy-MM-dd'T'HH:mm:ss||yyyy-MM-dd||epoch_millis",
-                        },
-                    },
-                },
-                {
-                    metadata_lists: {
-                        match: "MD_list_*",
-                        mapping: {
-                            type: "keyword",
-                        },
-                    },
-                },
-                {
-                    metadata_geo_points: {
-                        match: "MD_gp_*",
-                        mapping: {
-                            type: "geo_point",
-                        },
-                    },
-                },
-                {
-                    metadata_geo_shapes: {
-                        match: "MD_gs_*",
-                        mapping: {
-                            type: "geo_shape",
-                        },
-                    },
-                },
                 {
                     core_strings: {
                         match_mapping_type: "string",
@@ -168,6 +105,10 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
                 _rectype: {
                     type: "keyword",
                 },
+                // Flat object for all metadata fields - prevents field explosion
+                MD_: {
+                    type: "flat_object",
+                },
             } as any,
         },
         settings: {
@@ -222,6 +163,8 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
             num_filesize: { type: "long" },
             bool_archived: { type: "boolean" },
             list_tags: { type: "text", fields: { keyword: { type: "keyword" } } },
+            // Flat object for all attribute fields (file index only) - prevents field explosion
+            AB_: { type: "flat_object" },
         };
     }
 

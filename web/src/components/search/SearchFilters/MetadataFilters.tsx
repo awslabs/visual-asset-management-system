@@ -38,7 +38,6 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
         value: "",
         operator: "=",
         type: "string",
-        fieldType: "str",
     });
 
     const operatorOptions = [
@@ -66,7 +65,6 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                 value: "",
                 operator: "=",
                 type: "string",
-                fieldType: "str",
             });
         }
     };

@@ -49,6 +49,81 @@ This document covers common issues with asset management, file operations, and a
 
 ## File Upload Issues
 
+### File Extension Validation Error
+
+**Error:**
+
+```
+✗ File Extension Validation Error: Database has file extension restrictions: .glb,.gltf
+
+The following files do not meet the restriction:
+  - /document.pdf (extension: .pdf)
+  - /readme.txt (extension: .txt)
+
+The database 'my-db' restricts uploads to specific file types.
+Please check the allowed extensions and try again.
+```
+
+**Cause:**
+
+The database is configured with `restrictFileUploadsToExtensions` to limit which file types can be uploaded.
+
+**Solutions:**
+
+1. **Check database restrictions:**
+
+    ```bash
+    vamscli database get -d my-db
+    # Look for: restrictFileUploadsToExtensions: .glb,.gltf
+    ```
+
+2. **Upload only allowed file types:**
+
+    ```bash
+    # Only upload files with allowed extensions
+    vamscli file upload -d my-db -a my-asset model.glb texture.gltf
+    ```
+
+3. **Convert files to allowed formats:**
+
+    - Convert files to one of the allowed extensions
+    - Use appropriate conversion tools for your file type
+
+4. **Contact administrator to modify restrictions:**
+
+    - If you need to upload other file types, contact your database administrator
+    - They can update the database configuration to allow additional extensions
+
+5. **Use .all wildcard (administrator only):**
+    ```bash
+    # Administrator can set to allow all file types
+    vamscli database update my-db --restrict-file-uploads-to-extensions ".all"
+    ```
+
+**Important Notes:**
+
+-   Extension validation is **case-insensitive** (.GLB and .glb are treated the same)
+-   **Asset preview uploads** (`--asset-preview`) skip extension validation
+-   **Preview auxiliary files** (`.previewFile.` in filename) skip extension validation
+-   Validation checks **all files** before upload and reports **all violations** at once
+-   Empty or missing `restrictFileUploadsToExtensions` means all file types are allowed
+
+**Example Workflow:**
+
+```bash
+# 1. Check what extensions are allowed
+vamscli database get -d my-db
+
+# 2. Filter your files to only allowed extensions
+# If restrictions are: .glb,.gltf
+
+# 3. Upload only allowed files
+vamscli file upload -d my-db -a my-asset model.glb model.gltf
+
+# 4. Preview files are always allowed regardless of restrictions
+vamscli file upload -d my-db -a my-asset --asset-preview thumbnail.jpg
+```
+
 ### File Not Found
 
 **Error:**
@@ -811,6 +886,33 @@ vamscli asset-version revert -d <database> -a <asset> -v <version> --comment "Re
 **A:** Parent-child relationships cannot create cycles. Use `--tree-view` to visualize the hierarchy and restructure as needed.
 
 ## Asset Download Issues
+
+### Download Attempts to Download Folders
+
+**Problem:** Download command tries to download folder objects as files, or you see errors about downloading "/" or folder paths
+
+**Cause:** In older versions, folder objects in the asset file list were not being filtered properly
+
+**Solution:**
+
+-   Ensure you're using the latest version of VamsCLI (v2.2.0 or later)
+-   Folder objects are now automatically filtered - only actual files are downloaded
+-   When using `--file-key "/"`, all files at the root level are downloaded (the "/" folder object itself is ignored)
+-   When using `--recursive`, all files in the folder tree are downloaded (folder objects are ignored)
+-   If you still see errors about downloading folders, this indicates a bug that should be reported
+
+**Examples of correct behavior:**
+
+```bash
+# Download all files from root (filters out "/" folder object)
+vamscli assets download /local/path -d my-db -a my-asset --file-key "/"
+
+# Download all files from asset (filters out all folder objects)
+vamscli assets download /local/path -d my-db -a my-asset
+
+# Download folder recursively (filters out folder objects)
+vamscli assets download /local/path -d my-db -a my-asset --file-key "/models/" --recursive
+```
 
 ### Asset Not Distributable
 
