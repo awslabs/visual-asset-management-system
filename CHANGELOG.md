@@ -4,15 +4,12 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [2.4.1] (2026-01-30)
 
-
-### Features
-
 ### Bug Fixes
--   Fix CDK error with storage resources asset indexer queue names when deploying to GovCloud environments
--   Fix CDK error with Cloudfront KMS principal persmisions (should not be added) when deploying to non-cloudFront for web configurations or GovCloud environment
+-   Fix CDK deployment error with storage resources asset indexer queue names when deploying to GovCloud environments
+-   Fix CDK deployment error with Cloudfront KMS principal persmisions (should not be added) when deploying to non-cloudFront for web configurations or GovCloud environment
+-   Fix CDK deployment error with deploying metadata schema data when using KMS key (KMS key permissions were not being applied correctly to CDK custom resource role)
 
 ### Chores
-
 
 ## [2.4.0] (2026-01-16)
 
