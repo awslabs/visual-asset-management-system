@@ -1,6 +1,6 @@
 /*! coi-serviceworker v0.1.7 - Guido Zuidhof and contributors, licensed under MIT */
 let coepCredentialless = false;
-if (typeof window === 'undefined') {
+if (typeof window === "undefined") {
     self.addEventListener("install", () => self.skipWaiting());
     self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
@@ -13,7 +13,7 @@ if (typeof window === 'undefined') {
                 .then(() => {
                     return self.clients.matchAll();
                 })
-                .then(clients => {
+                .then((clients) => {
                     clients.forEach((client) => client.navigate(client.url));
                 });
         } else if (ev.data.type === "coepCredentialless") {
@@ -27,11 +27,12 @@ if (typeof window === 'undefined') {
             return;
         }
 
-        const request = (coepCredentialless && r.mode === "no-cors")
-            ? new Request(r, {
-                credentials: "omit",
-            })
-            : r;
+        const request =
+            coepCredentialless && r.mode === "no-cors"
+                ? new Request(r, {
+                      credentials: "omit",
+                  })
+                : r;
         event.respondWith(
             fetch(request)
                 .then((response) => {
@@ -48,7 +49,11 @@ if (typeof window === 'undefined') {
                     newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
 
                     // Log header injection for main document and important resources
-                    if (r.mode === "navigate" || r.destination === "document" || r.url.includes("index.html")) {
+                    if (
+                        r.mode === "navigate" ||
+                        r.destination === "document" ||
+                        r.url.includes("index.html")
+                    ) {
                         console.log("[COI Service Worker] Headers set for:", r.url);
                         console.log("  - Cross-Origin-Embedder-Policy:", coepValue);
                         console.log("  - Cross-Origin-Opener-Policy: same-origin");
@@ -66,12 +71,11 @@ if (typeof window === 'undefined') {
                 .catch((e) => console.error("[COI Service Worker] Fetch error:", e))
         );
     });
-
 } else {
     (() => {
         const reloadedBySelf = window.sessionStorage.getItem("coiReloadedBySelf");
         window.sessionStorage.removeItem("coiReloadedBySelf");
-        const coepDegrading = (reloadedBySelf == "coepdegrade");
+        const coepDegrading = reloadedBySelf == "coepdegrade";
 
         // You can customize the behavior of this script through a global `coi` variable.
         const coi = {
@@ -81,7 +85,7 @@ if (typeof window === 'undefined') {
             coepDegrade: () => true,
             doReload: () => window.location.reload(),
             quiet: false,
-            ...window.coi
+            ...window.coi,
         };
 
         const n = navigator;
@@ -95,14 +99,14 @@ if (typeof window === 'undefined') {
 
         if (controlling) {
             // Reload only on the first failure.
-            const reloadToDegrade = coi.coepDegrade() && !(
-                coepDegrading || window.crossOriginIsolated
-            );
+            const reloadToDegrade =
+                coi.coepDegrade() && !(coepDegrading || window.crossOriginIsolated);
             n.serviceWorker.controller.postMessage({
                 type: "coepCredentialless",
-                value: (reloadToDegrade || coepHasFailed && coi.coepDegrade())
-                    ? false
-                    : coi.coepCredentialless(),
+                value:
+                    reloadToDegrade || (coepHasFailed && coi.coepDegrade())
+                        ? false
+                        : coi.coepCredentialless(),
             });
             if (reloadToDegrade) {
                 !coi.quiet && console.log("Reloading page to degrade COEP.");
@@ -120,29 +124,40 @@ if (typeof window === 'undefined') {
         if (window.crossOriginIsolated !== false || !coi.shouldRegister()) return;
 
         if (!window.isSecureContext) {
-            !coi.quiet && console.log("COOP/COEP Service Worker not registered, a secure context is required.");
+            !coi.quiet &&
+                console.log(
+                    "COOP/COEP Service Worker not registered, a secure context is required."
+                );
             return;
         }
 
         // In some environments (e.g. Firefox private mode) this won't be available
         if (!n.serviceWorker) {
-            !coi.quiet && console.error("COOP/COEP Service Worker not registered, perhaps due to private mode.");
+            !coi.quiet &&
+                console.error(
+                    "COOP/COEP Service Worker not registered, perhaps due to private mode."
+                );
             return;
         }
 
         n.serviceWorker.register(window.document.currentScript.src).then(
             (registration) => {
-                !coi.quiet && console.log("COOP/COEP Service Worker registered", registration.scope);
+                !coi.quiet &&
+                    console.log("COOP/COEP Service Worker registered", registration.scope);
 
                 registration.addEventListener("updatefound", () => {
-                    !coi.quiet && console.log("Reloading page to make use of updated COOP/COEP Service Worker.");
+                    !coi.quiet &&
+                        console.log(
+                            "Reloading page to make use of updated COOP/COEP Service Worker."
+                        );
                     window.sessionStorage.setItem("coiReloadedBySelf", "updatefound");
                     coi.doReload();
                 });
 
                 // If the registration is active, but it's not controlling the page
                 if (registration.active && !n.serviceWorker.controller) {
-                    !coi.quiet && console.log("Reloading page to make use of COOP/COEP Service Worker.");
+                    !coi.quiet &&
+                        console.log("Reloading page to make use of COOP/COEP Service Worker.");
                     window.sessionStorage.setItem("coiReloadedBySelf", "notcontrolling");
                     coi.doReload();
                 }

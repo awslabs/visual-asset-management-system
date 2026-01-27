@@ -287,13 +287,16 @@ const NeedleUSDObjectMaterialAssignment: React.FC<NeedleUSDObjectMaterialAssignm
                                         >
                                             {item.name}
                                             {isCurrentMaterial && (
-                                                <span style={{ color: "#4CAF50", marginLeft: "6px" }}>
+                                                <span
+                                                    style={{ color: "#4CAF50", marginLeft: "6px" }}
+                                                >
                                                     ✓
                                                 </span>
                                             )}
                                         </div>
                                         <div style={{ fontSize: "0.65em", color: "#999" }}>
-                                            {item.usedBy.size} object{item.usedBy.size !== 1 ? "s" : ""}
+                                            {item.usedBy.size} object
+                                            {item.usedBy.size !== 1 ? "s" : ""}
                                         </div>
                                     </div>
                                 </div>

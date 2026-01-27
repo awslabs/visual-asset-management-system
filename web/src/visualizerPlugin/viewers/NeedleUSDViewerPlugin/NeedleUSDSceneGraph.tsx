@@ -74,7 +74,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     const maxUndoStackSize = 20;
     const sceneTreeContainerRef = useRef<HTMLDivElement>(null);
     const [detailsTab, setDetailsTab] = useState<"transform" | "material">("transform");
-    
+
     // Resizable divider state
     const [treeHeight, setTreeHeight] = useState<number>(300); // Default height in pixels
     const [isDragging, setIsDragging] = useState(false);
@@ -82,7 +82,6 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     const containerHeightRef = useRef<number>(0);
 
     const THREE = (window as any).THREE;
-
 
     // Build scene tree from Three.js scene
     const buildSceneTree = useCallback(() => {
@@ -116,9 +115,9 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
 
             // Handle both single group and array of groups
             const fileGroups = Array.isArray(usdRoot) ? usdRoot : [usdRoot];
-            
+
             // Build tree with file roots
-            return fileGroups.map(group => buildNode(group, true));
+            return fileGroups.map((group) => buildNode(group, true));
         } catch (error) {
             console.error("Error building scene tree:", error);
             return [];
@@ -132,7 +131,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
 
         // Auto-expand all file root nodes
         if (tree.length > 0) {
-            const rootIds = tree.map(node => node.id);
+            const rootIds = tree.map((node) => node.id);
             setExpandedNodes(new Set(rootIds));
         }
     }, [buildSceneTree]);
@@ -141,19 +140,21 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     useEffect(() => {
         // Trigger a re-render by updating the scene tree
         // This ensures the green background appears/disappears correctly
-        setSceneTree(prev => [...prev]);
+        setSceneTree((prev) => [...prev]);
 
         // Auto-scroll to first selected object
         if (externalSelectedObjects.length > 0 && sceneTreeContainerRef.current) {
             // Small delay to ensure DOM is updated
             setTimeout(() => {
                 const firstSelectedUuid = externalSelectedObjects[0].uuid;
-                const selectedElement = sceneTreeContainerRef.current?.querySelector(`[data-node-id="${firstSelectedUuid}"]`);
-                
+                const selectedElement = sceneTreeContainerRef.current?.querySelector(
+                    `[data-node-id="${firstSelectedUuid}"]`
+                );
+
                 if (selectedElement) {
                     selectedElement.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'center',
+                        behavior: "smooth",
+                        block: "center",
                     });
                     console.log("Scene Graph: Scrolled to selected object");
                 }
@@ -169,7 +170,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
         if (!container) return;
 
         const containerRect = container.getBoundingClientRect();
-        
+
         if (externalSelectedObjects.length === 0) {
             // No selection: Move divider to bottom (maximize tree view)
             const newHeight = containerRect.height - 100; // Leave small space at bottom
@@ -203,12 +204,12 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
 
             const containerRect = container.getBoundingClientRect();
             const mouseY = e.clientY - containerRect.top;
-            
+
             // Calculate new tree height with constraints
             const minTreeHeight = 150;
             const minDetailsHeight = 200;
             const maxTreeHeight = containerRect.height - minDetailsHeight;
-            
+
             const newHeight = Math.max(minTreeHeight, Math.min(mouseY, maxTreeHeight));
             setTreeHeight(newHeight);
         };
@@ -216,24 +217,23 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
         const handleMouseUp = () => {
             if (isDragging) {
                 setIsDragging(false);
-                document.body.style.cursor = '';
-                document.body.style.userSelect = '';
+                document.body.style.cursor = "";
+                document.body.style.userSelect = "";
             }
         };
 
         if (isDragging) {
-            document.body.style.cursor = 'ns-resize';
-            document.body.style.userSelect = 'none';
-            document.addEventListener('mousemove', handleMouseMove);
-            document.addEventListener('mouseup', handleMouseUp);
+            document.body.style.cursor = "ns-resize";
+            document.body.style.userSelect = "none";
+            document.addEventListener("mousemove", handleMouseMove);
+            document.addEventListener("mouseup", handleMouseUp);
         }
 
         return () => {
-            document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
+            document.removeEventListener("mousemove", handleMouseMove);
+            document.removeEventListener("mouseup", handleMouseUp);
         };
     }, [isDragging]);
-
 
     // Handle object selection
     const handleObjectClick = useCallback(
@@ -243,14 +243,16 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                 return;
             }
 
-            const isSelected = externalSelectedObjects.some(obj => obj.uuid === node.object.uuid);
+            const isSelected = externalSelectedObjects.some((obj) => obj.uuid === node.object.uuid);
 
             if (event.ctrlKey) {
                 // Ctrl+Click: Add/remove from selection
                 if (isSelected) {
                     // Remove from selection
                     console.log("Scene Graph: Removing from selection", node.name);
-                    onSelectObjects(externalSelectedObjects.filter(obj => obj.uuid !== node.object.uuid));
+                    onSelectObjects(
+                        externalSelectedObjects.filter((obj) => obj.uuid !== node.object.uuid)
+                    );
                 } else {
                     // Add to selection
                     console.log("Scene Graph: Adding to selection", node.name);
@@ -326,7 +328,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
 
             try {
                 const fileGroups = Array.isArray(usdRoot) ? usdRoot : [usdRoot];
-                
+
                 fileGroups.forEach((group: any) => {
                     group.traverse((obj: any) => {
                         obj.visible = visible;
@@ -347,7 +349,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
         const isExpanded = expandedNodes.has(node.id);
         const hasChildren = node.children.length > 0;
         // Check if this node's object is in the selected objects array
-        const isSelected = externalSelectedObjects.some(obj => obj.uuid === node.object.uuid);
+        const isSelected = externalSelectedObjects.some((obj) => obj.uuid === node.object.uuid);
         const isHovered = hoveredObject === node.id;
 
         // Get icon based on type
@@ -497,7 +499,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                         ✕ Clear Selection ({externalSelectedObjects.length})
                     </button>
                 )}
-                
+
                 {/* Show/Hide All Buttons */}
                 <div style={{ display: "flex", gap: "6px" }}>
                     <button
@@ -548,15 +550,17 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                 {sceneTree.length > 0 ? (
                     <>
                         {sceneTree.length > 1 && (
-                            <div style={{ 
-                                padding: "4px 8px", 
-                                marginBottom: "8px", 
-                                fontSize: "0.75em", 
-                                color: "#4CAF50",
-                                textAlign: "center",
-                                backgroundColor: "rgba(76, 175, 80, 0.1)",
-                                borderRadius: "4px"
-                            }}>
+                            <div
+                                style={{
+                                    padding: "4px 8px",
+                                    marginBottom: "8px",
+                                    fontSize: "0.75em",
+                                    color: "#4CAF50",
+                                    textAlign: "center",
+                                    backgroundColor: "rgba(76, 175, 80, 0.1)",
+                                    borderRadius: "4px",
+                                }}
+                            >
                                 📁 {sceneTree.length} USD files loaded
                             </div>
                         )}
@@ -575,7 +579,9 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                 onMouseDown={() => setIsDragging(true)}
                 style={{
                     height: "8px",
-                    backgroundColor: isDragging ? "rgba(33, 150, 243, 0.5)" : "rgba(255, 255, 255, 0.1)",
+                    backgroundColor: isDragging
+                        ? "rgba(33, 150, 243, 0.5)"
+                        : "rgba(255, 255, 255, 0.1)",
                     cursor: "ns-resize",
                     display: "flex",
                     alignItems: "center",
@@ -595,7 +601,13 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                 }}
                 title="Drag to resize tree view"
             >
-                <span style={{ fontSize: "0.6em", color: "rgba(255, 255, 255, 0.5)", letterSpacing: "2px" }}>
+                <span
+                    style={{
+                        fontSize: "0.6em",
+                        color: "rgba(255, 255, 255, 0.5)",
+                        letterSpacing: "2px",
+                    }}
+                >
                     ⋮⋮
                 </span>
             </div>
@@ -621,14 +633,31 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                         >
                             ✓ {externalSelectedObjects.length} Objects Selected
                         </h5>
-                        <div style={{ fontSize: "0.75em", lineHeight: "1.6", maxHeight: "120px", overflowY: "auto" }}>
+                        <div
+                            style={{
+                                fontSize: "0.75em",
+                                lineHeight: "1.6",
+                                maxHeight: "120px",
+                                overflowY: "auto",
+                            }}
+                        >
                             {externalSelectedObjects.map((obj, idx) => (
                                 <div key={obj.uuid} style={{ padding: "2px 0", color: "#ccc" }}>
                                     {idx + 1}. {obj.name || "Unnamed"}
                                 </div>
                             ))}
                         </div>
-                        <div style={{ marginTop: "8px", padding: "8px", backgroundColor: "rgba(255, 152, 0, 0.2)", borderRadius: "4px", fontSize: "0.7em", color: "#FF9800", textAlign: "center" }}>
+                        <div
+                            style={{
+                                marginTop: "8px",
+                                padding: "8px",
+                                backgroundColor: "rgba(255, 152, 0, 0.2)",
+                                borderRadius: "4px",
+                                fontSize: "0.7em",
+                                color: "#FF9800",
+                                textAlign: "center",
+                            }}
+                        >
                             🔒 Transform controls disabled for multi-selection
                         </div>
                     </div>
@@ -636,159 +665,184 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
 
                 {/* Object Details Panel */}
                 {externalSelectedObjects.length === 1 && externalSelectedObjects[0] && (
-                <div
-                    style={{
-                        borderTop: "1px solid rgba(255, 255, 255, 0.1)",
-                        padding: "12px 16px",
-                        backgroundColor: "rgba(0, 0, 0, 0.3)",
-                        maxHeight: "200px",
-                        overflowY: "auto",
-                    }}
-                >
-                    <h5
+                    <div
                         style={{
-                            margin: "0 0 8px 0",
-                            fontSize: "0.9em",
-                            color: "#4CAF50",
-                            textAlign: "center",
+                            borderTop: "1px solid rgba(255, 255, 255, 0.1)",
+                            padding: "12px 16px",
+                            backgroundColor: "rgba(0, 0, 0, 0.3)",
+                            maxHeight: "200px",
+                            overflowY: "auto",
                         }}
                     >
-                        📋 Object Details
-                    </h5>
-                    <div style={{ fontSize: "0.8em", lineHeight: "1.6", textAlign: "left" }}>
-                        <div>
-                            <strong>Name:</strong> {externalSelectedObjects[0].name || "Unnamed"}
-                        </div>
-                        <div>
-                            <strong>Type:</strong> {externalSelectedObjects[0].type}
-                        </div>
-                        <div>
-                            <strong>UUID:</strong> {externalSelectedObjects[0].uuid.substring(0, 8)}...
-                        </div>
-                        <div>
-                            <strong>Visible:</strong> {externalSelectedObjects[0].visible ? "Yes" : "No"}
-                        </div>
-                        <div>
-                            <strong>Children:</strong> {externalSelectedObjects[0].children?.length || 0}
-                        </div>
+                        <h5
+                            style={{
+                                margin: "0 0 8px 0",
+                                fontSize: "0.9em",
+                                color: "#4CAF50",
+                                textAlign: "center",
+                            }}
+                        >
+                            📋 Object Details
+                        </h5>
+                        <div style={{ fontSize: "0.8em", lineHeight: "1.6", textAlign: "left" }}>
+                            <div>
+                                <strong>Name:</strong>{" "}
+                                {externalSelectedObjects[0].name || "Unnamed"}
+                            </div>
+                            <div>
+                                <strong>Type:</strong> {externalSelectedObjects[0].type}
+                            </div>
+                            <div>
+                                <strong>UUID:</strong>{" "}
+                                {externalSelectedObjects[0].uuid.substring(0, 8)}...
+                            </div>
+                            <div>
+                                <strong>Visible:</strong>{" "}
+                                {externalSelectedObjects[0].visible ? "Yes" : "No"}
+                            </div>
+                            <div>
+                                <strong>Children:</strong>{" "}
+                                {externalSelectedObjects[0].children?.length || 0}
+                            </div>
 
-                        {externalSelectedObjects[0].geometry && (
-                            <>
-                                {externalSelectedObjects[0].geometry.attributes.position && (
-                                    <div>
-                                        <strong>Vertices:</strong>{" "}
-                                        {externalSelectedObjects[0].geometry.attributes.position.count.toLocaleString()}
-                                    </div>
-                                )}
-                                {externalSelectedObjects[0].geometry.index && (
-                                    <div>
-                                        <strong>Faces:</strong>{" "}
-                                        {Math.floor(externalSelectedObjects[0].geometry.index.count / 3).toLocaleString()}
-                                    </div>
-                                )}
-                            </>
-                        )}
-                        
-                        {/* Show total vertex count for groups with children */}
-                        {externalSelectedObjects[0].children && externalSelectedObjects[0].children.length > 0 && (() => {
-                            let totalVertices = 0;
-                            let totalFaces = 0;
-                            externalSelectedObjects[0].traverse((child: any) => {
-                                if (child.geometry?.attributes?.position) {
-                                    totalVertices += child.geometry.attributes.position.count;
-                                }
-                                if (child.geometry?.index) {
-                                    totalFaces += Math.floor(child.geometry.index.count / 3);
-                                }
-                            });
-                            
-                            return totalVertices > 0 ? (
+                            {externalSelectedObjects[0].geometry && (
                                 <>
-                                    <div style={{ marginTop: "8px", paddingTop: "8px", borderTop: "1px solid rgba(255, 255, 255, 0.1)" }}>
-                                        <strong>Group Totals:</strong>
-                                    </div>
-                                    <div>
-                                        <strong>Total Vertices:</strong> {totalVertices.toLocaleString()}
-                                    </div>
-                                    {totalFaces > 0 && (
+                                    {externalSelectedObjects[0].geometry.attributes.position && (
                                         <div>
-                                            <strong>Total Faces:</strong> {totalFaces.toLocaleString()}
+                                            <strong>Vertices:</strong>{" "}
+                                            {externalSelectedObjects[0].geometry.attributes.position.count.toLocaleString()}
+                                        </div>
+                                    )}
+                                    {externalSelectedObjects[0].geometry.index && (
+                                        <div>
+                                            <strong>Faces:</strong>{" "}
+                                            {Math.floor(
+                                                externalSelectedObjects[0].geometry.index.count / 3
+                                            ).toLocaleString()}
                                         </div>
                                     )}
                                 </>
-                            ) : null;
-                        })()}
+                            )}
 
-                        {externalSelectedObjects[0].position && (() => {
-                            const obj = externalSelectedObjects[0];
-                            // Get world position
-                            const worldPos = new THREE.Vector3();
-                            obj.getWorldPosition(worldPos);
-                            
-                            return (
-                                <>
-                                    <div>
-                                        <strong>Local Position:</strong> ({obj.position.x.toFixed(2)},
-                                        {obj.position.y.toFixed(2)},
-                                        {obj.position.z.toFixed(2)})
-                                    </div>
-                                    <div>
-                                        <strong>World Position:</strong> ({worldPos.x.toFixed(2)},
-                                        {worldPos.y.toFixed(2)},
-                                        {worldPos.z.toFixed(2)})
-                                    </div>
-                                </>
-                            );
-                        })()}
+                            {/* Show total vertex count for groups with children */}
+                            {externalSelectedObjects[0].children &&
+                                externalSelectedObjects[0].children.length > 0 &&
+                                (() => {
+                                    let totalVertices = 0;
+                                    let totalFaces = 0;
+                                    externalSelectedObjects[0].traverse((child: any) => {
+                                        if (child.geometry?.attributes?.position) {
+                                            totalVertices +=
+                                                child.geometry.attributes.position.count;
+                                        }
+                                        if (child.geometry?.index) {
+                                            totalFaces += Math.floor(
+                                                child.geometry.index.count / 3
+                                            );
+                                        }
+                                    });
 
-                        {externalSelectedObjects[0].rotation && (() => {
-                            const obj = externalSelectedObjects[0];
-                            // Get world rotation
-                            const worldQuat = new THREE.Quaternion();
-                            obj.getWorldQuaternion(worldQuat);
-                            const worldEuler = new THREE.Euler().setFromQuaternion(worldQuat);
-                            
-                            return (
-                                <>
-                                    <div>
-                                        <strong>Local Rotation:</strong> (
-                                        {((obj.rotation.x * 180) / Math.PI).toFixed(1)}°,
-                                        {((obj.rotation.y * 180) / Math.PI).toFixed(1)}°,
-                                        {((obj.rotation.z * 180) / Math.PI).toFixed(1)}°)
-                                    </div>
-                                    <div>
-                                        <strong>World Rotation:</strong> (
-                                        {((worldEuler.x * 180) / Math.PI).toFixed(1)}°,
-                                        {((worldEuler.y * 180) / Math.PI).toFixed(1)}°,
-                                        {((worldEuler.z * 180) / Math.PI).toFixed(1)}°)
-                                    </div>
-                                </>
-                            );
-                        })()}
+                                    return totalVertices > 0 ? (
+                                        <>
+                                            <div
+                                                style={{
+                                                    marginTop: "8px",
+                                                    paddingTop: "8px",
+                                                    borderTop: "1px solid rgba(255, 255, 255, 0.1)",
+                                                }}
+                                            >
+                                                <strong>Group Totals:</strong>
+                                            </div>
+                                            <div>
+                                                <strong>Total Vertices:</strong>{" "}
+                                                {totalVertices.toLocaleString()}
+                                            </div>
+                                            {totalFaces > 0 && (
+                                                <div>
+                                                    <strong>Total Faces:</strong>{" "}
+                                                    {totalFaces.toLocaleString()}
+                                                </div>
+                                            )}
+                                        </>
+                                    ) : null;
+                                })()}
 
-                        {externalSelectedObjects[0].scale && (() => {
-                            const obj = externalSelectedObjects[0];
-                            // Get world scale
-                            const worldScale = new THREE.Vector3();
-                            obj.getWorldScale(worldScale);
-                            
-                            return (
-                                <>
-                                    <div>
-                                        <strong>Local Scale:</strong> ({obj.scale.x.toFixed(2)},
-                                        {obj.scale.y.toFixed(2)},
-                                        {obj.scale.z.toFixed(2)})
-                                    </div>
-                                    <div>
-                                        <strong>World Scale:</strong> ({worldScale.x.toFixed(2)},
-                                        {worldScale.y.toFixed(2)},
-                                        {worldScale.z.toFixed(2)})
-                                    </div>
-                                </>
-                            );
-                        })()}
+                            {externalSelectedObjects[0].position &&
+                                (() => {
+                                    const obj = externalSelectedObjects[0];
+                                    // Get world position
+                                    const worldPos = new THREE.Vector3();
+                                    obj.getWorldPosition(worldPos);
+
+                                    return (
+                                        <>
+                                            <div>
+                                                <strong>Local Position:</strong> (
+                                                {obj.position.x.toFixed(2)},
+                                                {obj.position.y.toFixed(2)},
+                                                {obj.position.z.toFixed(2)})
+                                            </div>
+                                            <div>
+                                                <strong>World Position:</strong> (
+                                                {worldPos.x.toFixed(2)},{worldPos.y.toFixed(2)},
+                                                {worldPos.z.toFixed(2)})
+                                            </div>
+                                        </>
+                                    );
+                                })()}
+
+                            {externalSelectedObjects[0].rotation &&
+                                (() => {
+                                    const obj = externalSelectedObjects[0];
+                                    // Get world rotation
+                                    const worldQuat = new THREE.Quaternion();
+                                    obj.getWorldQuaternion(worldQuat);
+                                    const worldEuler = new THREE.Euler().setFromQuaternion(
+                                        worldQuat
+                                    );
+
+                                    return (
+                                        <>
+                                            <div>
+                                                <strong>Local Rotation:</strong> (
+                                                {((obj.rotation.x * 180) / Math.PI).toFixed(1)}°,
+                                                {((obj.rotation.y * 180) / Math.PI).toFixed(1)}°,
+                                                {((obj.rotation.z * 180) / Math.PI).toFixed(1)}°)
+                                            </div>
+                                            <div>
+                                                <strong>World Rotation:</strong> (
+                                                {((worldEuler.x * 180) / Math.PI).toFixed(1)}°,
+                                                {((worldEuler.y * 180) / Math.PI).toFixed(1)}°,
+                                                {((worldEuler.z * 180) / Math.PI).toFixed(1)}°)
+                                            </div>
+                                        </>
+                                    );
+                                })()}
+
+                            {externalSelectedObjects[0].scale &&
+                                (() => {
+                                    const obj = externalSelectedObjects[0];
+                                    // Get world scale
+                                    const worldScale = new THREE.Vector3();
+                                    obj.getWorldScale(worldScale);
+
+                                    return (
+                                        <>
+                                            <div>
+                                                <strong>Local Scale:</strong> (
+                                                {obj.scale.x.toFixed(2)},{obj.scale.y.toFixed(2)},
+                                                {obj.scale.z.toFixed(2)})
+                                            </div>
+                                            <div>
+                                                <strong>World Scale:</strong> (
+                                                {worldScale.x.toFixed(2)},{worldScale.y.toFixed(2)},
+                                                {worldScale.z.toFixed(2)})
+                                            </div>
+                                        </>
+                                    );
+                                })()}
+                        </div>
                     </div>
-                </div>
                 )}
 
                 {/* Sub-Tabs for Transform and Material */}
@@ -802,242 +856,293 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                                 backgroundColor: "rgba(0, 0, 0, 0.2)",
                             }}
                         >
-                        <button
-                            onClick={() => setDetailsTab("transform")}
-                            style={{
-                                flex: 1,
-                                background:
-                                    detailsTab === "transform"
-                                        ? "rgba(33, 150, 243, 0.3)"
-                                        : "transparent",
-                                border: "none",
-                                borderBottom:
-                                    detailsTab === "transform"
-                                        ? "2px solid #2196F3"
-                                        : "2px solid transparent",
-                                color: "white",
-                                padding: "8px 12px",
-                                cursor: "pointer",
-                                fontSize: "0.75em",
-                                fontWeight: detailsTab === "transform" ? "bold" : "normal",
-                            }}
-                        >
-                            🎛️ Transform
-                        </button>
-                        <button
-                            onClick={() => setDetailsTab("material")}
-                            style={{
-                                flex: 1,
-                                background:
-                                    detailsTab === "material"
-                                        ? "rgba(233, 30, 99, 0.3)"
-                                        : "transparent",
-                                border: "none",
-                                borderBottom:
-                                    detailsTab === "material"
-                                        ? "2px solid #E91E63"
-                                        : "2px solid transparent",
-                                color: "white",
-                                padding: "8px 12px",
-                                cursor: "pointer",
-                                fontSize: "0.75em",
-                                fontWeight: detailsTab === "material" ? "bold" : "normal",
-                            }}
-                        >
-                            🎨 Material
-                        </button>
-                    </div>
+                            <button
+                                onClick={() => setDetailsTab("transform")}
+                                style={{
+                                    flex: 1,
+                                    background:
+                                        detailsTab === "transform"
+                                            ? "rgba(33, 150, 243, 0.3)"
+                                            : "transparent",
+                                    border: "none",
+                                    borderBottom:
+                                        detailsTab === "transform"
+                                            ? "2px solid #2196F3"
+                                            : "2px solid transparent",
+                                    color: "white",
+                                    padding: "8px 12px",
+                                    cursor: "pointer",
+                                    fontSize: "0.75em",
+                                    fontWeight: detailsTab === "transform" ? "bold" : "normal",
+                                }}
+                            >
+                                🎛️ Transform
+                            </button>
+                            <button
+                                onClick={() => setDetailsTab("material")}
+                                style={{
+                                    flex: 1,
+                                    background:
+                                        detailsTab === "material"
+                                            ? "rgba(233, 30, 99, 0.3)"
+                                            : "transparent",
+                                    border: "none",
+                                    borderBottom:
+                                        detailsTab === "material"
+                                            ? "2px solid #E91E63"
+                                            : "2px solid transparent",
+                                    color: "white",
+                                    padding: "8px 12px",
+                                    cursor: "pointer",
+                                    fontSize: "0.75em",
+                                    fontWeight: detailsTab === "material" ? "bold" : "normal",
+                                }}
+                            >
+                                🎨 Material
+                            </button>
+                        </div>
 
-                    {/* Transform Controls */}
-                    {detailsTab === "transform" && (
-                        <NeedleUSDTransformControls
-                    selectedObject={externalSelectedObjects[0]}
-                    onTransformChange={(object, transform) => {
-                        // Save current state to undo stack
-                        const currentState: UndoState = {
-                            objectId: object.uuid,
-                            transform: {
-                                position: {
-                                    x: object.position.x,
-                                    y: object.position.y,
-                                    z: object.position.z,
-                                },
-                                rotation: {
-                                    x: object.rotation.x,
-                                    y: object.rotation.y,
-                                    z: object.rotation.z,
-                                },
-                                scale: {
-                                    x: object.scale.x,
-                                    y: object.scale.y,
-                                    z: object.scale.z,
-                                },
-                            },
-                            timestamp: Date.now(),
-                        };
+                        {/* Transform Controls */}
+                        {detailsTab === "transform" && (
+                            <NeedleUSDTransformControls
+                                selectedObject={externalSelectedObjects[0]}
+                                onTransformChange={(object, transform) => {
+                                    // Save current state to undo stack
+                                    const currentState: UndoState = {
+                                        objectId: object.uuid,
+                                        transform: {
+                                            position: {
+                                                x: object.position.x,
+                                                y: object.position.y,
+                                                z: object.position.z,
+                                            },
+                                            rotation: {
+                                                x: object.rotation.x,
+                                                y: object.rotation.y,
+                                                z: object.rotation.z,
+                                            },
+                                            scale: {
+                                                x: object.scale.x,
+                                                y: object.scale.y,
+                                                z: object.scale.z,
+                                            },
+                                        },
+                                        timestamp: Date.now(),
+                                    };
 
-                        setUndoStack((prev) => {
-                            const newStack = [...prev, currentState];
-                            return newStack.slice(-maxUndoStackSize);
-                        });
+                                    setUndoStack((prev) => {
+                                        const newStack = [...prev, currentState];
+                                        return newStack.slice(-maxUndoStackSize);
+                                    });
 
-                        // Apply transform
-                        object.position.set(
-                            transform.position.x,
-                            transform.position.y,
-                            transform.position.z
-                        );
-                        object.rotation.set(
-                            (transform.rotation.x * Math.PI) / 180,
-                            (transform.rotation.y * Math.PI) / 180,
-                            (transform.rotation.z * Math.PI) / 180
-                        );
-                        object.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
+                                    // Apply transform
+                                    object.position.set(
+                                        transform.position.x,
+                                        transform.position.y,
+                                        transform.position.z
+                                    );
+                                    object.rotation.set(
+                                        (transform.rotation.x * Math.PI) / 180,
+                                        (transform.rotation.y * Math.PI) / 180,
+                                        (transform.rotation.z * Math.PI) / 180
+                                    );
+                                    object.scale.set(
+                                        transform.scale.x,
+                                        transform.scale.y,
+                                        transform.scale.z
+                                    );
 
-                        object.updateMatrix();
-                        object.updateMatrixWorld(true);
-                    }}
-                    onUndo={() => {
-                        if (undoStack.length === 0 || externalSelectedObjects.length !== 1) return;
+                                    object.updateMatrix();
+                                    object.updateMatrixWorld(true);
+                                }}
+                                onUndo={() => {
+                                    if (
+                                        undoStack.length === 0 ||
+                                        externalSelectedObjects.length !== 1
+                                    )
+                                        return;
 
-                        const selectedObj = externalSelectedObjects[0];
-                        const lastState = undoStack[undoStack.length - 1];
-                        setUndoStack((prev) => prev.slice(0, -1));
+                                    const selectedObj = externalSelectedObjects[0];
+                                    const lastState = undoStack[undoStack.length - 1];
+                                    setUndoStack((prev) => prev.slice(0, -1));
 
-                        const t = lastState.transform;
-                        selectedObj.position.set(t.position.x, t.position.y, t.position.z);
-                        selectedObj.rotation.set(t.rotation.x, t.rotation.y, t.rotation.z);
-                        selectedObj.scale.set(t.scale.x, t.scale.y, t.scale.z);
+                                    const t = lastState.transform;
+                                    selectedObj.position.set(
+                                        t.position.x,
+                                        t.position.y,
+                                        t.position.z
+                                    );
+                                    selectedObj.rotation.set(
+                                        t.rotation.x,
+                                        t.rotation.y,
+                                        t.rotation.z
+                                    );
+                                    selectedObj.scale.set(t.scale.x, t.scale.y, t.scale.z);
 
-                        selectedObj.updateMatrix();
-                        selectedObj.updateMatrixWorld(true);
-                    }}
-                    onReset={() => {
-                        if (externalSelectedObjects.length !== 1 || !externalOriginalTransforms) return;
+                                    selectedObj.updateMatrix();
+                                    selectedObj.updateMatrixWorld(true);
+                                }}
+                                onReset={() => {
+                                    if (
+                                        externalSelectedObjects.length !== 1 ||
+                                        !externalOriginalTransforms
+                                    )
+                                        return;
 
-                        const selectedObj = externalSelectedObjects[0];
-                        const original = externalOriginalTransforms.get(selectedObj.uuid);
-                        if (!original) {
-                            console.warn("No original transform found for object:", selectedObj.name);
-                            return;
-                        }
+                                    const selectedObj = externalSelectedObjects[0];
+                                    const original = externalOriginalTransforms.get(
+                                        selectedObj.uuid
+                                    );
+                                    if (!original) {
+                                        console.warn(
+                                            "No original transform found for object:",
+                                            selectedObj.name
+                                        );
+                                        return;
+                                    }
 
-                        console.log("Resetting object:", selectedObj.name);
-                        console.log("Is top-level:", original.isTopLevel);
-                        console.log("Original local:", original.position, original.rotation, original.scale);
-                        console.log("Original world:", original.worldPosition, original.worldRotation, original.worldScale);
+                                    console.log("Resetting object:", selectedObj.name);
+                                    console.log("Is top-level:", original.isTopLevel);
+                                    console.log(
+                                        "Original local:",
+                                        original.position,
+                                        original.rotation,
+                                        original.scale
+                                    );
+                                    console.log(
+                                        "Original world:",
+                                        original.worldPosition,
+                                        original.worldRotation,
+                                        original.worldScale
+                                    );
 
-                        if (original.isTopLevel && original.worldPosition && original.worldRotation && original.worldScale) {
-                            // Top-level object: Use world coordinates
-                            // Need to convert world coordinates to local space relative to parent
-                            const parent = selectedObj.parent;
-                            if (parent) {
-                                // Get parent's inverse world matrix
-                                const parentWorldMatrix = new THREE.Matrix4();
-                                parent.updateMatrixWorld(true);
-                                parentWorldMatrix.copy(parent.matrixWorld);
-                                const parentInverse = new THREE.Matrix4().copy(parentWorldMatrix).invert();
-                                
-                                // Create target world transform
-                                const targetWorldPos = new THREE.Vector3(
-                                    original.worldPosition.x,
-                                    original.worldPosition.y,
-                                    original.worldPosition.z
-                                );
-                                const targetWorldRot = new THREE.Euler(
-                                    original.worldRotation.x,
-                                    original.worldRotation.y,
-                                    original.worldRotation.z
-                                );
-                                const targetWorldScale = new THREE.Vector3(
-                                    original.worldScale.x,
-                                    original.worldScale.y,
-                                    original.worldScale.z
-                                );
-                                
-                                // Convert world transform to local space
-                                const worldMatrix = new THREE.Matrix4();
-                                worldMatrix.compose(
-                                    targetWorldPos,
-                                    new THREE.Quaternion().setFromEuler(targetWorldRot),
-                                    targetWorldScale
-                                );
-                                
-                                const localMatrix = new THREE.Matrix4();
-                                localMatrix.multiplyMatrices(parentInverse, worldMatrix);
-                                
-                                // Extract local transform
-                                const localPos = new THREE.Vector3();
-                                const localQuat = new THREE.Quaternion();
-                                const localScale = new THREE.Vector3();
-                                localMatrix.decompose(localPos, localQuat, localScale);
-                                const localRot = new THREE.Euler().setFromQuaternion(localQuat);
-                                
-                                selectedObj.position.copy(localPos);
-                                selectedObj.rotation.copy(localRot);
-                                selectedObj.scale.copy(localScale);
-                                
-                                console.log("Reset using world coordinates (converted to local)");
-                            } else {
-                                // No parent, world = local
-                                selectedObj.position.set(
-                                    original.worldPosition.x,
-                                    original.worldPosition.y,
-                                    original.worldPosition.z
-                                );
-                                selectedObj.rotation.set(
-                                    original.worldRotation.x,
-                                    original.worldRotation.y,
-                                    original.worldRotation.z
-                                );
-                                selectedObj.scale.set(
-                                    original.worldScale.x,
-                                    original.worldScale.y,
-                                    original.worldScale.z
-                                );
-                                console.log("Reset using world coordinates (no parent)");
-                            }
-                        } else {
-                            // Sub-object: Use local coordinates
-                            selectedObj.position.set(
-                                original.position.x,
-                                original.position.y,
-                                original.position.z
-                            );
-                            selectedObj.rotation.set(
-                                original.rotation.x,
-                                original.rotation.y,
-                                original.rotation.z
-                            );
-                            selectedObj.scale.set(
-                                original.scale.x,
-                                original.scale.y,
-                                original.scale.z
-                            );
-                            console.log("Reset using local coordinates");
-                        }
+                                    if (
+                                        original.isTopLevel &&
+                                        original.worldPosition &&
+                                        original.worldRotation &&
+                                        original.worldScale
+                                    ) {
+                                        // Top-level object: Use world coordinates
+                                        // Need to convert world coordinates to local space relative to parent
+                                        const parent = selectedObj.parent;
+                                        if (parent) {
+                                            // Get parent's inverse world matrix
+                                            const parentWorldMatrix = new THREE.Matrix4();
+                                            parent.updateMatrixWorld(true);
+                                            parentWorldMatrix.copy(parent.matrixWorld);
+                                            const parentInverse = new THREE.Matrix4()
+                                                .copy(parentWorldMatrix)
+                                                .invert();
 
-                        selectedObj.updateMatrix();
-                        selectedObj.updateMatrixWorld(true);
-                        setUndoStack([]);
-                        console.log("Reset complete");
-                    }}
-                            canUndo={undoStack.length > 0}
-                            animationPlaying={!animationPaused}
-                        />
-                    )}
+                                            // Create target world transform
+                                            const targetWorldPos = new THREE.Vector3(
+                                                original.worldPosition.x,
+                                                original.worldPosition.y,
+                                                original.worldPosition.z
+                                            );
+                                            const targetWorldRot = new THREE.Euler(
+                                                original.worldRotation.x,
+                                                original.worldRotation.y,
+                                                original.worldRotation.z
+                                            );
+                                            const targetWorldScale = new THREE.Vector3(
+                                                original.worldScale.x,
+                                                original.worldScale.y,
+                                                original.worldScale.z
+                                            );
 
-                    {/* Material Assignment */}
-                    {detailsTab === "material" && (
-                        <NeedleUSDObjectMaterialAssignment
-                            selectedObject={externalSelectedObjects[0]}
-                            materialLibrary={materialLibrary}
-                            onAssignMaterial={onAssignMaterial}
-                            onMakeUnique={onMakeUnique}
-                            onCreateAndAssign={onCreateAndAssign}
-                            onEditMaterial={onEditMaterial}
-                        />
-                    )}
+                                            // Convert world transform to local space
+                                            const worldMatrix = new THREE.Matrix4();
+                                            worldMatrix.compose(
+                                                targetWorldPos,
+                                                new THREE.Quaternion().setFromEuler(targetWorldRot),
+                                                targetWorldScale
+                                            );
+
+                                            const localMatrix = new THREE.Matrix4();
+                                            localMatrix.multiplyMatrices(
+                                                parentInverse,
+                                                worldMatrix
+                                            );
+
+                                            // Extract local transform
+                                            const localPos = new THREE.Vector3();
+                                            const localQuat = new THREE.Quaternion();
+                                            const localScale = new THREE.Vector3();
+                                            localMatrix.decompose(localPos, localQuat, localScale);
+                                            const localRot = new THREE.Euler().setFromQuaternion(
+                                                localQuat
+                                            );
+
+                                            selectedObj.position.copy(localPos);
+                                            selectedObj.rotation.copy(localRot);
+                                            selectedObj.scale.copy(localScale);
+
+                                            console.log(
+                                                "Reset using world coordinates (converted to local)"
+                                            );
+                                        } else {
+                                            // No parent, world = local
+                                            selectedObj.position.set(
+                                                original.worldPosition.x,
+                                                original.worldPosition.y,
+                                                original.worldPosition.z
+                                            );
+                                            selectedObj.rotation.set(
+                                                original.worldRotation.x,
+                                                original.worldRotation.y,
+                                                original.worldRotation.z
+                                            );
+                                            selectedObj.scale.set(
+                                                original.worldScale.x,
+                                                original.worldScale.y,
+                                                original.worldScale.z
+                                            );
+                                            console.log(
+                                                "Reset using world coordinates (no parent)"
+                                            );
+                                        }
+                                    } else {
+                                        // Sub-object: Use local coordinates
+                                        selectedObj.position.set(
+                                            original.position.x,
+                                            original.position.y,
+                                            original.position.z
+                                        );
+                                        selectedObj.rotation.set(
+                                            original.rotation.x,
+                                            original.rotation.y,
+                                            original.rotation.z
+                                        );
+                                        selectedObj.scale.set(
+                                            original.scale.x,
+                                            original.scale.y,
+                                            original.scale.z
+                                        );
+                                        console.log("Reset using local coordinates");
+                                    }
+
+                                    selectedObj.updateMatrix();
+                                    selectedObj.updateMatrixWorld(true);
+                                    setUndoStack([]);
+                                    console.log("Reset complete");
+                                }}
+                                canUndo={undoStack.length > 0}
+                                animationPlaying={!animationPaused}
+                            />
+                        )}
+
+                        {/* Material Assignment */}
+                        {detailsTab === "material" && (
+                            <NeedleUSDObjectMaterialAssignment
+                                selectedObject={externalSelectedObjects[0]}
+                                materialLibrary={materialLibrary}
+                                onAssignMaterial={onAssignMaterial}
+                                onMakeUnique={onMakeUnique}
+                                onCreateAndAssign={onCreateAndAssign}
+                                onEditMaterial={onEditMaterial}
+                            />
+                        )}
                     </>
                 )}
 
@@ -1050,7 +1155,8 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                         color: "#999",
                     }}
                 >
-                    Click: Select | Ctrl+Click: Multi-select | Double-click: Zoom | 👁️: Toggle visibility
+                    Click: Select | Ctrl+Click: Multi-select | Double-click: Zoom | 👁️: Toggle
+                    visibility
                 </div>
             </div>
         </>

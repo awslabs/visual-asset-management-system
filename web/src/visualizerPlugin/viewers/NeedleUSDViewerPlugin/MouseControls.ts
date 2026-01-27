@@ -203,10 +203,7 @@ export class MouseControls {
         const distance = offset.length() * scale;
 
         // Clamp distance
-        const clampedDistance = Math.max(
-            this.minDistance,
-            Math.min(this.maxDistance, distance)
-        );
+        const clampedDistance = Math.max(this.minDistance, Math.min(this.maxDistance, distance));
 
         offset.normalize().multiplyScalar(clampedDistance);
         this.camera.position.copy(this.target).add(offset);

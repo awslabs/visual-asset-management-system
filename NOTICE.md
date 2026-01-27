@@ -110,19 +110,19 @@ This software includes third party software subject to the following copyrights:
 
 **3D Visualization Libraries**
 
-| Package              | Version                                                      | License                |
-| :------------------- | :----------------------------------------------------------- | :--------------------- |
-| @babylonjs/core      | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)      | Apache-2.0             |
-| @babylonjs/loaders   | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders)   | Apache-2.0             |
-| @needle-tools/engine | [3.x.x](https://www.npmjs.com/package/@needle-tools/engine)  | Apache-2.0 (Modified)  |
-| cesium               | [1.118.0](https://github.com/CesiumGS/cesium)                | Apache-2.0             |
-| online-3d-viewer     | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT          |
-| playcanvas           | [2.11.8](https://github.com/playcanvas/engine)               | MIT          |
-| potree               | [develop-latest](https://github.com/potree/potree)           | BSD-2-Clause |
-| web-ifc              | [0.0.39](https://github.com/IFCjs/web-ifc)                   | MPL-2.0      |
-| draco                | [1.5.6](https://github.com/google/draco)                     | Apache-2.0   |
-| rhino3dm             | [7.15.0](https://github.com/mcneel/rhino3dm)                 | MIT          |
-| pickr                | [1.8.2](https://github.com/Simonwep/pickr)                   | MIT          |
+| Package              | Version                                                     | License               |
+| :------------------- | :---------------------------------------------------------- | :-------------------- |
+| @babylonjs/core      | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)     | Apache-2.0            |
+| @babylonjs/loaders   | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders)  | Apache-2.0            |
+| @needle-tools/engine | [3.x.x](https://www.npmjs.com/package/@needle-tools/engine) | Apache-2.0 (Modified) |
+| cesium               | [1.118.0](https://github.com/CesiumGS/cesium)               | Apache-2.0            |
+| online-3d-viewer     | [0.16.0](https://github.com/kovacsv/Online3DViewer)         | MIT                   |
+| playcanvas           | [2.11.8](https://github.com/playcanvas/engine)              | MIT                   |
+| potree               | [develop-latest](https://github.com/potree/potree)          | BSD-2-Clause          |
+| web-ifc              | [0.0.39](https://github.com/IFCjs/web-ifc)                  | MPL-2.0               |
+| draco                | [1.5.6](https://github.com/google/draco)                    | Apache-2.0            |
+| rhino3dm             | [7.15.0](https://github.com/mcneel/rhino3dm)                | MIT                   |
+| pickr                | [1.8.2](https://github.com/Simonwep/pickr)                  | MIT                   |
 
 ---
 

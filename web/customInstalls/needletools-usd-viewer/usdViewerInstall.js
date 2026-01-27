@@ -81,7 +81,8 @@ const bundleWithWebpack = async () => {
         execSync("npm install", { cwd: bundleDir, stdio: "inherit" });
 
         // Copy ThreeJsRenderDelegate to bundle directory for easier import
-        const renderDelegateSource = gitRepoSourceDestDir + "/usd-wasm/src/hydra/ThreeJsRenderDelegate.js";
+        const renderDelegateSource =
+            gitRepoSourceDestDir + "/usd-wasm/src/hydra/ThreeJsRenderDelegate.js";
         await fs.copy(renderDelegateSource, bundleDir + "/ThreeJsRenderDelegate.js");
 
         // Create webpack entry point that imports and exposes everything
@@ -158,17 +159,29 @@ const copyFiles = async () => {
 
         // Copy USD WASM bindings from usd-wasm/src/bindings directory
         const wasmBindingsDir = gitRepoSourceDestDir + "/usd-wasm/src/bindings";
-        
+
         // Copy WASM files
         await fs.copy(wasmBindingsDir + "/emHdBindings.js", destinationDir + "/emHdBindings.js");
-        await fs.copy(wasmBindingsDir + "/emHdBindings.wasm", destinationDir + "/emHdBindings.wasm");
-        await fs.copy(wasmBindingsDir + "/emHdBindings.worker.js", destinationDir + "/emHdBindings.worker.js");
-        await fs.copy(wasmBindingsDir + "/emHdBindings.data", destinationDir + "/emHdBindings.data");
+        await fs.copy(
+            wasmBindingsDir + "/emHdBindings.wasm",
+            destinationDir + "/emHdBindings.wasm"
+        );
+        await fs.copy(
+            wasmBindingsDir + "/emHdBindings.worker.js",
+            destinationDir + "/emHdBindings.worker.js"
+        );
+        await fs.copy(
+            wasmBindingsDir + "/emHdBindings.data",
+            destinationDir + "/emHdBindings.data"
+        );
         console.log("NeedleTools-USDViewer: Copied WASM bindings");
 
         // Copy Three.js Hydra Render Delegate from usd-wasm/src/hydra
         const hydraDir = gitRepoSourceDestDir + "/usd-wasm/src/hydra";
-        await fs.copy(hydraDir + "/ThreeJsRenderDelegate.js", destinationDir + "/ThreeJsRenderDelegate.js");
+        await fs.copy(
+            hydraDir + "/ThreeJsRenderDelegate.js",
+            destinationDir + "/ThreeJsRenderDelegate.js"
+        );
         console.log("NeedleTools-USDViewer: Copied ThreeJsRenderDelegate");
 
         // Copy additional assets if they exist

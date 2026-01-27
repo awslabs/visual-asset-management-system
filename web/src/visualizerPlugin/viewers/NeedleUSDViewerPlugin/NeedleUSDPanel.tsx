@@ -75,7 +75,9 @@ const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
     onToggleAnimation,
     activeTabRef,
 }) => {
-    const [activeTab, setActiveTab] = useState<"sceneGraph" | "materialLibrary" | "controls">("sceneGraph");
+    const [activeTab, setActiveTab] = useState<"sceneGraph" | "materialLibrary" | "controls">(
+        "sceneGraph"
+    );
     const [forceShowEditor, setForceShowEditor] = useState(false);
 
     // Sync activeTab with ref if provided

@@ -298,7 +298,9 @@ const NeedleUSDMaterialEditor: React.FC<NeedleUSDMaterialEditorProps> = ({
                             max="1"
                             step="0.01"
                             value={material.metalness}
-                            onChange={(e) => updateMaterial("metalness", parseFloat(e.target.value))}
+                            onChange={(e) =>
+                                updateMaterial("metalness", parseFloat(e.target.value))
+                            }
                             style={{ width: "100%", cursor: "pointer" }}
                         />
                     </div>
@@ -324,7 +326,9 @@ const NeedleUSDMaterialEditor: React.FC<NeedleUSDMaterialEditorProps> = ({
                             max="1"
                             step="0.01"
                             value={material.roughness}
-                            onChange={(e) => updateMaterial("roughness", parseFloat(e.target.value))}
+                            onChange={(e) =>
+                                updateMaterial("roughness", parseFloat(e.target.value))
+                            }
                             style={{ width: "100%", cursor: "pointer" }}
                         />
                     </div>

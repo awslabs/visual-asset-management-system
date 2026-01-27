@@ -23,13 +23,13 @@
         <script src="%PUBLIC_URL%/globalScripts/coi-serviceworker.js"></script>
         <script type="application/javascript">
             // Check if SharedArrayBuffer is available (required for WASM)
-            if (typeof SharedArrayBuffer !== 'undefined') {
-                console.log(' SharedArrayBuffer is available');
-                console.log(' crossOriginIsolated:', window.crossOriginIsolated);
+            if (typeof SharedArrayBuffer !== "undefined") {
+                console.log(" SharedArrayBuffer is available");
+                console.log(" crossOriginIsolated:", window.crossOriginIsolated);
             } else {
-                console.warn(' SharedArrayBuffer is NOT available - WASM will not work');
-                console.warn('  crossOriginIsolated:', window.crossOriginIsolated);
-                console.warn('  COOP/COEP headers may not be set correctly');
+                console.warn(" SharedArrayBuffer is NOT available - WASM will not work");
+                console.warn("  crossOriginIsolated:", window.crossOriginIsolated);
+                console.warn("  COOP/COEP headers may not be set correctly");
             }
 
             window.addEventListener("error", function (e) {

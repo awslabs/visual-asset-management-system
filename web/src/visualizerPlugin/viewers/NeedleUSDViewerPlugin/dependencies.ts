@@ -68,13 +68,13 @@ export class NeedleUSDDependencyManager {
 
             const script = document.createElement("script");
             script.src = src;
-            
+
             if (asModule) {
                 script.type = "module";
             } else {
                 script.async = true;
             }
-            
+
             script.onload = () => {
                 this.loadedDependencies.add(src);
                 resolve();

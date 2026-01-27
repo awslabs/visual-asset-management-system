@@ -63,14 +63,14 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                 // World space
                 const worldPos = new THREE.Vector3();
                 selectedObject.getWorldPosition(worldPos);
-                
+
                 const worldQuat = new THREE.Quaternion();
                 selectedObject.getWorldQuaternion(worldQuat);
                 const worldEuler = new THREE.Euler().setFromQuaternion(worldQuat);
-                
+
                 const worldScale = new THREE.Vector3();
                 selectedObject.getWorldScale(worldScale);
-                
+
                 setTransform({
                     position: {
                         x: worldPos.x,
@@ -105,7 +105,7 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
             },
         };
         setTransform(newTransform);
-        
+
         if (coordinateSpace === "local") {
             // Direct local space update
             onTransformChange(selectedObject, newTransform);
@@ -145,8 +145,14 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                     disabled={animationPlaying}
                     style={{
                         flex: 1,
-                        background: coordinateSpace === "local" ? "rgba(33, 150, 243, 0.5)" : "rgba(255, 255, 255, 0.1)",
-                        border: coordinateSpace === "local" ? "1px solid #2196F3" : "1px solid rgba(255, 255, 255, 0.2)",
+                        background:
+                            coordinateSpace === "local"
+                                ? "rgba(33, 150, 243, 0.5)"
+                                : "rgba(255, 255, 255, 0.1)",
+                        border:
+                            coordinateSpace === "local"
+                                ? "1px solid #2196F3"
+                                : "1px solid rgba(255, 255, 255, 0.2)",
                         color: "white",
                         padding: "6px 8px",
                         borderRadius: "4px",
@@ -162,8 +168,14 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                     disabled={animationPlaying}
                     style={{
                         flex: 1,
-                        background: coordinateSpace === "world" ? "rgba(33, 150, 243, 0.5)" : "rgba(255, 255, 255, 0.1)",
-                        border: coordinateSpace === "world" ? "1px solid #2196F3" : "1px solid rgba(255, 255, 255, 0.2)",
+                        background:
+                            coordinateSpace === "world"
+                                ? "rgba(33, 150, 243, 0.5)"
+                                : "rgba(255, 255, 255, 0.1)",
+                        border:
+                            coordinateSpace === "world"
+                                ? "1px solid #2196F3"
+                                : "1px solid rgba(255, 255, 255, 0.2)",
                         color: "white",
                         padding: "6px 8px",
                         borderRadius: "4px",
@@ -178,17 +190,20 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
 
             {/* Warning when animation is playing */}
             {animationPlaying && (
-                <div style={{
-                    marginBottom: "12px",
-                    padding: "8px",
-                    backgroundColor: "rgba(255, 152, 0, 0.2)",
-                    borderRadius: "4px",
-                    fontSize: "0.7em",
-                    color: "#FF9800",
-                    textAlign: "center",
-                    border: "1px solid rgba(255, 152, 0, 0.3)"
-                }}>
-                    ⚠️ Transform controls disabled while animation is playing. Pause animation to enable.
+                <div
+                    style={{
+                        marginBottom: "12px",
+                        padding: "8px",
+                        backgroundColor: "rgba(255, 152, 0, 0.2)",
+                        borderRadius: "4px",
+                        fontSize: "0.7em",
+                        color: "#FF9800",
+                        textAlign: "center",
+                        border: "1px solid rgba(255, 152, 0, 0.3)",
+                    }}
+                >
+                    ⚠️ Transform controls disabled while animation is playing. Pause animation to
+                    enable.
                 </div>
             )}
 
@@ -344,22 +359,25 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                     disabled={!canUndo || animationPlaying}
                     style={{
                         flex: 1,
-                        background: (canUndo && !animationPlaying) ? "#FF9800" : "rgba(255, 255, 255, 0.1)",
+                        background:
+                            canUndo && !animationPlaying ? "#FF9800" : "rgba(255, 255, 255, 0.1)",
                         border: "none",
-                        color: (canUndo && !animationPlaying) ? "white" : "#666",
+                        color: canUndo && !animationPlaying ? "white" : "#666",
                         padding: "6px 8px",
                         borderRadius: "4px",
-                        cursor: (canUndo && !animationPlaying) ? "pointer" : "not-allowed",
+                        cursor: canUndo && !animationPlaying ? "pointer" : "not-allowed",
                         fontSize: "0.75em",
                     }}
-                    title={animationPlaying ? "Disabled while animation playing" : "Undo last change"}
+                    title={
+                        animationPlaying ? "Disabled while animation playing" : "Undo last change"
+                    }
                 >
                     ↶ Undo
                 </button>
                 <button
                     onClick={() => {
                         onReset();
-                        setUpdateTrigger(prev => prev + 1);
+                        setUpdateTrigger((prev) => prev + 1);
                     }}
                     disabled={animationPlaying}
                     style={{
@@ -372,7 +390,11 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                         cursor: animationPlaying ? "not-allowed" : "pointer",
                         fontSize: "0.75em",
                     }}
-                    title={animationPlaying ? "Disabled while animation playing" : "Reset to original transform"}
+                    title={
+                        animationPlaying
+                            ? "Disabled while animation playing"
+                            : "Reset to original transform"
+                    }
                 >
                     ⟲ Reset
                 </button>

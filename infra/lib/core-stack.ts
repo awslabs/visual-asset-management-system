@@ -222,7 +222,7 @@ export class CoreVAMSStack extends cdk.Stack {
                     this.enabledFeatures.push(VAMS_APP_FEATURES.CLOUDFRONTDEPLOY);
                 }
 
-                if(props.config.app.useAlb.enabled) {
+                if (props.config.app.useAlb.enabled) {
                     this.enabledFeatures.push(VAMS_APP_FEATURES.ALBDEPLOY);
                 }
 

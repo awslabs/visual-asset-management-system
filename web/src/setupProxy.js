@@ -12,10 +12,10 @@ module.exports = function (app) {
         // Set headers for all responses
         res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
         res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-        
+
         // Also set CORP for resources
         res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-        
+
         next();
     });
 

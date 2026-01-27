@@ -49,7 +49,9 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
 
     const THREE = (window as any).THREE;
 
-    const selectedMaterialItem = selectedMaterialId ? materialLibrary.get(selectedMaterialId) || null : null;
+    const selectedMaterialItem = selectedMaterialId
+        ? materialLibrary.get(selectedMaterialId) || null
+        : null;
 
     // Auto-show editor when forceShowEditor is true and a material is selected
     React.useEffect(() => {
@@ -91,7 +93,7 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
 
     const getColorHex = (material: any): string => {
         if (!material || !THREE) return "#808080";
-        
+
         try {
             if (material.color) {
                 return `#${material.color.getHexString()}`;
@@ -104,7 +106,7 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
 
     const getMaterialTypeIcon = (material: any): string => {
         if (!material) return "📦";
-        
+
         const type = material.type || "";
         if (type.includes("Standard")) return "✨";
         if (type.includes("Basic")) return "🔷";
@@ -147,7 +149,9 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
             </div>
 
             {/* Search Bar */}
-            <div style={{ padding: "8px 16px", borderBottom: "1px solid rgba(255, 255, 255, 0.1)" }}>
+            <div
+                style={{ padding: "8px 16px", borderBottom: "1px solid rgba(255, 255, 255, 0.1)" }}
+            >
                 <input
                     type="text"
                     placeholder="🔍 Search materials..."
@@ -166,7 +170,9 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
             </div>
 
             {/* Create Material Button */}
-            <div style={{ padding: "8px 16px", borderBottom: "1px solid rgba(255, 255, 255, 0.1)" }}>
+            <div
+                style={{ padding: "8px 16px", borderBottom: "1px solid rgba(255, 255, 255, 0.1)" }}
+            >
                 <button
                     onClick={onCreateMaterial}
                     style={{
@@ -213,7 +219,9 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
                                     fontSize: "0.85em",
                                 }}
                             >
-                                {searchTerm ? "No materials match your search" : "No materials in scene"}
+                                {searchTerm
+                                    ? "No materials match your search"
+                                    : "No materials in scene"}
                             </div>
                         ) : (
                             sortedMaterials.map((item) => {
@@ -257,7 +265,13 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
                                             }
                                         }}
                                     >
-                                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                        <div
+                                            style={{
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: "10px",
+                                            }}
+                                        >
                                             {/* Color Swatch */}
                                             <div
                                                 style={{
@@ -279,7 +293,9 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
                                                     <input
                                                         type="text"
                                                         value={editingName}
-                                                        onChange={(e) => setEditingName(e.target.value)}
+                                                        onChange={(e) =>
+                                                            setEditingName(e.target.value)
+                                                        }
                                                         onBlur={handleFinishRename}
                                                         onKeyDown={(e) => {
                                                             if (e.key === "Enter") {
@@ -295,7 +311,8 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
                                                             padding: "4px 6px",
                                                             borderRadius: "3px",
                                                             border: "1px solid #9C27B0",
-                                                            backgroundColor: "rgba(255, 255, 255, 0.1)",
+                                                            backgroundColor:
+                                                                "rgba(255, 255, 255, 0.1)",
                                                             color: "white",
                                                             fontSize: "0.85em",
                                                             fontWeight: "bold",
@@ -317,12 +334,15 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
                                                         }}
                                                     >
                                                         <span>{typeIcon}</span>
-                                                        <span style={{ flex: 1, minWidth: 0 }}>{item.name}</span>
+                                                        <span style={{ flex: 1, minWidth: 0 }}>
+                                                            {item.name}
+                                                        </span>
                                                         {item.isCustom && (
                                                             <span
                                                                 style={{
                                                                     fontSize: "0.7em",
-                                                                    backgroundColor: "rgba(156, 39, 176, 0.5)",
+                                                                    backgroundColor:
+                                                                        "rgba(156, 39, 176, 0.5)",
                                                                     padding: "2px 6px",
                                                                     borderRadius: "3px",
                                                                 }}
@@ -345,10 +365,13 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
                                                     }}
                                                 >
                                                     <span title="Number of objects using this material">
-                                                        📦 {item.usedBy.size} object{item.usedBy.size !== 1 ? "s" : ""}
+                                                        📦 {item.usedBy.size} object
+                                                        {item.usedBy.size !== 1 ? "s" : ""}
                                                     </span>
                                                     <span>•</span>
-                                                    <span title="Material type">{item.material.type}</span>
+                                                    <span title="Material type">
+                                                        {item.material.type}
+                                                    </span>
                                                 </div>
                                             </div>
 
@@ -399,7 +422,12 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
             ) : (
                 <>
                     {/* Back Button */}
-                    <div style={{ padding: "8px 16px", borderBottom: "1px solid rgba(255, 255, 255, 0.1)" }}>
+                    <div
+                        style={{
+                            padding: "8px 16px",
+                            borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
+                        }}
+                    >
                         <button
                             onClick={() => {
                                 setShowEditor(false);
@@ -425,7 +453,14 @@ const NeedleUSDMaterialLibrary: React.FC<NeedleUSDMaterialLibraryProps> = ({
                     </div>
 
                     {/* Material Editor */}
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                    <div
+                        style={{
+                            flex: 1,
+                            display: "flex",
+                            flexDirection: "column",
+                            overflow: "hidden",
+                        }}
+                    >
                         <NeedleUSDMaterialEditor
                             materialLibraryItem={selectedMaterialItem}
                             onMaterialChange={onMaterialChange}

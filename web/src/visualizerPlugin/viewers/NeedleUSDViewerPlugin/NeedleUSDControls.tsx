@@ -57,7 +57,7 @@ const NeedleUSDControls: React.FC<NeedleUSDControlsProps> = ({
                     const groupBox = new THREE.Box3().setFromObject(group);
                     box.union(groupBox);
                 });
-                
+
                 const size = box.getSize(new THREE.Vector3());
                 const center = box.getCenter(new THREE.Vector3());
 
@@ -108,7 +108,7 @@ const NeedleUSDControls: React.FC<NeedleUSDControlsProps> = ({
                 const groupBox = new THREE.Box3().setFromObject(group);
                 box.union(groupBox);
             });
-            
+
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
 
@@ -223,7 +223,7 @@ const NeedleUSDControls: React.FC<NeedleUSDControlsProps> = ({
 
             // Handle both single group and array of groups
             const fileGroups = Array.isArray(usdRoot) ? usdRoot : [usdRoot];
-            
+
             fileGroups.forEach((group: any) => {
                 group.traverse((obj: any) => {
                     if (obj.material) {
@@ -275,7 +275,17 @@ const NeedleUSDControls: React.FC<NeedleUSDControlsProps> = ({
         } catch (error) {
             console.error("Error resetting scene:", error);
         }
-    }, [changeBackground, updateAmbientLight, updateDirectionalLight, wireframe, toggleWireframe, fitToScene, onClearSelection, onResetAllTransforms, onResetAllMaterials]);
+    }, [
+        changeBackground,
+        updateAmbientLight,
+        updateDirectionalLight,
+        wireframe,
+        toggleWireframe,
+        fitToScene,
+        onClearSelection,
+        onResetAllTransforms,
+        onResetAllMaterials,
+    ]);
 
     if (!scene || !camera || !renderer) {
         return null;
@@ -391,7 +401,9 @@ const NeedleUSDControls: React.FC<NeedleUSDControlsProps> = ({
                     </label>
                 </div>
                 <div style={{ fontSize: "0.7em", color: "#999", marginTop: "4px" }}>
-                    {enable3DSelection ? "Click objects in 3D view to select" : "3D selection disabled"}
+                    {enable3DSelection
+                        ? "Click objects in 3D view to select"
+                        : "3D selection disabled"}
                 </div>
             </div>
 
@@ -496,7 +508,14 @@ const NeedleUSDControls: React.FC<NeedleUSDControlsProps> = ({
                 >
                     🔄 Reset Scene
                 </button>
-                <div style={{ fontSize: "0.7em", color: "#999", marginTop: "4px", textAlign: "center" }}>
+                <div
+                    style={{
+                        fontSize: "0.7em",
+                        color: "#999",
+                        marginTop: "4px",
+                        textAlign: "center",
+                    }}
+                >
                     Resets transforms, materials, selections, and camera
                 </div>
             </div>

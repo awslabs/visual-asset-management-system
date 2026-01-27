@@ -45,7 +45,7 @@ const NeedleUSDMaterialControls: React.FC<NeedleUSDMaterialControlsProps> = ({
     useEffect(() => {
         if (baseMaterial && THREE) {
             const mat = baseMaterial;
-            
+
             setMaterial({
                 color: mat.color ? `#${mat.color.getHexString()}` : "#ffffff",
                 emissive: mat.emissive ? `#${mat.emissive.getHexString()}` : "#000000",
@@ -242,7 +242,14 @@ const NeedleUSDMaterialControls: React.FC<NeedleUSDMaterialControlsProps> = ({
                 >
                     Options
                 </div>
-                <label style={{ display: "flex", alignItems: "center", cursor: "pointer", marginBottom: "4px" }}>
+                <label
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        cursor: "pointer",
+                        marginBottom: "4px",
+                    }}
+                >
                     <input
                         type="checkbox"
                         checked={material.transparent}
@@ -263,16 +270,30 @@ const NeedleUSDMaterialControls: React.FC<NeedleUSDMaterialControlsProps> = ({
             </div>
 
             {/* Material Info */}
-            <div style={{ marginBottom: "12px", padding: "8px", backgroundColor: "rgba(0, 0, 0, 0.3)", borderRadius: "4px", fontSize: "0.7em" }}>
-                <div><strong>Type:</strong> {baseMaterial.type}</div>
-                {baseMaterial.name && <div><strong>Name:</strong> {baseMaterial.name}</div>}
+            <div
+                style={{
+                    marginBottom: "12px",
+                    padding: "8px",
+                    backgroundColor: "rgba(0, 0, 0, 0.3)",
+                    borderRadius: "4px",
+                    fontSize: "0.7em",
+                }}
+            >
+                <div>
+                    <strong>Type:</strong> {baseMaterial.type}
+                </div>
+                {baseMaterial.name && (
+                    <div>
+                        <strong>Name:</strong> {baseMaterial.name}
+                    </div>
+                )}
             </div>
 
             {/* Reset Button */}
             <button
                 onClick={() => {
                     onResetMaterial();
-                    setUpdateTrigger(prev => prev + 1);
+                    setUpdateTrigger((prev) => prev + 1);
                 }}
                 style={{
                     width: "100%",
