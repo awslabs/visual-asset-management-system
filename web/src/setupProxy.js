@@ -10,7 +10,7 @@ module.exports = function (app) {
     // Set COOP and COEP headers for SharedArrayBuffer support
     app.use((req, res, next) => {
         // Set headers for all responses
-        res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+        res.setHeader("Cross-Origin-Embedder-Policy", "credentialless");
         res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
 
         // Also set CORP for resources

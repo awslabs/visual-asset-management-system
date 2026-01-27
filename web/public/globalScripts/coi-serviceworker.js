@@ -1,5 +1,5 @@
 /*! coi-serviceworker v0.1.7 - Guido Zuidhof and contributors, licensed under MIT */
-let coepCredentialless = false;
+let coepCredentialless = true;
 if (typeof window === "undefined") {
     self.addEventListener("install", () => self.skipWaiting());
     self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
@@ -41,7 +41,8 @@ if (typeof window === "undefined") {
                     }
 
                     const newHeaders = new Headers(response.headers);
-                    const coepValue = coepCredentialless ? "credentialless" : "require-corp";
+                    //const coepValue = coepCredentialless ? "credentialless" : "require-corp";
+                    const coepValue = "credentialless";
                     newHeaders.set("Cross-Origin-Embedder-Policy", coepValue);
                     if (!coepCredentialless) {
                         newHeaders.set("Cross-Origin-Resource-Policy", "cross-origin");
