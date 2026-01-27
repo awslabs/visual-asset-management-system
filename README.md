@@ -96,6 +96,7 @@ Various AWS partners, ISVs, or other external solutions that VAMS significantly 
 -   [Potree](https://potree.github.io/): 3D viewer and use-case pipeline for E57, LAS, and LAZ point-cloud web viewing (Potree-OpenSource)
 -   [BabylonJS](https://www.babylonjs.com/): 3D viewer for gaussian splat web viewing (Potree-OpenSource)
 -   [PlayCanvas](https://playcanvas.com/): 3D viewer for gaussian splat web viewing (Potree-OpenSource)
+-   [Needle Engine](https://needle.tools/): 3D viewer for USD (Universal Scene Description) web viewing with WASM support (Needle-OpenSource)
 -   [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws): Use-case pipeline for gaussian splat generation from media files (AWS-OpenSource)
 -   [Trimesh](https://trimesh.org/): Use-case pipeline for 3D mesh conversion and metadata extraction (TriMesh-OpenSource)
 -   [CADQuery](https://github.com/CadQuery/cadquery): Use-case pipeline for open standard CAD conversion and metadata extraction (TriMesh-OpenSource)

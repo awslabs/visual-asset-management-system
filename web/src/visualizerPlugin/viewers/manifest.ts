@@ -30,6 +30,8 @@ export const VIEWER_COMPONENTS = {
         "VntanaViewerPlugin/VntanaViewerComponent",
     "./viewers/VeerumViewerPlugin/VeerumViewerComponent":
         "VeerumViewerPlugin/VeerumViewerComponent",
+    "./viewers/NeedleUSDViewerPlugin/NeedleUSDViewerComponent":
+        "NeedleUSDViewerPlugin/NeedleUSDViewerComponent",
 } as const;
 
 // Dependency manager paths - add new dependency managers here
@@ -43,6 +45,7 @@ export const DEPENDENCY_MANAGERS = {
         "PlayCanvasGaussianSplatViewerPlugin/dependencies",
     "./viewers/VntanaViewerPlugin/dependencies": "VntanaViewerPlugin/dependencies",
     "./viewers/VeerumViewerPlugin/dependencies": "VeerumViewerPlugin/dependencies",
+    "./viewers/NeedleUSDViewerPlugin/dependencies": "NeedleUSDViewerPlugin/dependencies",
     // Add new dependency managers here as needed:
     // './viewers/MyViewerPlugin/dependencies': 'MyViewerPlugin/dependencies',
 } as const;

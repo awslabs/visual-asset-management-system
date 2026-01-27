@@ -20,7 +20,18 @@
         <meta name="HandheldFriendly" content="true" />
         <meta name="theme-color" content="#000000" />
         <meta name="description" content="Visual Asset Management System" />
+        <script src="%PUBLIC_URL%/globalScripts/coi-serviceworker.js"></script>
         <script type="application/javascript">
+            // Check if SharedArrayBuffer is available (required for WASM)
+            if (typeof SharedArrayBuffer !== 'undefined') {
+                console.log(' SharedArrayBuffer is available');
+                console.log(' crossOriginIsolated:', window.crossOriginIsolated);
+            } else {
+                console.warn(' SharedArrayBuffer is NOT available - WASM will not work');
+                console.warn('  crossOriginIsolated:', window.crossOriginIsolated);
+                console.warn('  COOP/COEP headers may not be set correctly');
+            }
+
             window.addEventListener("error", function (e) {
                 // prevent React's listener from firing
                 if (e.message.startsWith("ResizeObserver loop completed with undelivered")) {

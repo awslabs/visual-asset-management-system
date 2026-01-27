@@ -10,9 +10,13 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   **Web** Added new open-source Needle USD 3D WASM Web Viewer to the viewer plugin system for `.usd, .usda, .usdc, .usdz` files. Supports full dependency chain loading of files although Needle WASM libraries have some limitations on supported USD features and dependency depth for textures. 
+    -   Note: This viewer requires web deployment with Cloudfront; ALB web deployment (with direct S3 serving) has restrictions for adding required headers and will not currently work. Creates `CLOUDFRONTDEPLOY` feature enablement flag to track this to properly enable/disable the viewer for availability. This means this viewer will also not curently work for GovCloud environments. 
+
 ### Bug Fixes
 
 ### Chores
+-   **Web** Added service worker and proxy to manually set header flags for local debugging and/or attempt to set for CDN deployment. Currently verified to work for local debugging so web assembly (WASM) components can be viewed. 
 
 ### Known Outstanding Issues
 

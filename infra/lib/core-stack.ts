@@ -217,6 +217,15 @@ export class CoreVAMSStack extends cdk.Stack {
                 );
                 staticWebBuilderNestedStack.addDependency(storageResourcesNestedStack);
 
+                //Set features
+                if (props.config.app.useCloudFront.enabled) {
+                    this.enabledFeatures.push(VAMS_APP_FEATURES.CLOUDFRONTDEPLOY);
+                }
+
+                if(props.config.app.useAlb.enabled) {
+                    this.enabledFeatures.push(VAMS_APP_FEATURES.ALBDEPLOY);
+                }
+
                 //Write final output configurations (pulling forward from static web nested stacks)
                 const endPointURLParamsOutput = new cdk.CfnOutput(
                     this,

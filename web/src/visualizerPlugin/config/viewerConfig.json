@@ -288,6 +288,25 @@
             "enabled": false
         },
         {
+            "id": "needletools-usd-viewer",
+            "name": "Needle USD Viewer",
+            "description": "View USD files using Needle's USD Web Viewer with WebAssembly. Supports USD format files with advanced 3D rendering capabilities.",
+            "componentPath": "./viewers/NeedleUSDViewerPlugin/NeedleUSDViewerComponent",
+            "dependencyManager": "./viewers/NeedleUSDViewerPlugin/dependencies",
+            "dependencyManagerClass": "NeedleUSDDependencyManager",
+            "dependencyManagerMethod": "loadUSDViewer",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".usd", ".usda", ".usdc", ".usdz"],
+            "supportsMultiFile": true,
+            "canFullscreen": true,
+            "priority": 1,
+            "dependencies": ["usd-wasm", "three"],
+            "featuresEnabledRestriction": ["CLOUDFRONTDEPLOY"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "enabled": true
+        },
+        {
             "id": "preview-viewer",
             "name": "Preview Viewer",
             "description": "View generated preview images",
