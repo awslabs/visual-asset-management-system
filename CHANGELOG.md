@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   Fix CDK deployment error with deploying metadata schema data when using KMS key (KMS key permissions were not being applied correctly to CDK custom resource role)
 
 ### Chores
+-   Fix readme instructions for v2.3 to v2.4 migration scripts
 
 ## [2.4.0] (2026-01-16)
 
