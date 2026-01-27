@@ -82,6 +82,8 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { authResources } from "../auth/authBuilder-nestedStack";
 import { DynamoDbMetadataSchemaDefaultsConstruct } from "./constructs/dynamodb-metadataschema-defaults-construct";
 import * as iam from "aws-cdk-lib/aws-iam";
+import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
+import { Service } from "../../../lib/helper/service-helper";
 
 interface apiGatewayLambdaConfiguration {
     routePath: string;
@@ -1233,25 +1235,48 @@ export class ApiBuilderNestedStack extends NestedStack {
                 }
             );
 
-            // Add KMS permissions if encryption is enabled
-            if (config.app.useKmsCmkEncryption.enabled && storageResources.encryption.kmsKey) {
-                metadataSchemaCustomResourceRole.attachInlinePolicy(
-                    new iam.Policy(this, "CRMetadataSchemaKmsPolicy", {
-                        statements: [
-                            new iam.PolicyStatement({
-                                actions: [
-                                    "kms:Decrypt",
-                                    "kms:DescribeKey",
-                                    "kms:Encrypt",
-                                    "kms:GenerateDataKey*",
-                                    "kms:ReEncrypt*",
-                                ],
-                                effect: iam.Effect.ALLOW,
-                                resources: [storageResources.encryption.kmsKey.keyArn],
-                            }),
-                        ],
-                    })
-                );
+            // Add KMS permissions when KMS encryption is enabled, regardless of timing issues
+            if (config.app.useKmsCmkEncryption.enabled) {
+                if (storageResources.encryption.kmsKey) {
+                    // KMS key is available, add specific permissions
+                    metadataSchemaCustomResourceRole.attachInlinePolicy(
+                        new iam.Policy(this, "CRAuthKmsPolicy", {
+                            statements: [
+                                kmsKeyPolicyStatementGenerator(storageResources.encryption.kmsKey),
+                            ],
+                        })
+                    );
+                } else {
+                    // KMS key not yet available, add general KMS permissions for custom resources
+                    metadataSchemaCustomResourceRole.attachInlinePolicy(
+                        new iam.Policy(this, "CRAuthKmsPolicy", {
+                            statements: [
+                                new iam.PolicyStatement({
+                                    actions: [
+                                        "kms:Decrypt",
+                                        "kms:DescribeKey",
+                                        "kms:Encrypt",
+                                        "kms:GenerateDataKey*",
+                                        "kms:ReEncrypt*",
+                                        "kms:ListKeys",
+                                        "kms:CreateGrant",
+                                        "kms:ListAliases",
+                                    ],
+                                    effect: iam.Effect.ALLOW,
+                                    resources: ["*"], // Will be constrained by KMS key policy
+                                    conditions: {
+                                        StringEquals: {
+                                            "kms:ViaService": [
+                                                Service("DYNAMODB").Endpoint,
+                                                Service("S3").Endpoint,
+                                            ],
+                                        },
+                                    },
+                                }),
+                            ],
+                        })
+                    );
+                }
             }
 
             // Instantiate the metadata schema defaults construct

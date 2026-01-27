@@ -154,9 +154,8 @@ export class IsaacLabTrainingConstruct extends Construct {
             policy: cr.AwsCustomResourcePolicy.fromStatements([
                 new iam.PolicyStatement({
                     actions: ["batch:DescribeComputeEnvironments"],
-                    resources: [
-                        `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:compute-environment/*`,
-                    ],
+                    // DescribeComputeEnvironments does not support resource-level permissions
+                    resources: ["*"],
                 }),
             ]),
         });
@@ -478,7 +477,7 @@ export class IsaacLabTrainingConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "Wildcard permissions required for S3 bucket access and Batch job operations",
+                    reason: "Wildcard permissions required: batch:DescribeComputeEnvironments does not support resource-level permissions, S3 bucket access needs object-level wildcards, and Batch job operations require dynamic resource access",
                 },
                 {
                     id: "AwsSolutions-IAM4",

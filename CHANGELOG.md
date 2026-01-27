@@ -26,6 +26,27 @@ All notable changes to this project will be documented in this file. See [standa
 -   Pipeline metadata inputs have a limit when sending to ECS pipelines. Assets and/or files with extensive metadata may exceed the ECS limit for JSON metadata input (8k characters). Future pipeline overhauls will convert metadata input to a file to resolve this.
 -   When dealing with hundreds to thousands of files per asset or very large files (TB-size), some API asset/file operations may time-out on the request (after 29 seconds) however the lambda may still be processing the request and successfully complete the operation (up to 15 minutes). This also goes for OpenSearch indexing when there are hundreds of thousands to millions of files to re-index. The re-index may actually not finish after the 15 minute lambda time-out with millions of files and require different re-indexing technique locally or in a container. Asynchronous methods and optional containerized processing are being evaluated for the future for all API requests to prevent this.
 
+## [2.4.1] (2026-01-30)
+
+-   **Web** Added new open-source Needle USD 3D WASM Web Viewer to the viewer plugin system for `.usd, .usda, .usdc, .usdz` files. Supports full dependency chain loading of files although Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
+    -   Note: This viewer requires web deployment with Cloudfront; ALB web deployment (with direct S3 serving) has restrictions for adding required headers and will not currently work. Creates `CLOUDFRONTDEPLOY` feature enablement flag to track this to properly enable/disable the viewer for availability. This means this viewer will also not curently work for GovCloud environments.
+
+### Bug Fixes
+
+-   Fixed CDK deployment error with storage resources asset indexer queue names when deploying to GovCloud environments
+-   Fixed CDK deployment error with Cloudfront KMS principal persmisions (should not be added) when deploying to non-cloudFront for web configurations or GovCloud environment
+-   Fixed CDK deployment error with deploying metadata schema data when using KMS key (KMS key permissions were not being applied correctly to CDK custom resource role)
+-   Fixed CDK deployment error with IsaacSim use-case pipeline which tried to set IAM permissions on invalid resource types
+-   **Web** Fixed bug on metadata schema management where if navigating back to the same metadata schema page through the navigation bar (while on it), it won't show as blank or empty page anymore
+-   **Web** Asset FileManager will now remember expanded folders in file tree while detailed data is still loading in for large file trees. Previously it would collapse folders every time a new page worth of data was loaded in.
+-   **Web** Asset FileManager will now open all parent folders to a selected file in the tree when opened directly from an external page/source (ie. from asset/file search)
+
+### Chores
+
+-   **Web** Added service worker and proxy to manually set header flags for local debugging and/or attempt to set for CDN deployment. Currently verified to work for local debugging so web assembly (WASM) components can be viewed.
+
+-   Fix readme instructions for v2.3 to v2.4 migration scripts to remove steps that shouldn't have been added
+
 ## [2.4.0] (2026-01-16)
 
 ### Major Change Summary:

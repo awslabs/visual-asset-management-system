@@ -54,6 +54,33 @@ export function getRootByPath(root: FileTree | null, path: string): FileTree | n
     return null;
 }
 
+// Helper function to extract all parent folder paths from a file path
+export function getParentFolderPaths(filePath: string): string[] {
+    const parentPaths: string[] = [];
+
+    // Always include root
+    parentPaths.push("/");
+
+    // If the path is just root, return early
+    if (filePath === "/" || filePath === "") {
+        return parentPaths;
+    }
+
+    // Remove leading slash if present for easier processing
+    const cleanPath = filePath.startsWith("/") ? filePath.substring(1) : filePath;
+
+    // Split by "/" and build up parent paths
+    const parts = cleanPath.split("/");
+
+    // For each part except the last (which is the file itself), build the folder path
+    for (let i = 0; i < parts.length - 1; i++) {
+        const folderPath = "/" + parts.slice(0, i + 1).join("/") + "/";
+        parentPaths.push(folderPath);
+    }
+
+    return parentPaths;
+}
+
 // Helper function to check if a folder has any files beneath it (recursively)
 export function hasFolderContent(folder: FileTree): boolean {
     // Check if any direct children are files
@@ -108,7 +135,11 @@ function addDirectories(root: FileTree, directories: string): FileTree {
  * Merge new files into an existing tree, updating existing nodes instead of duplicating
  * Creates a new tree with updated nodes to ensure React detects changes
  */
-export function mergeFiles(fileKeys: FileKey[], root: FileTree): FileTree {
+export function mergeFiles(
+    fileKeys: FileKey[],
+    root: FileTree,
+    expandedFolders?: Set<string>
+): FileTree {
     // CRITICAL: Store original root node name/displayName at the START
     const originalRootName = root.name;
     const originalRootDisplayName = root.displayName;
@@ -147,9 +178,15 @@ export function mergeFiles(fileKeys: FileKey[], root: FileTree): FileTree {
         const updateNode = (node: FileTree): FileTree => {
             const update = updatesMap.get(node.relativePath);
 
+            // Preserve expansion state from expandedFolders set if provided
+            const shouldBeExpanded = expandedFolders
+                ? expandedFolders.has(node.relativePath)
+                : node.expanded;
+
             // Create new node (always create new object for React to detect change)
             const newNode: FileTree = {
                 ...node,
+                expanded: shouldBeExpanded,
                 subTree: node.subTree.map((child) => updateNode(child)),
             };
 
@@ -217,7 +254,7 @@ export function mergeFiles(fileKeys: FileKey[], root: FileTree): FileTree {
     // Add any new files
     const newFiles = Array.from(newFilesMap.values());
     if (newFiles.length > 0) {
-        root = addFiles(newFiles, root);
+        root = addFiles(newFiles, root, expandedFolders);
     }
 
     // CRITICAL: Restore original root node name/displayName at the END
@@ -234,7 +271,7 @@ export function mergeFiles(fileKeys: FileKey[], root: FileTree): FileTree {
     return root;
 }
 
-export function addFiles(fileKeys: FileKey[], root: FileTree) {
+export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: Set<string>) {
     // Helper function to get parent directory path
     const getParentDirectory = (path: string) => {
         const parentPath = path.split("/").slice(0, -1).join("/");
@@ -385,6 +422,11 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     );
 
                     if (!folderNode) {
+                        // Determine if this folder should be expanded based on expandedFolders set
+                        const shouldBeExpanded = expandedFolders
+                            ? expandedFolders.has(folderPath)
+                            : false;
+
                         // Create the folder node
                         folderNode = {
                             name: part,
@@ -392,7 +434,7 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                             relativePath: folderPath,
                             keyPrefix: part,
                             level: currentNode.level + 1,
-                            expanded: false,
+                            expanded: shouldBeExpanded,
                             subTree: [],
                             isFolder: true,
                         };
