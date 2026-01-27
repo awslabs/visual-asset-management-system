@@ -381,7 +381,7 @@ export function generateContentSecurityPolicy(
         "'self'",
         "'unsafe-hashes'",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
-        "'sha256-6oQux02QVJA9KvFQfSp/V7vUxwoN+61rtrKSUpL3rjM='" // script in index.html
+        "'sha256-6oQux02QVJA9KvFQfSp/V7vUxwoN+61rtrKSUpL3rjM='", // script in index.html
     ];
 
     let workerSrc = ["'self'", "blob:", "data:"];

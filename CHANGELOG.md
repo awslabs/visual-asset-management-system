@@ -5,12 +5,18 @@ All notable changes to this project will be documented in this file. See [standa
 ## [2.4.1] (2026-01-30)
 
 ### Bug Fixes
--   Fix CDK deployment error with storage resources asset indexer queue names when deploying to GovCloud environments
--   Fix CDK deployment error with Cloudfront KMS principal persmisions (should not be added) when deploying to non-cloudFront for web configurations or GovCloud environment
--   Fix CDK deployment error with deploying metadata schema data when using KMS key (KMS key permissions were not being applied correctly to CDK custom resource role)
+
+-   Fixed CDK deployment error with storage resources asset indexer queue names when deploying to GovCloud environments
+-   Fixed CDK deployment error with Cloudfront KMS principal persmisions (should not be added) when deploying to non-cloudFront for web configurations or GovCloud environment
+-   Fixed CDK deployment error with deploying metadata schema data when using KMS key (KMS key permissions were not being applied correctly to CDK custom resource role)
+-   Fixed CDK deployment error with IsaacSim use-case pipeline which tried to set IAM permissions on invalid resource types
+-   **Web** Fixed bug on metadata schema management where if navigating back to the same metadata schema page through the navigation bar (while on it), it won't show as blank or empty page anymore
+-   **Web** Asset FileManager will now remember expanded folders in file tree while detailed data is still loading in for large file trees. Previously it would collapse folders every time a new page worth of data was loaded in.
+-   **Web** Asset FileManager will now open all parent folders to a selected file in the tree when opened directly from an external page/source (ie. from asset/file search)
 
 ### Chores
--   Fix readme instructions for v2.3 to v2.4 migration scripts
+
+-   Fix readme instructions for v2.3 to v2.4 migration scripts to remove steps that shouldn't have been added
 
 ## [2.4.0] (2026-01-16)
 

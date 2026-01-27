@@ -1242,9 +1242,7 @@ export class ApiBuilderNestedStack extends NestedStack {
                     metadataSchemaCustomResourceRole.attachInlinePolicy(
                         new iam.Policy(this, "CRAuthKmsPolicy", {
                             statements: [
-                                kmsKeyPolicyStatementGenerator(
-                                    storageResources.encryption.kmsKey
-                                ),
+                                kmsKeyPolicyStatementGenerator(storageResources.encryption.kmsKey),
                             ],
                         })
                     );
