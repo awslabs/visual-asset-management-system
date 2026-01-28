@@ -2,7 +2,34 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.5.0] (2026-04-30)
+
+### Major Change Summary:
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+-   **Web** Added new open-source Needle USD 3D WASM Web Viewer to the viewer plugin system for `.usd, .usda, .usdc, .usdz` files. Supports full dependency chain loading of files although Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
+    -   Note: This viewer requires web deployment with Cloudfront; ALB web deployment (with direct S3 serving) has restrictions for adding required headers and will not currently work. Creates `CLOUDFRONTDEPLOY` feature enablement flag to track this to properly enable/disable the viewer for availability. This means this viewer will also not curently work for GovCloud environments.
+
+### Bug Fixes
+
+### Chores
+
+-   **Web** Added service worker and proxy to manually set header flags for local debugging and/or attempt to set for CDN deployment. Currently verified to work for local debugging so web assembly (WASM) components can be viewed.
+
+### Known Outstanding Issues
+
+-   With multiple S3 bucket support, scenarios may occur where identical assetIds exist across different buckets/prefixes in different databases, causing lookup conflicts in Asset Versions, Comments, and subscriptions functionality. This can only occur with manual S3 changes, as assetIds generated from VAMS uploads use unique GUIDs.
+-   Using the same pipeline ID in both GLOBAL and non-GLOBAL databases will cause overlap conflicts and issues.
+-   Pipeline metadata inputs have a limit when sending to ECS pipelines. Assets and/or files with extensive metadata may exceed the ECS limit for JSON metadata input (8k characters). Future pipeline overhauls will convert metadata input to a file to resolve this.
+-   When dealing with hundreds to thousands of files per asset or very large files (TB-size), some API asset/file operations may time-out on the request (after 29 seconds) however the lambda may still be processing the request and successfully complete the operation (up to 15 minutes). This also goes for OpenSearch indexing when there are hundreds of thousands to millions of files to re-index. The re-index may actually not finish after the 15 minute lambda time-out with millions of files and require different re-indexing technique locally or in a container. Asynchronous methods and optional containerized processing are being evaluated for the future for all API requests to prevent this.
+
 ## [2.4.1] (2026-01-30)
+
+-   **Web** Added new open-source Needle USD 3D WASM Web Viewer to the viewer plugin system for `.usd, .usda, .usdc, .usdz` files. Supports full dependency chain loading of files although Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
+    -   Note: This viewer requires web deployment with Cloudfront; ALB web deployment (with direct S3 serving) has restrictions for adding required headers and will not currently work. Creates `CLOUDFRONTDEPLOY` feature enablement flag to track this to properly enable/disable the viewer for availability. This means this viewer will also not curently work for GovCloud environments.
 
 ### Bug Fixes
 
@@ -15,6 +42,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Asset FileManager will now open all parent folders to a selected file in the tree when opened directly from an external page/source (ie. from asset/file search)
 
 ### Chores
+
+-   **Web** Added service worker and proxy to manually set header flags for local debugging and/or attempt to set for CDN deployment. Currently verified to work for local debugging so web assembly (WASM) components can be viewed.
 
 -   Fix readme instructions for v2.3 to v2.4 migration scripts to remove steps that shouldn't have been added
 

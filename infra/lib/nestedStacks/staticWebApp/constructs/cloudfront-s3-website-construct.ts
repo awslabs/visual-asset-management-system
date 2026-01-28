@@ -111,6 +111,20 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                         override: true,
                     },
                 },
+                customHeadersBehavior: {
+                    customHeaders: [
+                        {
+                            header: "Cross-Origin-Embedder-Policy",
+                            value: "credentialless",
+                            override: true,
+                        },
+                        {
+                            header: "Cross-Origin-Opener-Policy",
+                            value: "same-origin",
+                            override: true,
+                        },
+                    ],
+                },
             }
         );
 
