@@ -15,7 +15,7 @@ import { region_info } from "aws-cdk-lib";
 dotenv.config();
 
 //Top level configurations
-export const VAMS_VERSION = "2.4.0";
+export const VAMS_VERSION = "2.4.1";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;

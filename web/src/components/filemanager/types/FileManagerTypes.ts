@@ -64,6 +64,7 @@ export interface FileManagerStateValues {
     flattenedItems: FileTree[]; // Flattened array of all items for shift-selection
     totalAssetSize: number; // Total size of all files in the asset (excluding folders)
     paginationTokens: { basic: string | null; detailed: string | null }; // Track pagination tokens
+    expandedFolders: Set<string>; // Set of relativePath strings for expanded folders
 }
 
 export type FileManagerState = FileManagerStateValues;

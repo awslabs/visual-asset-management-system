@@ -1527,7 +1527,7 @@ export function storageResourcesBuilder(
 
         const esmAssetIndexerLinksMetadata = new lambda.EventSourceMapping(
             scope,
-            "AssetIndexerSnsQueuingAssetLinksStream",
+            "AssetIndexerSnsQueuingAssetLinksMetadataStream",
             {
                 target: assetIndexerSnsQueuingFunction,
                 eventSourceArn: assetLinksMetadataStorageTable.tableStreamArn,

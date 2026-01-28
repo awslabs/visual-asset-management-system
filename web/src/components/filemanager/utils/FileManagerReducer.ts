@@ -23,6 +23,30 @@ function flattenFileTree(tree: FileTree, result: FileTree[] = []): FileTree[] {
     return result;
 }
 
+// Helper function to collect all expanded folder paths from a tree
+function collectExpandedFolders(tree: FileTree, expandedSet: Set<string> = new Set()): Set<string> {
+    // If this node is expanded and is a folder, add it to the set
+    if (tree.expanded) {
+        const isFolder =
+            tree.isFolder !== undefined
+                ? tree.isFolder
+                : tree.subTree.length > 0 || tree.keyPrefix.endsWith("/");
+
+        if (isFolder) {
+            expandedSet.add(tree.relativePath);
+        }
+    }
+
+    // Recursively process all children
+    if (tree.subTree && tree.subTree.length > 0) {
+        for (const child of tree.subTree) {
+            collectExpandedFolders(child, expandedSet);
+        }
+    }
+
+    return expandedSet;
+}
+
 // Helper function to build a path-to-node map for fast lookups
 function buildPathMap(
     tree: FileTree,
@@ -79,10 +103,15 @@ export function fileManagerReducer(
             const updatedTree = toggleExpanded(state.fileTree, action.payload.relativePath);
             // Update flattened items whenever tree structure changes
             const updatedFlattenedItems = flattenFileTree(updatedTree);
+
+            // Update expandedFolders set
+            const newExpandedFolders = collectExpandedFolders(updatedTree);
+
             return {
                 ...state,
                 fileTree: updatedTree,
                 flattenedItems: updatedFlattenedItems,
+                expandedFolders: newExpandedFolders,
             };
         }
 
@@ -319,7 +348,12 @@ export function fileManagerReducer(
 
         case "MERGE_FILES": {
             // 1. Merge new files into UNFILTERED tree to preserve all data
-            const mergedUnfilteredTree = mergeFiles(action.payload.files, state.unfilteredFileTree);
+            // Pass expandedFolders to preserve folder expansion states
+            const mergedUnfilteredTree = mergeFiles(
+                action.payload.files,
+                state.unfilteredFileTree,
+                state.expandedFolders
+            );
 
             // 1.5. CRITICAL: Ensure root node name and displayName are preserved
             // This is essential because the initial tree has the asset name set
@@ -465,6 +499,14 @@ export function fileManagerReducer(
                 displayName: preservedDisplayName,
             };
 
+            // Capture current expanded folders
+            const currentExpandedFolders = collectExpandedFolders(state.fileTree);
+            console.log(
+                "📂 INIT_LOADING: Captured",
+                currentExpandedFolders.size,
+                "expanded folders"
+            );
+
             return {
                 ...state,
                 // Preserve root node name/displayName in both trees
@@ -477,6 +519,8 @@ export function fileManagerReducer(
                 // Store current selection paths for preservation
                 selectedItemPath: state.selectedItem?.relativePath || null,
                 selectedItemPaths: state.selectedItems.map((item) => item.relativePath),
+                // Store current expanded folders for preservation
+                expandedFolders: currentExpandedFolders,
             };
         }
 
@@ -498,6 +542,43 @@ export function fileManagerReducer(
                 loading: true,
                 loadingPhase: "basic-loading",
                 loadingProgress: { current: 0, total: null },
+            };
+        }
+
+        case "EXPAND_PATH_TO_ITEM": {
+            // Expand all parent folders leading to a specific file path
+            const targetPath = action.payload.path;
+
+            // Import the helper function to get parent folder paths
+            const { getParentFolderPaths } = require("./FileManagerUtils");
+            const parentPaths = getParentFolderPaths(targetPath);
+
+            console.log("📂 EXPAND_PATH_TO_ITEM: Expanding folders for path:", targetPath);
+            console.log("📂 Parent paths to expand:", parentPaths);
+
+            // Add all parent paths to expandedFolders
+            const newExpandedFolders = new Set(state.expandedFolders);
+            parentPaths.forEach((path: string) => newExpandedFolders.add(path));
+
+            // Recursively update tree to expand the folders
+            const expandFoldersInTree = (node: FileTree): FileTree => {
+                const shouldBeExpanded = newExpandedFolders.has(node.relativePath);
+
+                return {
+                    ...node,
+                    expanded: shouldBeExpanded,
+                    subTree: node.subTree.map((child) => expandFoldersInTree(child)),
+                };
+            };
+
+            const updatedTree = expandFoldersInTree(state.fileTree);
+            const updatedFlattenedItems = flattenFileTree(updatedTree);
+
+            return {
+                ...state,
+                fileTree: updatedTree,
+                expandedFolders: newExpandedFolders,
+                flattenedItems: updatedFlattenedItems,
             };
         }
 

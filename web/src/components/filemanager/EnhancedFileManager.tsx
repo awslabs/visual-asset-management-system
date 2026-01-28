@@ -69,6 +69,7 @@ export function EnhancedFileManager({
         flattenedItems: [],
         totalAssetSize: 0,
         paginationTokens: { basic: null, detailed: null },
+        expandedFolders: new Set<string>(),
     };
 
     const [state, dispatch] = useReducer(fileManagerReducer, initialState);
@@ -122,7 +123,9 @@ export function EnhancedFileManager({
 
             if (targetFile) {
                 console.log("✅ Found target file, selecting:", targetFile.relativePath);
-                // Select the file
+                // First, expand all parent folders leading to this file
+                dispatch({ type: "EXPAND_PATH_TO_ITEM", payload: { path: filePathToNavigate } });
+                // Then select the file
                 dispatch({ type: "SELECT_ITEM", payload: { item: targetFile } });
                 // Mark as navigated
                 hasNavigatedRef.current = true;
@@ -277,7 +280,12 @@ export function EnhancedFileManager({
                 const targetFile = getRootByPath(fileTree, filePathToNavigate);
 
                 if (targetFile) {
-                    // Select the file
+                    // First, expand all parent folders leading to this file
+                    dispatch({
+                        type: "EXPAND_PATH_TO_ITEM",
+                        payload: { path: filePathToNavigate },
+                    });
+                    // Then select the file
                     dispatch({ type: "SELECT_ITEM", payload: { item: targetFile } });
                 } else {
                     // File not found - show non-blocking error

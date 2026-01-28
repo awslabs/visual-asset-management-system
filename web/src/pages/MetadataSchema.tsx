@@ -71,6 +71,11 @@ export default function MetadataSchemaPage() {
     const [deletingSchema, setDeletingSchema] = useState<MetadataSchema | null>(null);
     const [flashMessages, setFlashMessages] = useState<FlashbarProps.MessageDefinition[]>([]);
 
+    // Sync modal state with databaseId changes to handle same-page navigation
+    useEffect(() => {
+        setDatabaseSelectModalOpen(!databaseId);
+    }, [databaseId]);
+
     // Fetch schemas when database changes
     useEffect(() => {
         if (databaseId) {
