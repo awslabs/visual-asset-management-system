@@ -375,7 +375,13 @@ export function generateContentSecurityPolicy(
     const additionalCSPConfig = loadCSPAdditionalConfig();
 
     // Base CSP sources
-    let connectSrc = ["'self'", "blob:", `https://${apiUrl}`, `https://${Service("S3").Endpoint}/`];
+    let connectSrc = [
+        "'self'",
+        "blob:",
+        "data:",
+        `https://${apiUrl}`,
+        `https://${Service("S3").Endpoint}/`,
+    ];
 
     let scriptSrc = [
         "'self'",

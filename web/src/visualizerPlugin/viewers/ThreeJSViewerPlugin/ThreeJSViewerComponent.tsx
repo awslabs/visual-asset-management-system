@@ -6,15 +6,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Cache } from "aws-amplify";
 import { ViewerPluginProps } from "../../core/types";
-import { NeedleUSDDependencyManager } from "./dependencies";
-import { downloadAsset } from "../../../services/APIService";
+import { ThreeJSDependencyManager } from "./dependencies";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { MouseControls } from "./MouseControls";
-import NeedleUSDPanel from "./NeedleUSDPanel";
+import ThreeJSPanel from "./ThreeJSPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
-import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
+import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
+import { loadFile } from "./utils/fileLoaders";
+import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
 
-const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
+const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
     databaseId,
     assetKey,
@@ -22,7 +23,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [config] = useState(Cache.getItem("config"));
-
+    const [threeReady, setThreeReady] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
@@ -40,18 +41,16 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     // Loading cancellation flag
     const loadingCancelledRef = useRef(false);
 
-    // Animation control (default to paused/off)
-    const [animationPaused, setAnimationPaused] = useState(true);
-    const animationFrameRef = useRef<number | null>(null);
-    const animationPausedRef = useRef(true);
-
-    // Animation timing
-    const endTimeCodeRef = useRef<number>(1);
-    const timeoutRef = useRef<number>(40);
-
     // 3D selection toggle
     const [enable3DSelection, setEnable3DSelection] = useState(true);
     const enable3DSelectionRef = useRef(true);
+
+    // Animation state
+    const [animations, setAnimations] = useState<any[]>([]);
+    const [animationPaused, setAnimationPaused] = useState(true);
+    const animationMixerRef = useRef<any>(null);
+    const animationClockRef = useRef<any>(null);
+    const animationPausedRef = useRef(true);
 
     // Keep refs in sync with state
     useEffect(() => {
@@ -106,7 +105,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 material: material,
                 usedBy: usedBy,
                 isCustom: false,
-                originalMaterial: originalMat, // Store original for reset
+                originalMaterial: originalMat,
             });
 
             counter++;
@@ -155,7 +154,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 });
 
                 if (baseMaterial) {
-                    // Create highlight material - check if clone method exists
+                    // Create highlight material
                     const highlightMaterial = baseMaterial.clone
                         ? baseMaterial.clone()
                         : new THREE.MeshStandardMaterial({
@@ -174,727 +173,44 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     }, [selectedObjects, materialLibrary]);
 
     useEffect(() => {
+        const initializeThreeJS = async () => {
+            try {
+                setLoadingMessage("Loading ThreeJS dependencies...");
+                await ThreeJSDependencyManager.loadThreeJS();
+                setThreeReady(true);
+            } catch (error) {
+                console.error("Failed to initialize ThreeJS:", error);
+                setError("Failed to load ThreeJS dependencies");
+                setIsLoading(false);
+            }
+        };
+
+        if (!threeReady) {
+            initializeThreeJS();
+        }
+    }, [threeReady]);
+
+    useEffect(() => {
         const hasFiles = assetKey || (multiFileKeys && multiFileKeys.length > 0);
-        if (!hasFiles || initializationRef.current || !config || !containerRef.current) {
+        if (
+            !hasFiles ||
+            initializationRef.current ||
+            !threeReady ||
+            !config ||
+            !containerRef.current
+        ) {
             return;
         }
         initializationRef.current = true;
 
-        // PRESERVED: Original implementation using downloadAsset API (unused, kept for reference)
-        // This function downloads files using the downloadAsset API which requires pre-signed URLs.
-        // It has been replaced by loadAssets() which uses direct streaming URLs instead.
-        const loadAssetsFromDownloadAPI = async () => {
-            try {
-                setLoadingMessage("Loading USD Viewer dependencies...");
-                await NeedleUSDDependencyManager.loadUSDViewer();
-                console.log("USD Viewer dependencies loaded successfully");
-
-                setLoadingMessage("Initializing 3D scene...");
-
-                // Get dependencies from bundle (guaranteed to be available)
-                const bundle = NeedleUSDDependencyManager.getUSDBundle();
-                const THREE = bundle.THREE;
-                const ThreeRenderDelegateInterface = bundle.ThreeRenderDelegateInterface;
-                const getUsdModule = bundle.getUsdModule;
-
-                const scene = new THREE.Scene();
-                scene.background = new THREE.Color(0x333333);
-                const camera = new THREE.PerspectiveCamera(
-                    60,
-                    containerRef.current!.clientWidth / containerRef.current!.clientHeight,
-                    0.1,
-                    1000
-                );
-                camera.position.set(5, 5, 5);
-                const renderer = new THREE.WebGLRenderer({ antialias: true });
-                renderer.setSize(
-                    containerRef.current!.clientWidth,
-                    containerRef.current!.clientHeight
-                );
-                renderer.setPixelRatio(window.devicePixelRatio);
-                containerRef.current!.appendChild(renderer.domElement);
-
-                scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-                const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-                dirLight.position.set(5, 10, 7.5);
-                scene.add(dirLight);
-
-                setLoadingMessage("Initializing USD WASM module...");
-                const USD = await getUsdModule({
-                    locateFile: (path: string, prefix: string) =>
-                        (prefix || "/viewers/needletools_usd_viewer/") + path,
-                });
-
-                const filesToLoad =
-                    multiFileKeys && multiFileKeys.length > 0
-                        ? multiFileKeys
-                        : assetKey
-                        ? [assetKey]
-                        : [];
-                if (filesToLoad.length === 0) throw new Error("No files specified");
-
-                const loadedGroups: any[] = [];
-                const errors: Array<{ file: string; error: string }> = [];
-                const allDrivers: any[] = [];
-
-                for (let i = 0; i < filesToLoad.length; i++) {
-                    const fileKey = filesToLoad[i];
-                    const fileName = fileKey.split("/").pop() || `model_${i}.usd`;
-                    setLoadingMessage(
-                        `Downloading file ${i + 1}/${filesToLoad.length}: ${fileName}...`
-                    );
-
-                    try {
-                        const response = await downloadAsset({
-                            assetId,
-                            databaseId,
-                            key: fileKey,
-                            versionId: "",
-                            downloadType: "assetFile",
-                        });
-                        if (!response || !Array.isArray(response) || response[0] === false)
-                            throw new Error("Download failed");
-
-                        setLoadingMessage(
-                            `Loading file ${i + 1}/${filesToLoad.length}: ${fileName}...`
-                        );
-                        const fileResponse = await fetch(response[1]);
-                        if (!fileResponse.ok)
-                            throw new Error(`Fetch failed: ${fileResponse.statusText}`);
-
-                        const arrayBuffer = await fileResponse.arrayBuffer();
-                        const fileGroup = new THREE.Group();
-                        fileGroup.name = fileName;
-                        fileGroup.userData.sourceFile = fileKey;
-                        scene.add(fileGroup);
-
-                        const directory = `/file_${i}`;
-                        USD.FS_createPath("", directory, true, true);
-                        USD.FS_createDataFile(
-                            directory,
-                            fileName,
-                            new Uint8Array(arrayBuffer),
-                            true,
-                            true,
-                            true
-                        );
-
-                        const delegateConfig = {
-                            usdRoot: fileGroup,
-                            paths: [],
-                            driver: () => driver,
-                        };
-                        const renderInterface = new ThreeRenderDelegateInterface(delegateConfig);
-                        let driver = new USD.HdWebSyncDriver(
-                            renderInterface,
-                            directory + "/" + fileName
-                        );
-                        if (driver instanceof Promise) driver = await driver;
-
-                        driver.Draw();
-                        let stage = driver.GetStage();
-                        if (stage instanceof Promise) {
-                            stage = await stage;
-                            stage = driver.GetStage();
-                        }
-
-                        // Store animation timing information
-                        if (stage.GetEndTimeCode) {
-                            endTimeCodeRef.current = stage.GetEndTimeCode();
-                        }
-                        if (stage.GetTimeCodesPerSecond) {
-                            timeoutRef.current = 1000 / stage.GetTimeCodesPerSecond();
-                        }
-
-                        if (stage.GetUpAxis && String.fromCharCode(stage.GetUpAxis()) === "z") {
-                            fileGroup.rotation.x = -Math.PI / 2;
-                        }
-
-                        loadedGroups.push(fileGroup);
-                        allDrivers.push(driver);
-                    } catch (fileError: any) {
-                        errors.push({
-                            file: fileKey,
-                            error: fileError?.message || "Unknown error",
-                        });
-                    }
-                }
-
-                if (errors.length > 0) setFileErrors(errors);
-                if (loadedGroups.length === 0) throw new Error("No files loaded successfully");
-
-                setLoadedFileGroups(loadedGroups);
-                setLoadingMessage("Positioning camera...");
-
-                const combinedBox = new THREE.Box3();
-                loadedGroups.forEach((g) => combinedBox.union(new THREE.Box3().setFromObject(g)));
-                const size = combinedBox.getSize(new THREE.Vector3());
-                const center = combinedBox.getCenter(new THREE.Vector3());
-                const maxSize = Math.max(size.x, size.y, size.z);
-                const distance =
-                    1.5 *
-                    Math.max(
-                        maxSize / (2 * Math.tan((Math.PI * camera.fov) / 360)),
-                        maxSize / (2 * Math.tan((Math.PI * camera.fov) / 360)) / camera.aspect
-                    );
-
-                camera.position.set(distance, distance, distance);
-                camera.lookAt(center);
-                camera.near = distance / 100;
-                camera.far = distance * 100;
-                camera.updateProjectionMatrix();
-
-                const mouseControls = new MouseControls(camera, renderer.domElement, THREE);
-                mouseControls.setTarget(center.x, center.y, center.z);
-
-                raycasterRef.current = new THREE.Raycaster();
-                mouseRef.current = new THREE.Vector2();
-
-                const handleCanvasClick = (event: MouseEvent) => {
-                    if (mouseControls.hasMoved) {
-                        console.log("3D View: Ignoring click - camera was moved");
-                        return;
-                    }
-
-                    const rect = renderer.domElement.getBoundingClientRect();
-                    mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-                    mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-                    raycasterRef.current.setFromCamera(mouseRef.current, camera);
-                    const allChildren: any[] = [];
-                    loadedGroups.forEach((g) => allChildren.push(...g.children));
-                    const intersects = raycasterRef.current.intersectObjects(allChildren, true);
-
-                    if (intersects.length > 0) {
-                        const clickedObject = intersects[0].object;
-                        console.log(
-                            "3D View: Object clicked",
-                            clickedObject.name,
-                            "Ctrl:",
-                            event.ctrlKey
-                        );
-
-                        if (event.ctrlKey) {
-                            setSelectedObjects((prev) => {
-                                const exists = prev.find((obj) => obj.uuid === clickedObject.uuid);
-                                return exists
-                                    ? prev.filter((obj) => obj.uuid !== clickedObject.uuid)
-                                    : [...prev, clickedObject];
-                            });
-                        } else {
-                            setSelectedObjects([clickedObject]);
-                        }
-                    } else {
-                        console.log("3D View: Clicked empty space - keeping current selection");
-                    }
-                };
-
-                renderer.domElement.addEventListener("click", handleCanvasClick);
-
-                viewerInstanceRef.current = {
-                    scene,
-                    camera,
-                    renderer,
-                    drivers: allDrivers,
-                    USD,
-                    fileGroups: loadedGroups,
-                    controls: mouseControls,
-                    clickHandler: handleCanvasClick,
-                };
-
-                const animate = () => {
-                    requestAnimationFrame(animate);
-                    allDrivers.forEach((d) => d?.Draw?.());
-                    renderer.render(scene, camera);
-                };
-                animate();
-
-                setSceneReady(true);
-                window.addEventListener("resize", () => {
-                    if (containerRef.current) {
-                        camera.aspect =
-                            containerRef.current.clientWidth / containerRef.current.clientHeight;
-                        camera.updateProjectionMatrix();
-                        renderer.setSize(
-                            containerRef.current.clientWidth,
-                            containerRef.current.clientHeight
-                        );
-                    }
-                });
-
-                setIsLoading(false);
-            } catch (error) {
-                console.error("Error loading USD assets:", error);
-                setError(error instanceof Error ? error.message : "Failed to load USD files");
-                setIsLoading(false);
-            }
-        };
-
-        // ============================================================================
-        // WASM FILESYSTEM CLEANUP
-        // ============================================================================
-
-        /**
-         * Clean up WASM filesystem to prevent memory leaks
-         */
-        const cleanupWASMFilesystem = (USD: any) => {
-            try {
-                console.log("Cleaning WASM filesystem...");
-
-                // Helper to recursively get all files in a directory
-                const getAllFiles = (path: string): string[] => {
-                    const files: string[] = [];
-                    try {
-                        const entries = USD.FS_readdir(path);
-                        for (const entry of entries) {
-                            if (entry === "." || entry === "..") continue;
-                            const fullPath = path === "/" ? `/${entry}` : `${path}/${entry}`;
-                            try {
-                                const stat = USD.FS_analyzePath(fullPath);
-                                if (stat.object && stat.object.isFolder) {
-                                    files.push(...getAllFiles(fullPath));
-                                } else {
-                                    files.push(fullPath);
-                                }
-                            } catch {}
-                        }
-                    } catch {}
-                    return files;
-                };
-
-                // Delete all /file_* directories
-                for (let i = 0; i < 100; i++) {
-                    try {
-                        const dirPath = `/file_${i}`;
-                        const stat = USD.FS_analyzePath(dirPath);
-                        if (stat.exists) {
-                            const files = getAllFiles(dirPath);
-                            files.forEach((f) => {
-                                try {
-                                    USD.FS_unlink(f);
-                                } catch {}
-                            });
-                            // Remove empty directories recursively
-                            try {
-                                USD.FS_rmdir(dirPath);
-                            } catch {}
-                        }
-                    } catch {}
-                }
-                console.log("WASM filesystem cleaned");
-            } catch (error) {
-                console.warn("Error cleaning WASM filesystem:", error);
-            }
-        };
-
-        // ============================================================================
-        // USD DEPENDENCY RESOLUTION HELPER FUNCTIONS
-        // ============================================================================
-
-        /**
-         * Detect if a USD file is text-based or binary format
-         */
-        const detectUSDFormat = (content: ArrayBuffer): "text" | "binary" => {
-            const header = new Uint8Array(content.slice(0, 8));
-
-            // USDC files start with "PXR-USDC" magic bytes
-            const usdcMagic = [0x50, 0x58, 0x52, 0x2d, 0x55, 0x53, 0x44, 0x43];
-            const isUSDC = usdcMagic.every((byte, i) => header[i] === byte);
-
-            if (isUSDC) return "binary";
-
-            // Try to decode as text
-            try {
-                const sample = new TextDecoder("utf-8", { fatal: true }).decode(
-                    content.slice(0, 1024)
-                );
-                if (sample.includes("#usda") || sample.includes("def ") || sample.includes("@")) {
-                    return "text";
-                }
-            } catch {
-                return "binary";
-            }
-
-            return "text"; // Default to text
-        };
-
-        /**
-         * Extract ASCII strings from binary data
-         */
-        const extractASCIIStrings = (bytes: Uint8Array, minLength: number = 4): string[] => {
-            const strings: string[] = [];
-            let currentString = "";
-
-            for (let i = 0; i < bytes.length; i++) {
-                const byte = bytes[i];
-
-                // Printable ASCII range (space to ~)
-                if (byte >= 0x20 && byte <= 0x7e) {
-                    currentString += String.fromCharCode(byte);
-                } else {
-                    if (currentString.length >= minLength) {
-                        strings.push(currentString);
-                    }
-                    currentString = "";
-                }
-            }
-
-            if (currentString.length >= minLength) {
-                strings.push(currentString);
-            }
-
-            return strings;
-        };
-
-        /**
-         * Clean file path extracted from binary data
-         */
-        const cleanFilePath = (path: string): string | null => {
-            let cleaned = path.trim();
-
-            // Remove @ symbols
-            cleaned = cleaned.replace(/@/g, "");
-
-            // Remove leading/trailing non-path characters
-            cleaned = cleaned.replace(/^[^a-zA-Z0-9._\/]+/, "");
-            cleaned = cleaned.replace(/[^a-zA-Z0-9._\/]+$/, "");
-
-            // Must have a filename (not just extension)
-            const parts = cleaned.split("/");
-            const fileName = parts[parts.length - 1];
-            if (!fileName || fileName.startsWith(".")) {
-                return null; // Invalid: no filename or just extension
-            }
-
-            // Must contain at least one path separator or be a simple filename
-            if (cleaned.includes("/") || cleaned.includes(".")) {
-                return cleaned;
-            }
-
-            return null;
-        };
-
-        /**
-         * Resolve relative path based on source file location
-         */
-        const resolveRelativePath = (referencePath: string, sourceFilePath: string): string => {
-            // Remove @ symbols if present
-            const cleanPath = referencePath.replace(/@/g, "").trim();
-
-            // Get directory of source file
-            const lastSlash = sourceFilePath.lastIndexOf("/");
-            const sourceDir = lastSlash >= 0 ? sourceFilePath.substring(0, lastSlash) : "";
-
-            // Handle different path types
-            if (cleanPath.startsWith("./")) {
-                // Relative to current directory
-                return sourceDir
-                    ? `${sourceDir}/${cleanPath.substring(2)}`
-                    : cleanPath.substring(2);
-            } else if (cleanPath.startsWith("../")) {
-                // Parent directory reference
-                const parts = sourceDir.split("/").filter((p) => p);
-                const refParts = cleanPath.split("/").filter((p) => p);
-
-                // Remove parent references and corresponding source parts
-                while (refParts.length > 0 && refParts[0] === "..") {
-                    refParts.shift();
-                    if (parts.length > 0) parts.pop();
-                }
-
-                return [...parts, ...refParts].join("/");
-            } else if (cleanPath.startsWith("/")) {
-                // Absolute path from root
-                return cleanPath.substring(1);
-            } else {
-                // Relative path without ./
-                return sourceDir ? `${sourceDir}/${cleanPath}` : cleanPath;
-            }
-        };
-
-        /**
-         * Extract dependencies from text-based USD file
-         */
-        const extractFromText = (
-            text: string,
-            sourceFilePath: string,
-            dependencies: Set<string>
-        ): void => {
-            // Pattern 1: @path@ asset references
-            const assetPattern = /@([^@\s]+(?:\.[a-zA-Z0-9]+)?)@/g;
-            let match;
-            while ((match = assetPattern.exec(text)) !== null) {
-                const refPath = match[1];
-                if (refPath && !refPath.startsWith("http") && !refPath.startsWith("//")) {
-                    const resolved = resolveRelativePath(refPath, sourceFilePath);
-                    dependencies.add(resolved);
-                }
-            }
-
-            // Pattern 2: Sublayers
-            const sublayerPattern = /sublayers\s*=\s*\[([^\]]*)\]/g;
-            const sublayerMatch = sublayerPattern.exec(text);
-            if (sublayerMatch) {
-                const sublayerContent = sublayerMatch[1];
-                const sublayerRefs = sublayerContent.match(/@([^@]+)@/g);
-                if (sublayerRefs) {
-                    sublayerRefs.forEach((ref) => {
-                        const path = ref.replace(/@/g, "").trim();
-                        if (path) {
-                            const resolved = resolveRelativePath(path, sourceFilePath);
-                            dependencies.add(resolved);
-                        }
-                    });
-                }
-            }
-
-            // Pattern 3: Payload/References
-            const payloadPattern = /(?:payload|references)\s*=\s*@([^@]+)@/g;
-            while ((match = payloadPattern.exec(text)) !== null) {
-                const refPath = match[1].trim();
-                if (refPath) {
-                    const resolved = resolveRelativePath(refPath, sourceFilePath);
-                    dependencies.add(resolved);
-                }
-            }
-        };
-
-        /**
-         * Extract dependencies from binary USD file using heuristic byte search
-         */
-        const extractFromBinary = (
-            content: ArrayBuffer,
-            sourceFilePath: string,
-            dependencies: Set<string>
-        ): void => {
-            const bytes = new Uint8Array(content);
-
-            // Common file extensions to look for
-            const extensions = [
-                ".usd",
-                ".usda",
-                ".usdc",
-                ".usdz", // USD files
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".exr", // Textures
-                ".hdr",
-                ".tif",
-                ".tiff", // HDR/Textures
-                ".obj",
-                ".fbx",
-                ".gltf",
-                ".glb", // Other 3D formats
-            ];
-
-            // Search for ASCII strings in binary data
-            const strings = extractASCIIStrings(bytes, 4);
-
-            for (const str of strings) {
-                const lowerStr = str.toLowerCase();
-                const hasExtension = extensions.some((ext) => lowerStr.endsWith(ext));
-
-                if (hasExtension && !str.startsWith("http")) {
-                    const cleanPath = cleanFilePath(str);
-                    if (cleanPath) {
-                        const resolved = resolveRelativePath(cleanPath, sourceFilePath);
-                        dependencies.add(resolved);
-                    }
-                }
-            }
-        };
-
-        /**
-         * Extract all dependencies from a USD file (text or binary)
-         */
-        const extractDependencies = (content: ArrayBuffer, sourceFilePath: string): string[] => {
-            const dependencies: Set<string> = new Set();
-
-            try {
-                const format = detectUSDFormat(content);
-                console.log(`  USD format detected: ${format} for ${sourceFilePath}`);
-
-                if (format === "text") {
-                    const text = new TextDecoder().decode(content);
-                    extractFromText(text, sourceFilePath, dependencies);
-                } else {
-                    extractFromBinary(content, sourceFilePath, dependencies);
-                }
-            } catch (error) {
-                console.warn(`Error extracting dependencies from ${sourceFilePath}:`, error);
-            }
-
-            return Array.from(dependencies);
-        };
-
-        /**
-         * Check if a file is a USD file based on extension
-         */
-        const isUSDFile = (path: string): boolean => {
-            const ext = path.toLowerCase().split(".").pop();
-            return ext === "usd" || ext === "usda" || ext === "usdc" || ext === "usdz";
-        };
-
-        /**
-         * Store file in WASM filesystem with proper directory structure
-         * @param fileKey - Original file path (e.g., "x659317c9.../Materials/model.usd")
-         * @param content - File content as ArrayBuffer
-         * @param USD - USD WASM module
-         * @param baseDirectory - Base directory prefix (e.g., "/file_0")
-         */
-        const storeInWASM = (
-            fileKey: string,
-            content: ArrayBuffer,
-            USD: any,
-            baseDirectory: string = ""
-        ): string => {
-            let parts = fileKey.split("/");
-
-            // Remove assetId from path if it's the first component
-            // The assetId is passed in from the component props
-            if (parts.length > 0 && parts[0] === assetId) {
-                parts.shift(); // Remove assetId
-                console.log(`    Trimmed assetId from path: ${fileKey} -> ${parts.join("/")}`);
-            }
-
-            const fileName = parts.pop()!;
-
-            // Construct full directory path with base directory
-            let dirPath: string;
-            if (parts.length > 0) {
-                dirPath = baseDirectory
-                    ? `${baseDirectory}/${parts.join("/")}`
-                    : "/" + parts.join("/");
-            } else {
-                dirPath = baseDirectory || "/";
-            }
-
-            // Create directory structure
-            USD.FS_createPath("", dirPath, true, true);
-
-            // Store file
-            USD.FS_createDataFile(dirPath, fileName, new Uint8Array(content), true, true, true);
-
-            const fullPath = `${dirPath}/${fileName}`;
-            console.log(`    Stored in WASM: ${fullPath}`);
-            return fullPath;
-        };
-
-        /**
-         * Download a file from the streaming endpoint
-         */
-        const downloadFile = async (
-            fileKey: string,
-            authHeader: string,
-            isMainFile: boolean = false
-        ): Promise<ArrayBuffer | null> => {
-            try {
-                const pathSegments = fileKey.split("/");
-                const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
-                const encodedFileKey = encodedSegments.join("/");
-                const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
-
-                const response = await fetch(assetUrl, {
-                    headers: { Authorization: authHeader },
-                });
-
-                if (!response.ok) {
-                    if (isMainFile) {
-                        throw new Error(`Failed to load: ${fileKey} (${response.status})`);
-                    } else {
-                        console.warn(
-                            `Dependency not found (skipping): ${fileKey} (${response.status})`
-                        );
-                        return null;
-                    }
-                }
-
-                return await response.arrayBuffer();
-            } catch (error) {
-                if (isMainFile) throw error;
-                console.warn(`Error loading dependency: ${fileKey}`, error);
-                return null;
-            }
-        };
-
-        /**
-         * Recursively load a file and all its dependencies
-         */
-        const loadFileWithDependencies = async (
-            fileKey: string,
-            loadedFiles: Set<string>,
-            pendingFiles: string[],
-            authHeader: string,
-            USD: any,
-            baseDirectory: string,
-            isMainFile: boolean = false
-        ): Promise<void> => {
-            // Check if loading was cancelled
-            if (loadingCancelledRef.current) {
-                console.log(`  Loading cancelled, skipping: ${fileKey}`);
-                return;
-            }
-
-            // Skip if already loaded
-            if (loadedFiles.has(fileKey)) {
-                console.log(`  Skipping already loaded: ${fileKey}`);
-                return;
-            }
-
-            // Download file
-            const fileContent = await downloadFile(fileKey, authHeader, isMainFile);
-            if (!fileContent) return; // Failed to download dependency
-
-            // Check cancellation after async operation
-            if (loadingCancelledRef.current) {
-                console.log(`  Loading cancelled after download: ${fileKey}`);
-                return;
-            }
-
-            // Store in WASM filesystem with base directory
-            storeInWASM(fileKey, fileContent, USD, baseDirectory);
-            loadedFiles.add(fileKey);
-
-            console.log(`  Loaded: ${fileKey} (${fileContent.byteLength} bytes)`);
-
-            // Extract dependencies if USD file
-            if (isUSDFile(fileKey)) {
-                const dependencies = extractDependencies(fileContent, fileKey);
-
-                if (dependencies.length > 0) {
-                    console.log(`  Found ${dependencies.length} dependencies in ${fileKey}`);
-
-                    // Add to queue
-                    for (const dep of dependencies) {
-                        if (!loadedFiles.has(dep) && !pendingFiles.includes(dep)) {
-                            pendingFiles.push(dep);
-                            console.log(`    → Queued: ${dep}`);
-                        }
-                    }
-                }
-            }
-        };
-        // ============================================================================
-        // MAIN LOADING FUNCTION WITH DEPENDENCY RESOLUTION
-        // ============================================================================
-
-        // NEW: Main loading function using streaming URLs with recursive dependency resolution
-        // This implementation uses direct streaming URLs instead of the downloadAsset API,
-        // eliminating the need for pre-signed URL fetching while maintaining the WASM filesystem
-        // approach for handling USD file dependencies.
         const loadAssets = async () => {
             try {
-                setLoadingMessage("Loading USD Viewer dependencies...");
-                await NeedleUSDDependencyManager.loadUSDViewer();
-                console.log("USD Viewer dependencies loaded successfully");
-
                 setLoadingMessage("Initializing 3D scene...");
+                const THREE = (window as any).THREE;
 
-                // Get dependencies from bundle (guaranteed to be available)
-                const bundle = NeedleUSDDependencyManager.getUSDBundle();
-                const THREE = bundle.THREE;
-                const ThreeRenderDelegateInterface = bundle.ThreeRenderDelegateInterface;
-                const getUsdModule = bundle.getUsdModule;
+                if (!THREE) {
+                    throw new Error("ThreeJS dependencies not loaded");
+                }
 
                 const scene = new THREE.Scene();
                 scene.background = new THREE.Color(0x333333);
@@ -918,12 +234,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 dirLight.position.set(5, 10, 7.5);
                 scene.add(dirLight);
 
-                setLoadingMessage("Initializing USD WASM module...");
-                const USD = await getUsdModule({
-                    locateFile: (path: string, prefix: string) =>
-                        (prefix || "/viewers/needletools_usd_viewer/") + path,
-                });
-
                 const filesToLoad =
                     multiFileKeys && multiFileKeys.length > 0
                         ? multiFileKeys
@@ -934,152 +244,116 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 const loadedGroups: any[] = [];
                 const errors: Array<{ file: string; error: string }> = [];
-                const allDrivers: any[] = [];
+                const allAnimations: any[] = [];
+                const allBlobUrls: string[] = [];
+                const fileDependencyCounts = new Map<string, number>(); // Track dependency count per file
 
                 // Get authorization header for streaming endpoint
                 const authHeader = await getDualAuthorizationHeader();
 
-                // Track all loaded files to prevent duplicates
-                const loadedFiles = new Set<string>();
-
                 for (let i = 0; i < filesToLoad.length; i++) {
-                    // Check if loading was cancelled
                     if (loadingCancelledRef.current) {
                         console.log("Loading cancelled by component unmount");
                         return;
                     }
 
                     const fileKey = filesToLoad[i];
-                    const fileName = fileKey.split("/").pop() || `model_${i}.usd`;
+                    const fileName = fileKey.split("/").pop() || `model_${i}`;
+                    const fileExtension = fileName.split(".").pop()?.toLowerCase() || "";
 
                     console.log(
-                        `\n=== Loading main file ${i + 1}/${filesToLoad.length}: ${fileKey} ===`
+                        `\n=== Loading file ${i + 1}/${filesToLoad.length}: ${fileKey} ===`
                     );
                     setLoadingMessage(
                         `Loading file ${i + 1}/${filesToLoad.length}: ${fileName}...`
                     );
 
                     try {
-                        // Check cancellation before download
                         if (loadingCancelledRef.current) {
                             console.log("Loading cancelled");
                             return;
                         }
 
-                        // Download main file
-                        const arrayBuffer = await downloadFile(fileKey, authHeader, true);
-                        if (!arrayBuffer) throw new Error("Failed to download file");
-
-                        // Store main file in WASM filesystem
-                        const directory = `/file_${i}`;
-                        USD.FS_createPath("", directory, true, true);
-                        USD.FS_createDataFile(
-                            directory,
-                            fileName,
-                            new Uint8Array(arrayBuffer),
-                            true,
-                            true,
-                            true
+                        // Download file using streaming endpoint
+                        const pathSegments = fileKey.split("/");
+                        const encodedSegments = pathSegments.map((segment) =>
+                            encodeURIComponent(segment)
                         );
-                        loadedFiles.add(fileKey);
+                        const encodedFileKey = encodedSegments.join("/");
+                        const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                        console.log(
-                            `Main file loaded: ${fileKey} (${arrayBuffer.byteLength} bytes)`
-                        );
+                        const response = await fetch(assetUrl, {
+                            headers: { Authorization: authHeader },
+                        });
 
-                        // NEW: Recursively load dependencies
-                        if (isUSDFile(fileKey)) {
+                        if (!response.ok) {
+                            throw new Error(`Failed to load: ${fileName} (${response.status})`);
+                        }
+
+                        let arrayBuffer = await response.arrayBuffer();
+                        console.log(`Downloaded: ${fileName} (${arrayBuffer.byteLength} bytes)`);
+
+                        // For GLTF files, pre-load dependencies
+                        if (fileExtension === "gltf") {
                             setLoadingMessage(`Resolving dependencies for ${fileName}...`);
-
-                            const dependencies = extractDependencies(arrayBuffer, fileKey);
-                            const pendingFiles: string[] = [...dependencies];
-
-                            if (pendingFiles.length > 0) {
-                                console.log(`Found ${pendingFiles.length} dependencies to load`);
-
-                                // Process all dependencies recursively
-                                let depCount = 0;
-                                while (pendingFiles.length > 0) {
-                                    // Check cancellation in loop
-                                    if (loadingCancelledRef.current) {
-                                        console.log("Dependency loading cancelled");
-                                        return;
-                                    }
-
-                                    const depPath = pendingFiles.shift()!;
-                                    depCount++;
+                            const depResult = await preloadGLTFDependencies(
+                                arrayBuffer,
+                                {
+                                    assetId,
+                                    databaseId,
+                                    baseFileKey: fileKey,
+                                    apiEndpoint: config.api,
+                                },
+                                (current, total) => {
                                     setLoadingMessage(
-                                        `Loading dependency ${depCount} for ${fileName}...`
-                                    );
-
-                                    await loadFileWithDependencies(
-                                        depPath,
-                                        loadedFiles,
-                                        pendingFiles,
-                                        authHeader,
-                                        USD,
-                                        directory, // Pass base directory for dependencies
-                                        false
+                                        `Loading dependencies for ${fileName} (${current}/${total})...`
                                     );
                                 }
+                            );
+                            arrayBuffer = depResult.gltfArrayBuffer;
+                            allBlobUrls.push(...depResult.blobUrls);
 
-                                console.log(`Loaded ${depCount} dependencies for ${fileKey}`);
-                            } else {
-                                console.log(`No dependencies found for ${fileKey}`);
+                            // Track dependency count for this file
+                            const depCount = depResult.blobUrls.length;
+                            if (depCount > 0) {
+                                fileDependencyCounts.set(fileName, depCount);
+                                console.log(`Loaded ${depCount} dependencies for ${fileName}`);
                             }
                         }
 
-                        // Create file group and load USD
-                        setLoadingMessage(`Rendering ${fileName}...`);
+                        // Load file using appropriate loader
+                        setLoadingMessage(`Processing ${fileName}...`);
+                        const result = await loadFile(arrayBuffer, fileExtension, fileName);
+
+                        if (!result.object) {
+                            throw new Error("Failed to parse file");
+                        }
+
+                        // Store animations if present
+                        if (result.animations && result.animations.length > 0) {
+                            console.log(
+                                `Found ${result.animations.length} animations in ${fileName}`
+                            );
+                            allAnimations.push(...result.animations);
+                        }
+
+                        // Create file group
                         const fileGroup = new THREE.Group();
                         fileGroup.name = fileName;
                         fileGroup.userData.sourceFile = fileKey;
+
+                        // Store dependency count if available
+                        const depCount = fileDependencyCounts.get(fileName);
+                        if (depCount !== undefined) {
+                            fileGroup.userData.dependencyCount = depCount;
+                        }
+
+                        fileGroup.add(result.object);
                         scene.add(fileGroup);
 
-                        const delegateConfig = {
-                            usdRoot: fileGroup,
-                            paths: [],
-                            driver: () => driver,
-                        };
-                        const renderInterface = new ThreeRenderDelegateInterface(delegateConfig);
-                        let driver = new USD.HdWebSyncDriver(
-                            renderInterface,
-                            directory + "/" + fileName
-                        );
-                        if (driver instanceof Promise) driver = await driver;
-
-                        driver.Draw();
-                        let stage = driver.GetStage();
-                        if (stage instanceof Promise) {
-                            stage = await stage;
-                            stage = driver.GetStage();
-                        }
-
-                        // Store animation timing information
-                        if (stage.GetEndTimeCode) {
-                            const endTime = stage.GetEndTimeCode();
-                            if (endTime > endTimeCodeRef.current) {
-                                endTimeCodeRef.current = endTime;
-                            }
-                        }
-                        if (stage.GetTimeCodesPerSecond) {
-                            timeoutRef.current = 1000 / stage.GetTimeCodesPerSecond();
-                        }
-
-                        console.log(
-                            `Animation timing for ${fileName}: endTimeCode=${
-                                endTimeCodeRef.current
-                            }, fps=${(1000 / timeoutRef.current).toFixed(1)}`
-                        );
-
-                        if (stage.GetUpAxis && String.fromCharCode(stage.GetUpAxis()) === "z") {
-                            fileGroup.rotation.x = -Math.PI / 2;
-                        }
-
                         loadedGroups.push(fileGroup);
-                        allDrivers.push(driver);
 
-                        console.log(`Successfully loaded ${fileKey} with all dependencies`);
+                        console.log(`Successfully loaded ${fileName}`);
                     } catch (fileError: any) {
                         console.error(`Error loading ${fileKey}:`, fileError);
                         errors.push({
@@ -1089,10 +363,44 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
                 }
 
-                console.log(`\n=== Total files loaded: ${loadedFiles.size} ===`);
+                // Store animations and create mixer if animations found
+                if (allAnimations.length > 0) {
+                    setAnimations(allAnimations);
+                    const mixer = new THREE.AnimationMixer(scene);
+                    const clock = new THREE.Clock();
+
+                    // Play first animation by default (but paused)
+                    const action = mixer.clipAction(allAnimations[0]);
+                    action.play();
+
+                    animationMixerRef.current = mixer;
+                    animationClockRef.current = clock;
+
+                    console.log(
+                        `Animation system initialized with ${allAnimations.length} animations`
+                    );
+                }
+
+                console.log(`\n=== Total files loaded: ${loadedGroups.length} ===`);
 
                 if (errors.length > 0) setFileErrors(errors);
-                if (loadedGroups.length === 0) throw new Error("No files loaded successfully");
+
+                // If no files loaded, check if it's an OCCT error and show it prominently
+                if (loadedGroups.length === 0) {
+                    // Check if any error is OCCT-related
+                    const occtError = errors.find(
+                        (err) =>
+                            err.error.includes("CAD format support not enabled") ||
+                            err.error.includes("OCCT library")
+                    );
+
+                    if (occtError) {
+                        // Show OCCT error prominently
+                        throw new Error(occtError.error);
+                    } else {
+                        throw new Error("No files loaded successfully");
+                    }
+                }
 
                 setLoadedFileGroups(loadedGroups);
                 setLoadingMessage("Positioning camera...");
@@ -1121,11 +429,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 raycasterRef.current = new THREE.Raycaster();
                 mouseRef.current = new THREE.Vector2();
 
-                // IMPORTANT: Store original transforms AFTER all files are loaded and scene is set up
-                // This ensures we capture the actual USD geometry positions after driver.Draw()
+                // Store original transforms
                 console.log("Storing original transforms for all objects...");
                 loadedGroups.forEach((group: any) => {
-                    // Mark top-level children of each file group
                     const topLevelUuids = new Set(group.children.map((child: any) => child.uuid));
 
                     group.traverse((obj: any) => {
@@ -1136,6 +442,16 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             !originalTransformsRef.current.has(obj.uuid)
                         ) {
                             const isTopLevel = topLevelUuids.has(obj.uuid);
+
+                            const worldPos = new THREE.Vector3();
+                            obj.getWorldPosition(worldPos);
+
+                            const worldQuat = new THREE.Quaternion();
+                            obj.getWorldQuaternion(worldQuat);
+                            const worldEuler = new THREE.Euler().setFromQuaternion(worldQuat);
+
+                            const worldScale = new THREE.Vector3();
+                            obj.getWorldScale(worldScale);
 
                             originalTransformsRef.current.set(obj.uuid, {
                                 position: {
@@ -1149,6 +465,17 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                                     z: obj.rotation.z,
                                 },
                                 scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z },
+                                worldPosition: { x: worldPos.x, y: worldPos.y, z: worldPos.z },
+                                worldRotation: {
+                                    x: worldEuler.x,
+                                    y: worldEuler.y,
+                                    z: worldEuler.z,
+                                },
+                                worldScale: {
+                                    x: worldScale.x,
+                                    y: worldScale.y,
+                                    z: worldScale.z,
+                                },
                                 isTopLevel: isTopLevel,
                             });
                         }
@@ -1158,45 +485,12 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     `Stored original transforms for ${originalTransformsRef.current.size} objects`
                 );
 
-                // Also store world coordinates for proper reset
-                loadedGroups.forEach((group: any) => {
-                    group.traverse((obj: any) => {
-                        const stored = originalTransformsRef.current.get(obj.uuid);
-                        if (stored && !stored.worldPosition) {
-                            const worldPos = new THREE.Vector3();
-                            obj.getWorldPosition(worldPos);
-
-                            const worldQuat = new THREE.Quaternion();
-                            obj.getWorldQuaternion(worldQuat);
-                            const worldEuler = new THREE.Euler().setFromQuaternion(worldQuat);
-
-                            const worldScale = new THREE.Vector3();
-                            obj.getWorldScale(worldScale);
-
-                            stored.worldPosition = { x: worldPos.x, y: worldPos.y, z: worldPos.z };
-                            stored.worldRotation = {
-                                x: worldEuler.x,
-                                y: worldEuler.y,
-                                z: worldEuler.z,
-                            };
-                            stored.worldScale = {
-                                x: worldScale.x,
-                                y: worldScale.y,
-                                z: worldScale.z,
-                            };
-                        }
-                    });
-                });
-                console.log("Added world coordinates to stored transforms");
-
                 const handleCanvasClick = (event: MouseEvent) => {
-                    // Check if 3D selection is enabled using ref (not state)
                     if (!enable3DSelectionRef.current) {
                         console.log("3D View: Selection disabled");
                         return;
                     }
 
-                    // Don't process selection if camera was moved
                     if (mouseControls.hasMoved) {
                         console.log("3D View: Ignoring click - camera was moved");
                         return;
@@ -1210,7 +504,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     loadedGroups.forEach((g) => allChildren.push(...g.children));
                     const intersects = raycasterRef.current.intersectObjects(allChildren, true);
 
-                    // Only process selection if we hit an object
                     if (intersects.length > 0) {
                         const clickedObject = intersects[0].object;
                         console.log(
@@ -1221,7 +514,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         );
 
                         if (event.ctrlKey) {
-                            // Ctrl+Click: Toggle selection (add/remove)
                             setSelectedObjects((prev) => {
                                 const exists = prev.find((obj) => obj.uuid === clickedObject.uuid);
                                 return exists
@@ -1229,7 +521,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                                     : [...prev, clickedObject];
                             });
                         } else {
-                            // Regular click: Toggle if already selected, otherwise select
                             setSelectedObjects((prev) => {
                                 const isAlreadySelected =
                                     prev.length === 1 && prev[0].uuid === clickedObject.uuid;
@@ -1237,7 +528,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             });
                         }
                     } else {
-                        // Clicked empty space: Do nothing (keep current selection)
                         console.log("3D View: Clicked empty space - keeping current selection");
                     }
                 };
@@ -1248,32 +538,25 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     scene,
                     camera,
                     renderer,
-                    drivers: allDrivers,
-                    USD,
                     fileGroups: loadedGroups,
                     controls: mouseControls,
                     clickHandler: handleCanvasClick,
+                    blobUrls: allBlobUrls,
                 };
 
                 const animate = () => {
-                    // Store frame ID for cancellation
-                    animationFrameRef.current = requestAnimationFrame(animate);
+                    requestAnimationFrame(animate);
 
-                    // Calculate animation time (based on reference implementation)
-                    const secs = Date.now() / 1000;
-                    const time = (secs * (1000 / timeoutRef.current)) % endTimeCodeRef.current;
-
-                    // Update animation time if not paused (use ref, not state)
-                    if (!animationPausedRef.current) {
-                        allDrivers.forEach((d) => {
-                            if (d?.SetTime) {
-                                d.SetTime(time);
-                            }
-                        });
+                    // Update animation mixer if animations are playing
+                    if (
+                        animationMixerRef.current &&
+                        animationClockRef.current &&
+                        !animationPausedRef.current
+                    ) {
+                        const delta = animationClockRef.current.getDelta();
+                        animationMixerRef.current.update(delta);
                     }
 
-                    // Always draw and render to keep scene visible
-                    allDrivers.forEach((d) => d?.Draw?.());
                     renderer.render(scene, camera);
                 };
                 animate();
@@ -1293,8 +576,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 setIsLoading(false);
             } catch (error) {
-                console.error("Error loading USD assets:", error);
-                setError(error instanceof Error ? error.message : "Failed to load USD files");
+                console.error("Error loading ThreeJS assets:", error);
+                setError(error instanceof Error ? error.message : "Failed to load 3D files");
                 setIsLoading(false);
             }
         };
@@ -1302,46 +585,40 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         loadAssets();
 
         return () => {
-            console.log("NeedleUSD Viewer: Cleanup initiated");
-
-            // Cancel any ongoing loading operations
+            console.log("ThreeJS Viewer: Cleanup initiated");
             loadingCancelledRef.current = true;
 
-            // Cancel animation frame
-            if (animationFrameRef.current !== null) {
-                cancelAnimationFrame(animationFrameRef.current);
-                animationFrameRef.current = null;
-            }
-
             if (viewerInstanceRef.current) {
-                const { renderer, controls, clickHandler, USD } = viewerInstanceRef.current;
+                const { renderer, controls, clickHandler, blobUrls } = viewerInstanceRef.current;
 
-                // Remove event listeners
                 if (clickHandler && renderer?.domElement) {
                     renderer.domElement.removeEventListener("click", clickHandler);
                 }
 
-                // Dispose controls
                 controls?.dispose();
 
-                // Clean WASM filesystem
-                if (USD) {
-                    cleanupWASMFilesystem(USD);
-                }
-
-                // Remove renderer from DOM
                 if (renderer?.domElement?.parentNode) {
                     renderer.domElement.parentNode.removeChild(renderer.domElement);
                 }
 
-                // Dispose renderer
                 renderer?.dispose();
+
+                // Cleanup blob URLs
+                if (blobUrls && blobUrls.length > 0) {
+                    cleanupBlobUrls(blobUrls);
+                    console.log(`Cleaned up ${blobUrls.length} blob URLs`);
+                }
             }
 
-            NeedleUSDDependencyManager.cleanup();
-            console.log("NeedleUSD Viewer: Cleanup complete");
+            // Clear global THREE.js reference to prevent contamination
+            delete (window as any).THREE;
+            delete (window as any).THREEBundle;
+            console.log("ThreeJS Viewer: Cleared global THREE.js references");
+
+            ThreeJSDependencyManager.cleanup();
+            console.log("ThreeJS Viewer: Cleanup complete");
         };
-    }, [assetKey, multiFileKeys, assetId, databaseId, config]);
+    }, [threeReady, assetKey, multiFileKeys, assetId, databaseId, config]);
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
@@ -1356,7 +633,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             if (key === "escape" && showPanel) {
                 setShowPanel(false);
             } else if (key === "f" && viewerInstanceRef.current) {
-                // F key: Fit to scene
                 const { camera, controls, fileGroups } = viewerInstanceRef.current;
                 const THREE = (window as any).THREE;
 
@@ -1449,7 +725,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
         const mat = item.material;
 
-        // Apply changes to the material
         if (materialState.color) {
             mat.color = new THREE.Color(materialState.color);
         }
@@ -1467,18 +742,15 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         mat.wireframe = materialState.wireframe;
         mat.needsUpdate = true;
 
-        // Update all objects using this material (including highlighted ones)
         if (viewerInstanceRef.current?.scene) {
             viewerInstanceRef.current.scene.traverse((obj: any) => {
                 if (item.usedBy.has(obj.uuid)) {
-                    // Check if object is selected (has highlight)
                     const isSelected = selectedObjects.some((sel) => sel.uuid === obj.uuid);
 
                     if (isSelected) {
-                        // Update highlight material
                         if (materialState.color)
                             obj.material.color = new THREE.Color(materialState.color);
-                        obj.material.emissive = new THREE.Color(0x4caf50); // Keep green highlight
+                        obj.material.emissive = new THREE.Color(0x4caf50);
                         obj.material.emissiveIntensity = 0.5;
                         if (obj.material.metalness !== undefined)
                             obj.material.metalness = materialState.metalness;
@@ -1489,7 +761,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         obj.material.wireframe = materialState.wireframe;
                         obj.material.needsUpdate = true;
                     }
-                    // Non-selected objects already use the base material, so they update automatically
                 }
             });
         }
@@ -1507,7 +778,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const original = item.originalMaterial;
         const mat = item.material;
 
-        // Reset material properties
         if (original.color) mat.color = original.color.clone();
         if (original.emissive) mat.emissive = original.emissive.clone();
         if (original.metalness !== undefined) mat.metalness = original.metalness;
@@ -1517,7 +787,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         mat.wireframe = original.wireframe;
         mat.needsUpdate = true;
 
-        // Update highlighted objects too
         if (viewerInstanceRef.current?.scene) {
             viewerInstanceRef.current.scene.traverse((obj: any) => {
                 if (item.usedBy.has(obj.uuid)) {
@@ -1601,30 +870,24 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const object = scene.getObjectByProperty("uuid", objectUuid);
         if (!object) return;
 
-        // Remove object from old material's usedBy
         Array.from(materialLibrary.values()).forEach((libItem) => {
             if (libItem.usedBy.has(objectUuid)) {
                 libItem.usedBy.delete(objectUuid);
             }
         });
 
-        // Add object to new material's usedBy
         item.usedBy.add(objectUuid);
 
-        // Assign material (instance/share)
         const isSelected = selectedObjects.some((sel) => sel.uuid === objectUuid);
         if (isSelected) {
-            // Create highlight version
             const highlightMaterial = item.material.clone();
             highlightMaterial.emissive = new THREE.Color(0x4caf50);
             highlightMaterial.emissiveIntensity = 0.5;
             object.material = highlightMaterial;
         } else {
-            // Use base material
             object.material = item.material;
         }
 
-        // Update library to trigger re-render
         setMaterialLibrary(new Map(materialLibrary));
 
         console.log(`Assigned material ${item.name} to object ${object.name}`);
@@ -1638,17 +901,14 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const object = scene.getObjectByProperty("uuid", objectUuid);
         if (!object || !object.material) return;
 
-        // Find current material
         const currentItem = Array.from(materialLibrary.values()).find((item) =>
             item.usedBy.has(objectUuid)
         );
 
         if (!currentItem) return;
 
-        // Remove from current material's usedBy
         currentItem.usedBy.delete(objectUuid);
 
-        // Create new unique material
         const uniqueMaterial = currentItem.material.clone();
         const newMaterialId = `unique_${Date.now()}`;
         const newMaterialName = `${currentItem.name}_Unique`;
@@ -1662,10 +922,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             originalMaterial: uniqueMaterial.clone(),
         };
 
-        // Add to library
         setMaterialLibrary((prev) => new Map(prev).set(newMaterialId, newItem));
 
-        // Assign to object
         const isSelected = selectedObjects.some((sel) => sel.uuid === objectUuid);
         if (isSelected) {
             const highlightMaterial = uniqueMaterial.clone();
@@ -1683,7 +941,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const THREE = (window as any).THREE;
         if (!THREE || !viewerInstanceRef.current?.scene) return;
 
-        // Create new material
         const newMaterial = new THREE.MeshStandardMaterial({
             color: 0xffffff,
             metalness: 0.5,
@@ -1705,17 +962,14 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             originalMaterial: newMaterial.clone(),
         };
 
-        // Remove object from old material's usedBy
         Array.from(materialLibrary.values()).forEach((libItem) => {
             if (libItem.usedBy.has(objectUuid)) {
                 libItem.usedBy.delete(objectUuid);
             }
         });
 
-        // Add to library
         setMaterialLibrary((prev) => new Map(prev).set(materialId, newItem));
 
-        // Assign to object
         const scene = viewerInstanceRef.current.scene;
         const object = scene.getObjectByProperty("uuid", objectUuid);
         if (object) {
@@ -1753,10 +1007,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         original.worldRotation &&
                         original.worldScale
                     ) {
-                        // Top-level object: Use world coordinates
                         const parent = obj.parent;
                         if (parent) {
-                            // Get parent's inverse world matrix
                             const parentWorldMatrix = new THREE.Matrix4();
                             parent.updateMatrixWorld(true);
                             parentWorldMatrix.copy(parent.matrixWorld);
@@ -1764,7 +1016,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                                 .copy(parentWorldMatrix)
                                 .invert();
 
-                            // Create target world transform
                             const targetWorldPos = new THREE.Vector3(
                                 original.worldPosition.x,
                                 original.worldPosition.y,
@@ -1781,7 +1032,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                                 original.worldScale.z
                             );
 
-                            // Convert world transform to local space
                             const worldMatrix = new THREE.Matrix4();
                             worldMatrix.compose(
                                 targetWorldPos,
@@ -1792,7 +1042,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             const localMatrix = new THREE.Matrix4();
                             localMatrix.multiplyMatrices(parentInverse, worldMatrix);
 
-                            // Extract local transform
                             const localPos = new THREE.Vector3();
                             const localQuat = new THREE.Quaternion();
                             const localScale = new THREE.Vector3();
@@ -1803,7 +1052,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             obj.rotation.copy(localRot);
                             obj.scale.copy(localScale);
                         } else {
-                            // No parent, world = local
                             obj.position.set(
                                 original.worldPosition.x,
                                 original.worldPosition.y,
@@ -1821,7 +1069,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             );
                         }
                     } else {
-                        // Sub-object: Use local coordinates
                         obj.position.set(
                             original.position.x,
                             original.position.y,
@@ -1839,11 +1086,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
             });
         });
-        console.log("All object transforms reset to original (using smart reset logic)");
+        console.log("All object transforms reset to original");
     };
 
     const handleEditMaterial = (materialId: string) => {
-        // Select the material and the Panel will handle showing it in the Material Library tab
         setSelectedMaterialId(materialId);
         console.log(`Edit material requested: ${materialId}`);
     };
@@ -1852,13 +1098,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const THREE = (window as any).THREE;
         if (!THREE || !viewerInstanceRef.current?.scene) return;
 
-        // Reset all materials in the library to their original state
         Array.from(materialLibrary.values()).forEach((item) => {
             if (item.originalMaterial) {
                 const original = item.originalMaterial;
                 const mat = item.material;
 
-                // Reset material properties
                 if (original.color) mat.color = original.color.clone();
                 if (original.emissive) mat.emissive = original.emissive.clone();
                 if (original.metalness !== undefined) mat.metalness = original.metalness;
@@ -1870,11 +1114,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             }
         });
 
-        // Update all objects in the scene to use their library materials (remove highlights)
         const scene = viewerInstanceRef.current.scene;
         scene.traverse((obj: any) => {
             if (obj.material) {
-                // Find the material in library for this object
                 Array.from(materialLibrary.values()).forEach((item) => {
                     if (item.usedBy.has(obj.uuid)) {
                         obj.material = item.material;
@@ -1888,7 +1130,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
     if (error) {
         return (
-            <div style={{ position: "relative", height: "100%" }} id="usd-viewer-root">
+            <div style={{ position: "relative", height: "100%" }} id="threejs-viewer-root">
                 <div
                     style={{
                         color: "#d13212",
@@ -1907,7 +1149,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     <br />
                     <br />
                     <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                        Please ensure the file is a valid USD format (.usd, .usda, .usdz)
+                        Please ensure the file is a supported 3D format
                     </span>
                 </div>
             </div>
@@ -1915,11 +1157,14 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     }
 
     return (
-        <div style={{ position: "relative", height: "100%", width: "100%" }} id="usd-viewer-root">
+        <div
+            style={{ position: "relative", height: "100%", width: "100%" }}
+            id="threejs-viewer-root"
+        >
             <div
                 ref={containerRef}
                 style={{ width: "100%", height: "100%" }}
-                id="usd-viewer-container"
+                id="threejs-viewer-container"
             />
 
             {fileErrors.length > 0 && !isLoading && (
@@ -1985,11 +1230,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             {isLoading && <LoadingSpinner message={loadingMessage} />}
 
             {sceneReady && viewerInstanceRef.current && showPanel && (
-                <NeedleUSDPanel
+                <ThreeJSPanel
                     scene={viewerInstanceRef.current.scene}
                     camera={viewerInstanceRef.current.camera}
                     renderer={viewerInstanceRef.current.renderer}
-                    usdRoot={viewerInstanceRef.current.fileGroups}
+                    threeRoot={viewerInstanceRef.current.fileGroups}
                     controls={viewerInstanceRef.current.controls}
                     selectedObjects={selectedObjects}
                     onSelectObjects={setSelectedObjects}
@@ -2013,6 +1258,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     onClearSelection={() => setSelectedObjects([])}
                     enable3DSelection={enable3DSelection}
                     onToggle3DSelection={setEnable3DSelection}
+                    animations={animations}
                     animationPaused={animationPaused}
                     onToggleAnimation={setAnimationPaused}
                 />
@@ -2044,8 +1290,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 <div
                     style={{
                         position: "absolute",
-                        top: fileErrors.length > 0 ? "auto" : "10px",
-                        bottom: fileErrors.length > 0 ? "10px" : "auto",
+                        top: "10px",
                         right: "10px",
                         color: "white",
                         fontSize: "12px",
@@ -2055,7 +1300,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         zIndex: 1000,
                     }}
                 >
-                    <div style={{ fontWeight: "bold", marginBottom: "4px" }}>Needle USD Viewer</div>
+                    <div style={{ fontWeight: "bold", marginBottom: "4px" }}>ThreeJS Viewer</div>
                     <div style={{ fontSize: "0.9em", opacity: 0.9 }}>
                         Mouse: Rotate | Wheel: Zoom | Right-click: Pan
                     </div>
@@ -2146,4 +1391,4 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     );
 };
 
-export default NeedleUSDViewerComponent;
+export default ThreeJSViewerComponent;

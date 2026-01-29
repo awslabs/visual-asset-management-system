@@ -110,19 +110,23 @@ This software includes third party software subject to the following copyrights:
 
 **3D Visualization Libraries**
 
-| Package              | Version                                                     | License               |
-| :------------------- | :---------------------------------------------------------- | :-------------------- |
-| @babylonjs/core      | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)     | Apache-2.0            |
-| @babylonjs/loaders   | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders)  | Apache-2.0            |
-| @needle-tools/engine | [3.x.x](https://www.npmjs.com/package/@needle-tools/engine) | Apache-2.0 (Modified) |
-| cesium               | [1.118.0](https://github.com/CesiumGS/cesium)               | Apache-2.0            |
-| online-3d-viewer     | [0.16.0](https://github.com/kovacsv/Online3DViewer)         | MIT                   |
-| playcanvas           | [2.11.8](https://github.com/playcanvas/engine)              | MIT                   |
-| potree               | [develop-latest](https://github.com/potree/potree)          | BSD-2-Clause          |
-| web-ifc              | [0.0.39](https://github.com/IFCjs/web-ifc)                  | MPL-2.0               |
-| draco                | [1.5.6](https://github.com/google/draco)                    | Apache-2.0            |
-| rhino3dm             | [7.15.0](https://github.com/mcneel/rhino3dm)                | MIT                   |
-| pickr                | [1.8.2](https://github.com/Simonwep/pickr)                  | MIT                   |
+| Package              | Version                                                      | License               |
+| :------------------- | :----------------------------------------------------------- | :-------------------- |
+| @babylonjs/core      | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)      | Apache-2.0            |
+| @babylonjs/loaders   | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders)   | Apache-2.0            |
+| @needle-tools/engine | [3.x.x](https://www.npmjs.com/package/@needle-tools/engine)  | Apache-2.0 (Modified) |
+| cesium               | [1.118.0](https://github.com/CesiumGS/cesium)                | Apache-2.0            |
+| online-3d-viewer     | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
+| playcanvas           | [2.11.8](https://github.com/playcanvas/engine)               | MIT                   |
+| potree               | [develop-latest](https://github.com/potree/potree)           | BSD-2-Clause          |
+| three.js             | [0.182.0](https://threejs.org/)                              | MIT                   |
+| opencascade.js       | [2.0.0-beta.2](https://github.com/donalffons/opencascade.js) | LGPL-2.1\*            |
+| web-ifc              | [0.0.39](https://github.com/IFCjs/web-ifc)                   | MPL-2.0               |
+| draco                | [1.5.6](https://github.com/google/draco)                     | Apache-2.0            |
+| rhino3dm             | [7.15.0](https://github.com/mcneel/rhino3dm)                 | MIT                   |
+| pickr                | [1.8.2](https://github.com/Simonwep/pickr)                   | MIT                   |
+
+\* **OpenCascade Technology (OCCT) License Note**: opencascade.js is an optional dependency that is dynamically loaded only when CAD format support is explicitly enabled for the Three.js viewer. The library provides support for STEP (.stp, .step), IGES (.iges), and BREP (.brep) file formats. LGPL-2.1 license terms apply only when this optional feature is enabled. The feature is disabled by default and must be explicitly enabled by organizations that choose to use it. The library is not bundled with VAMS and is loaded on-demand from a CDN when needed.
 
 ---
 

@@ -126,7 +126,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
             (valid, message) = validate({
                 'criteriaAndValue': {
                     'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX'
+                    'validator': 'REGEX',
+                    'allowGlobalKeyword': True
                 }
             })
             if not valid:
@@ -144,7 +145,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
             (valid, message) = validate({
                 'criteriaOrValue': {
                     'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX'
+                    'validator': 'REGEX',
+                    'allowGlobalKeyword': True
                 }
             })
             if not valid:

@@ -551,39 +551,92 @@ The front end when loading the page receives a configuration from the AWS backen
 
 VAMS currently integrates with several different asset viewers and supports the following formats for viewing 3D assets interactively.
 
-| Name                              | Extension | Type   | Viewer             | Excluded Library | Notes                                                                                        |
-| :-------------------------------- | :-------- | :----- | :----------------- | :--------------- | -------------------------------------------------------------------------------------------- |
-| Wavefront                         | obj       | text   | Online 3D Viewer   |                  |                                                                                              |
-| 3D Studio                         | 3ds       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Stereolithography                 | stl       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Stereolithography                 | stl       | binary | Online 3D Viewer   |                  |                                                                                              |
-| glTF                              | gltf      | text   | Online 3D Viewer   |                  |                                                                                              |
-| glTF                              | glb       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Object File Format                | off       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Object File Format                | off       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Dotbim                            | bim       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Rhinoceros 3D                     | 3dm       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Filmbox                           | fbx       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Filmbox                           | fbx       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Collada                           | dae       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Virtual Reality Modeling Language | wrl       | text   | Online 3D Viewer   |                  |                                                                                              |
-| 3D Manufacturing Format           | 3mf       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Additive Manufacturing            | amf       | text   | Online 3D Viewer   |                  |                                                                                              |
-| (Excluded\*) Dotbim               | ifc       | text   | Online 3D Viewer\* | web-ifc          |                                                                                              |
-| (Excluded\*) FreeCad              | fcstd     | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| (Excluded\*) Boundary Rep         | brep      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| (Excluded\*) ISO 10303 CAD        | step      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| (Excluded\*) Graphics Exchange    | iges      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| Point Cloud - LiDAR Data Exchange | laz       | binary | Potree Viewer      |                  |                                                                                              |
-| Point Cloud - LiDAR Data Exchange | las       | binary | Potree Viewer      |                  |                                                                                              |
-| Point Cloud - LiDAR Data Exchange | e57       | binary | Potree Viewer      |                  |                                                                                              |
-| Polygon File Format               | ply       | binary | Potree Viewer      |                  | Type stores meshes and point clouds - VAMS currently showing only point cloud viewer for PLY |
-| Polygon File Format               | ply       | text   | Potree Viewer      |                  |                                                                                              |
+| Name                              | Extension | Type   | Viewer            | Excluded Library | Notes                                                                           |
+| :-------------------------------- | :-------- | :----- | :---------------- | :--------------- | ------------------------------------------------------------------------------- |
+| glTF                              | gltf      | text   | Three.js Viewer   |                  |                                                                                 |
+| glTF                              | glb       | binary | Three.js Viewer   |                  |                                                                                 |
+| Wavefront                         | obj       | text   | Three.js Viewer   |                  |                                                                                 |
+| Filmbox                           | fbx       | text   | Three.js Viewer   |                  |                                                                                 |
+| Filmbox                           | fbx       | binary | Three.js Viewer   |                  |                                                                                 |
+| Stereolithography                 | stl       | text   | Three.js Viewer   |                  |                                                                                 |
+| Stereolithography                 | stl       | binary | Three.js Viewer   |                  |                                                                                 |
+| Polygon File Format               | ply       | text   | Three.js Viewer   |                  |                                                                                 |
+| Polygon File Format               | ply       | binary | Three.js Viewer   |                  |                                                                                 |
+| Collada                           | dae       | text   | Three.js Viewer   |                  |                                                                                 |
+| 3D Studio                         | 3ds       | binary | Three.js Viewer   |                  |                                                                                 |
+| 3D Manufacturing Format           | 3mf       | text   | Three.js Viewer   |                  |                                                                                 |
+| ISO 10303 CAD (Optional\*)        | stp       | text   | Three.js Viewer   | opencascade.js\* | Requires optional OCCT library (LGPL-2.1)                                       |
+| ISO 10303 CAD (Optional\*)        | step      | text   | Three.js Viewer   | opencascade.js\* | Requires optional OCCT library (LGPL-2.1)                                       |
+| Graphics Exchange (Optional\*)    | iges      | text   | Three.js Viewer   | opencascade.js\* | Requires optional OCCT library (LGPL-2.1)                                       |
+| Boundary Rep (Optional\*)         | brep      | text   | Three.js Viewer   | opencascade.js\* | Requires optional OCCT library (LGPL-2.1)                                       |
+| Universal Scene Description       | usd       | text   | Needle USD Viewer |                  |                                                                                 |
+| Universal Scene Description       | usda      | text   | Needle USD Viewer |                  |                                                                                 |
+| Universal Scene Description       | usdc      | binary | Needle USD Viewer |                  |                                                                                 |
+| Universal Scene Description       | usdz      | binary | Needle USD Viewer |                  |                                                                                 |
+| Rhinoceros 3D                     | 3dm       | binary | Online 3D Viewer  |                  | Online 3D Viewer now handles only specialized formats not supported by Three.js |
+| Additive Manufacturing            | amf       | text   | Online 3D Viewer  |                  | Online 3D Viewer now handles only specialized formats not supported by Three.js |
+| Dotbim                            | bim       | text   | Online 3D Viewer  |                  | Online 3D Viewer now handles only specialized formats not supported by Three.js |
+| Object File Format                | off       | text   | Online 3D Viewer  |                  | Online 3D Viewer now handles only specialized formats not supported by Three.js |
+| Object File Format                | off       | binary | Online 3D Viewer  |                  | Online 3D Viewer now handles only specialized formats not supported by Three.js |
+| Virtual Reality Modeling Language | wrl       | text   | Online 3D Viewer  |                  | Online 3D Viewer now handles only specialized formats not supported by Three.js |
+| Point Cloud - LiDAR Data Exchange | laz       | binary | Potree Viewer     |                  | Requires Potree pipeline preprocessing                                          |
+| Point Cloud - LiDAR Data Exchange | las       | binary | Potree Viewer     |                  | Requires Potree pipeline preprocessing                                          |
+| Point Cloud - LiDAR Data Exchange | e57       | binary | Potree Viewer     |                  | Requires Potree pipeline preprocessing                                          |
+| Point Cloud - Polygon File Format | ply       | binary | Potree Viewer     |                  | Requires Potree pipeline preprocessing for point cloud viewing                  |
+| Raster Image                      | png       | binary | Image Viewer      |                  |                                                                                 |
+| Raster Image                      | jpg       | binary | Image Viewer      |                  |                                                                                 |
+| Raster Image                      | jpeg      | binary | Image Viewer      |                  |                                                                                 |
+| Vector Image                      | svg       | text   | Image Viewer      |                  |                                                                                 |
+| Raster Image                      | gif       | binary | Image Viewer      |                  |                                                                                 |
+| Hypertext Markup Language         | html      | text   | HTML Viewer       |                  |                                                                                 |
+| Video - MPEG-4                    | mp4       | binary | Video Player      |                  |                                                                                 |
+| Video - WebM                      | webm      | binary | Video Player      |                  |                                                                                 |
+| Video - QuickTime                 | mov       | binary | Video Player      |                  |                                                                                 |
+| Video - AVI                       | avi       | binary | Video Player      |                  |                                                                                 |
+| Video - Matroska                  | mkv       | binary | Video Player      |                  |                                                                                 |
+| Video - Flash Video               | flv       | binary | Video Player      |                  |                                                                                 |
+| Video - Windows Media             | wmv       | binary | Video Player      |                  |                                                                                 |
+| Video - MPEG-4                    | m4v       | binary | Video Player      |                  |                                                                                 |
+| Audio - MP3                       | mp3       | binary | Audio Player      |                  |                                                                                 |
+| Audio - WAV                       | wav       | binary | Audio Player      |                  |                                                                                 |
+| Audio - Ogg Vorbis                | ogg       | binary | Audio Player      |                  |                                                                                 |
+| Audio - AAC                       | aac       | binary | Audio Player      |                  |                                                                                 |
+| Audio - FLAC                      | flac      | binary | Audio Player      |                  |                                                                                 |
+| Audio - MPEG-4                    | m4a       | binary | Audio Player      |                  |                                                                                 |
+| Columnar Data - R Data            | rds       | binary | Columnar Viewer   |                  |                                                                                 |
+| Columnar Data - Flow Cytometry    | fcs       | binary | Columnar Viewer   |                  |                                                                                 |
+| Columnar Data - CSV               | csv       | text   | Columnar Viewer   |                  |                                                                                 |
+| Portable Document Format          | pdf       | binary | PDF Viewer        |                  |                                                                                 |
+| 3D Tileset Metadata               | json      | text   | Cesium Viewer     |                  | For 3D Tileset files only; requires ALLOWUNSAFEEVAL feature                     |
+| Plain Text                        | txt       | text   | Text Viewer       |                  |                                                                                 |
+| JavaScript Object Notation        | json      | text   | Text Viewer       |                  | General JSON files (not 3D Tilesets)                                            |
+| Extensible Markup Language        | xml       | text   | Text Viewer       |                  |                                                                                 |
+| YAML Ain't Markup Language        | yaml      | text   | Text Viewer       |                  |                                                                                 |
+| YAML Ain't Markup Language        | yml       | text   | Text Viewer       |                  |                                                                                 |
+| Tom's Obvious Minimal Language    | toml      | text   | Text Viewer       |                  |                                                                                 |
+| Initialization File               | ini       | text   | Text Viewer       |                  |                                                                                 |
+| Jupyter Notebook                  | ipynb     | text   | Text Viewer       |                  |                                                                                 |
+| Information File                  | inf       | text   | Text Viewer       |                  |                                                                                 |
+| Configuration File                | cfg       | text   | Text Viewer       |                  |                                                                                 |
+| Markdown                          | md        | text   | Text Viewer       |                  |                                                                                 |
+| Shell Script                      | sh        | text   | Text Viewer       |                  |                                                                                 |
+| Python Script                     | py        | text   | Text Viewer       |                  |                                                                                 |
+| Log File                          | log       | text   | Text Viewer       |                  |                                                                                 |
+| JavaScript                        | js        | text   | Text Viewer       |                  |                                                                                 |
+| TypeScript                        | ts        | text   | Text Viewer       |                  |                                                                                 |
+| SQL Script                        | sql       | text   | Text Viewer       |                  |                                                                                 |
+| PowerShell Script                 | ps1       | text   | Text Viewer       |                  |                                                                                 |
+| Gaussian Splat - PLY              | ply       | binary | BabylonJS Splat   |                  | For Gaussian Splat point clouds (different from mesh PLY)                       |
+| Gaussian Splat - SPZ              | spz       | binary | BabylonJS Splat   |                  |                                                                                 |
+| Gaussian Splat - PLY              | ply       | binary | PlayCanvas Splat  |                  | For Gaussian Splat point clouds (different from mesh PLY)                       |
+| Gaussian Splat - SOG              | sog       | binary | PlayCanvas Splat  |                  |                                                                                 |
 
 Viewers available include:
 
--   [Online 3D Viewer](https://github.com/kovacsv/Online3DViewer)
--   [Potree Viewer](https://github.com/potree/potree)
+-   [Three.js Viewer](https://threejs.org/) - Primary viewer for common 3D mesh formats with advanced features including scene graph, material editing, and transform controls
+-   [Needle USD Viewer](https://needle.tools/) - Specialized viewer for Universal Scene Description (USD) files with WebAssembly-based rendering
+-   [Online 3D Viewer](https://github.com/kovacsv/Online3DViewer) - Handles specialized 3D formats not supported by Three.js (Rhinoceros 3D, AMF, BIM, OFF, VRML)
+-   [Potree Viewer](https://github.com/potree/potree) - Point cloud visualization
 
 Please take note:
 
@@ -591,10 +644,9 @@ Please take note:
 -   There are some limitations with formats that leverage multiple files such as glTF that uses json with references to other files.
 -   Some viewers like Potree Viewer requires additional pipelines to be deployed to fully generate and view point cloud files.
 
-Exclusion\* notes:
+Optional\* notes:
 
--   Online 3D Viewer requires the more restrivi licensed opencascade sub-library to view these file types. They are excluded due to VAMS license restrictions on carrying LGPL libraries.
--   -   If an organizations wishes to implement this sub-library and view these excluded file types with Online 3D viewer, add the excluded file types to the `onlineViewer3DFileFormats` constants array in `./web/src/common/constants/fileFormats.js`. Then add the listed excluded npm library in the web folder through `yarn add`.
+-   **Three.js Viewer CAD Support**: The Three.js viewer includes optional support for CAD formats (STEP, IGES, BREP) through the OpenCascade Technology (OCCT) library (opencascade.js). This library is licensed under LGPL-2.1 and is dynamically loaded on-demand from a CDN only when CAD format support is explicitly enabled. The feature is disabled by default. Organizations wishing to use CAD format support should review the LGPL-2.1 license terms and enable the feature through the viewer configuration. The OCCT library is not bundled with VAMS.
 
 ### Implementing pipelines outside of Lambda
 

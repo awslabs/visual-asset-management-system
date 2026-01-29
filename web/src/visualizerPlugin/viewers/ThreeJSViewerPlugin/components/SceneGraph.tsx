@@ -4,9 +4,9 @@
  */
 
 import React, { useCallback, useEffect, useState, useRef } from "react";
-import NeedleUSDTransformControls from "./NeedleUSDTransformControls";
-import NeedleUSDObjectMaterialAssignment from "./NeedleUSDObjectMaterialAssignment";
-import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
+import TransformControls from "./TransformControls";
+import ObjectMaterialAssignment from "./ObjectMaterialAssignment";
+import { MaterialLibraryItem } from "../ThreeJSMaterialLibrary";
 
 interface SceneNode {
     id: string;
@@ -34,10 +34,10 @@ interface UndoState {
     timestamp: number;
 }
 
-interface NeedleUSDSceneGraphProps {
+interface SceneGraphProps {
     scene: any;
     camera: any;
-    usdRoot: any; // Can be single group or array of groups
+    threeRoot: any; // Can be single group or array of groups
     controls: any;
     selectedObjects?: any[];
     onSelectObjects?: (objects: any[]) => void;
@@ -48,13 +48,12 @@ interface NeedleUSDSceneGraphProps {
     onMakeUnique: (objectUuid: string) => void;
     onCreateAndAssign: (objectUuid: string) => void;
     onEditMaterial: (materialId: string) => void;
-    animationPaused?: boolean;
 }
 
-const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
+const SceneGraph: React.FC<SceneGraphProps> = ({
     scene,
     camera,
-    usdRoot,
+    threeRoot,
     controls,
     selectedObjects: externalSelectedObjects = [],
     onSelectObjects,
@@ -65,7 +64,6 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     onMakeUnique,
     onCreateAndAssign,
     onEditMaterial,
-    animationPaused = true,
 }) => {
     const [sceneTree, setSceneTree] = useState<SceneNode[]>([]);
     const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -86,7 +84,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
 
     // Build scene tree from Three.js scene
     const buildSceneTree = useCallback(() => {
-        if (!usdRoot) return [];
+        if (!threeRoot) return [];
 
         try {
             const buildNode = (obj: any, isFileRoot: boolean = false): SceneNode => {
@@ -115,7 +113,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
             };
 
             // Handle both single group and array of groups
-            const fileGroups = Array.isArray(usdRoot) ? usdRoot : [usdRoot];
+            const fileGroups = Array.isArray(threeRoot) ? threeRoot : [threeRoot];
 
             // Build tree with file roots
             return fileGroups.map((group) => buildNode(group, true));
@@ -123,7 +121,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
             console.error("Error building scene tree:", error);
             return [];
         }
-    }, [usdRoot]);
+    }, [threeRoot]);
 
     // Refresh scene tree
     useEffect(() => {
@@ -419,10 +417,10 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     // Show/Hide all objects
     const setAllVisibility = useCallback(
         (visible: boolean) => {
-            if (!usdRoot) return;
+            if (!threeRoot) return;
 
             try {
-                const fileGroups = Array.isArray(usdRoot) ? usdRoot : [usdRoot];
+                const fileGroups = Array.isArray(threeRoot) ? threeRoot : [threeRoot];
 
                 fileGroups.forEach((group: any) => {
                     group.traverse((obj: any) => {
@@ -436,7 +434,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                 console.error("Error setting all visibility:", error);
             }
         },
-        [usdRoot, buildSceneTree]
+        [threeRoot, buildSceneTree]
     );
 
     // Render tree node recursively
@@ -545,6 +543,23 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                             ({node.children.length})
                         </span>
                     )}
+
+                    {/* Dependency Count for file roots */}
+                    {node.isFileRoot && node.object.userData?.dependencyCount !== undefined && (
+                        <span
+                            style={{
+                                fontSize: "0.7em",
+                                color: "#03A9F4",
+                                marginLeft: "6px",
+                                backgroundColor: "rgba(3, 169, 244, 0.2)",
+                                padding: "2px 6px",
+                                borderRadius: "3px",
+                            }}
+                            title={`${node.object.userData.dependencyCount} dependencies loaded`}
+                        >
+                            🔗 {node.object.userData.dependencyCount}
+                        </span>
+                    )}
                 </div>
 
                 {/* Render children if expanded */}
@@ -555,7 +570,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
         );
     };
 
-    if (!scene || !usdRoot) {
+    if (!scene || !threeRoot) {
         return null;
     }
 
@@ -656,7 +671,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                                     borderRadius: "4px",
                                 }}
                             >
-                                📁 {sceneTree.length} USD files loaded
+                                📁 {sceneTree.length} files loaded
                             </div>
                         )}
                         {sceneTree.map((node) => renderNode(node, 0))}
@@ -790,7 +805,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
 
                         {/* Transform Controls */}
                         {detailsTab === "transform" && (
-                            <NeedleUSDTransformControls
+                            <TransformControls
                                 selectedObject={externalSelectedObjects[0]}
                                 onTransformChange={(object: any, transform: any) => {
                                     // Save current state to undo stack
@@ -1014,13 +1029,12 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                                     console.log("Reset complete");
                                 }}
                                 canUndo={undoStack.length > 0}
-                                animationPlaying={!animationPaused}
                             />
                         )}
 
                         {/* Material Assignment */}
                         {detailsTab === "material" && (
-                            <NeedleUSDObjectMaterialAssignment
+                            <ObjectMaterialAssignment
                                 selectedObject={externalSelectedObjects[0]}
                                 materialLibrary={materialLibrary}
                                 onAssignMaterial={onAssignMaterial}
@@ -1270,7 +1284,8 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                                             ([key, value]) =>
                                                 !key.startsWith("_") &&
                                                 value !== null &&
-                                                value !== undefined
+                                                value !== undefined &&
+                                                key !== "dependencyCount" // Filter out our internal property
                                         );
 
                                         if (metadataEntries.length > 0) {
@@ -1411,4 +1426,4 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     );
 };
 
-export default NeedleUSDSceneGraph;
+export default SceneGraph;
