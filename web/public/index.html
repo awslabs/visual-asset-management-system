@@ -20,7 +20,13 @@
         <meta name="HandheldFriendly" content="true" />
         <meta name="theme-color" content="#000000" />
         <meta name="description" content="Visual Asset Management System" />
-        <script src="%PUBLIC_URL%/globalScripts/coi-serviceworker.js"></script>
+        <!-- 
+            COI Service Worker: Adds COOP/COEP headers for cross-origin isolation.
+            IMPORTANT: This script MUST be served from the root (not a subdirectory) 
+            to ensure the service worker can control all pages on the site.
+            Required for SharedArrayBuffer and WASM features.
+        -->
+        <script src="%PUBLIC_URL%/coi-serviceworker.js"></script>
         <script type="application/javascript">
             // Check if SharedArrayBuffer is available (required for WASM)
             if (typeof SharedArrayBuffer !== "undefined") {

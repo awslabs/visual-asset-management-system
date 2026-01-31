@@ -21,6 +21,9 @@ import * as Config from "../../../../config/config";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import { NagSuppressions } from "cdk-nag";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as path from "path";
+import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
 
 export interface AlbS3WebsiteAlbDeployConstructProps extends cdk.StackProps {
     /**
@@ -142,60 +145,66 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                 })
             );
 
-            //Create custom resource to get IP of Interface Endpoint (CDK doesn't support getting the IP directly)
+            //Create Lambda-backed custom resource to get unique VPC Endpoint IPs
+            //This prevents duplicate target errors and avoids CloudFormation response size limits
             //https://repost.aws/questions/QUjISNyk6aTA6jZgZQwKWf4Q/how-to-connect-a-load-balancer-and-an-interface-vpc-endpoint-together-using-cdk
-            for (let index = 0; index < props.albSubnets.length; index++) {
-                const getEndpointIp = new customResources.AwsCustomResource(
-                    this,
-                    `WebAppGetEndpointIP${index}`,
-                    {
-                        installLatestAwsSdk: false,
-                        onCreate: {
-                            service: "EC2",
-                            action: "describeNetworkInterfaces",
-                            outputPaths: [`NetworkInterfaces.${index}.PrivateIpAddress`],
-                            parameters: {
-                                NetworkInterfaceIds: s3VPCEndpoint.vpcEndpointNetworkInterfaceIds,
-                            },
-                            physicalResourceId: customResources.PhysicalResourceId.of(
-                                Date.now().toString()
-                            ),
-                        },
-                        onUpdate: {
-                            service: "EC2",
-                            action: "describeNetworkInterfaces",
-                            outputPaths: [`NetworkInterfaces.${index}.PrivateIpAddress`],
-                            parameters: {
-                                NetworkInterfaceIds: s3VPCEndpoint.vpcEndpointNetworkInterfaceIds,
-                            },
-                            physicalResourceId: customResources.PhysicalResourceId.of(
-                                Date.now().toString()
-                            ),
-                        },
-                        //DescribeNetworkInterfaces is a policy that requires '*' resource permissions as IAM has no resource-level permissions for this
-                        //https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-policy-structure.html#ec2-supported-iam-actions-resources
-                        //https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html#amazonec2-actions-as-permissions
-                        //https://stackoverflow.com/questions/67272918/specific-resource-aws-lambdathe-provided-execution-role-does-not-have-permiss
-                        policy: {
-                            statements: [
-                                new iam.PolicyStatement({
-                                    actions: ["ec2:DescribeNetworkInterfaces"],
-                                    resources: ["*"],
-                                }),
-                            ],
-                        },
-                    }
-                );
-                targetGroup1.addTarget(
-                    new elbv2_targets.IpTarget(
-                        getEndpointIp.getResponseField(
-                            `NetworkInterfaces.${index}.PrivateIpAddress`
-                        )
-                    )
-                );
+
+            // Create Lambda function for custom resource
+            const getVpcEndpointIpsFunction = new lambda.Function(
+                this,
+                "GetVpcEndpointIpsFunction",
+                {
+                    runtime: LAMBDA_PYTHON_RUNTIME,
+                    handler: "getVpcEndpointIps.lambda_handler",
+                    code: lambda.Code.fromAsset(
+                        path.join(__dirname, "../../../../../backend/backend/customResources")
+                    ),
+                    timeout: Duration.minutes(2),
+                    memorySize: 256,
+                }
+            );
+
+            // Grant permissions to describe network interfaces
+            getVpcEndpointIpsFunction.addToRolePolicy(
+                new iam.PolicyStatement({
+                    actions: ["ec2:DescribeNetworkInterfaces"],
+                    resources: ["*"],
+                })
+            );
+
+            // Create custom resource provider
+            const getVpcEndpointIpsProvider = new customResources.Provider(
+                this,
+                "GetVpcEndpointIpsProvider",
+                {
+                    onEventHandler: getVpcEndpointIpsFunction,
+                }
+            );
+
+            // Create custom resource
+            const getVpcEndpointIps = new cdk.CustomResource(this, "GetVpcEndpointIps", {
+                serviceToken: getVpcEndpointIpsProvider.serviceToken,
+                properties: {
+                    NetworkInterfaceIds: s3VPCEndpoint.vpcEndpointNetworkInterfaceIds,
+                },
+            });
+
+            // Get the comma-separated list of unique IPs
+            const ipAddressesList = getVpcEndpointIps.getAttString("IpAddresses");
+
+            // Split and add each IP as a target
+            // Note: We use Fn.split to handle the comma-separated list at deployment time
+            const ipAddresses = cdk.Fn.split(",", ipAddressesList);
+
+            // Add each IP as a target using a loop
+            // CloudFormation will resolve the actual IPs at deployment time
+            for (let i = 0; i < props.albSubnets.length; i++) {
+                const ipAddress = cdk.Fn.select(i, ipAddresses);
+                targetGroup1.addTarget(new elbv2_targets.IpTarget(ipAddress));
             }
         }
 
+        // Add target group to listener after all targets are added
         listener.addTargetGroups("WebAppTargetGroup1", {
             targetGroups: [targetGroup1],
         });

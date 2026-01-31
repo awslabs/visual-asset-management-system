@@ -39,27 +39,25 @@ OCCT (Open CASCADE Technology) support for CAD file formats (STEP, IGES, BREP) i
 
 ### ☁️ Deployment Requirements
 
-**⚠️ CRITICAL: CloudFront Required for OCCT**
+**⚠️ CRITICAL: Special Headers Required for OCCT**
 
-OCCT support **only works with CloudFront deployments** and will **fail with ALB-only deployments**.
-
-**Why CloudFront is Required:**
+**Why Headers are Required:**
 
 -   WASM files require specific HTTP headers
 -   CloudFront distributions are configured with proper WASM headers
--   ALB web deployments do not set WASM-specific headers
+-   ALB web deployments use a web service worker to try to set the headers
 -   Without proper headers, browsers will refuse to load WASM modules
 
 **Before Enabling OCCT:**
 
-1. Verify your VAMS deployment uses CloudFront for web content
-2. Confirm CloudFront is configured to serve static assets from S3
-3. Do NOT enable OCCT if using ALB-only deployment
+1. Verify your VAMS deployment is setting the web headers
 
 **Deployment Check:**
 
--   ✅ CloudFront + S3: OCCT will work
--   ❌ ALB only: OCCT will fail to load WASM
+-   ✅ Web headers found: OCCT will work
+-   ❌ Headers not found: OCCT will fail to load WASM
+
+-   Headers to check: "Cross-Origin-Embedder-Policy: credentialless" and "Cross-Origin-Opener-Policy: same-origin"
 
 ## Implementation Details
 

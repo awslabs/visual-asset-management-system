@@ -17,10 +17,28 @@ export const getAmplifyConfig = async () => {
         );
         console.log(amplifyConfigUrl.href);
         const response = await fetch(amplifyConfigUrl);
-        return response.json();
+
+        if (!response.ok) {
+            console.error("getAmplifyConfig: HTTP error", response.status, response.statusText);
+            // Return null on error - don't return corrupted data
+            // This allows the caller to detect the error and not cache bad data
+            return null;
+        }
+
+        const config = await response.json();
+
+        // Validate that we got a proper config object (not an error response)
+        if (!config || typeof config !== "object" || Array.isArray(config)) {
+            console.error("getAmplifyConfig: Invalid config response", config);
+            return null;
+        }
+
+        return config;
     } catch (error) {
-        console.log(error);
-        return [false, error?.message];
+        console.error("getAmplifyConfig: Fetch error", error);
+        // Return null on error - don't return corrupted data like [false, error.message]
+        // This prevents caching invalid data that would cause crashes
+        return null;
     }
 };
 

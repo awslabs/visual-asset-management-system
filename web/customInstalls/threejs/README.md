@@ -37,15 +37,15 @@ By default, OCCT support for CAD file formats (STEP, IGES, BREP) is **disabled**
 2. **Consult your legal team**: Ensure LGPL is acceptable for your deployment
 3. **Document the decision**: Keep records of why OCCT support was enabled
 
-**⚠️ DEPLOYMENT REQUIREMENT: CloudFront Only**
+**⚠️ DEPLOYMENT REQUIREMENT: Special Web Headers**
 
-OCCT support **requires CloudFront deployment** and will **not work with ALB-only deployments**. This is because:
+OCCT support **requires special headers** and will **not work with if not being set due to any restrictions**. This is because:
 
 -   WASM files require specific HTTP headers ()
--   These headers are currently only configured for CloudFront distributions
--   ALB web deployments do not set the required WASM headers
+-   These headers are configured for CloudFront distributions and/or to run a web service worker script in index.html for ALB deployments
+-   Headers Needed: "Cross-Origin-Embedder-Policy: credentialless" and "Cross-Origin-Opener-Policy: same-origin"
 
-**Before enabling OCCT, verify your deployment uses CloudFront for web content delivery.**
+**Before enabling OCCT, verify your deployment has these headers set properly during web page load.**
 
 ### Steps to Enable OCCT Support
 

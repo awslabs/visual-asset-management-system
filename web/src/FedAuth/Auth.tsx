@@ -134,7 +134,7 @@ interface Config {
     locationServiceApiUrl?: string;
 
     /**
-     * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
+     * Content Security Policy to apply (generally for ALB deployment where CSP may not be injected)
      */
     contentSecurityPolicy?: string;
 
@@ -328,6 +328,20 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Fetch && Setup Initial global configurations
     useEffect(() => {
         if (config) {
+            // Validate that config is a proper object with required fields
+            // This prevents crashes from corrupted cache data (e.g., from interrupted API calls)
+            if (
+                typeof config !== "object" ||
+                Array.isArray(config) ||
+                !config.api ||
+                !config.region
+            ) {
+                console.error("Invalid config detected, clearing cache and refetching:", config);
+                Cache.removeItem("config");
+                setConfig(null);
+                return;
+            }
+
             //Set global variables for cognito mode or external OAUTH.
             //If config.config.cognitoUserPoolId is undefined or empty, then disable cognito and setup external oauth
             if (
@@ -354,9 +368,26 @@ const Auth: React.FC<AuthProps> = (props) => {
             //Configure Amplify
             configureAmplify(config, setAmpInit);
         } else {
-            getAmplifyConfig().then(async (config) => {
-                Cache.setItem("config", config);
-                setConfig(config);
+            getAmplifyConfig().then(async (fetchedConfig) => {
+                // Only cache and set config if we got a valid response
+                // getAmplifyConfig now returns null on error instead of corrupted data
+                if (
+                    fetchedConfig &&
+                    typeof fetchedConfig === "object" &&
+                    !Array.isArray(fetchedConfig) &&
+                    fetchedConfig.api
+                ) {
+                    Cache.setItem("config", fetchedConfig);
+                    setConfig(fetchedConfig);
+                } else {
+                    console.error("Failed to fetch valid config from API:", fetchedConfig);
+                    // Set config to a special error state to show the error page
+                    setConfig({
+                        _configError: true,
+                        _errorMessage:
+                            "Failed to load VAMS configuration. Please refresh the page or contact your administrator.",
+                    });
+                }
             });
         }
     }, [ampInit, config, setConfig]);
@@ -646,7 +677,89 @@ const Auth: React.FC<AuthProps> = (props) => {
     }, [ampInit]);
 
     //Initial loading screen when going through config init
-    if (config === null || !ampInit) {
+    if (config === null) {
+        return (
+            <CenteredBox>
+                <p className="explanation">One moment please ...</p>
+            </CenteredBox>
+        );
+    }
+
+    // Show error page if config failed to load
+    if (config._configError) {
+        return (
+            <>
+                <GlobalHeader authorizationHeader={true} />
+                <div
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        minHeight: "80vh",
+                    }}
+                >
+                    <div className={styles.container}>
+                        <div className={styles.centeredBox}>
+                            <Heading level={3}>
+                                <img
+                                    style={{ width: "100%" }}
+                                    src={logoDarkImageSrc}
+                                    alt="Visual Asset Management System Logo"
+                                />
+                            </Heading>
+                            <Alert
+                                type="error"
+                                statusIconAriaLabel="Error"
+                                header="Configuration Error"
+                            >
+                                {config._errorMessage || "Failed to load VAMS configuration."}
+                                <br />
+                                <br />
+                                <strong>Possible causes:</strong>
+                                <ul style={{ margin: "8px 0", paddingLeft: "20px" }}>
+                                    <li>The backend API is not responding</li>
+                                    <li>Network connectivity issues</li>
+                                    <li>The page was reloaded during initialization</li>
+                                </ul>
+                                <strong>Try:</strong>
+                                <ul style={{ margin: "8px 0", paddingLeft: "20px" }}>
+                                    <li>Refreshing the page</li>
+                                    <li>Clearing your browser cache and cookies</li>
+                                    <li>Contacting your administrator if the issue persists</li>
+                                </ul>
+                            </Alert>
+                            <Box padding={{ top: "l" }}>
+                                <Button
+                                    variant="primary"
+                                    onClick={() => {
+                                        // Clear the cached config and reload
+                                        Cache.removeItem("config");
+                                        window.location.reload();
+                                    }}
+                                >
+                                    Retry
+                                </Button>
+                            </Box>
+                        </div>
+                    </div>
+                    <img
+                        alt="background texture"
+                        src={loginBgImageSrc}
+                        style={{
+                            position: "fixed",
+                            top: 0,
+                            width: "100vw",
+                            left: 0,
+                            zIndex: "-100",
+                        }}
+                    />
+                </div>
+            </>
+        );
+    }
+
+    // Wait for Amplify to initialize
+    if (!ampInit) {
         return (
             <CenteredBox>
                 <p className="explanation">One moment please ...</p>

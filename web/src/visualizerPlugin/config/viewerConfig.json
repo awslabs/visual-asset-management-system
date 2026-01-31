@@ -286,7 +286,6 @@
             "canFullscreen": true,
             "priority": 1,
             "dependencies": ["usd-wasm", "three"],
-            "featuresEnabledRestriction": ["CLOUDFRONTDEPLOY"],
             "loadStrategy": "lazy",
             "category": "3d",
             "enabled": true

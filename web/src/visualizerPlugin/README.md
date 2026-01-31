@@ -253,7 +253,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Dependencies**: `@needle-tools/engine` (WebAssembly-based)
 -   **Priority**: 1
 -   **Category**: 3d
--   **Note**: ⚠️ **Requires CloudFront deployment** - This viewer uses WebAssembly (WASM) and currently only works with CloudFront deployments, not ALB deployments (which means it's not available in GovCloud). Local debugging is supported.
+-   **Note**: ⚠️ **Requires CloudFront deployment** - This viewer uses WebAssembly (WASM) and requires headers to be set by either CloudFront or the implemented COI web service worker script. Local debugging is supported.
 
 ## 🚀 Usage
 

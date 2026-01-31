@@ -11,18 +11,23 @@ All notable changes to this project will be documented in this file. See [standa
 ### Features
 
 -   **Web** Added new open-source Needle USD 3D WASM Web Viewer to the viewer plugin system for `.usd, .usda, .usdc, .usdz` files. Supports full dependency chain loading of files although Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
-    -   Note: This viewer requires web deployment with Cloudfront; ALB web deployment (with direct S3 serving) has restrictions for adding required headers and will not currently work. Creates `CLOUDFRONTDEPLOY` feature enablement flag to track this to properly enable/disable the viewer for availability. This means this viewer will also not curently work for GovCloud environments.
+    -   Note: Uses WASM which relies on either the Cloudfront deployment mode or the newly implemented front-end service worker to set proper https headers to allow WASM to load. If these are not set due to additional organizational security restrictions, this viewer will not load.
 -   **Web** Added new open-source ThreeJS 3D Web Viewer to the viewer plugin system for `.gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep` files. Supports full dependency chain loading of files and scene graph support. ThreeJS will now be the first primary viewer of choice for most common mesh file types. Additional libraries need to be installed to support CAD file types that are LGPL licensed and requires WASM support (see ./web/customInstalls/threejs/README.md for information).
-    -   Note: This viewer when installed with the CAD library requires web deployment with Cloudfront for viewing CAD files; ALB web deployment (with direct S3 serving) has restrictions for adding required headers and will not currently work. Uses `CLOUDFRONTDEPLOY` feature enablement flag to track this to properly enable/disable the viewer for availability. This means this viewer for CAD file types will also not curently work for GovCloud environments. If CAD library is enabled and WASM is not, you can still use it in non-WASM deployment environments for viewing non-CAD.
+    -   Note: The CAD loading uses WASM which relies on either the Cloudfront deployment mode or using the newly implemented front-end service worker to set proper https headers to allow WASM to load. If these are not set due to additional organizational security restrictions, this viewer will simply not work for CAD extensions however will still work with the other mesh extensions viewed.
 -   **Web** Online3DViewer web viewer configuration has been adjusted to only show up for the 3D files types of `.3dm, .amf, .bim, .off, .wrl`, these file types are currently not supported by the ThreeJS viewer.
 
 ### Bug Fixes
 
 -   Permission constraints now allow `GLOBAL` as an input for criteria field values, previously this threw a API validation error
+-   Revised CDK deployment code for the ALB website to try to fix a rare-recurring error when deploying that ALB targets need a unique IP list (issue with how custom resources were fetching subnet IPs and applying them)
+-   **Web** Updated web initial amplify config logic to properly error if the API config cannot be fetched and not to set error valued config into cookies, causing future reloads to use the errored config (and not refetch the API) without a cookie/cache reset.
 
 ### Chores
 
--   **Web** Added service worker and proxy to manually set header flags for local debugging and/or attempt to set for CDN deployment. Currently verified to work for local debugging so web assembly (WASM) components can be viewed.
+-   Created `CLOUDFRONTDEPLOY` feature enablement flag to let the front-end know the type of web deployment the website is being served under
+-   **Web** Added service worker and proxy to manually set header flags for both local debugging and/or to set for website deployment to allow features like WebAssembly (WASM) loading.
+-   Added additional validation checks to the APIs regarding creating workflows and workflow execution
+-   Added featuresEnabled dynamoDB table writing check during CDK deployment to de-deplicate and overwrite existing values
 
 ### Known Outstanding Issues
 

@@ -546,6 +546,16 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
+        
+        # Validate that workflow database ID is either "GLOBAL" or matches asset database ID
+        asset_database_id = pathParams['databaseId']
+        workflow_database_id = request_body.get('workflowDatabaseId', '')
+        
+        if workflow_database_id != 'GLOBAL' and workflow_database_id != asset_database_id:
+            logger.error(f"Workflow database ID validation failed. Workflow can only be executed on assets from the same database or from global workflows.")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({'message': 'Workflow can only be executed on assets from the same database or from global workflows'})
+            return response
 
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
@@ -590,6 +600,7 @@ def lambda_handler(event, context):
                                 workflow_allowed = True
 
                         if workflow_allowed:
+                            
                             (status, pipelineName) = validate_pipelines(workflow)
                             if not status:
                                 logger.error("Not all pipelines are enabled/accessible")

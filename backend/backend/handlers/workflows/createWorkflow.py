@@ -595,38 +595,7 @@ def lambda_handler(event, context):
                 response['body'] = json.dumps({"message": message})
                 logger.error(response)
                 return response
-
-            pipelineArray = []
-            for pipeline in event['body']['specifiedPipelines']['functions']:
-                logger.info("pipeline in workflow creation: ")
-                logger.info(pipeline)
-                # If global workflow, included pipeline should also be global
-                if event['body']['databaseId'] == "GLOBAL":
-                    if pipeline['databaseId'] != "GLOBAL":
-                        response['statusCode'] = 400
-                        response['body'] = json.dumps({"message": "Only global pipelines are allowed in global workflows."})
-                        return response
-                # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline:
-                pipeline_allowed = False
-                pipeline.update({
-                    "object__type": "pipeline",
-                    "databaseId": event['body']['databaseId'],
-                    "pipelineId": pipeline['name'],
-                    "pipelineType": pipeline['pipelineType'],
-                    "pipelineExecutionType": pipeline['pipelineExecutionType'],
-                })
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if casbin_enforcer.enforce(pipeline, "GET"):
-                        pipeline_allowed = True
-
-                if pipeline_allowed:
-                    pipelineArray.append(pipeline['name'])
-                else:
-                    response['statusCode'] = 403
-                    response['body'] = json.dumps({"message": "Not Authorized to read the pipeline"})
-                    return response
-
+            
             # Check for missing fields
             required_field_names = ['databaseId', 'workflowId', 'description']
             missing_field_names = list(set(required_field_names).difference(event['body']))
@@ -672,6 +641,43 @@ def lambda_handler(event, context):
                     response['body'] = json.dumps({"message": message})
                     logger.error(response)
                     return response
+
+            pipelineArray = []
+            for pipeline in event['body']['specifiedPipelines']['functions']:
+                logger.info("pipeline in workflow creation: ")
+                logger.info(pipeline)
+                # If global workflow, included pipeline should also be global
+                if event['body']['databaseId'] == "GLOBAL":
+                    if pipeline['databaseId'] != "GLOBAL":
+                        response['statusCode'] = 400
+                        response['body'] = json.dumps({"message": "Only global pipelines are allowed in global workflows."})
+                        return response
+                else:
+                    if pipeline['databaseId'] != "GLOBAL" and event['body']['databaseId'] != pipeline['databaseId']:
+                        response['statusCode'] = 400
+                        response['body'] = json.dumps({"message": "Only global or same database pipelines are allowed in a database specifc workflows."})
+                        return response
+                # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline:
+                pipeline_allowed = False
+                pipeline.update({
+                    "object__type": "pipeline",
+                    "databaseId": event['body']['databaseId'],
+                    "pipelineId": pipeline['name'],
+                    "pipelineType": pipeline['pipelineType'],
+                    "pipelineExecutionType": pipeline['pipelineExecutionType'],
+                })
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(pipeline, "GET"):
+                        pipeline_allowed = True
+
+                if pipeline_allowed:
+                    pipelineArray.append(pipeline['name'])
+                else:
+                    response['statusCode'] = 403
+                    response['body'] = json.dumps({"message": "Not Authorized to read the pipeline"})
+                    return response
+
 
             logger.info("Validating workflow authorization")
             workflow_allowed = False
