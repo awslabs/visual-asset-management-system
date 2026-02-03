@@ -16,6 +16,9 @@ interface DependencyLoaderConfig {
     databaseId: string;
     baseFileKey: string;
     apiEndpoint: string;
+    // Note: versionId is intentionally NOT included here.
+    // Dependencies are always loaded without versionId because they are
+    // part of the same asset version as the main file.
 }
 
 /**
@@ -84,7 +87,11 @@ async function downloadDependency(
     // Construct streaming URL
     const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
     const encodedPath = encodedSegments.join("/");
-    const url = `${config.apiEndpoint}database/${config.databaseId}/assets/${config.assetId}/download/stream/${encodedPath}`;
+    let url = `${config.apiEndpoint}database/${config.databaseId}/assets/${config.assetId}/download/stream/${encodedPath}`;
+
+    // Note: versionId is intentionally NOT passed for dependencies.
+    // Dependencies are always loaded without versionId because they are
+    // part of the same asset version as the main file.
 
     console.log(`Downloading dependency: ${relativePath} -> ${url}`);
 
@@ -126,30 +133,41 @@ export async function preloadGLTFDependencies(
 
         console.log(`Found ${dependencies.length} dependencies in GLTF`);
 
-        // Download all dependencies and create blob URLs
+        // Download all dependencies in parallel (5 concurrent) and create blob URLs
         const dependencyMap = new Map<string, string>();
+        const PARALLEL_LIMIT = 5;
+        let downloadedCount = 0;
 
-        for (let i = 0; i < dependencies.length; i++) {
-            const dep = dependencies[i];
-            try {
-                if (onProgress) {
-                    onProgress(i + 1, dependencies.length);
+        for (let i = 0; i < dependencies.length; i += PARALLEL_LIMIT) {
+            const batch = dependencies.slice(i, i + PARALLEL_LIMIT);
+
+            const batchPromises = batch.map(async (dep) => {
+                try {
+                    const arrayBuffer = await downloadDependency(dep, config, authHeader);
+                    const blob = new Blob([arrayBuffer]);
+                    const blobUrl = URL.createObjectURL(blob);
+                    dependencyMap.set(dep, blobUrl);
+                    blobUrls.push(blobUrl);
+
+                    downloadedCount++;
+                    if (onProgress) {
+                        onProgress(downloadedCount, dependencies.length);
+                    }
+
+                    console.log(
+                        `Downloaded dependency ${downloadedCount}/${dependencies.length}: ${dep} (${arrayBuffer.byteLength} bytes)`
+                    );
+                } catch (error) {
+                    console.warn(`Failed to download dependency ${dep}:`, error);
+                    // Continue with other dependencies
+                    downloadedCount++;
+                    if (onProgress) {
+                        onProgress(downloadedCount, dependencies.length);
+                    }
                 }
+            });
 
-                const arrayBuffer = await downloadDependency(dep, config, authHeader);
-                const blob = new Blob([arrayBuffer]);
-                const blobUrl = URL.createObjectURL(blob);
-                dependencyMap.set(dep, blobUrl);
-                blobUrls.push(blobUrl);
-                console.log(
-                    `Downloaded dependency ${i + 1}/${dependencies.length}: ${dep} (${
-                        arrayBuffer.byteLength
-                    } bytes)`
-                );
-            } catch (error) {
-                console.warn(`Failed to download dependency ${dep}:`, error);
-                // Continue with other dependencies
-            }
+            await Promise.all(batchPromises);
         }
 
         // Replace URIs in GLTF JSON with blob URLs

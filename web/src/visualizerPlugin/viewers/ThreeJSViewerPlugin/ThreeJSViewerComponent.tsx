@@ -20,6 +20,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     multiFileKeys,
+    versionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [config] = useState(Cache.getItem("config"));
@@ -280,7 +281,13 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             encodeURIComponent(segment)
                         );
                         const encodedFileKey = encodedSegments.join("/");
-                        const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                        let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+
+                        // Add versionId query parameter for single file mode
+                        const isSingleFile = filesToLoad.length === 1;
+                        if (isSingleFile && versionId) {
+                            assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
+                        }
 
                         const response = await fetch(assetUrl, {
                             headers: { Authorization: authHeader },
@@ -294,6 +301,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         console.log(`Downloaded: ${fileName} (${arrayBuffer.byteLength} bytes)`);
 
                         // For GLTF files, pre-load dependencies
+                        // Note: Dependencies are loaded without versionId - they are part of the same asset version
                         if (fileExtension === "gltf") {
                             setLoadingMessage(`Resolving dependencies for ${fileName}...`);
                             const depResult = await preloadGLTFDependencies(
@@ -618,7 +626,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             ThreeJSDependencyManager.cleanup();
             console.log("ThreeJS Viewer: Cleanup complete");
         };
-    }, [threeReady, assetKey, multiFileKeys, assetId, databaseId, config]);
+    }, [threeReady, assetKey, multiFileKeys, assetId, databaseId, versionId, config]);
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {

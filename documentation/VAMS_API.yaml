@@ -1817,11 +1817,18 @@ paths:
                       type: string
                       pattern: ^bytes=\d+-\d*$
                       example: "bytes=200-1023"
+                - name: "versionId"
+                  in: "query"
+                  description: "Optional S3 version ID to stream a specific version of the file."
+                  required: false
+                  schema:
+                      type: string
+                      maxLength: 256
             security:
                 - DefaultCognitoAuthorizer: []
         head:
             summary: "Check asset file availability and permissions without downloading content."
-            description: "Check if an asset file exists and retrieve metadata headers without downloading file content. Uses S3 head_object for efficient metadata retrieval. Returns the same headers as GET but with empty body. Does not check file size thresholds or generate redirects. Requires asset to be distributable."
+            description: "Check if an asset file exists and retrieve metadata headers without downloading file content. Uses S3 head_object for efficient metadata retrieval. Returns the same headers as GET but with empty body. Does not check file size thresholds or generate redirects. Requires asset to be distributable. Supports optional versionId query parameter to check a specific S3 version."
             responses:
                 "200":
                     description: File exists and user has permission to access it.
@@ -1904,6 +1911,13 @@ paths:
                   required: true
                   schema:
                     type: "string"
+                - name: "versionId"
+                  in: "query"
+                  description: "Optional S3 version ID to check a specific version of the file."
+                  required: false
+                  schema:
+                      type: string
+                      maxLength: 256
             security:
                 - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}:

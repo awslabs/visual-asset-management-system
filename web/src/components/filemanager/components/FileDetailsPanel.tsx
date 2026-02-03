@@ -660,7 +660,20 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const folderName = selectedItem.name;
 
     const handleView = () => {
-        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
+        // Encode the relative path for the URL (for bookmarking/sharing)
+        // Remove leading slash if present since it's already in the URL structure
+        const pathForUrl = selectedItem.relativePath.startsWith("/")
+            ? selectedItem.relativePath.substring(1)
+            : selectedItem.relativePath;
+        const encodedPath = encodeURIComponent(pathForUrl);
+
+        // Build URL with optional version query parameter
+        let url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}`;
+        if (selectedItem.versionId) {
+            url += `?version=${encodeURIComponent(selectedItem.versionId)}`;
+        }
+
+        navigate(url, {
             state: {
                 filename: selectedItem.name,
                 key: selectedItem.keyPrefix,

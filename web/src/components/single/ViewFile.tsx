@@ -20,7 +20,7 @@ import {
     SpaceBetween,
     Spinner,
 } from "@cloudscape-design/components";
-import { useLocation, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 
 import FileMetadata from "../metadata/FileMetadata";
 import { fetchAsset, fetchFileInfo } from "../../services/APIService";
@@ -90,6 +90,7 @@ interface Asset {
 
 export default function ViewFile() {
     const location = useLocation();
+    const navigate = useNavigate();
     const { state } = location as { state: ViewFileState };
     const { databaseId, assetId, pathViewType } = useParams<{
         databaseId: string;
@@ -134,17 +135,25 @@ export default function ViewFile() {
     const [isLoadingDirectPath, setIsLoadingDirectPath] = useState(isDirectPathAccess);
     const [directPathError, setDirectPathError] = useState<string | null>(null);
     const [loadedFileInfo, setLoadedFileInfo] = useState<FileInfo | null>(null);
+    // State for on-demand version loading when state is passed without versionId
+    const [isLoadingVersionInfo, setIsLoadingVersionInfo] = useState(false);
 
     // Determine if we're in multi-file mode
     const isMultiFileMode = state?.files && state.files.length > 1;
     const currentFiles = isMultiFileMode ? state.files! : [];
 
     // For single file mode, use existing logic or loaded file info
+    // Priority:
+    // 1. state with versionId (from navigation with full data) - use state directly
+    // 2. state without versionId but loadedFileInfo has versionId (version was fetched on-demand) - use loadedFileInfo
+    // 3. state without versionId and no loadedFileInfo - use state (will trigger version fetch)
+    // 4. loadedFileInfo (from direct URL access) - use loadedFileInfo
+    // 5. fallback empty object
     const singleFileInfo = isMultiFileMode
         ? null
-        : loadedFileInfo
-        ? loadedFileInfo
-        : {
+        : state?.key && state?.versionId
+        ? {
+              // State has full data including versionId - use it directly
               filename: state?.filename || "",
               key: state?.key || "",
               isDirectory: state?.isDirectory || false,
@@ -154,6 +163,35 @@ export default function ViewFile() {
               isArchived: state?.isArchived,
               primaryType: state?.primaryType,
               previewFile: state?.previewFile,
+          }
+        : state?.key && !state?.versionId && loadedFileInfo?.versionId
+        ? // State has key but no versionId, and we've fetched version info - use loadedFileInfo
+          loadedFileInfo
+        : state?.key
+        ? {
+              // State has key but no versionId yet (version fetch in progress or not started)
+              filename: state?.filename || "",
+              key: state?.key || "",
+              isDirectory: state?.isDirectory || false,
+              versionId: undefined, // Will be populated by version fetch
+              size: state?.size,
+              dateCreatedCurrentVersion: state?.dateCreatedCurrentVersion,
+              isArchived: state?.isArchived,
+              primaryType: state?.primaryType,
+              previewFile: state?.previewFile,
+          }
+        : loadedFileInfo
+        ? loadedFileInfo
+        : {
+              filename: "",
+              key: "",
+              isDirectory: false,
+              versionId: undefined,
+              size: undefined,
+              dateCreatedCurrentVersion: undefined,
+              isArchived: undefined,
+              primaryType: undefined,
+              previewFile: undefined,
           };
 
     // Check if any files are archived
@@ -353,6 +391,93 @@ export default function ViewFile() {
         loadFileFromDirectPath();
     }, [isDirectPathAccess, databaseId, assetId, urlFilePath, urlVersion]);
 
+    // Fetch version info when state is passed but versionId is missing
+    useEffect(() => {
+        const loadVersionInfo = async () => {
+            // Only run if:
+            // 1. We have state with a key (navigated from file manager)
+            // 2. But no versionId (file manager hadn't loaded full data yet)
+            // 3. Not in multi-file mode
+            // 4. Not already loading
+            if (
+                !state?.key ||
+                state?.versionId ||
+                isMultiFileMode ||
+                isLoadingVersionInfo ||
+                isLoadingDirectPath
+            ) {
+                return;
+            }
+
+            console.log("State passed without versionId, fetching version info for:", state.key);
+            setIsLoadingVersionInfo(true);
+
+            try {
+                const [success, fileInfoResponse] = await fetchFileInfo({
+                    databaseId: databaseId!,
+                    assetId: assetId!,
+                    fileKey: state.key,
+                    includeVersions: true,
+                });
+
+                if (success && fileInfoResponse) {
+                    let fileInfo: any;
+                    if (typeof fileInfoResponse === "string") {
+                        try {
+                            fileInfo = JSON.parse(fileInfoResponse);
+                        } catch {
+                            fileInfo = fileInfoResponse;
+                        }
+                    } else {
+                        fileInfo = fileInfoResponse;
+                    }
+
+                    // Get the latest version from versions array
+                    let latestVersionId: string | undefined;
+                    if (fileInfo.versions && fileInfo.versions.length > 0) {
+                        const latestVersion = fileInfo.versions.find((v: any) => v.isLatest);
+                        latestVersionId =
+                            latestVersion?.versionId || fileInfo.versions[0]?.versionId;
+                    } else if (fileInfo.versionId) {
+                        latestVersionId = fileInfo.versionId;
+                    }
+
+                    if (latestVersionId) {
+                        console.log("Found latest version:", latestVersionId);
+                        // Update loadedFileInfo with the version info
+                        // This will be used by singleFileInfo since state doesn't have versionId
+                        setLoadedFileInfo({
+                            filename: state.filename || fileInfo.fileName || "",
+                            key: state.key,
+                            isDirectory: state.isDirectory || false,
+                            versionId: latestVersionId,
+                            size: state.size || fileInfo.size,
+                            dateCreatedCurrentVersion:
+                                state.dateCreatedCurrentVersion || fileInfo.lastModified,
+                            isArchived: state.isArchived || fileInfo.isArchived,
+                            primaryType: state.primaryType || fileInfo.primaryType,
+                            previewFile: state.previewFile || fileInfo.previewFile,
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error("Error fetching version info:", error);
+            } finally {
+                setIsLoadingVersionInfo(false);
+            }
+        };
+
+        loadVersionInfo();
+    }, [
+        state?.key,
+        state?.versionId,
+        isMultiFileMode,
+        isLoadingVersionInfo,
+        isLoadingDirectPath,
+        databaseId,
+        assetId,
+    ]);
+
     useEffect(() => {
         const getData = async () => {
             if (databaseId && assetId) {
@@ -397,6 +522,66 @@ export default function ViewFile() {
             getData();
         }
     }, [reload, assetId, databaseId, pathViewType]);
+
+    // Update URL when version changes to keep URL copy/paste accurate
+    useEffect(() => {
+        // Only update URL for single file mode with a valid file key and version
+        if (isMultiFileMode || !singleFileInfo?.key || !singleFileInfo?.versionId) {
+            return;
+        }
+
+        // Don't update during initial loading
+        if (isLoadingDirectPath) {
+            return;
+        }
+
+        // Get the relative path from the file key
+        // The key format is typically: assetId/relativePath
+        // We need to extract just the relativePath part
+        const keyParts = singleFileInfo.key.split("/");
+        // Remove the first part (assetId) if it matches
+        let relativePath = singleFileInfo.key;
+        if (keyParts.length > 1 && keyParts[0] === assetId) {
+            relativePath = keyParts.slice(1).join("/");
+        }
+
+        // Encode the path for URL
+        const encodedPath = encodeURIComponent(relativePath);
+
+        // Build the new URL with version query parameter
+        const newUrl = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}?version=${encodeURIComponent(
+            singleFileInfo.versionId
+        )}`;
+
+        // Get current URL path and query
+        const currentPath = location.pathname;
+        const currentSearch = location.search;
+        const currentFullPath = currentPath + currentSearch;
+
+        // Only update if the URL has changed (to avoid infinite loops)
+        // Compare the expected URL structure
+        const expectedPathBase = `/databases/${databaseId}/assets/${assetId}/file/`;
+        if (
+            currentPath.startsWith(expectedPathBase) ||
+            currentPath === `/databases/${databaseId}/assets/${assetId}/file`
+        ) {
+            const currentVersion = getVersionFromQuery();
+            if (currentVersion !== singleFileInfo.versionId) {
+                // Update URL without adding to history (replace)
+                navigate(newUrl, { replace: true });
+            }
+        }
+    }, [
+        singleFileInfo?.versionId,
+        singleFileInfo?.key,
+        databaseId,
+        assetId,
+        isMultiFileMode,
+        isLoadingDirectPath,
+        navigate,
+        location.pathname,
+        location.search,
+    ]);
 
     // Generate breadcrumb text
     const getBreadcrumbText = (): string => {

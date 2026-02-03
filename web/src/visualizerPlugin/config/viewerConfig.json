@@ -21,7 +21,7 @@
         {
             "id": "potree-viewer",
             "name": "Potree Viewer",
-            "description": "View point clouds using Potree. This requires the Potree pipeline to create Potree auxiliary preview files. ",
+            "description": "View point clouds using Potree. This requires the Potree pipeline to create Potree auxiliary preview files. Will always show the latest version of files only.",
             "componentPath": "./viewers/PotreeViewerPlugin/PotreeViewerComponent",
             "dependencyManager": "./viewers/PotreeViewerPlugin/dependencies",
             "dependencyManagerClass": "PotreeDependencyManager",
@@ -133,7 +133,7 @@
         {
             "id": "cesium-viewer",
             "name": "Cesium 3D Tileset Viewer",
-            "description": "View 3D Tileset files (.json) using CesiumJS with streaming support and advanced geospatial capabilities",
+            "description": "View 3D Tileset files (.json) using CesiumJS with streaming support and advanced geospatial capabilities. Will always show the latest version of files only.",
             "componentPath": "./viewers/CesiumViewerPlugin/CesiumViewerComponent",
             "dependencyManager": "./viewers/CesiumViewerPlugin/dependencies",
             "dependencyManagerClass": "CesiumDependencyManager",
@@ -257,7 +257,7 @@
         {
             "id": "veerum-viewer",
             "name": "VEERUM 3D Viewer",
-            "description": "View Potree-converted point cloud files (.e57, .las, .laz, .ply) and 3D tilesets (.json) using VEERUM's advanced 3D viewer (LICENSED VIEWER)",
+            "description": "View Potree-converted point cloud files (.e57, .las, .laz, .ply) and 3D tilesets (.json) using VEERUM's advanced 3D viewer. Will always show the latest version of files only. (LICENSED VIEWER)",
             "componentPath": "./viewers/VeerumViewerPlugin/VeerumViewerComponent",
             "dependencyManager": "./viewers/VeerumViewerPlugin/dependencies",
             "dependencyManagerClass": "VeerumDependencyManager",
@@ -282,7 +282,7 @@
             "dependencyManagerMethod": "loadUSDViewer",
             "dependencyCleanupMethod": "cleanup",
             "supportedExtensions": [".usd", ".usda", ".usdc", ".usdz"],
-            "supportsMultiFile": true,
+            "supportsMultiFile": false,
             "canFullscreen": true,
             "priority": 1,
             "dependencies": ["usd-wasm", "three"],

@@ -12,9 +12,12 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Web** Added new open-source Needle USD 3D WASM Web Viewer to the viewer plugin system for `.usd, .usda, .usdc, .usdz` files. Supports full dependency chain loading of files although Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
     -   Note: Uses WASM which relies on either the Cloudfront deployment mode or the newly implemented front-end service worker to set proper https headers to allow WASM to load. If these are not set due to additional organizational security restrictions, this viewer will not load.
+    -   Note: Needle Viewer in our implementation has issues with loading dependencies from compressed (USDC) files as these cannot be reliabiliy parsed out ahead of time.
 -   **Web** Added new open-source ThreeJS 3D Web Viewer to the viewer plugin system for `.gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep` files. Supports full dependency chain loading of files and scene graph support. ThreeJS will now be the first primary viewer of choice for most common mesh file types. Additional libraries need to be installed to support CAD file types that are LGPL licensed and requires WASM support (see ./web/customInstalls/threejs/README.md for information).
     -   Note: The CAD loading uses WASM which relies on either the Cloudfront deployment mode or using the newly implemented front-end service worker to set proper https headers to allow WASM to load. If these are not set due to additional organizational security restrictions, this viewer will simply not work for CAD extensions however will still work with the other mesh extensions viewed.
 -   **Web** Online3DViewer web viewer configuration has been adjusted to only show up for the 3D files types of `.3dm, .amf, .bim, .off, .wrl`, these file types are currently not supported by the ThreeJS viewer.
+-   Updated the `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` GET API endpoint to support an optional `?versionId =` query parameter to specify the version being retrieved
+-   **Web** Updated Veerum Viewer to use the new streaming API endpoint query parameter for versionId, this will enable proper file version viewing.
 
 ### Bug Fixes
 
@@ -28,6 +31,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Added service worker and proxy to manually set header flags for both local debugging and/or to set for website deployment to allow features like WebAssembly (WASM) loading.
 -   Added additional validation checks to the APIs regarding creating workflows and workflow execution
 -   Added featuresEnabled dynamoDB table writing check during CDK deployment to de-deplicate and overwrite existing values
+-   Updated description of viewers that currently do not support showing non-current version files for the primary selected file (will always show the latest file).
 
 ### Known Outstanding Issues
 

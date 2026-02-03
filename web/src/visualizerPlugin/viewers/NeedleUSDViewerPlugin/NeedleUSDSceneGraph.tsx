@@ -280,18 +280,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
         };
     }, [isDragging]);
 
-    // Helper function to collect all descendants of a node
-    const collectAllDescendants = useCallback((node: SceneNode): any[] => {
-        const descendants: any[] = [node.object];
-        node.object.traverse((child: any) => {
-            if (child !== node.object) {
-                descendants.push(child);
-            }
-        });
-        return descendants;
-    }, []);
-
-    // Handle object selection
+    // Handle object selection - only select the clicked object, not its children
     const handleObjectClick = useCallback(
         (node: SceneNode, event: React.MouseEvent) => {
             if (!onSelectObjects) {
@@ -299,76 +288,44 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
                 return;
             }
 
-            // Collect all descendants if this is a group
-            const hasChildren = node.children.length > 0;
-            const objectsToSelect = hasChildren ? collectAllDescendants(node) : [node.object];
+            // Only select the clicked object itself, not its children
+            const objectToSelect = node.object;
 
-            // Check if any of the objects to select are already selected
-            const isAnySelected = objectsToSelect.some((obj) =>
-                externalSelectedObjects.some((selected) => selected.uuid === obj.uuid)
+            // Check if this object is already selected
+            const isSelected = externalSelectedObjects.some(
+                (selected) => selected.uuid === objectToSelect.uuid
             );
 
             if (event.ctrlKey) {
                 // Ctrl+Click: Add/remove from selection
-                if (isAnySelected) {
-                    // Remove all descendants from selection
-                    const uuidsToRemove = new Set(objectsToSelect.map((obj) => obj.uuid));
+                if (isSelected) {
+                    // Remove from selection
                     const newSelection = externalSelectedObjects.filter(
-                        (obj) => !uuidsToRemove.has(obj.uuid)
+                        (obj) => obj.uuid !== objectToSelect.uuid
                     );
-                    console.log(
-                        `Scene Graph: Removing ${objectsToSelect.length} object(s) from selection`,
-                        node.name
-                    );
+                    console.log(`Scene Graph: Removing from selection`, node.name);
                     onSelectObjects(newSelection);
                 } else {
-                    // Add all descendants to selection
-                    const existingUuids = new Set(externalSelectedObjects.map((obj) => obj.uuid));
-                    const newObjects = objectsToSelect.filter(
-                        (obj) => !existingUuids.has(obj.uuid)
-                    );
-                    console.log(
-                        `Scene Graph: Adding ${newObjects.length} object(s) to selection`,
-                        node.name
-                    );
-                    onSelectObjects([...externalSelectedObjects, ...newObjects]);
+                    // Add to selection
+                    console.log(`Scene Graph: Adding to selection`, node.name);
+                    onSelectObjects([...externalSelectedObjects, objectToSelect]);
                 }
             } else {
-                // Regular click: Replace selection
-                if (isAnySelected && externalSelectedObjects.length === objectsToSelect.length) {
-                    // Check if selection exactly matches - if so, deselect
-                    const selectionUuids = new Set(externalSelectedObjects.map((obj) => obj.uuid));
-                    const objectUuids = new Set(objectsToSelect.map((obj) => obj.uuid));
-                    const selectionArray = Array.from(selectionUuids);
-                    const exactMatch =
-                        selectionUuids.size === objectUuids.size &&
-                        selectionArray.every((uuid) => objectUuids.has(uuid));
-
-                    if (exactMatch) {
-                        console.log("Scene Graph: Deselecting", node.name);
-                        onSelectObjects([]);
-                        setUndoStack([]);
-                    } else {
-                        // Select this object/group only
-                        console.log(
-                            `Scene Graph: Selecting ${objectsToSelect.length} object(s)`,
-                            node.name
-                        );
-                        onSelectObjects(objectsToSelect);
-                        setUndoStack([]);
-                    }
+                // Regular click: Toggle or replace selection
+                if (isSelected && externalSelectedObjects.length === 1) {
+                    // Already selected and only selection - deselect
+                    console.log("Scene Graph: Deselecting", node.name);
+                    onSelectObjects([]);
+                    setUndoStack([]);
                 } else {
-                    // Select this object/group only
-                    console.log(
-                        `Scene Graph: Selecting ${objectsToSelect.length} object(s)`,
-                        node.name
-                    );
-                    onSelectObjects(objectsToSelect);
+                    // Select this object only
+                    console.log(`Scene Graph: Selecting`, node.name);
+                    onSelectObjects([objectToSelect]);
                     setUndoStack([]);
                 }
             }
         },
-        [externalSelectedObjects, onSelectObjects, collectAllDescendants]
+        [externalSelectedObjects, onSelectObjects]
     );
 
     // Handle object double-click (zoom to object)

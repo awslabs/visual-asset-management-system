@@ -204,8 +204,25 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         // Find the version to get its isArchived status
         const version = versions.find((v) => v.versionId === versionId);
 
-        // For EnhancedFileManager context without callback - navigate directly
-        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
+        // Get the relative path from the file path
+        // The filePath format is typically: assetId/relativePath
+        // We need to extract just the relativePath part
+        const pathParts = filePath.split("/");
+        let relativePath = filePath;
+        if (pathParts.length > 1 && pathParts[0] === assetId) {
+            relativePath = pathParts.slice(1).join("/");
+        }
+
+        // Encode the path for URL
+        const encodedPath = encodeURIComponent(relativePath);
+
+        // Build URL with version query parameter
+        const url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}?version=${encodeURIComponent(
+            versionId
+        )}`;
+
+        // Navigate with state for fast loading, URL for bookmarking/sharing
+        navigate(url, {
             state: {
                 filename: fileName,
                 key: filePath,

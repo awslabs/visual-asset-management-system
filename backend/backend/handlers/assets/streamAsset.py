@@ -136,13 +136,16 @@ def handle_head_request(event, claims_and_roles):
     
     Returns metadata headers without file content, following HTTP best practices.
     HEAD requests do not check file size thresholds or generate redirects.
+    Supports optional versionId query parameter to check a specific S3 version.
     """
     path_parameters = event.get('pathParameters', {})
+    query_parameters = event.get('queryStringParameters', {}) or {}
     
     # Get the object key which comes after the base path of the API Call
     assetId = path_parameters.get('assetId', "") 
     databaseId = path_parameters.get('databaseId', "") 
     object_key = path_parameters.get('proxy', "")
+    version_id = query_parameters.get('versionId')
     
     # Error if no object key in path
     if not object_key or object_key == None or object_key == "":
@@ -155,7 +158,7 @@ def handle_head_request(event, claims_and_roles):
         object_key = '/' + object_key
     
     logger.info("Validating parameters for HEAD request")
-    (valid, message) = validate({
+    validation_params = {
         'databaseId': {
             'value': databaseId,
             'validator': 'ID'
@@ -168,7 +171,17 @@ def handle_head_request(event, claims_and_roles):
             'value': object_key,
             'validator': 'RELATIVE_FILE_PATH'
         },
-    })
+    }
+    
+    # Validate versionId if provided
+    if version_id:
+        validation_params['versionId'] = {
+            'value': version_id,
+            'validator': 'STRING_256',
+            'optional': True
+        }
+    
+    (valid, message) = validate(validation_params)
     if not valid:
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
@@ -215,11 +228,19 @@ def handle_head_request(event, claims_and_roles):
     object_key = resolve_asset_file_path(asset_base_key, object_key)
     
     try:
+        # Build head_object parameters
+        head_params = {
+            'Bucket': asset_bucket,
+            'Key': object_key
+        }
+        
+        # Add versionId if provided to fetch specific version
+        if version_id:
+            head_params['VersionId'] = version_id
+            logger.info(f"HEAD request for specific version: {version_id}")
+        
         # Use head_object to get metadata without downloading file content
-        head_response = s3_client.head_object(
-            Bucket=asset_bucket,
-            Key=object_key
-        )
+        head_response = s3_client.head_object(**head_params)
         
         # Validate file extension and content type
         content_type = head_response.get('ContentType', 'application/octet-stream')
@@ -296,11 +317,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             range_header = ""
 
         path_parameters = event.get('pathParameters', {})
+        query_parameters = event.get('queryStringParameters', {}) or {}
 
         # Get the object key which comes after the base path of the API Call
         assetId = path_parameters.get('assetId', "") 
         databaseId = path_parameters.get('databaseId', "") 
-        object_key = path_parameters.get('proxy', "")  
+        object_key = path_parameters.get('proxy', "")
+        version_id = query_parameters.get('versionId')
 
         # Error if no object key in path
         if not object_key or object_key == None or object_key == "":
@@ -321,7 +344,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             object_key = '/' + object_key
 
         logger.info("Validating parameters")
-        (valid, message) = validate({
+        validation_params = {
             'databaseId': {
                 'value': databaseId,
                 'validator': 'ID'
@@ -334,7 +357,18 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 'value': object_key,
                 'validator': 'RELATIVE_FILE_PATH'
             },
-        })
+        }
+        
+        # Validate versionId if provided
+        if version_id:
+            validation_params['versionId'] = {
+                'value': version_id,
+                'validator': 'STRING_256',
+                'optional': True
+            }
+            logger.info(f"GET request for specific version: {version_id}")
+        
+        (valid, message) = validate(validation_params)
         if not valid:
             logger.error(message)
             return validation_error(body={'message': message}, event=event)
@@ -409,6 +443,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 'Key': object_key
             }
 
+            # Add versionId if provided to fetch specific version
+            if version_id:
+                s3_params['VersionId'] = version_id
+
             # Add the "Range" header to the S3 GetObject request if it exists
             if range_header and range_header != None and range_header != "":
                 s3_params['Range'] = range_header
@@ -458,7 +496,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         {
                             "streamType": "presigned_url_redirect",
                             "fileSize": content_length,
-                            "rangeHeader": range_header if range_header else None
+                            "rangeHeader": range_header if range_header else None,
+                            "versionId": version_id if version_id else None
                         }
                     )
                     
@@ -484,7 +523,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     {
                         "streamType": "direct_stream",
                         "fileSize": content_length,
-                        "rangeHeader": range_header if range_header else None
+                        "rangeHeader": range_header if range_header else None,
+                        "versionId": version_id if version_id else None
                     }
                 )
                 

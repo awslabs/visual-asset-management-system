@@ -19,6 +19,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     multiFileKeys,
+    versionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [config] = useState(Cache.getItem("config"));
@@ -27,6 +28,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
+    const [additionalDepsWarning, setAdditionalDepsWarning] = useState<{
+        loaded: number;
+        unresolved: number;
+    }>({ loaded: 0, unresolved: 0 });
     const viewerInstanceRef = useRef<any>(null);
     const [showPanel, setShowPanel] = useState(true);
     const [sceneReady, setSceneReady] = useState(false);
@@ -39,6 +44,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
     // Loading cancellation flag
     const loadingCancelledRef = useRef(false);
+
+    // Console override for WASM error capture (scoped to component lifecycle)
+    const originalConsoleWarnRef = useRef<typeof console.warn | null>(null);
+    const capturedWASMErrorsRef = useRef<string[]>([]);
 
     // Animation control (default to paused/off)
     const [animationPaused, setAnimationPaused] = useState(true);
@@ -180,254 +189,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         }
         initializationRef.current = true;
 
-        // PRESERVED: Original implementation using downloadAsset API (unused, kept for reference)
-        // This function downloads files using the downloadAsset API which requires pre-signed URLs.
-        // It has been replaced by loadAssets() which uses direct streaming URLs instead.
-        const loadAssetsFromDownloadAPI = async () => {
-            try {
-                setLoadingMessage("Loading USD Viewer dependencies...");
-                await NeedleUSDDependencyManager.loadUSDViewer();
-                console.log("USD Viewer dependencies loaded successfully");
-
-                setLoadingMessage("Initializing 3D scene...");
-
-                // Get dependencies from bundle (guaranteed to be available)
-                const bundle = NeedleUSDDependencyManager.getUSDBundle();
-                const THREE = bundle.THREE;
-                const ThreeRenderDelegateInterface = bundle.ThreeRenderDelegateInterface;
-                const getUsdModule = bundle.getUsdModule;
-
-                const scene = new THREE.Scene();
-                scene.background = new THREE.Color(0x333333);
-                const camera = new THREE.PerspectiveCamera(
-                    60,
-                    containerRef.current!.clientWidth / containerRef.current!.clientHeight,
-                    0.1,
-                    1000
-                );
-                camera.position.set(5, 5, 5);
-                const renderer = new THREE.WebGLRenderer({ antialias: true });
-                renderer.setSize(
-                    containerRef.current!.clientWidth,
-                    containerRef.current!.clientHeight
-                );
-                renderer.setPixelRatio(window.devicePixelRatio);
-                containerRef.current!.appendChild(renderer.domElement);
-
-                scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-                const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-                dirLight.position.set(5, 10, 7.5);
-                scene.add(dirLight);
-
-                setLoadingMessage("Initializing USD WASM module...");
-                const USD = await getUsdModule({
-                    locateFile: (path: string, prefix: string) =>
-                        (prefix || "/viewers/needletools_usd_viewer/") + path,
-                });
-
-                const filesToLoad =
-                    multiFileKeys && multiFileKeys.length > 0
-                        ? multiFileKeys
-                        : assetKey
-                        ? [assetKey]
-                        : [];
-                if (filesToLoad.length === 0) throw new Error("No files specified");
-
-                const loadedGroups: any[] = [];
-                const errors: Array<{ file: string; error: string }> = [];
-                const allDrivers: any[] = [];
-
-                for (let i = 0; i < filesToLoad.length; i++) {
-                    const fileKey = filesToLoad[i];
-                    const fileName = fileKey.split("/").pop() || `model_${i}.usd`;
-                    setLoadingMessage(
-                        `Downloading file ${i + 1}/${filesToLoad.length}: ${fileName}...`
-                    );
-
-                    try {
-                        const response = await downloadAsset({
-                            assetId,
-                            databaseId,
-                            key: fileKey,
-                            versionId: "",
-                            downloadType: "assetFile",
-                        });
-                        if (!response || !Array.isArray(response) || response[0] === false)
-                            throw new Error("Download failed");
-
-                        setLoadingMessage(
-                            `Loading file ${i + 1}/${filesToLoad.length}: ${fileName}...`
-                        );
-                        const fileResponse = await fetch(response[1]);
-                        if (!fileResponse.ok)
-                            throw new Error(`Fetch failed: ${fileResponse.statusText}`);
-
-                        const arrayBuffer = await fileResponse.arrayBuffer();
-                        const fileGroup = new THREE.Group();
-                        fileGroup.name = fileName;
-                        fileGroup.userData.sourceFile = fileKey;
-                        scene.add(fileGroup);
-
-                        const directory = `/file_${i}`;
-                        USD.FS_createPath("", directory, true, true);
-                        USD.FS_createDataFile(
-                            directory,
-                            fileName,
-                            new Uint8Array(arrayBuffer),
-                            true,
-                            true,
-                            true
-                        );
-
-                        const delegateConfig = {
-                            usdRoot: fileGroup,
-                            paths: [],
-                            driver: () => driver,
-                        };
-                        const renderInterface = new ThreeRenderDelegateInterface(delegateConfig);
-                        let driver = new USD.HdWebSyncDriver(
-                            renderInterface,
-                            directory + "/" + fileName
-                        );
-                        if (driver instanceof Promise) driver = await driver;
-
-                        driver.Draw();
-                        let stage = driver.GetStage();
-                        if (stage instanceof Promise) {
-                            stage = await stage;
-                            stage = driver.GetStage();
-                        }
-
-                        // Store animation timing information
-                        if (stage.GetEndTimeCode) {
-                            endTimeCodeRef.current = stage.GetEndTimeCode();
-                        }
-                        if (stage.GetTimeCodesPerSecond) {
-                            timeoutRef.current = 1000 / stage.GetTimeCodesPerSecond();
-                        }
-
-                        if (stage.GetUpAxis && String.fromCharCode(stage.GetUpAxis()) === "z") {
-                            fileGroup.rotation.x = -Math.PI / 2;
-                        }
-
-                        loadedGroups.push(fileGroup);
-                        allDrivers.push(driver);
-                    } catch (fileError: any) {
-                        errors.push({
-                            file: fileKey,
-                            error: fileError?.message || "Unknown error",
-                        });
-                    }
-                }
-
-                if (errors.length > 0) setFileErrors(errors);
-                if (loadedGroups.length === 0) throw new Error("No files loaded successfully");
-
-                setLoadedFileGroups(loadedGroups);
-                setLoadingMessage("Positioning camera...");
-
-                const combinedBox = new THREE.Box3();
-                loadedGroups.forEach((g) => combinedBox.union(new THREE.Box3().setFromObject(g)));
-                const size = combinedBox.getSize(new THREE.Vector3());
-                const center = combinedBox.getCenter(new THREE.Vector3());
-                const maxSize = Math.max(size.x, size.y, size.z);
-                const distance =
-                    1.5 *
-                    Math.max(
-                        maxSize / (2 * Math.tan((Math.PI * camera.fov) / 360)),
-                        maxSize / (2 * Math.tan((Math.PI * camera.fov) / 360)) / camera.aspect
-                    );
-
-                camera.position.set(distance, distance, distance);
-                camera.lookAt(center);
-                camera.near = distance / 100;
-                camera.far = distance * 100;
-                camera.updateProjectionMatrix();
-
-                const mouseControls = new MouseControls(camera, renderer.domElement, THREE);
-                mouseControls.setTarget(center.x, center.y, center.z);
-
-                raycasterRef.current = new THREE.Raycaster();
-                mouseRef.current = new THREE.Vector2();
-
-                const handleCanvasClick = (event: MouseEvent) => {
-                    if (mouseControls.hasMoved) {
-                        console.log("3D View: Ignoring click - camera was moved");
-                        return;
-                    }
-
-                    const rect = renderer.domElement.getBoundingClientRect();
-                    mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-                    mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-                    raycasterRef.current.setFromCamera(mouseRef.current, camera);
-                    const allChildren: any[] = [];
-                    loadedGroups.forEach((g) => allChildren.push(...g.children));
-                    const intersects = raycasterRef.current.intersectObjects(allChildren, true);
-
-                    if (intersects.length > 0) {
-                        const clickedObject = intersects[0].object;
-                        console.log(
-                            "3D View: Object clicked",
-                            clickedObject.name,
-                            "Ctrl:",
-                            event.ctrlKey
-                        );
-
-                        if (event.ctrlKey) {
-                            setSelectedObjects((prev) => {
-                                const exists = prev.find((obj) => obj.uuid === clickedObject.uuid);
-                                return exists
-                                    ? prev.filter((obj) => obj.uuid !== clickedObject.uuid)
-                                    : [...prev, clickedObject];
-                            });
-                        } else {
-                            setSelectedObjects([clickedObject]);
-                        }
-                    } else {
-                        console.log("3D View: Clicked empty space - keeping current selection");
-                    }
-                };
-
-                renderer.domElement.addEventListener("click", handleCanvasClick);
-
-                viewerInstanceRef.current = {
-                    scene,
-                    camera,
-                    renderer,
-                    drivers: allDrivers,
-                    USD,
-                    fileGroups: loadedGroups,
-                    controls: mouseControls,
-                    clickHandler: handleCanvasClick,
-                };
-
-                const animate = () => {
-                    requestAnimationFrame(animate);
-                    allDrivers.forEach((d) => d?.Draw?.());
-                    renderer.render(scene, camera);
-                };
-                animate();
-
-                setSceneReady(true);
-                window.addEventListener("resize", () => {
-                    if (containerRef.current) {
-                        camera.aspect =
-                            containerRef.current.clientWidth / containerRef.current.clientHeight;
-                        camera.updateProjectionMatrix();
-                        renderer.setSize(
-                            containerRef.current.clientWidth,
-                            containerRef.current.clientHeight
-                        );
-                    }
-                });
-
-                setIsLoading(false);
-            } catch (error) {
-                console.error("Error loading USD assets:", error);
-                setError(error instanceof Error ? error.message : "Failed to load USD files");
-                setIsLoading(false);
-            }
-        };
 
         // ============================================================================
         // WASM FILESYSTEM CLEANUP
@@ -547,6 +308,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
         /**
          * Clean file path extracted from binary data
+         * Preserves relative path prefixes like ./ and ../
          */
         const cleanFilePath = (path: string): string | null => {
             let cleaned = path.trim();
@@ -554,18 +316,38 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             // Remove @ symbols
             cleaned = cleaned.replace(/@/g, "");
 
-            // Remove leading/trailing non-path characters
-            cleaned = cleaned.replace(/^[^a-zA-Z0-9._\/]+/, "");
-            cleaned = cleaned.replace(/[^a-zA-Z0-9._\/]+$/, "");
+            // Remove leading non-path characters BUT preserve ./ and ../
+            // First, check if it starts with relative path indicators
+            const startsWithRelative = cleaned.startsWith("./") || cleaned.startsWith("../");
 
-            // Must have a filename (not just extension)
-            const parts = cleaned.split("/");
-            const fileName = parts[parts.length - 1];
-            if (!fileName || fileName.startsWith(".")) {
-                return null; // Invalid: no filename or just extension
+            if (!startsWithRelative) {
+                // Remove leading non-path characters (but keep . for relative paths)
+                cleaned = cleaned.replace(/^[^a-zA-Z0-9._\/]+/, "");
             }
 
-            // Must contain at least one path separator or be a simple filename
+            // Remove trailing non-path characters
+            cleaned = cleaned.replace(/[^a-zA-Z0-9._\/]+$/, "");
+
+            // Must have a filename (not just extension or directory)
+            const parts = cleaned.split("/");
+            const fileName = parts[parts.length - 1];
+
+            // Skip if no filename or filename is just . or ..
+            if (!fileName || fileName === "." || fileName === "..") {
+                return null;
+            }
+
+            // Skip if filename starts with . but has no extension (hidden file without name)
+            if (fileName.startsWith(".") && !fileName.includes(".", 1)) {
+                return null;
+            }
+
+            // Must contain a file extension
+            if (!fileName.includes(".")) {
+                return null;
+            }
+
+            // Must contain at least one path separator or be a simple filename with extension
             if (cleaned.includes("/") || cleaned.includes(".")) {
                 return cleaned;
             }
@@ -575,91 +357,185 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
         /**
          * Resolve relative path based on source file location
+         * Handles ./ and ../ paths correctly.
+         * 
+         * The boundary is the assetId level - paths can go up to but not above the assetId.
+         * For example:
+         * - Source: "source/asset/file.usd" (path within assetId)
+         * - Reference: "../../../data/pot.usd"
+         * - Result: "data/pot.usd" (relative to assetId root)
+         * 
+         * The sourceFilePath should be the path relative to the assetId (assetId prefix stripped).
          */
-        const resolveRelativePath = (referencePath: string, sourceFilePath: string): string => {
+        const resolveRelativePath = (
+            referencePath: string,
+            sourceFilePath: string,
+            baseDirectory: string = ""
+        ): string => {
             // Remove @ symbols if present
             const cleanPath = referencePath.replace(/@/g, "").trim();
 
+            // Strip assetId from sourceFilePath if present (for consistent handling)
+            let normalizedSourcePath = sourceFilePath;
+            if (normalizedSourcePath.startsWith(assetId + "/")) {
+                normalizedSourcePath = normalizedSourcePath.substring(assetId.length + 1);
+            }
+
             // Get directory of source file
-            const lastSlash = sourceFilePath.lastIndexOf("/");
-            const sourceDir = lastSlash >= 0 ? sourceFilePath.substring(0, lastSlash) : "";
+            const lastSlash = normalizedSourcePath.lastIndexOf("/");
+            const sourceDir = lastSlash >= 0 ? normalizedSourcePath.substring(0, lastSlash) : "";
+
+            let resolvedPath: string;
 
             // Handle different path types
             if (cleanPath.startsWith("./")) {
                 // Relative to current directory
-                return sourceDir
+                resolvedPath = sourceDir
                     ? `${sourceDir}/${cleanPath.substring(2)}`
                     : cleanPath.substring(2);
             } else if (cleanPath.startsWith("../")) {
                 // Parent directory reference
-                const parts = sourceDir.split("/").filter((p) => p);
+                const sourceParts = sourceDir.split("/").filter((p) => p);
                 const refParts = cleanPath.split("/").filter((p) => p);
 
-                // Remove parent references and corresponding source parts
+                // Process parent references (..)
+                // Allow going up as far as needed - the boundary is at the assetId level
+                // Any additional .. beyond the root are simply consumed
                 while (refParts.length > 0 && refParts[0] === "..") {
                     refParts.shift();
-                    if (parts.length > 0) parts.pop();
+                    if (sourceParts.length > 0) {
+                        sourceParts.pop();
+                    }
+                    // If sourceParts is empty, we've reached the assetId root
+                    // Continue consuming .. but don't go negative
                 }
 
-                return [...parts, ...refParts].join("/");
+                resolvedPath = [...sourceParts, ...refParts].join("/");
             } else if (cleanPath.startsWith("/")) {
-                // Absolute path from root
-                return cleanPath.substring(1);
+                // Absolute path from root (relative to assetId)
+                resolvedPath = cleanPath.substring(1);
             } else {
-                // Relative path without ./
-                return sourceDir ? `${sourceDir}/${cleanPath}` : cleanPath;
+                // Relative path without ./ (same as ./)
+                resolvedPath = sourceDir ? `${sourceDir}/${cleanPath}` : cleanPath;
             }
+
+            // Normalize the path (remove any double slashes, trailing slashes)
+            resolvedPath = resolvedPath
+                .replace(/\/+/g, "/") // Replace multiple slashes with single
+                .replace(/^\//, "") // Remove leading slash
+                .replace(/\/$/, ""); // Remove trailing slash
+
+            // Debug logging for relative path resolution
+            if (cleanPath.includes("../")) {
+                console.log(`  [resolveRelativePath] "${referencePath}" from "${sourceFilePath}" -> "${resolvedPath}"`);
+            }
+
+            return resolvedPath;
         };
 
         /**
          * Extract dependencies from text-based USD file
+         * Handles all USD reference patterns including:
+         * - @path@ asset references
+         * - sublayers = [@path@, ...]
+         * - payload/references = @path@
+         * - prepend payload = @path@
+         * - info:mdl:sourceAsset = @path@
+         * - inputs:file = @path@
+         * - inputs:*_texture = @path@
+         * - asset ... = @path@
          */
         const extractFromText = (
             text: string,
             sourceFilePath: string,
             dependencies: Set<string>
         ): void => {
-            // Pattern 1: @path@ asset references
-            const assetPattern = /@([^@\s]+(?:\.[a-zA-Z0-9]+)?)@/g;
             let match;
-            while ((match = assetPattern.exec(text)) !== null) {
-                const refPath = match[1];
-                if (refPath && !refPath.startsWith("http") && !refPath.startsWith("//")) {
+
+            // Helper to add dependency if valid
+            const addDependency = (refPath: string) => {
+                if (
+                    refPath &&
+                    !refPath.startsWith("http") &&
+                    !refPath.startsWith("//") &&
+                    refPath.length > 0 &&
+                    refPath !== "@@" // Skip empty asset references
+                ) {
                     const resolved = resolveRelativePath(refPath, sourceFilePath);
-                    dependencies.add(resolved);
+                    if (resolved && resolved.length > 0) {
+                        dependencies.add(resolved);
+                    }
                 }
+            };
+
+            // Pattern 1: Generic @path@ asset references (most common)
+            // Matches: @./path/to/file.usd@, @../path/file.png@, @path/file.mdl@
+            const assetPattern = /@([^@\s][^@]*\.[a-zA-Z0-9]+)@/g;
+            while ((match = assetPattern.exec(text)) !== null) {
+                addDependency(match[1].trim());
             }
 
-            // Pattern 2: Sublayers
-            const sublayerPattern = /sublayers\s*=\s*\[([^\]]*)\]/g;
-            const sublayerMatch = sublayerPattern.exec(text);
-            if (sublayerMatch) {
-                const sublayerContent = sublayerMatch[1];
+            // Pattern 2: Sublayers array
+            // Matches: subLayers = [@path1@, @path2@]
+            const sublayerPattern = /subLayers\s*=\s*\[([^\]]*)\]/gi;
+            while ((match = sublayerPattern.exec(text)) !== null) {
+                const sublayerContent = match[1];
                 const sublayerRefs = sublayerContent.match(/@([^@]+)@/g);
                 if (sublayerRefs) {
                     sublayerRefs.forEach((ref) => {
                         const path = ref.replace(/@/g, "").trim();
-                        if (path) {
-                            const resolved = resolveRelativePath(path, sourceFilePath);
-                            dependencies.add(resolved);
-                        }
+                        addDependency(path);
                     });
                 }
             }
 
-            // Pattern 3: Payload/References
-            const payloadPattern = /(?:payload|references)\s*=\s*@([^@]+)@/g;
+            // Pattern 3: Payload/References (with optional prepend/append)
+            // Matches: payload = @path@, prepend payload = @path@, references = @path@
+            const payloadPattern =
+                /(?:prepend\s+|append\s+)?(?:payload|references)\s*=\s*@([^@]+)@/gi;
             while ((match = payloadPattern.exec(text)) !== null) {
-                const refPath = match[1].trim();
-                if (refPath) {
-                    const resolved = resolveRelativePath(refPath, sourceFilePath);
-                    dependencies.add(resolved);
-                }
+                addDependency(match[1].trim());
+            }
+
+            // Pattern 4: MDL source asset references
+            // Matches: info:mdl:sourceAsset = @path/to/material.mdl@
+            const mdlPattern = /info:mdl:sourceAsset\s*=\s*@([^@]+)@/gi;
+            while ((match = mdlPattern.exec(text)) !== null) {
+                addDependency(match[1].trim());
+            }
+
+            // Pattern 5: Shader texture file inputs
+            // Matches: inputs:file = @path/to/texture.jpg@
+            const inputsFilePattern = /inputs:file\s*=\s*@([^@]+)@/gi;
+            while ((match = inputsFilePattern.exec(text)) !== null) {
+                addDependency(match[1].trim());
+            }
+
+            // Pattern 6: Various texture input references
+            // Matches: inputs:diffuse_texture = @path@, inputs:normalmap_texture = @path@, etc.
+            const textureInputPattern = /inputs:[a-zA-Z_]+(?:_texture|Texture)\s*=\s*@([^@]+)@/gi;
+            while ((match = textureInputPattern.exec(text)) !== null) {
+                addDependency(match[1].trim());
+            }
+
+            // Pattern 7: Generic asset type declarations
+            // Matches: asset inputs:ao_texture = @path@, uniform asset info:mdl:sourceAsset = @path@
+            const assetDeclPattern = /(?:uniform\s+)?asset\s+[a-zA-Z:_]+\s*=\s*@([^@]+)@/gi;
+            while ((match = assetDeclPattern.exec(text)) !== null) {
+                addDependency(match[1].trim());
+            }
+
+            // Pattern 8: Default value asset references in customData
+            // Matches: asset default = @path/to/default.png@
+            const defaultAssetPattern = /asset\s+default\s*=\s*@([^@]+)@/gi;
+            while ((match = defaultAssetPattern.exec(text)) !== null) {
+                addDependency(match[1].trim());
             }
         };
 
         /**
          * Extract dependencies from binary USD file using heuristic byte search
+         * Enhanced to better capture relative paths like ../../Assets/...
          */
         const extractFromBinary = (
             content: ArrayBuffer,
@@ -685,23 +561,65 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 ".fbx",
                 ".gltf",
                 ".glb", // Other 3D formats
+                ".mdl", // Material files
+                ".bin",
+                ".animation",
+                ".ply",
+                ".json",
             ];
 
-            // Search for ASCII strings in binary data
-            const strings = extractASCIIStrings(bytes, 4);
+            // Search for ASCII strings in binary data with lower minimum length
+            // to catch short relative paths
+            const strings = extractASCIIStrings(bytes, 3);
+
+            // Also try to find paths by looking for common patterns
+            const foundPaths = new Set<string>();
 
             for (const str of strings) {
                 const lowerStr = str.toLowerCase();
                 const hasExtension = extensions.some((ext) => lowerStr.endsWith(ext));
 
                 if (hasExtension && !str.startsWith("http")) {
+                    // Try to extract the path - it might be embedded in a longer string
+                    // Look for patterns like: ../path/file.usd or ./path/file.usd or path/file.usd
+
+                    // Pattern 1: Find relative paths starting with ../ or ./
+                    const relativeMatch = str.match(/(\.\.\/[^\s@<>"|?*]+\.[a-zA-Z0-9]+)/);
+                    if (relativeMatch) {
+                        foundPaths.add(relativeMatch[1]);
+                    }
+
+                    const currentDirMatch = str.match(/(\.\/[^\s@<>"|?*]+\.[a-zA-Z0-9]+)/);
+                    if (currentDirMatch) {
+                        foundPaths.add(currentDirMatch[1]);
+                    }
+
+                    // Pattern 2: Find paths that look like directory/file.ext
+                    const pathMatch = str.match(
+                        /([a-zA-Z0-9_][a-zA-Z0-9_\-./]*\/[a-zA-Z0-9_][a-zA-Z0-9_\-.]*\.[a-zA-Z0-9]+)/
+                    );
+                    if (pathMatch) {
+                        foundPaths.add(pathMatch[1]);
+                    }
+
+                    // Pattern 3: Clean the whole string as a path
                     const cleanPath = cleanFilePath(str);
                     if (cleanPath) {
-                        const resolved = resolveRelativePath(cleanPath, sourceFilePath);
-                        dependencies.add(resolved);
+                        foundPaths.add(cleanPath);
                     }
                 }
             }
+
+            // Process all found paths
+            Array.from(foundPaths).forEach((path) => {
+                if (path && path.length > 0) {
+                    const resolved = resolveRelativePath(path, sourceFilePath);
+                    if (resolved && resolved.length > 0) {
+                        dependencies.add(resolved);
+                        console.log(`    Binary extraction: ${path} -> ${resolved}`);
+                    }
+                }
+            });
         };
 
         /**
@@ -769,14 +687,44 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 dirPath = baseDirectory || "/";
             }
 
-            // Create directory structure
-            USD.FS_createPath("", dirPath, true, true);
+            const fullPath = `${dirPath}/${fileName}`;
+
+            // Check if file already exists - if so, unlink and replace
+            // The USD driver may create placeholder/empty files, so we replace with actual content
+            try {
+                const stat = USD.FS_analyzePath(fullPath);
+                if (stat.exists) {
+                    console.log(`    File exists, unlinking and replacing: ${fullPath}`);
+                    try {
+                        USD.FS_unlink(fullPath);
+                    } catch (unlinkError) {
+                        console.warn(`    Failed to unlink ${fullPath}:`, unlinkError);
+                        // Continue anyway - the createDataFile might still work
+                    }
+                }
+            } catch (e) {
+                // Error checking path - proceed with creation
+            }
+
+            // Create directory structure level by level
+            // This is necessary because FS_createPath doesn't always handle deep nesting
+            const pathParts = dirPath.split("/").filter((p) => p);
+            let currentPath = "";
+            for (const part of pathParts) {
+                const parentPath = currentPath || "/";
+                currentPath = currentPath + "/" + part;
+                try {
+                    // Try to create this directory level
+                    USD.FS_createPath(parentPath, part, true, true);
+                } catch (e: any) {
+                    // Directory might already exist, that's fine
+                }
+            }
 
             // Store file
             USD.FS_createDataFile(dirPath, fileName, new Uint8Array(content), true, true, true);
 
-            const fullPath = `${dirPath}/${fileName}`;
-            console.log(`    Stored in WASM: ${fullPath}`);
+            console.log(`    Stored in WASM: ${fullPath} (${content.byteLength} bytes)`);
             return fullPath;
         };
 
@@ -786,13 +734,19 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const downloadFile = async (
             fileKey: string,
             authHeader: string,
-            isMainFile: boolean = false
+            isMainFile: boolean = false,
+            isSingleFile: boolean = false
         ): Promise<ArrayBuffer | null> => {
             try {
                 const pathSegments = fileKey.split("/");
                 const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
                 const encodedFileKey = encodedSegments.join("/");
-                const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+
+                // Add versionId query parameter for single file mode
+                if (isSingleFile && versionId) {
+                    assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
+                }
 
                 const response = await fetch(assetUrl, {
                     headers: { Authorization: authHeader },
@@ -817,80 +771,222 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             }
         };
 
+        // ============================================================================
+        // WASM ERROR PARSING FOR DEPENDENCY DISCOVERY
+        // ============================================================================
+
         /**
-         * Recursively load a file and all its dependencies
+         * Parse WASM console warnings to extract missing asset paths with their file index
+         * Example error: "Could not open asset @/file_0/Assets/Vegetation/Plant_Tropical/Buddha_Belly_Bamboo.usd@"
+         * Returns array of {fileIndex, path} objects
          */
-        const loadFileWithDependencies = async (
-            fileKey: string,
-            loadedFiles: Set<string>,
-            pendingFiles: string[],
-            authHeader: string,
-            USD: any,
-            baseDirectory: string,
-            isMainFile: boolean = false
-        ): Promise<void> => {
-            // Check if loading was cancelled
-            if (loadingCancelledRef.current) {
-                console.log(`  Loading cancelled, skipping: ${fileKey}`);
-                return;
-            }
+        const parseWASMErrorsForMissingAssets = (
+            errors: string[]
+        ): Array<{ fileIndex: number; path: string }> => {
+            const missingAssets: Map<string, { fileIndex: number; path: string }> = new Map();
 
-            // Skip if already loaded
-            if (loadedFiles.has(fileKey)) {
-                console.log(`  Skipping already loaded: ${fileKey}`);
-                return;
-            }
+            console.log(`[parseWASMErrors] Parsing ${errors.length} captured errors`);
 
-            // Download file
-            const fileContent = await downloadFile(fileKey, authHeader, isMainFile);
-            if (!fileContent) return; // Failed to download dependency
+            for (let i = 0; i < errors.length; i++) {
+                const error = errors[i];
 
-            // Check cancellation after async operation
-            if (loadingCancelledRef.current) {
-                console.log(`  Loading cancelled after download: ${fileKey}`);
-                return;
-            }
+                // Only log first few errors in detail
+                if (i < 3) {
+                    console.log(
+                        `[parseWASMErrors] Error ${i}: length=${error.length}, full="${error}"`
+                    );
+                }
 
-            // Store in WASM filesystem with base directory
-            storeInWASM(fileKey, fileContent, USD, baseDirectory);
-            loadedFiles.add(fileKey);
+                // Find the "Could not open asset" phrase
+                const couldNotOpenIdx = error.indexOf("Could not open asset");
+                if (couldNotOpenIdx < 0) {
+                    continue; // Skip errors without this phrase
+                }
 
-            console.log(`  Loaded: ${fileKey} (${fileContent.byteLength} bytes)`);
+                // Extract the portion after "Could not open asset"
+                const afterPhrase = error.substring(couldNotOpenIdx);
 
-            // Extract dependencies if USD file
-            if (isUSDFile(fileKey)) {
-                const dependencies = extractDependencies(fileContent, fileKey);
+                // Look for the pattern: @/file_X/path/to/file.ext@
+                // The path is wrapped in @...@ (not quotes!)
+                // Pattern: @/file_0/Assets/ArchVis/Residential/Decor/Vases/Prime_Large.usd@
 
-                if (dependencies.length > 0) {
-                    console.log(`  Found ${dependencies.length} dependencies in ${fileKey}`);
+                // Find @/file_X/ pattern
+                const fileStartMatch = afterPhrase.match(/@\/file_(\d+)\//);
+                let filePathMatch: RegExpMatchArray | null = null;
 
-                    // Add to queue
-                    for (const dep of dependencies) {
-                        if (!loadedFiles.has(dep) && !pendingFiles.includes(dep)) {
-                            pendingFiles.push(dep);
-                            console.log(`    → Queued: ${dep}`);
+                if (fileStartMatch) {
+                    // Found @/file_X/, now extract the path until the closing @
+                    const startIdx = fileStartMatch.index! + fileStartMatch[0].length;
+                    const remaining = afterPhrase.substring(startIdx);
+
+                    // Find the closing @ (the path ends with .usd@ or similar)
+                    const endIdx = remaining.indexOf("@");
+
+                    if (endIdx > 0) {
+                        const path = remaining.substring(0, endIdx);
+                        // Create a match-like array for compatibility
+                        filePathMatch = [
+                            `@/file_${fileStartMatch[1]}/${path}@`,
+                            fileStartMatch[1],
+                            path,
+                        ] as RegExpMatchArray;
+                    }
+
+                    if (i < 3) {
+                        console.log(`[parseWASMErrors] fileStartMatch:`, fileStartMatch[0]);
+                        console.log(
+                            `[parseWASMErrors] remaining (first 80): "${remaining.substring(
+                                0,
+                                80
+                            )}"`
+                        );
+                        console.log(`[parseWASMErrors] endIdx (@):`, endIdx);
+                        if (filePathMatch) {
+                            console.log(`[parseWASMErrors] Extracted path: "${filePathMatch[2]}"`);
                         }
+                    }
+                } else if (i < 3) {
+                    console.log(
+                        `[parseWASMErrors] No @/file_X/ pattern found in: "${afterPhrase.substring(
+                            0,
+                            80
+                        )}"`
+                    );
+                }
+
+                if (filePathMatch && filePathMatch[2]) {
+                    // filePathMatch[1] is the file number (e.g., "0", "1", "123")
+                    // filePathMatch[2] is the path without the trailing @ (e.g., "Assets/ArchVis/.../Prime_Large.usd")
+                    const fileIndex = parseInt(filePathMatch[1], 10);
+                    let path = filePathMatch[2].trim();
+
+                    if (path.length > 0 && !isNaN(fileIndex)) {
+                        // Use path as key to deduplicate, but store fileIndex with it
+                        missingAssets.set(path, { fileIndex, path });
+                        if (i < 5) {
+                            console.log(`[parseWASMErrors] ✓ Found: file_${fileIndex}/${path}`);
+                        }
+                    }
+                } else {
+                    // Try alternate pattern without @ (for paths that don't end with @)
+                    const altMatch = afterPhrase.match(/'file_(\d+)\/([^']+)'/);
+                    if (altMatch && altMatch[1] && altMatch[2]) {
+                        const fileIndex = parseInt(altMatch[1], 10);
+                        let path = altMatch[2].trim();
+                        // Remove trailing @ if present
+                        if (path.endsWith("@")) {
+                            path = path.slice(0, -1);
+                        }
+                        if (path.length > 0 && !isNaN(fileIndex)) {
+                            missingAssets.set(path, { fileIndex, path });
+                            if (i < 5) {
+                                console.log(
+                                    `[parseWASMErrors] ✓ Found (alt): file_${fileIndex}/${path}`
+                                );
+                            }
+                        }
+                    } else if (i < 3) {
+                        // Debug: Show what we're trying to match
+                        console.log(
+                            `[parseWASMErrors] No match. afterPhrase first 100 chars: "${afterPhrase.substring(
+                                0,
+                                100
+                            )}"`
+                        );
                     }
                 }
             }
+
+            const results = Array.from(missingAssets.values());
+            console.log(`[parseWASMErrors] Total unique missing assets: ${results.length}`);
+            if (results.length > 0) {
+                console.log(
+                    `[parseWASMErrors] First few:`,
+                    results.slice(0, 5).map((r) => `file_${r.fileIndex}/${r.path}`)
+                );
+            }
+            return results;
         };
+
+
+        /**
+         * Wait for WASM to settle (finish loading and reporting errors)
+         */
+        const waitForWASMToSettle = (ms: number = 2000): Promise<void> => {
+            return new Promise((resolve) => setTimeout(resolve, ms));
+        };
+
         // ============================================================================
         // MAIN LOADING FUNCTION WITH DEPENDENCY RESOLUTION
         // ============================================================================
 
-        // NEW: Main loading function using streaming URLs with recursive dependency resolution
-        // This implementation uses direct streaming URLs instead of the downloadAsset API,
-        // eliminating the need for pre-signed URL fetching while maintaining the WASM filesystem
-        // approach for handling USD file dependencies.
+        // Main loading function using streaming URLs with recursive dependency resolution
+        // This implementation:
+        // 1. Loads all primary files and their initial dependencies
+        // 2. Creates drivers and verifies dependencies via WASM errors
+        // 3. Destroys drivers, downloads missing dependencies in parallel
+        // 4. Recreates drivers and verifies again (repeat until done)
         const loadAssets = async () => {
             try {
+                // Detect Deep Deps Setting
+                const allowDeepDepLoading = true //navigator.userAgent.toLowerCase().includes("firefox");
+
+                // ============================================================
+                // CRITICAL: Set up console.warn override BEFORE loading ANY
+                // WASM-related code. The emHdBindings.js captures console.warn
+                // at load time, so we must override it first.
+                // SKIP FOR FIREFOX - causes browser lockups
+                // ============================================================
+                capturedWASMErrorsRef.current = [];
+
+                // Store original console.warn for cleanup
+                const originalConsoleWarn = console.warn.bind(console);
+                const originalConsoleLog = console.log.bind(console);
+                originalConsoleWarnRef.current = originalConsoleWarn;
+
+                // Create capture function - only used for non-Firefox browsers
+                let isCapturing = false;
+                let printErrBuffer = "";
+
+                const captureWASMError = (message: string) => {
+                    if (isCapturing || !allowDeepDepLoading) return; // Skip for non deep deps
+
+                    if (
+                        message.includes("Could not open asset") ||
+                        message.includes("_ReportErrors") ||
+                        (message.includes("Warning:") && message.includes("stage.cpp"))
+                    ) {
+                        capturedWASMErrorsRef.current.push(message);
+                        isCapturing = true;
+                        originalConsoleLog("[WASM ERROR CAPTURED]:", message.length, "chars");
+                        isCapturing = false;
+                    }
+                };
+
+                const handlePrintErr = (text: string) => {
+                    if (!allowDeepDepLoading) return; // Skip for non deep deps
+
+                    printErrBuffer += text;
+
+                    if (printErrBuffer.includes("<0x") && printErrBuffer.endsWith(")")) {
+                        captureWASMError(printErrBuffer);
+                        printErrBuffer = "";
+                    } else if (
+                        text.endsWith("\n") &&
+                        printErrBuffer.includes("Could not open asset")
+                    ) {
+                        captureWASMError(printErrBuffer.trim());
+                        printErrBuffer = "";
+                    }
+                };
+
+
                 setLoadingMessage("Loading USD Viewer dependencies...");
                 await NeedleUSDDependencyManager.loadUSDViewer();
-                console.log("USD Viewer dependencies loaded successfully");
+                originalConsoleLog("USD Viewer dependencies loaded successfully");
 
                 setLoadingMessage("Initializing 3D scene...");
 
-                // Get dependencies from bundle (guaranteed to be available)
                 const bundle = NeedleUSDDependencyManager.getUSDBundle();
                 const THREE = bundle.THREE;
                 const ThreeRenderDelegateInterface = bundle.ThreeRenderDelegateInterface;
@@ -919,9 +1015,84 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 scene.add(dirLight);
 
                 setLoadingMessage("Initializing USD WASM module...");
+
+                // const onDemandDownloads = new Map<string, ArrayBuffer>();
+                // // Define urlModifier function that will be called by WASM
+                // // IMPORTANT: When called from worker threads via callHandlerAsync,
+                // // the args are passed as an object with numeric keys, not an array.
+                // // We need to handle both calling conventions.
+                // const urlModifierFunc = async (...args: any[]) => {
+                //     // Handle both array args and object args (from worker threads)
+                //     let url: string;
+                //     if (args.length > 0 && typeof args[0] === 'string') {
+                //         // Normal call: args is a real array with string URL
+                //         url = args[0];
+                //     } else if (args.length > 0 && typeof args[0] === 'object' && args[0] !== null && '0' in args[0]) {
+                //         // Worker thread call: args[0] is an object with numeric keys like {0: url, uniqueMessageId: "..."}
+                //         url = args[0]['0'];
+                //     } else if (args.length === 0) {
+                //         // No args provided - shouldn't happen but handle gracefully
+                //         console.warn('[urlModifier] Called with no arguments');
+                //         return undefined;
+                //     } else {
+                //         // Unknown format - log and return first arg
+                //         console.warn('[urlModifier] Unknown args format:', args);
+                //         url = String(args[0]);
+                //     }
+                    
+                //     // url format: "/file_0/path/to/dependency.usd"
+                //     const match = url.match(/^\/file_(\d+)\/(.+)$/);
+                //     if (!match) return url;
+                    
+                //     const relativePath = match[2];
+                //     const fileName = relativePath.split('/').pop() || 'file';
+                    
+                //     // Already downloaded?
+                //     if (onDemandDownloads.has(relativePath)) {
+                //         const content = onDemandDownloads.get(relativePath)!;
+                //         // Return object with getFile method
+                //         return {
+                //             getFile: async () => {
+                //                 return new File([content], fileName);
+                //             }
+                //         };
+                //     }
+                    
+                //     if (failedDownloads.has(relativePath)) {
+                //         return url; // Let it fail
+                //     }
+                    
+                //     // Download using existing streams API logic
+                //     console.log(`[urlModifier] On-demand download: ${relativePath}`);
+                //     const content = await downloadFile(relativePath, authHeader, false, false);
+                //     if (content) {
+                //         onDemandDownloads.set(relativePath, content);
+                //         console.log(`[urlModifier] Downloaded: ${relativePath} (${content.byteLength} bytes)`);
+                //         // Return object with getFile method
+                //         return {
+                //             getFile: async () => {
+                //                 return new File([content], fileName);
+                //             }
+                //         };
+                //     }
+                    
+                //     console.warn(`[urlModifier] Failed to download: ${relativePath}`);
+                //     failedDownloads.add(relativePath);
+                //     return url;
+                // };
+
                 const USD = await getUsdModule({
                     locateFile: (path: string, prefix: string) =>
                         (prefix || "/viewers/needletools_usd_viewer/") + path,
+                    //urlModifier: urlModifierFunc,
+                    printErr: (text: string) => {
+                        handlePrintErr(text);
+                        originalConsoleWarn(text);
+                    },
+                    print: (text: string) => {
+                        handlePrintErr(text);
+                        originalConsoleLog(text);
+                    },
                 });
 
                 const filesToLoad =
@@ -932,46 +1103,51 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         : [];
                 if (filesToLoad.length === 0) throw new Error("No files specified");
 
-                const loadedGroups: any[] = [];
-                const errors: Array<{ file: string; error: string }> = [];
-                const allDrivers: any[] = [];
-
-                // Get authorization header for streaming endpoint
                 const authHeader = await getDualAuthorizationHeader();
-
-                // Track all loaded files to prevent duplicates
                 const loadedFiles = new Set<string>();
+                const failedDownloads = new Set<string>();
+                const errors: Array<{ file: string; error: string }> = [];
 
+                // Store file info for driver creation
+                const fileInfos: Array<{
+                    fileKey: string;
+                    fileName: string;
+                    directory: string;
+                    fileGroup: any;
+                }> = [];
+
+                // ============================================================
+                // PHASE 1: Load all primary files and their initial dependencies
+                // ============================================================
                 for (let i = 0; i < filesToLoad.length; i++) {
-                    // Check if loading was cancelled
                     if (loadingCancelledRef.current) {
-                        console.log("Loading cancelled by component unmount");
+                        console.log("Loading cancelled");
                         return;
                     }
 
                     const fileKey = filesToLoad[i];
                     const fileName = fileKey.split("/").pop() || `model_${i}.usd`;
+                    const directory = `/file_${i}`;
 
                     console.log(
-                        `\n=== Loading main file ${i + 1}/${filesToLoad.length}: ${fileKey} ===`
+                        `\n=== Loading primary file ${i + 1}/${filesToLoad.length}: ${fileKey} ===`
                     );
                     setLoadingMessage(
                         `Loading file ${i + 1}/${filesToLoad.length}: ${fileName}...`
                     );
 
                     try {
-                        // Check cancellation before download
-                        if (loadingCancelledRef.current) {
-                            console.log("Loading cancelled");
-                            return;
-                        }
-
                         // Download main file
-                        const arrayBuffer = await downloadFile(fileKey, authHeader, true);
+                        const isSingleFile = filesToLoad.length === 1;
+                        const arrayBuffer = await downloadFile(
+                            fileKey,
+                            authHeader,
+                            true,
+                            isSingleFile
+                        );
                         if (!arrayBuffer) throw new Error("Failed to download file");
 
                         // Store main file in WASM filesystem
-                        const directory = `/file_${i}`;
                         USD.FS_createPath("", directory, true, true);
                         USD.FS_createDataFile(
                             directory,
@@ -987,7 +1163,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             `Main file loaded: ${fileKey} (${arrayBuffer.byteLength} bytes)`
                         );
 
-                        // NEW: Recursively load dependencies
+                        // Load initial dependencies (from file parsing)
                         if (isUSDFile(fileKey)) {
                             setLoadingMessage(`Resolving dependencies for ${fileName}...`);
 
@@ -995,91 +1171,73 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             const pendingFiles: string[] = [...dependencies];
 
                             if (pendingFiles.length > 0) {
-                                console.log(`Found ${pendingFiles.length} dependencies to load`);
-
-                                // Process all dependencies recursively
+                                console.log(`Found ${pendingFiles.length} initial dependencies`);
                                 let depCount = 0;
+
+                                // Download dependencies in parallel (5 concurrent)
+                                const PARALLEL_LIMIT = 5;
                                 while (pendingFiles.length > 0) {
-                                    // Check cancellation in loop
-                                    if (loadingCancelledRef.current) {
-                                        console.log("Dependency loading cancelled");
-                                        return;
-                                    }
+                                    if (loadingCancelledRef.current) return;
 
-                                    const depPath = pendingFiles.shift()!;
-                                    depCount++;
-                                    setLoadingMessage(
-                                        `Loading dependency ${depCount} for ${fileName}...`
-                                    );
+                                    const batch = pendingFiles.splice(0, PARALLEL_LIMIT);
+                                    const batchPromises = batch.map(async (depPath) => {
+                                        if (
+                                            loadedFiles.has(depPath) ||
+                                            failedDownloads.has(depPath)
+                                        )
+                                            return;
 
-                                    await loadFileWithDependencies(
-                                        depPath,
-                                        loadedFiles,
-                                        pendingFiles,
-                                        authHeader,
-                                        USD,
-                                        directory, // Pass base directory for dependencies
-                                        false
-                                    );
+                                        const content = await downloadFile(
+                                            depPath,
+                                            authHeader,
+                                            false,
+                                            false
+                                        );
+                                        if (content) {
+                                            storeInWASM(depPath, content, USD, directory);
+                                            loadedFiles.add(depPath);
+                                            depCount++;
+                                            setLoadingMessage(
+                                                `Loading dependencies for ${fileName} (${depCount})...`
+                                            );
+
+                                            // Extract sub-dependencies
+                                            if (isUSDFile(depPath)) {
+                                                const subDeps = extractDependencies(
+                                                    content,
+                                                    depPath
+                                                );
+                                                for (const subDep of subDeps) {
+                                                    if (
+                                                        !loadedFiles.has(subDep) &&
+                                                        !failedDownloads.has(subDep) &&
+                                                        !pendingFiles.includes(subDep)
+                                                    ) {
+                                                        pendingFiles.push(subDep);
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            failedDownloads.add(depPath);
+                                        }
+                                    });
+
+                                    await Promise.all(batchPromises);
                                 }
 
-                                console.log(`Loaded ${depCount} dependencies for ${fileKey}`);
-                            } else {
-                                console.log(`No dependencies found for ${fileKey}`);
+                                console.log(
+                                    `Loaded ${depCount} initial dependencies for ${fileKey}`
+                                );
                             }
                         }
 
-                        // Create file group and load USD
-                        setLoadingMessage(`Rendering ${fileName}...`);
+                        // Create file group for scene
                         const fileGroup = new THREE.Group();
                         fileGroup.name = fileName;
                         fileGroup.userData.sourceFile = fileKey;
                         scene.add(fileGroup);
 
-                        const delegateConfig = {
-                            usdRoot: fileGroup,
-                            paths: [],
-                            driver: () => driver,
-                        };
-                        const renderInterface = new ThreeRenderDelegateInterface(delegateConfig);
-                        let driver = new USD.HdWebSyncDriver(
-                            renderInterface,
-                            directory + "/" + fileName
-                        );
-                        if (driver instanceof Promise) driver = await driver;
-
-                        driver.Draw();
-                        let stage = driver.GetStage();
-                        if (stage instanceof Promise) {
-                            stage = await stage;
-                            stage = driver.GetStage();
-                        }
-
-                        // Store animation timing information
-                        if (stage.GetEndTimeCode) {
-                            const endTime = stage.GetEndTimeCode();
-                            if (endTime > endTimeCodeRef.current) {
-                                endTimeCodeRef.current = endTime;
-                            }
-                        }
-                        if (stage.GetTimeCodesPerSecond) {
-                            timeoutRef.current = 1000 / stage.GetTimeCodesPerSecond();
-                        }
-
-                        console.log(
-                            `Animation timing for ${fileName}: endTimeCode=${
-                                endTimeCodeRef.current
-                            }, fps=${(1000 / timeoutRef.current).toFixed(1)}`
-                        );
-
-                        if (stage.GetUpAxis && String.fromCharCode(stage.GetUpAxis()) === "z") {
-                            fileGroup.rotation.x = -Math.PI / 2;
-                        }
-
-                        loadedGroups.push(fileGroup);
-                        allDrivers.push(driver);
-
-                        console.log(`Successfully loaded ${fileKey} with all dependencies`);
+                        fileInfos.push({ fileKey, fileName, directory, fileGroup });
                     } catch (fileError: any) {
                         console.error(`Error loading ${fileKey}:`, fileError);
                         errors.push({
@@ -1089,10 +1247,287 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
                 }
 
-                console.log(`\n=== Total files loaded: ${loadedFiles.size} ===`);
+                if (fileInfos.length === 0) {
+                    throw new Error("No files loaded successfully");
+                }
 
+                // ============================================================
+                // PHASE 2: Create single driver, verify, download missing, repeat
+                // Key insight: Only ONE driver should be created for all files
+                // ============================================================
+                const maxRetries = 10;
+                let retryCount = 0;
+                let driver: any = null;
+                const loadedGroups: any[] = [];
+                let remainingMissingCount = 0;
+
+                // Create single driver - it stays active throughout the verification loop
+                console.log("\n=== Creating single driver for all files ===");
+                setLoadingMessage("Verifying dependencies...");
+
+                // Use the first file's group as the root for the driver
+                const mainFileInfo = fileInfos[0];
+                const delegateConfig = {
+                    usdRoot: mainFileInfo.fileGroup,
+                    paths: [],
+                    driver: () => driver,
+                };
+
+                let renderInterface = new ThreeRenderDelegateInterface(delegateConfig);
+                driver = new USD.HdWebSyncDriver(
+                    renderInterface,
+                    mainFileInfo.directory + "/" + mainFileInfo.fileName
+                );
+                if (driver instanceof Promise) driver = await driver;
+
+                console.log(`Driver created for: ${mainFileInfo.directory}/${mainFileInfo.fileName}`);
+
+                await waitForWASMToSettle(1500);
+
+                // Initial draw to trigger error reports
+                try {
+                    driver.Draw();
+                } catch (drawError) {
+                    console.warn("Initial draw error (expected for missing deps):", drawError);
+                }
+
+                // Wait for WASM to settle
+                await waitForWASMToSettle(1500);
+
+                // Get stage info z-axis
+                if (driver) {
+                    try {
+                        let stage = driver.GetStage();
+                        if (stage instanceof Promise) {
+                            stage = await stage;
+                            stage = driver.GetStage();
+                        }
+                        // Handle Z-up axis
+                        if (stage.GetUpAxis && String.fromCharCode(stage.GetUpAxis()) === "z") {
+                            let upAxis = String.fromCharCode(stage.GetUpAxis())
+                            console.log("Up Axis from USD:", upAxis)
+                            if (upAxis === "z") {
+                                fileInfos[0].fileGroup.rotation.x = -Math.PI / 2;
+                                console.log("Setting Z axis up")
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("Error getting stage info:", e);
+                    }
+                }
+
+                // Track total additional dependencies loaded during verification
+                let totalAdditionalDepsLoaded = 0;
+
+                // Skip verification loop for Deep Deps
+                if (!allowDeepDepLoading) {
+                    console.log(
+                        "Skipping verification loop of loading deep dependencies"
+                    );
+                }
+
+                // Main verification loop - drivers stay active, we just add files and redraw
+                // Skip for Firefox due to WASM HTTP fallback issues
+                while (retryCount < maxRetries && allowDeepDepLoading) {
+                    if (loadingCancelledRef.current) {
+                        console.log("Loading cancelled during verification");
+                        break;
+                    }
+
+                    console.log(`\n=== Verification attempt ${retryCount + 1}/${maxRetries} ===`);
+
+                    // Parse errors for missing assets
+                    const missingAssets = parseWASMErrorsForMissingAssets(
+                        capturedWASMErrorsRef.current
+                    );
+                    const newMissingAssets = missingAssets.filter(
+                        (asset) => !failedDownloads.has(asset.path) && !loadedFiles.has(asset.path)
+                    );
+
+                    console.log(`Found ${newMissingAssets.length} new missing assets`);
+
+                    // Clear captured errors for next iteration (including deps form this iteration)
+                    capturedWASMErrorsRef.current = [];
+
+                    if (newMissingAssets.length === 0) {
+                        // No more missing assets - we're done!
+                        console.log("All dependencies resolved!");
+                        break;
+                    }
+
+                    //Destroy the driver and we'll recreate again
+                    driver.delete()
+                    let oldDriver = driver
+                    renderInterface = null
+                    driver = null
+                    console.log("Destroying driver to add additional dependencies");
+
+                    // Download missing dependencies in parallel (5 concurrent)
+                    // Files are added to WASM FS while drivers remain active
+                    const totalMissing = newMissingAssets.length;
+                    let downloadedCount = 0;
+                    setLoadingMessage(`Downloading additional dependencies (0/${totalMissing})...`);
+
+                    const PARALLEL_LIMIT = 5;
+                    for (let i = 0; i < newMissingAssets.length; i += PARALLEL_LIMIT) {
+                        if (loadingCancelledRef.current) break;
+
+                        const batch = newMissingAssets.slice(i, i + PARALLEL_LIMIT);
+                        const batchPromises = batch.map(async (asset) => {
+                            const { fileIndex, path: assetPath } = asset;
+                            const targetDirectory = `/file_${fileIndex}`;
+
+                            console.log(
+                                `[Verification] Downloading: ${assetPath} for file_${fileIndex}`
+                            );
+                            const content = await downloadFile(assetPath, authHeader, false, false);
+                            // console.log(
+                            //     `[Verification] Download result for ${assetPath}: ${
+                            //         content ? `${content.byteLength} bytes` : "null (404)"
+                            //     }`
+                            // );
+
+                            if (content) {
+                                try {
+                                    console.log(
+                                        `[Verification] Storing ${assetPath} in ${targetDirectory}`
+                                    );
+                                    storeInWASM(assetPath, content, USD, targetDirectory);
+                                    loadedFiles.add(assetPath);
+                                    downloadedCount++;
+                                    setLoadingMessage(
+                                        `Downloading additional dependencies (${downloadedCount}/${totalMissing})...`
+                                    );
+
+                                    // Extract sub-dependencies from USD files
+                                    if (isUSDFile(assetPath)) {
+                                        const subDeps = extractDependencies(content, assetPath);
+                                        for (const subDep of subDeps) {
+                                            if (
+                                                !loadedFiles.has(subDep) &&
+                                                !failedDownloads.has(subDep)
+                                            ) {
+                                                // Queue for next verification iteration
+                                                capturedWASMErrorsRef.current.push(
+                                                    `Could not open asset @/file_${fileIndex}/${subDep}@`
+                                                );
+                                            }
+                                        }
+                                    }
+                                } catch (storeError: any) {
+                                    console.warn(`Error storing ${assetPath} in WASM:`, storeError);
+                                    console.warn(
+                                        `  Error details: errno=${storeError?.errno}, message=${storeError?.message}`
+                                    );
+                                    // Still mark as loaded to prevent infinite retries
+                                    loadedFiles.add(assetPath);
+                                }
+                            } else {
+                                console.log(`[Verification] Failed to download: ${assetPath}`);
+                                failedDownloads.add(assetPath);
+                            }
+                        });
+
+                        await Promise.all(batchPromises);
+                    }
+
+                    console.log(`Downloaded ${downloadedCount} additional dependencies`);
+                    totalAdditionalDepsLoaded += downloadedCount;
+
+                    if (downloadedCount === 0) {
+                        // No new files downloaded - all remaining are 404s
+                        remainingMissingCount = newMissingAssets.length - downloadedCount;
+                        console.warn(
+                            `No new files downloaded. ${remainingMissingCount} dependencies could not be found.`
+                        );
+                        break;
+                    }
+
+                    //Wait until we deleted the old driver
+                    while(!oldDriver.isDeleted) {}
+
+                    renderInterface = new ThreeRenderDelegateInterface(delegateConfig);
+                    driver = new USD.HdWebSyncDriver(
+                        renderInterface,
+                        mainFileInfo.directory + "/" + mainFileInfo.fileName
+                    );
+                    if (driver instanceof Promise) driver = await driver;
+
+                    await waitForWASMToSettle(1500);
+
+                    console.log(`Driver re-created for: ${mainFileInfo.directory}/${mainFileInfo.fileName}`);
+
+                    // Redraw driver to re-resolve references with newly added files
+                    setLoadingMessage("Verifying dependencies...");
+                    console.log("Redrawing driver with newly added files...");
+                    try {
+                        driver.Draw();
+                    } catch (drawError) {
+                        console.warn("Draw error during verification (expected):", drawError);
+                    }
+
+                    // Wait for WASM to settle again
+                    await waitForWASMToSettle(2000);
+
+                    retryCount++;
+                }
+
+                // Check if we hit max retries
+                if (retryCount >= maxRetries) {
+                    const finalMissing = parseWASMErrorsForMissingAssets(
+                        capturedWASMErrorsRef.current
+                    );
+                    remainingMissingCount = finalMissing.filter(
+                        (asset) => !failedDownloads.has(asset.path) && !loadedFiles.has(asset.path)
+                    ).length;
+                    if (remainingMissingCount > 0) {
+                        console.warn(
+                            `Max retries reached. ${remainingMissingCount} dependencies still missing.`
+                        );
+                    }
+                }
+
+                // Populate loadedGroups from fileInfos
+                for (const info of fileInfos) {
+                    loadedGroups.push(info.fileGroup);
+                }
+
+                // Get stage info from driver for animation
+                if (driver) {
+                    try {
+                        let stage = driver.GetStage();
+                        if (stage instanceof Promise) {
+                            stage = await stage;
+                            stage = driver.GetStage();
+                        }
+                        if (stage.GetEndTimeCode) {
+                            endTimeCodeRef.current = stage.GetEndTimeCode();
+                        }
+                        if (stage.GetTimeCodesPerSecond) {
+                            timeoutRef.current = 1000 / stage.GetTimeCodesPerSecond();
+                        }
+                    } catch (e) {
+                        console.warn("Error getting stage info:", e);
+                    }
+                }
+
+                // Set file errors if any
                 if (errors.length > 0) setFileErrors(errors);
                 if (loadedGroups.length === 0) throw new Error("No files loaded successfully");
+
+                // Show warning if additional dependencies were loaded during verification
+                // These may not render properly in the Needle viewer
+                if (totalAdditionalDepsLoaded > 0 || remainingMissingCount > 0) {
+                    setAdditionalDepsWarning({
+                        loaded: totalAdditionalDepsLoaded,
+                        unresolved: remainingMissingCount,
+                    });
+                    console.log(
+                        `Warning: ${totalAdditionalDepsLoaded} additional deep dependencies were loaded during verification. ${remainingMissingCount} dependencies could not be resolved.`
+                    );
+                }
+
+                console.log(`\n=== Total files loaded: ${loadedFiles.size} ===`);
 
                 setLoadedFileGroups(loadedGroups);
                 setLoadingMessage("Positioning camera...");
@@ -1248,7 +1683,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     scene,
                     camera,
                     renderer,
-                    drivers: allDrivers,
+                    driver: driver,
                     USD,
                     fileGroups: loadedGroups,
                     controls: mouseControls,
@@ -1264,16 +1699,14 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     const time = (secs * (1000 / timeoutRef.current)) % endTimeCodeRef.current;
 
                     // Update animation time if not paused (use ref, not state)
-                    if (!animationPausedRef.current) {
-                        allDrivers.forEach((d) => {
-                            if (d?.SetTime) {
-                                d.SetTime(time);
-                            }
-                        });
+                    if (!animationPausedRef.current && driver?.SetTime) {
+                        driver.SetTime(time);
                     }
 
                     // Always draw and render to keep scene visible
-                    allDrivers.forEach((d) => d?.Draw?.());
+                    if (driver?.Draw) {
+                        driver.Draw();
+                    }
                     renderer.render(scene, camera);
                 };
                 animate();
@@ -1341,7 +1774,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             NeedleUSDDependencyManager.cleanup();
             console.log("NeedleUSD Viewer: Cleanup complete");
         };
-    }, [assetKey, multiFileKeys, assetId, databaseId, config]);
+    }, [assetKey, multiFileKeys, assetId, databaseId, versionId, config]);
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
@@ -1981,6 +2414,57 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     </button>
                 </div>
             )}
+
+            {(additionalDepsWarning.loaded > 0 || additionalDepsWarning.unresolved > 0) &&
+                !isLoading && (
+                    <div
+                        style={{
+                            position: "absolute",
+                            top: fileErrors.length > 0 ? "170px" : "0",
+                            left: "0",
+                            right: "0",
+                            backgroundColor: "#cce5ff",
+                            border: "1px solid #004085",
+                            borderRadius: "4px",
+                            padding: "12px 16px",
+                            margin: "8px",
+                            zIndex: 1001,
+                            fontSize: "0.85em",
+                        }}
+                    >
+                        <div style={{ color: "#004085", fontWeight: "bold", marginBottom: "4px" }}>
+                            ℹ️ {additionalDepsWarning.loaded} additional compressed dependencies were
+                            recognized and loaded
+                            {additionalDepsWarning.unresolved > 0 &&
+                                `. ${additionalDepsWarning.unresolved} dependencies could not be resolved.`}
+                        </div>
+                        <div style={{ color: "#004085", fontSize: "0.9em" }}>
+                            Note: The Needle USD viewer may not properly reload these dependencies.
+                            Some textures or referenced files may not display correctly.
+                        </div>
+                        <button
+                            onClick={() =>
+                                setAdditionalDepsWarning({ loaded: 0, unresolved: 0 })
+                            }
+                            style={{
+                                position: "absolute",
+                                top: "8px",
+                                right: "8px",
+                                background: "none",
+                                border: "none",
+                                color: "#004085",
+                                cursor: "pointer",
+                                fontSize: "16px",
+                                padding: "0",
+                                width: "20px",
+                                height: "20px",
+                            }}
+                            title="Dismiss"
+                        >
+                            ×
+                        </button>
+                    </div>
+                )}
 
             {isLoading && <LoadingSpinner message={loadingMessage} />}
 

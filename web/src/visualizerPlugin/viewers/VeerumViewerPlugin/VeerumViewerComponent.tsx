@@ -175,7 +175,13 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                                 encodeURIComponent(segment)
                             );
                             const encodedFileKey = encodedSegments.join("/");
-                            const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                            let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+
+                            // Add versionId query parameter for single file mode
+                            const isSingleFile = filesToLoad.length === 1;
+                            if (isSingleFile && versionId) {
+                                assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
+                            }
 
                             console.log(`VEERUM Viewer: Loading 3D tileset from ${assetUrl}`);
 

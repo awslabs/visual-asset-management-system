@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 interface TransformState {
     position: { x: number; y: number; z: number };
@@ -36,13 +36,22 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
     const [updateTrigger, setUpdateTrigger] = useState(0);
     const [coordinateSpace, setCoordinateSpace] = useState<"local" | "world">("local");
 
+    // Track input values separately from transform state to allow empty/partial values during editing
+    const [inputValues, setInputValues] = useState<Record<string, string>>({});
+    // Track which field is currently focused
+    const focusedFieldRef = useRef<string | null>(null);
+    // Store the last valid value for each field (to restore on blur if empty)
+    const lastValidValuesRef = useRef<Record<string, number>>({});
+
     const THREE = (window as any).THREE;
 
     // Update transform state when selected object changes or after reset
     useEffect(() => {
         if (selectedObject && THREE) {
+            let newTransform: TransformState;
+
             if (coordinateSpace === "local") {
-                setTransform({
+                newTransform = {
                     position: {
                         x: selectedObject.position.x,
                         y: selectedObject.position.y,
@@ -58,7 +67,7 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                         y: selectedObject.scale.y,
                         z: selectedObject.scale.z,
                     },
-                });
+                };
             } else {
                 // World space
                 const worldPos = new THREE.Vector3();
@@ -71,7 +80,7 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                 const worldScale = new THREE.Vector3();
                 selectedObject.getWorldScale(worldScale);
 
-                setTransform({
+                newTransform = {
                     position: {
                         x: worldPos.x,
                         y: worldPos.y,
@@ -87,33 +96,146 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                         y: worldScale.y,
                         z: worldScale.z,
                     },
-                });
+                };
             }
+
+            setTransform(newTransform);
+
+            // Update last valid values
+            const newLastValid: Record<string, number> = {};
+            (["position", "rotation", "scale"] as const).forEach((type) => {
+                (["x", "y", "z"] as const).forEach((axis) => {
+                    newLastValid[`${type}-${axis}`] = newTransform[type][axis];
+                });
+            });
+            lastValidValuesRef.current = newLastValid;
+
+            // Clear input values (will use transform state for display)
+            setInputValues({});
         }
     }, [selectedObject, updateTrigger, coordinateSpace, THREE]);
 
-    const updateTransform = (
+    // Apply transform change
+    const applyTransform = (newTransform: TransformState) => {
+        setTransform(newTransform);
+        onTransformChange(selectedObject, newTransform);
+    };
+
+    // Get the display value for an input field
+    const getDisplayValue = (
+        type: "position" | "rotation" | "scale",
+        axis: "x" | "y" | "z"
+    ): string => {
+        const fieldKey = `${type}-${axis}`;
+
+        // If we have a custom input value (user is typing), use that
+        if (inputValues[fieldKey] !== undefined) {
+            return inputValues[fieldKey];
+        }
+
+        // Otherwise format the transform value
+        const value = transform[type][axis];
+        const decimals = type === "rotation" ? 1 : 2;
+        return value.toFixed(decimals);
+    };
+
+    // Handle input change - allow any text, only apply valid numbers
+    const handleInputChange = (
         type: "position" | "rotation" | "scale",
         axis: "x" | "y" | "z",
-        value: number
+        value: string
     ) => {
-        const newTransform = {
-            ...transform,
-            [type]: {
-                ...transform[type],
-                [axis]: value,
-            },
-        };
-        setTransform(newTransform);
+        const fieldKey = `${type}-${axis}`;
 
-        if (coordinateSpace === "local") {
-            // Direct local space update
-            onTransformChange(selectedObject, newTransform);
-        } else {
-            // World space update - need to convert to local
-            // For now, just update local (world space editing is complex with parent transforms)
-            // TODO: Implement proper world-to-local conversion
-            onTransformChange(selectedObject, newTransform);
+        // Always update the input value to allow typing
+        setInputValues((prev) => ({ ...prev, [fieldKey]: value }));
+
+        // Try to parse as number and apply if valid
+        const numValue = parseFloat(value);
+        if (!isNaN(numValue) && isFinite(numValue)) {
+            // Store as last valid value
+            lastValidValuesRef.current[fieldKey] = numValue;
+
+            // Apply the transform
+            const newTransform = {
+                ...transform,
+                [type]: {
+                    ...transform[type],
+                    [axis]: numValue,
+                },
+            };
+            applyTransform(newTransform);
+        }
+        // If invalid (empty, partial, etc.), don't apply - keep previous transform
+    };
+
+    // Handle focus - track which field is focused
+    const handleFocus = (
+        type: "position" | "rotation" | "scale",
+        axis: "x" | "y" | "z",
+        e: React.FocusEvent<HTMLInputElement>
+    ) => {
+        const fieldKey = `${type}-${axis}`;
+        focusedFieldRef.current = fieldKey;
+
+        // Store current value as last valid
+        lastValidValuesRef.current[fieldKey] = transform[type][axis];
+
+        // Select all text for easy replacement
+        e.target.select();
+    };
+
+    // Handle blur - restore last valid value if empty
+    const handleBlur = (type: "position" | "rotation" | "scale", axis: "x" | "y" | "z") => {
+        const fieldKey = `${type}-${axis}`;
+        focusedFieldRef.current = null;
+
+        const currentInputValue = inputValues[fieldKey];
+
+        // If input is empty or invalid, restore last valid value
+        if (
+            currentInputValue === undefined ||
+            currentInputValue === "" ||
+            isNaN(parseFloat(currentInputValue))
+        ) {
+            const lastValid = lastValidValuesRef.current[fieldKey];
+            if (lastValid !== undefined) {
+                // Restore the last valid value
+                const newTransform = {
+                    ...transform,
+                    [type]: {
+                        ...transform[type],
+                        [axis]: lastValid,
+                    },
+                };
+                setTransform(newTransform);
+            }
+        }
+
+        // Clear the custom input value to use formatted transform value
+        setInputValues((prev) => {
+            const newValues = { ...prev };
+            delete newValues[fieldKey];
+            return newValues;
+        });
+    };
+
+    // Handle Enter key - blur to apply
+    const handleKeyDown = (
+        type: "position" | "rotation" | "scale",
+        axis: "x" | "y" | "z",
+        e: React.KeyboardEvent<HTMLInputElement>
+    ) => {
+        if (e.key === "Enter") {
+            e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+            // Restore last valid value and blur
+            const fieldKey = `${type}-${axis}`;
+            const lastValid = lastValidValuesRef.current[fieldKey];
+            if (lastValid !== undefined) {
+                setInputValues((prev) => ({ ...prev, [fieldKey]: String(lastValid) }));
+            }
+            e.currentTarget.blur();
         }
     };
 
@@ -232,12 +354,15 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                                 {axis.toUpperCase()}:
                             </span>
                             <input
-                                type="number"
-                                value={transform.position[axis].toFixed(2)}
+                                type="text"
+                                inputMode="decimal"
+                                value={getDisplayValue("position", axis)}
                                 onChange={(e) =>
-                                    updateTransform("position", axis, parseFloat(e.target.value))
+                                    handleInputChange("position", axis, e.target.value)
                                 }
-                                step="0.1"
+                                onFocus={(e) => handleFocus("position", axis, e)}
+                                onBlur={() => handleBlur("position", axis)}
+                                onKeyDown={(e) => handleKeyDown("position", axis, e)}
                                 disabled={animationPlaying}
                                 style={{
                                     flex: 1,
@@ -280,12 +405,15 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                                 {axis.toUpperCase()}:
                             </span>
                             <input
-                                type="number"
-                                value={transform.rotation[axis].toFixed(1)}
+                                type="text"
+                                inputMode="decimal"
+                                value={getDisplayValue("rotation", axis)}
                                 onChange={(e) =>
-                                    updateTransform("rotation", axis, parseFloat(e.target.value))
+                                    handleInputChange("rotation", axis, e.target.value)
                                 }
-                                step="1"
+                                onFocus={(e) => handleFocus("rotation", axis, e)}
+                                onBlur={() => handleBlur("rotation", axis)}
+                                onKeyDown={(e) => handleKeyDown("rotation", axis, e)}
                                 disabled={animationPlaying}
                                 style={{
                                     flex: 1,
@@ -328,13 +456,13 @@ const NeedleUSDTransformControls: React.FC<NeedleUSDTransformControlsProps> = ({
                                 {axis.toUpperCase()}:
                             </span>
                             <input
-                                type="number"
-                                value={transform.scale[axis].toFixed(2)}
-                                onChange={(e) =>
-                                    updateTransform("scale", axis, parseFloat(e.target.value))
-                                }
-                                step="0.1"
-                                min="0.01"
+                                type="text"
+                                inputMode="decimal"
+                                value={getDisplayValue("scale", axis)}
+                                onChange={(e) => handleInputChange("scale", axis, e.target.value)}
+                                onFocus={(e) => handleFocus("scale", axis, e)}
+                                onBlur={() => handleBlur("scale", axis)}
+                                onKeyDown={(e) => handleKeyDown("scale", axis, e)}
                                 disabled={animationPlaying}
                                 style={{
                                     flex: 1,
