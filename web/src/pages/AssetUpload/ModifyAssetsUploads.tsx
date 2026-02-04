@@ -2,9 +2,11 @@ import {
     Box,
     Button,
     Container,
+    FormField,
     Grid,
     SpaceBetween,
     TextContent,
+    Toggle,
 } from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
 import Alert from "@cloudscape-design/components/alert";
@@ -15,12 +17,9 @@ import { useLocation, useNavigate, useParams } from "react-router";
 import localforage from "localforage";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import Synonyms from "../../synonyms";
-import {
-    FileInfo,
-    DragDropMultiFileSelect,
-} from "../../components/multifile/DragDropMultiFileSelect";
 import { Link } from "@cloudscape-design/components";
 import { FileUpload } from "./components";
+import DragDropFileUpload from "../../components/form/DragDropFileUpload";
 import { previewFileFormats } from "../../common/constants/fileFormats";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { Metadata } from "../../components/single/Metadata";
@@ -75,58 +74,52 @@ interface FinishUploadsProps {
     isNewFiles: boolean;
 }
 
-const convertToFileUploadTableItems = async (
-    fileInfo: FileInfo[],
+const getFilesFromFileHandles = async (
+    fileHandles: any[],
     prefix: string = ""
 ): Promise<FileUploadTableItem[]> => {
-    const items: FileUploadTableItem[] = [];
-
-    for (let index = 0; index < fileInfo.length; index++) {
+    const fileUploadTableItems: FileUploadTableItem[] = [];
+    for (let i = 0; i < fileHandles.length; i++) {
         try {
-            const file = fileInfo[index];
-
             // Use our safe utility to get the file regardless of handle type
-            const actualFile = await safeGetFile(file.handle);
+            const file = await safeGetFile(fileHandles[i].handle);
 
             // Prepend the folder path to the relative path if a prefix exists
             const relativePath = prefix
                 ? prefix.endsWith("/")
-                    ? prefix + file.path
-                    : prefix + "/" + file.path
-                : file.path;
+                    ? prefix + fileHandles[i].path
+                    : prefix + "/" + fileHandles[i].path
+                : fileHandles[i].path;
 
-            items.push({
-                index: index,
-                name: file.path,
-                size: actualFile.size,
-                status: "Queued",
-                progress: 0,
-                loaded: 0,
-                total: actualFile.size,
-                startedAt: 0,
-                handle: file.handle,
+            fileUploadTableItems.push({
+                handle: fileHandles[i].handle,
+                index: i,
+                name: fileHandles[i].handle.name || file.name,
+                size: file.size,
                 relativePath: relativePath,
+                progress: 0,
+                status: "Queued",
+                loaded: 0,
+                total: file.size,
             });
         } catch (error) {
-            console.error(`Error processing file at index ${index}:`, error);
-
+            console.error(`Error processing file at index ${i}:`, error);
             // Add a placeholder entry with error status
-            items.push({
-                index: index,
-                name: fileInfo[index].path || `File ${index}`,
+            fileUploadTableItems.push({
+                handle: fileHandles[i].handle,
+                index: i,
+                name: fileHandles[i].handle.name || `File ${i}`,
                 size: 0,
-                status: "Failed",
+                relativePath: fileHandles[i].path || "",
                 progress: 0,
+                status: "Failed",
                 loaded: 0,
                 total: 0,
-                relativePath: fileInfo[index].path || "",
-                handle: fileInfo[index].handle,
                 error: "Browser compatibility issue: Cannot access file",
             });
         }
     }
-
-    return items;
+    return fileUploadTableItems;
 };
 
 export default function ModifyAssetsUploadsPage() {
@@ -149,22 +142,25 @@ export default function ModifyAssetsUploadsPage() {
     const [showUploadWorkflow, setShowUploadWorkflow] = useState(false);
     // Initialize with empty array since we're uploading new files, not showing existing ones
     const [fileItems, setFileItems] = useState<FileUploadTableItem[]>([]);
-    const [metadata, setMetadata] = useState<Metadata>({});
     const [previewFile, setPreviewFile] = useState<File | null>(null);
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
     const [folderPath, setFolderPath] = useState<string>("");
     const [keyPrefix, setKeyPrefix] = useState<string>("");
-    const [multiFileSelectKey, setMultiFileSelectKey] = useState<number>(0); // Key to force MultiFileSelect re-render
+
     const [restrictFileUploadsToExtensions, setRestrictFileUploadsToExtensions] =
         useState<string>("");
     const [fileValidationResult, setFileValidationResult] = useState<ValidationResult | null>(null);
+    const [selectionMode, setSelectionMode] = useState<"folder" | "files" | "both">(
+        assetDetail.isMultiFile ? "folder" : "files"
+    );
 
     // Update assetDetail when fileItems change
     useEffect(() => {
         setAssetDetail((prev) => ({
             ...prev,
             Asset: fileItems,
-            isMultiFile: fileItems.length > 1,
+            // Don't automatically change isMultiFile based on file count
+            // Keep the user's selection mode preference
             Preview: previewFile || undefined,
         }));
     }, [fileItems, previewFile]);
@@ -318,12 +314,55 @@ export default function ModifyAssetsUploadsPage() {
 
     // Handle file selection
     const handleFileSelection = useCallback(
-        async (fileSelection: FileInfo[]) => {
-            // Convert the file selection directly to FileUploadTableItems
-            const newItems = await convertToFileUploadTableItems(fileSelection, keyPrefix);
+        async (directoryHandle: any, fileHandles: any[]) => {
+            try {
+                console.log("handleFileSelection called with:", {
+                    directoryHandle,
+                    fileHandlesCount: fileHandles.length,
+                    keyPrefix,
+                });
 
-            console.log("File selection - new items:", newItems.length);
-            setFileItems(newItems);
+                // Convert the file selection directly to FileUploadTableItems
+                const newItems = await getFilesFromFileHandles(fileHandles, keyPrefix);
+
+                console.log("File selection - new items:", newItems.length, newItems);
+
+                // Combine with existing files if any exist
+                setFileItems((prevItems) => {
+                    console.log("Previous items count:", prevItems.length);
+
+                    if (prevItems.length === 0) {
+                        console.log("No previous items, returning new items");
+                        return newItems;
+                    }
+
+                    // Create a map of existing file paths to avoid duplicates
+                    const existingFilePaths = new Map(
+                        prevItems.map((item) => [item.relativePath, item])
+                    );
+
+                    // Filter out any new files that would be duplicates
+                    const uniqueNewFiles = newItems.filter(
+                        (file) => !existingFilePaths.has(file.relativePath)
+                    );
+
+                    console.log("Unique new files:", uniqueNewFiles.length);
+
+                    // Combine existing files with unique new files
+                    const combinedFiles = [
+                        ...prevItems,
+                        ...uniqueNewFiles.map((file, idx) => ({
+                            ...file,
+                            index: prevItems.length + idx,
+                        })),
+                    ];
+
+                    console.log("Combined files:", combinedFiles.length);
+                    return combinedFiles;
+                });
+            } catch (error) {
+                console.error("Error in handleFileSelection:", error);
+            }
         },
         [keyPrefix]
     );
@@ -366,15 +405,6 @@ export default function ModifyAssetsUploadsPage() {
     // Function to remove all files
     const handleRemoveAllFiles = () => {
         setFileItems([]);
-        // Increment the key to force MultiFileSelect to re-render with fresh state
-        setMultiFileSelectKey((prev) => prev + 1);
-    };
-
-    // Function to remove a single file - also increment key to force re-render
-    const handleRemoveFileWithReset = (index: number) => {
-        handleRemoveFile(index);
-        // Force component re-render to clear internal state
-        setMultiFileSelectKey((prev) => prev + 1);
     };
 
     // Handle upload completion
@@ -565,17 +595,45 @@ export default function ModifyAssetsUploadsPage() {
                                             }
                                         >
                                             {/* Asset Files Selection */}
-                                            <DragDropMultiFileSelect
-                                                key={multiFileSelectKey}
-                                                label="Asset Files"
-                                                description={
-                                                    fileItems.length > 0
-                                                        ? `Total Files to Upload: ${fileItems.length}`
-                                                        : "Select a folder or multiple files"
-                                                }
-                                                externalFileCount={fileItems.length}
-                                                onChange={handleFileSelection}
-                                            />
+                                            <SpaceBetween direction="vertical" size="m">
+                                                <FormField
+                                                    label="Asset Files"
+                                                    description={
+                                                        fileItems.length > 0
+                                                            ? `Total Files to Upload: ${fileItems.length}`
+                                                            : "Select a folder or multiple files"
+                                                    }
+                                                >
+                                                    <SpaceBetween direction="vertical" size="xs">
+                                                        <Toggle
+                                                            onChange={({ detail }) => {
+                                                                setAssetDetail((prev) => ({
+                                                                    ...prev,
+                                                                    isMultiFile: detail.checked,
+                                                                }));
+                                                                setSelectionMode(
+                                                                    detail.checked
+                                                                        ? "folder"
+                                                                        : "files"
+                                                                );
+                                                            }}
+                                                            checked={assetDetail.isMultiFile}
+                                                        >
+                                                            {assetDetail.isMultiFile
+                                                                ? "Folder Upload"
+                                                                : "File Upload"}
+                                                        </Toggle>
+
+                                                        <DragDropFileUpload
+                                                            label=""
+                                                            description=""
+                                                            multiFile={true}
+                                                            selectionMode={selectionMode}
+                                                            onSelect={handleFileSelection}
+                                                        />
+                                                    </SpaceBetween>
+                                                </FormField>
+                                            </SpaceBetween>
 
                                             {/* Preview File Selection - Only show when uploading to root path (including "/") */}
                                             {isRootPath && (
@@ -603,6 +661,7 @@ export default function ModifyAssetsUploadsPage() {
                                                 allowRemoval={true}
                                                 onRemoveItem={handleRemoveFile}
                                                 onRemoveAll={handleRemoveAllFiles}
+                                                displayMode="selection"
                                             />
                                         </Box>
                                     )}

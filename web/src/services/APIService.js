@@ -672,7 +672,10 @@ export const fetchCognitoUsers = async (api = API) => {
         }
     } catch (error) {
         console.log(error);
-        return error?.message;
+        // Extract the actual error message from the API response
+        const errorMessage =
+            error?.response?.data?.message || error?.message || "An error occurred";
+        return errorMessage;
     }
 };
 
@@ -681,14 +684,14 @@ export const fetchCognitoUsers = async (api = API) => {
  * @param {Object} params - Parameters object
  * @param {string} params.userId - User ID
  * @param {string} params.email - Email address
- * @param {string} params.phoneNumber - Phone number (optional, E.164 format)
+ * @param {string} params.phone - Phone number (optional, E.164 format)
  * @returns {Promise<[boolean, string]>}
  */
-export const createCognitoUser = async ({ userId, email, phoneNumber }, api = API) => {
+export const createCognitoUser = async ({ userId, email, phone }, api = API) => {
     try {
         const body = { userId, email };
-        if (phoneNumber) {
-            body.phoneNumber = phoneNumber;
+        if (phone) {
+            body.phone = phone;
         }
 
         const response = await api.post("api", "user/cognito", { body });
@@ -708,7 +711,10 @@ export const createCognitoUser = async ({ userId, email, phoneNumber }, api = AP
         }
     } catch (error) {
         console.log(error);
-        return [false, error?.message];
+        // Extract the actual error message from the API response
+        const errorMessage =
+            error?.response?.data?.message || error?.message || "An error occurred";
+        return [false, errorMessage];
     }
 };
 
@@ -717,14 +723,14 @@ export const createCognitoUser = async ({ userId, email, phoneNumber }, api = AP
  * @param {Object} params - Parameters object
  * @param {string} params.userId - User ID
  * @param {string} params.email - Email address (optional)
- * @param {string} params.phoneNumber - Phone number (optional, E.164 format)
+ * @param {string} params.phone - Phone number (optional, E.164 format)
  * @returns {Promise<[boolean, string]>}
  */
-export const updateCognitoUser = async ({ userId, email, phoneNumber }, api = API) => {
+export const updateCognitoUser = async ({ userId, email, phone }, api = API) => {
     try {
         const body = {};
         if (email) body.email = email;
-        if (phoneNumber) body.phoneNumber = phoneNumber;
+        if (phone) body.phone = phone;
 
         const response = await api.put("api", `user/cognito/${userId}`, { body });
 
@@ -743,7 +749,10 @@ export const updateCognitoUser = async ({ userId, email, phoneNumber }, api = AP
         }
     } catch (error) {
         console.log(error);
-        return [false, error?.message];
+        // Extract the actual error message from the API response
+        const errorMessage =
+            error?.response?.data?.message || error?.message || "An error occurred";
+        return [false, errorMessage];
     }
 };
 
@@ -765,7 +774,10 @@ export const deleteCognitoUser = async ({ userId }, api = API) => {
         }
     } catch (error) {
         console.log(error);
-        return [false, error?.message];
+        // Extract the actual error message from the API response
+        const errorMessage =
+            error?.response?.data?.message || error?.message || "An error occurred";
+        return [false, errorMessage];
     }
 };
 
@@ -796,7 +808,10 @@ export const resetCognitoUserPassword = async ({ userId }, api = API) => {
         }
     } catch (error) {
         console.log(error);
-        return [false, error?.message];
+        // Extract the actual error message from the API response
+        const errorMessage =
+            error?.response?.data?.message || error?.message || "An error occurred";
+        return [false, errorMessage];
     }
 };
 

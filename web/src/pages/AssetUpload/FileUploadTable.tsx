@@ -80,6 +80,7 @@ interface FileUploadTableProps {
     onRemoveItem?: (index: number) => void;
     onRemoveAll?: () => void;
     allowRemoval?: boolean;
+    displayMode?: "selection" | "upload";
 }
 
 /**
@@ -284,6 +285,7 @@ export const FileUploadTable = ({
     onRemoveItem,
     onRemoveAll,
     allowRemoval = false,
+    displayMode = "upload",
 }: FileUploadTableProps) => {
     let visibleContent = ["filesize", "status", "progress"];
 
@@ -424,6 +426,14 @@ export const FileUploadTable = ({
         }
 
         columnDefinitions = customColumnDefinitions;
+    }
+
+    // Filter columns based on displayMode
+    if (displayMode === "selection") {
+        // In selection mode, only show filepath, filesize, and actions (no progress or status)
+        columnDefinitions = columnDefinitions.filter(
+            (col) => col.id === "filepath" || col.id === "filesize" || col.id === "actions"
+        );
     }
 
     if (columnDefinitions) {

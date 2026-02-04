@@ -1137,6 +1137,7 @@ const AssetFileInfo = ({
                             allowRemoval={true}
                             onRemoveItem={handleRemoveFile}
                             onRemoveAll={handleRemoveAllFiles}
+                            displayMode="selection"
                         />
                     </Box>
                 )}

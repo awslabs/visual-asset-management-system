@@ -12,13 +12,13 @@ import {
     SpaceBetween,
     Input,
 } from "@cloudscape-design/components";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createCognitoUser, updateCognitoUser } from "../../services/APIService";
 
 interface CognitoUserFields {
     userId: string;
     email: string;
-    phoneNumber: string;
+    phone: string;
 }
 
 interface CreateCognitoUserProps {
@@ -85,8 +85,24 @@ export default function CreateCognitoUser({
     const [formState, setFormState] = useState<CognitoUserFields>({
         userId: initState?.userId || "",
         email: initState?.email || "",
-        phoneNumber: initState?.phoneNumber || "",
+        phone: initState?.phone || "",
     });
+
+    // Update form state when initState changes (e.g., after data reload)
+    useEffect(() => {
+        if (open) {
+            setFormState({
+                userId: initState?.userId || "",
+                email: initState?.email || "",
+                phone: initState?.phone || "",
+            });
+            // Reset errors when opening
+            setUserIdError(null);
+            setEmailError(null);
+            setPhoneError(null);
+            setFormError("");
+        }
+    }, [open, initState]);
 
     const handleSubmit = async () => {
         setInProgress(true);
@@ -99,8 +115,8 @@ export default function CreateCognitoUser({
                     userId: formState.userId,
                     email: formState.email,
                 };
-                if (formState.phoneNumber) {
-                    params.phoneNumber = formState.phoneNumber;
+                if (formState.phone) {
+                    params.phone = formState.phone;
                 }
                 response = await createCognitoUser(params);
             } else {
@@ -110,8 +126,8 @@ export default function CreateCognitoUser({
                 if (formState.email) {
                     params.email = formState.email;
                 }
-                if (formState.phoneNumber) {
-                    params.phoneNumber = formState.phoneNumber;
+                if (formState.phone) {
+                    params.phone = formState.phone;
                 }
                 response = await updateCognitoUser(params);
             }
@@ -122,7 +138,7 @@ export default function CreateCognitoUser({
                 setFormState({
                     userId: "",
                     email: "",
-                    phoneNumber: "",
+                    phone: "",
                 });
                 setUserIdError(null);
                 setEmailError(null);
@@ -143,7 +159,10 @@ export default function CreateCognitoUser({
             }
         } catch (error: any) {
             console.log("Error:", error);
-            setFormError(error?.message || "An error occurred");
+            // Extract the actual error message from the API response
+            const errorMessage =
+                error?.response?.data?.message || error?.message || "An error occurred";
+            setFormError(errorMessage);
         } finally {
             setInProgress(false);
         }
@@ -153,7 +172,7 @@ export default function CreateCognitoUser({
         // Email is always required for both Create and Update
         return (
             validateEmail(formState.email) === null &&
-            validatePhoneNumber(formState.phoneNumber) === null &&
+            validatePhoneNumber(formState.phone) === null &&
             (createOrUpdate === "Create" ? validateUserId(formState.userId) === null : true)
         );
     };
@@ -166,7 +185,7 @@ export default function CreateCognitoUser({
                 setFormState({
                     userId: "",
                     email: "",
-                    phoneNumber: "",
+                    phone: "",
                 });
                 setUserIdError(null);
                 setEmailError(null);
@@ -185,7 +204,7 @@ export default function CreateCognitoUser({
                                 setFormState({
                                     userId: "",
                                     email: "",
-                                    phoneNumber: "",
+                                    phone: "",
                                 });
                                 setUserIdError(null);
                                 setEmailError(null);
@@ -248,9 +267,9 @@ export default function CreateCognitoUser({
                         errorText={phoneError}
                     >
                         <Input
-                            value={formState.phoneNumber}
+                            value={formState.phone}
                             onChange={({ detail }) => {
-                                setFormState({ ...formState, phoneNumber: detail.value });
+                                setFormState({ ...formState, phone: detail.value });
                                 setPhoneError(validatePhoneNumber(detail.value));
                             }}
                             placeholder="+12345678900"

@@ -255,19 +255,29 @@ def update_cognito_user(user_id, update_data, claims_and_roles):
                 {'Name': 'email_verified', 'Value': 'true'}
             ])
         
+        # Handle phone number - if phone has a value, set it; otherwise clear it
         if phone:
+            # Phone number provided - update it and mark as verified
             user_attributes.extend([
                 {'Name': 'phone_number', 'Value': phone},
                 {'Name': 'phone_number_verified', 'Value': 'true'}
             ])
             logger.info(f"Adding phone number attribute: {phone}")
+        else:
+            # Phone number not provided or empty - set to empty and mark as not verified
+            user_attributes.extend([
+                {'Name': 'phone_number', 'Value': ''},
+                {'Name': 'phone_number_verified', 'Value': 'false'}
+            ])
+            logger.info("Clearing phone number (setting to empty)")
         
         # Update user attributes
-        cognito_client.admin_update_user_attributes(
-            UserPoolId=user_pool_id,
-            Username=user_id,
-            UserAttributes=user_attributes
-        )
+        if user_attributes:
+            cognito_client.admin_update_user_attributes(
+                UserPoolId=user_pool_id,
+                Username=user_id,
+                UserAttributes=user_attributes
+            )
         
         logger.info(f"Successfully updated Cognito user {user_id}")
         

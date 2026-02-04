@@ -29,6 +29,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   Revised CDK deployment code for the ALB website to try to fix a rare-recurring error when deploying that ALB targets need a unique IP list (issue with how custom resources were fetching subnet IPs and applying them)
 -   **Web** Updated web initial amplify config logic to properly error if the API config cannot be fetched and not to set error valued config into cookies, causing future reloads to use the errored config (and not refetch the API) without a cookie/cache reset.
 -   **CLI** Continued fixes to various CLI commands to make sure outputs when using the `--json-ouput` parameter only return a JSON output. This round of fixes is to take care of both missing inputs that required confirmation or showing errors becuase of missing parameters
+-   **Web** Fixed the file selector pop-up on the asset upload for existing assets to work in Firefox; folder selection on Firefox is still not yet supported
 
 ### Chores
 
@@ -37,6 +38,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   Added additional validation checks to the APIs regarding creating workflows and workflow execution
 -   Added featuresEnabled dynamoDB table writing check during CDK deployment to de-deplicate and overwrite existing values
 -   Updated description of viewers that currently do not support showing non-current version files for the primary selected file (will always show the latest file).
+-   **Web** Changed some of the columns that show up on the new asset and existing asset file table to not show the progress bar or status. This will help alleviate confusion on the pre-upload screen for users who were expecting files to start uploading after immediate selection.
 -   Updated CLINE/KIRO workflows for clarifying CLI patterns for json-output
 
 ### Known Outstanding Issues
