@@ -189,7 +189,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         }
         initializationRef.current = true;
 
-
         // ============================================================================
         // WASM FILESYSTEM CLEANUP
         // ============================================================================
@@ -358,13 +357,13 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         /**
          * Resolve relative path based on source file location
          * Handles ./ and ../ paths correctly.
-         * 
+         *
          * The boundary is the assetId level - paths can go up to but not above the assetId.
          * For example:
          * - Source: "source/asset/file.usd" (path within assetId)
          * - Reference: "../../../data/pot.usd"
          * - Result: "data/pot.usd" (relative to assetId root)
-         * 
+         *
          * The sourceFilePath should be the path relative to the assetId (assetId prefix stripped).
          */
         const resolveRelativePath = (
@@ -427,7 +426,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             // Debug logging for relative path resolution
             if (cleanPath.includes("../")) {
-                console.log(`  [resolveRelativePath] "${referencePath}" from "${sourceFilePath}" -> "${resolvedPath}"`);
+                console.log(
+                    `  [resolveRelativePath] "${referencePath}" from "${sourceFilePath}" -> "${resolvedPath}"`
+                );
             }
 
             return resolvedPath;
@@ -908,7 +909,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             return results;
         };
 
-
         /**
          * Wait for WASM to settle (finish loading and reporting errors)
          */
@@ -928,8 +928,25 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         // 4. Recreates drivers and verifies again (repeat until done)
         const loadAssets = async () => {
             try {
+                // ============================================================
+                // CRITICAL: Check for SharedArrayBuffer support BEFORE loading WASM
+                // WASM requires SharedArrayBuffer which needs specific HTTP headers:
+                // - Cross-Origin-Embedder-Policy: credentialless
+                // - Cross-Origin-Opener-Policy: same-origin
+                // ============================================================
+                if (typeof SharedArrayBuffer === "undefined") {
+                    throw new Error(
+                        "WebAssembly (WASM) Support Not Available.\n\n" +
+                            "The Needle USD viewer requires WebAssembly with SharedArrayBuffer support, which is not currently available. This may be due to:\n\n" +
+                            "• Missing or incorrect web server headers (Cross-Origin-Embedder-Policy and Cross-Origin-Opener-Policy).\n" +
+                            "• Browser restrictions or unsupported browser version.\n" +
+                            "• Safari browser limitations (does not support required 'credentialless' policy).\n\n" +
+                            "Please contact your system administrator to enable WASM support or try a different browser (Chrome, Firefox, or Edge recommended)."
+                    );
+                }
+
                 // Detect Deep Deps Setting
-                const allowDeepDepLoading = true //navigator.userAgent.toLowerCase().includes("firefox");
+                const allowDeepDepLoading = true; //navigator.userAgent.toLowerCase().includes("firefox");
 
                 // ============================================================
                 // CRITICAL: Set up console.warn override BEFORE loading ANY
@@ -979,7 +996,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         printErrBuffer = "";
                     }
                 };
-
 
                 setLoadingMessage("Loading USD Viewer dependencies...");
                 await NeedleUSDDependencyManager.loadUSDViewer();
@@ -1039,14 +1055,14 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 //         console.warn('[urlModifier] Unknown args format:', args);
                 //         url = String(args[0]);
                 //     }
-                    
+
                 //     // url format: "/file_0/path/to/dependency.usd"
                 //     const match = url.match(/^\/file_(\d+)\/(.+)$/);
                 //     if (!match) return url;
-                    
+
                 //     const relativePath = match[2];
                 //     const fileName = relativePath.split('/').pop() || 'file';
-                    
+
                 //     // Already downloaded?
                 //     if (onDemandDownloads.has(relativePath)) {
                 //         const content = onDemandDownloads.get(relativePath)!;
@@ -1057,11 +1073,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 //             }
                 //         };
                 //     }
-                    
+
                 //     if (failedDownloads.has(relativePath)) {
                 //         return url; // Let it fail
                 //     }
-                    
+
                 //     // Download using existing streams API logic
                 //     console.log(`[urlModifier] On-demand download: ${relativePath}`);
                 //     const content = await downloadFile(relativePath, authHeader, false, false);
@@ -1075,7 +1091,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 //             }
                 //         };
                 //     }
-                    
+
                 //     console.warn(`[urlModifier] Failed to download: ${relativePath}`);
                 //     failedDownloads.add(relativePath);
                 //     return url;
@@ -1280,7 +1296,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 );
                 if (driver instanceof Promise) driver = await driver;
 
-                console.log(`Driver created for: ${mainFileInfo.directory}/${mainFileInfo.fileName}`);
+                console.log(
+                    `Driver created for: ${mainFileInfo.directory}/${mainFileInfo.fileName}`
+                );
 
                 await waitForWASMToSettle(1500);
 
@@ -1304,11 +1322,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         }
                         // Handle Z-up axis
                         if (stage.GetUpAxis && String.fromCharCode(stage.GetUpAxis()) === "z") {
-                            let upAxis = String.fromCharCode(stage.GetUpAxis())
-                            console.log("Up Axis from USD:", upAxis)
+                            let upAxis = String.fromCharCode(stage.GetUpAxis());
+                            console.log("Up Axis from USD:", upAxis);
                             if (upAxis === "z") {
                                 fileInfos[0].fileGroup.rotation.x = -Math.PI / 2;
-                                console.log("Setting Z axis up")
+                                console.log("Setting Z axis up");
                             }
                         }
                     } catch (e) {
@@ -1321,9 +1339,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 // Skip verification loop for Deep Deps
                 if (!allowDeepDepLoading) {
-                    console.log(
-                        "Skipping verification loop of loading deep dependencies"
-                    );
+                    console.log("Skipping verification loop of loading deep dependencies");
                 }
 
                 // Main verification loop - drivers stay active, we just add files and redraw
@@ -1356,10 +1372,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
 
                     //Destroy the driver and we'll recreate again
-                    driver.delete()
-                    let oldDriver = driver
-                    renderInterface = null
-                    driver = null
+                    driver.delete();
+                    let oldDriver = driver;
+                    renderInterface = null;
+                    driver = null;
                     console.log("Destroying driver to add additional dependencies");
 
                     // Download missing dependencies in parallel (5 concurrent)
@@ -1444,7 +1460,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
 
                     //Wait until we deleted the old driver
-                    while(!oldDriver.isDeleted) {}
+                    while (!oldDriver.isDeleted) {}
 
                     renderInterface = new ThreeRenderDelegateInterface(delegateConfig);
                     driver = new USD.HdWebSyncDriver(
@@ -1455,7 +1471,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                     await waitForWASMToSettle(1500);
 
-                    console.log(`Driver re-created for: ${mainFileInfo.directory}/${mainFileInfo.fileName}`);
+                    console.log(
+                        `Driver re-created for: ${mainFileInfo.directory}/${mainFileInfo.fileName}`
+                    );
 
                     // Redraw driver to re-resolve references with newly added files
                     setLoadingMessage("Verifying dependencies...");
@@ -2321,7 +2339,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
     if (error) {
         return (
-            <div style={{ position: "relative", height: "100%" }} id="usd-viewer-root">
+            <div
+                style={{ position: "relative", height: "100%", backgroundColor: "#f5f5f5" }}
+                id="usd-viewer-root"
+            >
                 <div
                     style={{
                         color: "#d13212",
@@ -2433,8 +2454,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         }}
                     >
                         <div style={{ color: "#004085", fontWeight: "bold", marginBottom: "4px" }}>
-                            ℹ️ {additionalDepsWarning.loaded} additional compressed dependencies were
-                            recognized and loaded
+                            ℹ️ {additionalDepsWarning.loaded} additional compressed dependencies
+                            were recognized and loaded
                             {additionalDepsWarning.unresolved > 0 &&
                                 `. ${additionalDepsWarning.unresolved} dependencies could not be resolved.`}
                         </div>
@@ -2443,9 +2464,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             Some textures or referenced files may not display correctly.
                         </div>
                         <button
-                            onClick={() =>
-                                setAdditionalDepsWarning({ loaded: 0, unresolved: 0 })
-                            }
+                            onClick={() => setAdditionalDepsWarning({ loaded: 0, unresolved: 0 })}
                             style={{
                                 position: "absolute",
                                 top: "8px",

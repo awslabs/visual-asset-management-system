@@ -1201,6 +1201,37 @@ export class ApiBuilderNestedStack extends NestedStack {
             api: api,
         });
 
+        // Cognito User Management Routes
+        attachFunctionToApi(this, authFunctions.cognitoUserService, {
+            routePath: "/user/cognito",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.cognitoUserService, {
+            routePath: "/user/cognito",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.cognitoUserService, {
+            routePath: "/user/cognito/{userId}",
+            method: apigateway.HttpMethod.PUT,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.cognitoUserService, {
+            routePath: "/user/cognito/{userId}",
+            method: apigateway.HttpMethod.DELETE,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.cognitoUserService, {
+            routePath: "/user/cognito/{userId}/resetPassword",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
+
         // Metadata Schema Defaults - Auto-load default schemas if configured
         if (
             config.app.metadataSchema.autoLoadDefaultAssetLinksSchema ||

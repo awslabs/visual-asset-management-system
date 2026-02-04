@@ -393,18 +393,23 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (errors.length > 0) setFileErrors(errors);
 
-                // If no files loaded, check if it's an OCCT error and show it prominently
+                // If no files loaded, show the actual error message
                 if (loadedGroups.length === 0) {
-                    // Check if any error is OCCT-related
-                    const occtError = errors.find(
+                    // Check if any error is CAD/WASM-related (SharedArrayBuffer, OCCT, etc.)
+                    const cadError = errors.find(
                         (err) =>
+                            err.error.includes("CAD Format Support Not Available") ||
                             err.error.includes("CAD format support not enabled") ||
-                            err.error.includes("OCCT library")
+                            err.error.includes("OCCT library") ||
+                            err.error.includes("SharedArrayBuffer")
                     );
 
-                    if (occtError) {
-                        // Show OCCT error prominently
-                        throw new Error(occtError.error);
+                    if (cadError) {
+                        // Show CAD/WASM error prominently
+                        throw new Error(cadError.error);
+                    } else if (errors.length > 0) {
+                        // Show the first error if available
+                        throw new Error(errors[0].error);
                     } else {
                         throw new Error("No files loaded successfully");
                     }
@@ -1138,13 +1143,16 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
     if (error) {
         return (
-            <div style={{ position: "relative", height: "100%" }} id="threejs-viewer-root">
+            <div
+                style={{ position: "relative", height: "100%", backgroundColor: "#f5f5f5" }}
+                id="threejs-viewer-root"
+            >
                 <div
                     style={{
                         color: "#d13212",
                         fontSize: "1.4em",
                         lineHeight: "1.5",
-                        width: "100%",
+                        maxWidth: "800px",
                         position: "absolute",
                         top: "50%",
                         left: "50%",

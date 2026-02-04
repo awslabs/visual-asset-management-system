@@ -892,7 +892,8 @@ class TestAssetDeleteCommand:
             assert '✗ Asset Not Found' in result.output
             assert '--show-archived' in result.output
     
-    def test_delete_json_input_file(self, cli_runner, assets_command_mocks):
+    @patch('click.confirm')
+    def test_delete_json_input_file(self, mock_confirm, cli_runner, assets_command_mocks):
         """Test delete command with JSON input from file."""
         with assets_command_mocks as mocks:
             mocks['api_client'].delete_asset_permanent.return_value = {
@@ -902,6 +903,8 @@ class TestAssetDeleteCommand:
                 'operation': 'delete',
                 'timestamp': '2024-01-01T00:00:00Z'
             }
+            
+            mock_confirm.return_value = True  # User confirms deletion
             
             json_data = {
                 'databaseId': 'json-database',
@@ -914,6 +917,7 @@ class TestAssetDeleteCommand:
                 result = cli_runner.invoke(cli, [
                     'assets', 'delete', 'test-asset',
                     '-d', 'test-database',
+                    '--confirm',  # Add --confirm flag to skip interactive prompt
                     '--json-input', 'test.json'
                 ])
             
@@ -964,12 +968,15 @@ class TestAssetDeleteCommand:
                 output_json = json.loads(json_output)
                 assert output_json['assetId'] == 'test-asset'
     
-    def test_delete_deletion_error(self, cli_runner, assets_command_mocks):
+    @patch('click.confirm')
+    def test_delete_deletion_error(self, mock_confirm, cli_runner, assets_command_mocks):
         """Test delete command with deletion error (business logic exception)."""
         with assets_command_mocks as mocks:
             mocks['api_client'].delete_asset_permanent.side_effect = AssetDeletionError("Deletion confirmation required")
             
-            # Use JSON input to avoid interactive confirmation prompt
+            mock_confirm.return_value = True  # User confirms deletion
+            
+            # Use --confirm flag and JSON input to avoid interactive confirmation prompt
             json_data = {
                 'databaseId': 'test-database',
                 'assetId': 'test-asset',
@@ -981,6 +988,7 @@ class TestAssetDeleteCommand:
                 result = cli_runner.invoke(cli, [
                     'assets', 'delete', 'test-asset',
                     '-d', 'test-database',
+                    '--confirm',  # Add --confirm flag to skip interactive prompt
                     '--json-input', 'test.json'
                 ])
             

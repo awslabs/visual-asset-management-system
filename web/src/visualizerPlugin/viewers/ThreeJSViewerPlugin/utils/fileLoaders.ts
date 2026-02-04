@@ -231,6 +231,20 @@ export async function loadFile(
     // Check if this is an OCCT format
     const occtFormats = ["stp", "step", "iges", "igs", "brep"];
     if (occtFormats.includes(extension.toLowerCase())) {
+        // CRITICAL: Check for SharedArrayBuffer support FIRST
+        // CAD files require WASM which needs SharedArrayBuffer
+        if (typeof SharedArrayBuffer === "undefined") {
+            throw new Error(
+                `CAD Format Support Not Available.\n\n` +
+                    `This CAD file format requires WebAssembly with SharedArrayBuffer support, which is not currently available. This may be due to:\n\n` +
+                    `• Missing or incorrect web server headers (Cross-Origin-Embedder-Policy: credentialless and Cross-Origin-Opener-Policy: same-origin).\n` +
+                    `• Browser restrictions or unsupported browser version.\n` +
+                    `• Safari browser limitations (does not support required 'credentialless' policy).\n\n` +
+                    `Note: Safari browser does not support the required 'credentialless' policy. Please use Chrome, Firefox, or Edge for CAD file viewing.\n\n` +
+                    `Please contact your system administrator to enable WASM support for CAD files.`
+            );
+        }
+
         // Check if OCCT loader is available
         const bundle = (window as any).THREEBundle;
         if (!bundle || !bundle.occtimportjs) {

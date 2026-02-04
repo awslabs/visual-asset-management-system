@@ -1555,8 +1555,24 @@ def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
             raise click.ClickException("Asset ID is required (-a/--asset)")
         if not file_path:
             raise click.ClickException("File path is required (-p/--path)")
+        
+        # Require confirmation for deletion
         if not confirm:
-            raise click.ClickException("Permanent deletion requires confirmation (--confirm)")
+            if json_output:
+                # For JSON output, return error in JSON format
+                import sys
+                error_result = {
+                    "error": "Confirmation required",
+                    "message": "Permanent deletion requires the --confirm flag",
+                    "databaseId": database_id,
+                    "assetId": asset_id,
+                    "filePath": file_path
+                }
+                output_result(error_result, json_output=True)
+                sys.exit(1)
+            else:
+                # For CLI output, show helpful message
+                raise click.ClickException("Permanent deletion requires confirmation (--confirm)")
         
         # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)

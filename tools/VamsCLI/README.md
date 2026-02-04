@@ -88,6 +88,32 @@ vamscli tag-type create --tag-type-name "category" --description "Asset categori
 vamscli tag create --tag-name "urgent" --description "Urgent priority" --tag-type-name "priority"
 vamscli tag create --tag-name "model" --description "3D models" --tag-type-name "category"
 
+# Manage roles
+vamscli role list --auto-paginate
+vamscli role create -r admin --description "Administrator role" --mfa-required
+vamscli role update -r admin --description "Updated description"
+vamscli role delete -r old-role --confirm
+
+# Manage user role assignments
+vamscli role user list --auto-paginate
+vamscli role user create -u user@example.com --role-name admin --role-name viewer
+vamscli role user update -u user@example.com --role-name admin --role-name editor
+vamscli role user delete -u user@example.com --confirm
+
+# Manage role constraints for fine-grained access control
+vamscli role constraint list --auto-paginate
+vamscli role constraint get -c my-constraint
+vamscli role constraint create -c db-access --json-input constraint.json
+vamscli role constraint update -c db-access --name "Updated Name"
+vamscli role constraint delete -c old-constraint --confirm
+
+# Manage Cognito users (requires Cognito enabled)
+vamscli user cognito list --auto-paginate
+vamscli user cognito create -u user@example.com -e user@example.com -p +12345678900
+vamscli user cognito update -u user@example.com -e newemail@example.com
+vamscli user cognito reset-password -u user@example.com --confirm
+vamscli user cognito delete -u user@example.com --confirm
+
 # Create an asset with tags
 vamscli assets create -d my-database --name "My Asset" --description "Asset description" --tags urgent --tags model
 
@@ -213,7 +239,7 @@ vamscli industry engineering plm --help
 
 ## Available Commands
 
-VamsCLI provides sixteen main command groups:
+VamsCLI provides eighteen main command groups:
 
 -   **`vamscli setup`** - Configure CLI with API Gateway URL
 -   **`vamscli auth`** - Authentication and session management
@@ -229,6 +255,8 @@ VamsCLI provides sixteen main command groups:
 -   **`vamscli database`** - Database creation and management
 -   **`vamscli tag`** - Tag creation and management for asset organization
 -   **`vamscli tag-type`** - Tag type creation and management
+-   **`vamscli role`** - Role creation and management for access control
+-   **`vamscli user`** - User management for Cognito (requires Cognito enabled)
 -   **`vamscli industry`** - Industry-specific commands (spatial data processing, PLM import)
 -   **`vamscli profile`** - Profile management for multiple environments
 
@@ -277,6 +305,8 @@ VamsCLI provides comprehensive documentation organized by functional area:
 -   **[Metadata Management](docs/commands/metadata-management.md)** - Metadata operations for assets and files
 -   **[Database Administration](docs/commands/database-admin.md)** - Database and bucket management
 -   **[Tag Management](docs/commands/tag-management.md)** - Tag and tag type operations
+-   **[Role Management](docs/commands/role-management.md)** - Role creation and management for access control
+-   **[User Management](docs/commands/user-management.md)** - Cognito user management (requires Cognito enabled)
 -   **[Industry Spatial](docs/commands/industry-spatial.md)** - Spatial data processing (GLB combining)
 -   **[PLM Commands](docs/commands/plm-commands.md)** - Product Lifecycle Management (PLM XML import)
 -   **[Global Options](docs/commands/global-options.md)** - JSON patterns, automation, and best practices
@@ -287,6 +317,8 @@ VamsCLI provides comprehensive documentation organized by functional area:
 -   **[Search Issues](docs/troubleshooting/search-issues.md)** - Search functionality and OpenSearch problems
 -   **[Asset and File Issues](docs/troubleshooting/asset-file-issues.md)** - Asset and file operation problems
 -   **[Database and Tag Issues](docs/troubleshooting/database-tag-issues.md)** - Database and tag management problems
+-   **[Role Management Issues](docs/troubleshooting/role-issues.md)** - Role management problems and solutions
+-   **[User Management Issues](docs/troubleshooting/user-issues.md)** - Cognito user management problems
 -   **[Network and Configuration Issues](docs/troubleshooting/network-config-issues.md)** - Network, SSL, and proxy issues
 -   **[General Troubleshooting](docs/troubleshooting/general-troubleshooting.md)** - Debug mode, performance, and recovery
 

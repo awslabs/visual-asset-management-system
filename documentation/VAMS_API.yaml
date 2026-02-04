@@ -851,6 +851,268 @@ paths:
                                 $ref: '#/components/schemas/error'
             security:
             -   DefaultCognitoAuthorizer: []
+    /user/cognito:
+        get:
+            summary: "List all Cognito users."
+            description: "Retrieve a paginated list of all users in the Cognito user pool. Returns user details including email, phone, status, and MFA settings. Only available when Cognito is enabled."
+            responses:
+                "200":
+                    description: Users retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/listCognitoUsersResponse'
+                "400":
+                    description: Invalid pagination parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to list users.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: Cognito user management is not available (Cognito not enabled).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: maxItems
+                  in: query
+                  description: "Maximum number of users to return (1-60)"
+                  schema:
+                      type: integer
+                      minimum: 1
+                      maximum: 60
+                      default: 60
+                - name: pageSize
+                  in: query
+                  description: "Number of users per page (1-60)"
+                  schema:
+                      type: integer
+                      minimum: 1
+                      maximum: 60
+                      default: 60
+                - name: startingToken
+                  in: query
+                  description: "Pagination token from previous response"
+                  schema:
+                      type: string
+            security:
+                - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create a new Cognito user."
+            description: "Create a new user in the Cognito user pool with auto-verified email and optional phone. Cognito auto-generates a temporary password and sends a welcome email to the user. Only available when Cognito is enabled."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/createCognitoUserRequest'
+            responses:
+                "200":
+                    description: User created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/cognitoUserOperationResponse'
+                "400":
+                    description: Invalid parameters or user already exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create users.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: Cognito user management is not available (Cognito not enabled).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /user/cognito/{userId}:
+        put:
+            summary: "Update a Cognito user's email and/or phone."
+            description: "Update an existing Cognito user's email and/or phone number. Updated attributes are automatically marked as verified. At least one field must be provided. Only available when Cognito is enabled."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/updateCognitoUserRequest'
+            responses:
+                "200":
+                    description: User updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/cognitoUserOperationResponse'
+                "400":
+                    description: Invalid parameters or no fields provided for update.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update users.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: User not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: Cognito user management is not available (Cognito not enabled).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: userId
+                  in: path
+                  description: "User ID (username) to update"
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/userid_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete a Cognito user."
+            description: "Permanently delete a user from the Cognito user pool. This operation cannot be undone. Only available when Cognito is enabled."
+            responses:
+                "200":
+                    description: User deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/cognitoUserOperationResponse'
+                "400":
+                    description: Invalid userId parameter.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete users.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: User not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: Cognito user management is not available (Cognito not enabled).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: userId
+                  in: path
+                  description: "User ID (username) to delete"
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/userid_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /user/cognito/{userId}/resetPassword:
+        post:
+            summary: "Reset a Cognito user's password."
+            description: "Reset a user's password using Cognito's built-in password reset. Cognito auto-generates a new temporary password and sends it to the user's email. The user must change the password on next login. Only available when Cognito is enabled."
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/resetPasswordRequest'
+            responses:
+                "200":
+                    description: Password reset successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/cognitoUserOperationResponse'
+                "400":
+                    description: Invalid parameters or confirmation not provided.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to reset passwords.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: User not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: Cognito user management is not available (Cognito not enabled).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: userId
+                  in: path
+                  description: "User ID (username) to reset password for"
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/userid_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
     /check-subscription:
         post:
             summary: "Verify if subscription exists or not."
@@ -9276,6 +9538,169 @@ components:
                 - timed_out
                 - _shards
                 - hits
+        
+        # Cognito User Management API Schemas
+        createCognitoUserRequest:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/userid_regex"
+                    description: "User ID (username) - 3-256 characters"
+                email:
+                    $ref: "#/components/schemas/email_pattern_regex"
+                    description: "User email address"
+                phone:
+                    type: string
+                    pattern: ^\+[0-9]{10,15}$
+                    description: "Optional phone number in E.164 format (e.g., +12345678900)"
+            required:
+                - userId
+                - email
+            example:
+                userId: "user@example.com"
+                email: "user@example.com"
+                phone: "+12345678900"
+        
+        updateCognitoUserRequest:
+            type: object
+            properties:
+                email:
+                    $ref: "#/components/schemas/email_pattern_regex"
+                    description: "Updated email address (optional)"
+                phone:
+                    type: string
+                    pattern: ^\+[0-9]{10,15}$
+                    description: "Updated phone number in E.164 format (optional)"
+            required: []
+            example:
+                email: "newemail@example.com"
+                phone: "+19876543210"
+        
+        resetPasswordRequest:
+            type: object
+            properties:
+                confirmReset:
+                    type: boolean
+                    default: false
+                    description: "Confirmation for password reset (must be true)"
+            required:
+                - confirmReset
+            example:
+                confirmReset: true
+        
+        cognitoUserResponse:
+            type: object
+            properties:
+                userId:
+                    type: string
+                    description: "User ID (username)"
+                email:
+                    type: string
+                    description: "User email address"
+                phone:
+                    type: string
+                    description: "User phone number (if set)"
+                    nullable: true
+                userStatus:
+                    type: string
+                    enum: [UNCONFIRMED, CONFIRMED, ARCHIVED, COMPROMISED, UNKNOWN, RESET_REQUIRED, FORCE_CHANGE_PASSWORD]
+                    description: "Cognito user status"
+                enabled:
+                    type: boolean
+                    description: "Whether the user account is enabled"
+                userCreateDate:
+                    type: string
+                    format: date-time
+                    description: "Date when user was created"
+                    nullable: true
+                userLastModifiedDate:
+                    type: string
+                    format: date-time
+                    description: "Date when user was last modified"
+                    nullable: true
+                mfaEnabled:
+                    type: boolean
+                    description: "Whether MFA is enabled for this user"
+                    default: false
+            required:
+                - userId
+                - email
+                - userStatus
+                - enabled
+            example:
+                userId: "user@example.com"
+                email: "user@example.com"
+                phone: "+12345678900"
+                userStatus: "CONFIRMED"
+                enabled: true
+                userCreateDate: "2024-01-15T10:30:00.000Z"
+                userLastModifiedDate: "2024-01-15T10:30:00.000Z"
+                mfaEnabled: false
+        
+        listCognitoUsersResponse:
+            type: object
+            properties:
+                users:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/cognitoUserResponse"
+                    description: "List of Cognito users"
+                NextToken:
+                    type: string
+                    description: "Pagination token for retrieving next page"
+            required:
+                - users
+            example:
+                users:
+                    - userId: "user1@example.com"
+                      email: "user1@example.com"
+                      phone: "+12345678900"
+                      userStatus: "CONFIRMED"
+                      enabled: true
+                      userCreateDate: "2024-01-15T10:30:00.000Z"
+                      userLastModifiedDate: "2024-01-15T10:30:00.000Z"
+                      mfaEnabled: false
+                    - userId: "user2@example.com"
+                      email: "user2@example.com"
+                      userStatus: "FORCE_CHANGE_PASSWORD"
+                      enabled: true
+                      userCreateDate: "2024-01-16T14:20:00.000Z"
+                      userLastModifiedDate: "2024-01-16T14:20:00.000Z"
+                      mfaEnabled: false
+                NextToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        
+        cognitoUserOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                userId:
+                    type: string
+                    description: "User ID that was operated on"
+                operation:
+                    type: string
+                    enum: [create, update, delete, resetPassword]
+                    description: "Operation that was performed"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+            required:
+                - success
+                - message
+                - userId
+                - operation
+                - timestamp
+            example:
+                success: true
+                message: "User user@example.com created successfully. A welcome email with temporary password has been sent to their email."
+                userId: "user@example.com"
+                operation: "create"
+                timestamp: "2024-01-15T10:30:00.000Z"
     parameters:
       maxItemsParam:
         name: maxItems

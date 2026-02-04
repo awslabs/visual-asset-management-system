@@ -436,24 +436,37 @@ def delete(ctx: click.Context, asset_id: str, database: str, reason: Optional[st
         
         # Require confirmation for permanent deletion
         if not confirm:
-            output_warning("⚠️  Permanent deletion requires explicit confirmation!", json_output)
-            output_info("This action cannot be undone and will permanently delete:", json_output)
-            output_info("  • The asset and all its metadata", json_output)
-            output_info("  • All asset files and versions", json_output)
-            output_info("  • All asset links and relationships", json_output)
-            output_info("  • All comments and version history", json_output)
-            output_info("", json_output)
-            output_info("Use --confirm flag to proceed with permanent deletion.", json_output)
-            raise click.ClickException("Confirmation required for permanent deletion")
+            if json_output:
+                # For JSON output, return error in JSON format
+                import sys
+                error_result = {
+                    "error": "Confirmation required",
+                    "message": "Permanent deletion requires the --confirm flag",
+                    "assetId": asset_id,
+                    "databaseId": database
+                }
+                output_result(error_result, json_output=True)
+                sys.exit(1)
+            else:
+                # For CLI output, show helpful message
+                output_warning("⚠️  Permanent deletion requires explicit confirmation!", False)
+                output_info("This action cannot be undone and will permanently delete:", False)
+                output_info("  • The asset and all its metadata", False)
+                output_info("  • All asset files and versions", False)
+                output_info("  • All asset links and relationships", False)
+                output_info("  • All comments and version history", False)
+                output_info("", False)
+                output_info("Use --confirm flag to proceed with permanent deletion.", False)
+                raise click.ClickException("Confirmation required for permanent deletion")
         
-        # Additional confirmation prompt for safety (only in CLI mode)
-        if not json_input and not json_output:  # Skip interactive prompt if using JSON input or JSON output
+        # Additional confirmation prompt for safety (skip in JSON mode)
+        if not json_output:
             output_warning(f"⚠️  You are about to permanently delete asset '{asset_id}' from database '{database}'", False)
             output_warning("This action cannot be undone!", False)
             
             if not click.confirm("Are you sure you want to proceed?"):
                 output_info("Deletion cancelled.", False)
-                return
+                return None
         
         output_status(f"Permanently deleting asset '{asset_id}' from database '{database}'...", json_output)
         

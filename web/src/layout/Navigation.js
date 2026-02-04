@@ -95,6 +95,15 @@ export function Navigation({
                     text: "Users in Roles",
                     href: "#/auth/userroles/",
                 },
+                ...(!window.DISABLE_COGNITO
+                    ? [
+                          {
+                              type: "link",
+                              text: "Cognito User Management",
+                              href: "#/auth/cognitousers/",
+                          },
+                      ]
+                    : []),
                 {
                     type: "link",
                     text: "Metadata Schema",

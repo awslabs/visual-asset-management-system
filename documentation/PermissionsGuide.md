@@ -370,6 +370,9 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: PUT)
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
 -   -   `Workflow` (databaseId, workflowId) - PUT (api: PUT)
+-   `/user/cognito` - GET/POST
+-   `/user/cognito/{userId}` - PUT/DELETE
+-   `/user/cognito/{userId}/resetPassword` - POST
 
 ### Constraint Statement Criteria Operators
 

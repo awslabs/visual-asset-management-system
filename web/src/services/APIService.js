@@ -623,6 +623,184 @@ export const fetchConstraints = async (api = API) => {
 };
 
 /**
+ * Returns array of all Cognito users
+ * @returns {Promise<Array|boolean>}
+ */
+export const fetchCognitoUsers = async (api = API) => {
+    try {
+        let response = await api.get("api", "user/cognito", {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+
+        // Handle direct response with users array
+        if (response.users && Array.isArray(response.users)) {
+            items = items.concat(response.users);
+            while (response.nextToken) {
+                init["queryStringParameters"]["startingToken"] = response.nextToken;
+                response = await api.get("api", "user/cognito", init);
+                if (response.users) {
+                    items = items.concat(response.users);
+                }
+            }
+            return items;
+        }
+        // Handle legacy response format with message wrapper
+        else if (response.message) {
+            if (response.message.users && Array.isArray(response.message.users)) {
+                items = items.concat(response.message.users);
+                while (response.message.nextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.nextToken;
+                    response = await api.get("api", "user/cognito", init);
+                    if (response.message && response.message.users) {
+                        items = items.concat(response.message.users);
+                    }
+                }
+                return items;
+            } else if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", "user/cognito", init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+/**
+ * Creates a new Cognito user
+ * @param {Object} params - Parameters object
+ * @param {string} params.userId - User ID
+ * @param {string} params.email - Email address
+ * @param {string} params.phoneNumber - Phone number (optional, E.164 format)
+ * @returns {Promise<[boolean, string]>}
+ */
+export const createCognitoUser = async ({ userId, email, phoneNumber }, api = API) => {
+    try {
+        const body = { userId, email };
+        if (phoneNumber) {
+            body.phoneNumber = phoneNumber;
+        }
+
+        const response = await api.post("api", "user/cognito", { body });
+
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
+ * Updates an existing Cognito user
+ * @param {Object} params - Parameters object
+ * @param {string} params.userId - User ID
+ * @param {string} params.email - Email address (optional)
+ * @param {string} params.phoneNumber - Phone number (optional, E.164 format)
+ * @returns {Promise<[boolean, string]>}
+ */
+export const updateCognitoUser = async ({ userId, email, phoneNumber }, api = API) => {
+    try {
+        const body = {};
+        if (email) body.email = email;
+        if (phoneNumber) body.phoneNumber = phoneNumber;
+
+        const response = await api.put("api", `user/cognito/${userId}`, { body });
+
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
+ * Deletes a Cognito user
+ * @param {Object} params - Parameters object
+ * @param {string} params.userId - User ID
+ * @returns {Promise<[boolean, string]>}
+ */
+export const deleteCognitoUser = async ({ userId }, api = API) => {
+    try {
+        const response = await api.del("api", `user/cognito/${userId}`, {});
+
+        if (response.message) {
+            console.log(response.message);
+            return [true, response.message];
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
+ * Resets a Cognito user's password
+ * @param {Object} params - Parameters object
+ * @param {string} params.userId - User ID
+ * @returns {Promise<[boolean, string]>}
+ */
+export const resetCognitoUserPassword = async ({ userId }, api = API) => {
+    try {
+        const response = await api.post("api", `user/cognito/${userId}/resetPassword`, {
+            body: { userId },
+        });
+
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
  * Returns array of all the comments that are attached to a given assetId
  * @returns {Promise<boolean|{message}|any>}
  */

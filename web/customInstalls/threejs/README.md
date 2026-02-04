@@ -14,6 +14,52 @@ The ThreeJS viewer provides support for viewing 3D models in various formats inc
 -   COLLADA (.dae)
 -   3DS (3D Studio)
 -   3MF (3D Manufacturing Format)
+-   **CAD Formats** (optional, requires OCCT): STEP (.stp, .step), IGES (.iges), BREP (.brep)
+
+## ⚠️ Browser Requirements for CAD Files
+
+**CAD file formats (STEP, IGES, BREP) require WebAssembly (WASM) with SharedArrayBuffer support.** If you plan to enable OCCT support for CAD files, your deployment must meet specific requirements.
+
+### Required HTTP Headers (CAD Files Only)
+
+For CAD file viewing to work, your web server **MUST** serve the following HTTP headers:
+
+```
+Cross-Origin-Embedder-Policy: credentialless
+Cross-Origin-Opener-Policy: same-origin
+```
+
+These headers enable the `SharedArrayBuffer` API which is required by the OCCT WASM module.
+
+**Note**: These headers are only required if you enable OCCT support. Standard 3D formats (GLTF, OBJ, FBX, etc.) work without these headers.
+
+### Browser Compatibility (CAD Files)
+
+| Browser | CAD Support      | Notes                                    |
+| ------- | ---------------- | ---------------------------------------- |
+| Chrome  | ✅ Supported     | Recommended for CAD files                |
+| Firefox | ✅ Supported     | Recommended for CAD files                |
+| Edge    | ✅ Supported     | Recommended for CAD files                |
+| Safari  | ❌ Not Supported | Does not support `credentialless` policy |
+
+**Safari Limitation**: Safari does not support the `Cross-Origin-Embedder-Policy: credentialless` value required for CAD file viewing. Users on Safari will see an error message directing them to use Chrome, Firefox, or Edge for CAD files.
+
+### Error Messages (CAD Files)
+
+If a user tries to view a CAD file without proper browser support, they will see:
+
+```
+CAD Format Support Not Available
+
+This CAD file format requires WebAssembly with SharedArrayBuffer support,
+which is not currently available. This may be due to:
+
+• Missing or incorrect web server headers
+• Browser restrictions or unsupported browser version
+• Safari browser limitations
+
+Please contact your system administrator to enable WASM support for CAD files.
+```
 
 ## Installation
 

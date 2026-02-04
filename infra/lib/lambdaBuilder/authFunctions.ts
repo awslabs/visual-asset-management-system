@@ -28,6 +28,7 @@ interface AuthFunctions {
     authConstraintsService: lambda.Function;
     authLoginProfile: lambda.Function;
     routes: lambda.Function;
+    cognitoUserService: lambda.Function;
 }
 
 export function buildAuthFunctions(
@@ -61,6 +62,15 @@ export function buildAuthFunctions(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
+            config,
+            vpc,
+            subnets
+        ),
+        cognitoUserService: buildCognitoUserService(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            authResources,
             config,
             vpc,
             subnets
@@ -175,6 +185,71 @@ export function buildRoutesService(
             ...environment,
         },
     });
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    return fun;
+}
+
+export function buildCognitoUserService(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    authResources: authResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "cognitoUserService";
+
+    // Build environment variables
+    const environment: { [key: string]: string } = {
+        COGNITO_ENABLED: config.app.authProvider.useCognito.enabled ? "true" : "false",
+    };
+
+    // Add Cognito-specific variables if enabled and authResources available
+    if (config.app.authProvider.useCognito.enabled && authResources?.cognito?.userPoolId) {
+        environment.USER_POOL_ID = authResources.cognito.userPoolId;
+    }
+
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(2),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: environment,
+    });
+
+    // Grant Cognito permissions only if Cognito is enabled and user pool exists
+    if (config.app.authProvider.useCognito.enabled && authResources?.cognito?.userPool) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: [
+                    "cognito-idp:ListUsers",
+                    "cognito-idp:AdminCreateUser",
+                    "cognito-idp:AdminUpdateUserAttributes",
+                    "cognito-idp:AdminDeleteUser",
+                    "cognito-idp:AdminResetUserPassword",
+                    "cognito-idp:AdminSetUserPassword",
+                    "cognito-idp:AdminGetUser",
+                ],
+                resources: [authResources.cognito.userPool.userPoolArn],
+            })
+        );
+    }
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);

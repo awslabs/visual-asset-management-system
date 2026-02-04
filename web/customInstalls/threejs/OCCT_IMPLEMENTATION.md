@@ -1,5 +1,48 @@
 # OCCT Optional Implementation for ThreeJS Viewer
 
+## ⚠️ Prerequisites
+
+Before enabling OCCT support, ensure your deployment meets these critical requirements:
+
+### 1. WebAssembly Requirements
+
+OCCT uses WebAssembly (WASM) which requires **SharedArrayBuffer** support. This has specific browser and server requirements:
+
+#### Required HTTP Headers
+
+Your web server **MUST** serve these headers:
+
+```
+Cross-Origin-Embedder-Policy: credentialless
+Cross-Origin-Opener-Policy: same-origin
+```
+
+**Without these headers, CAD file viewing will not work.**
+
+#### Browser Compatibility
+
+| Browser | Support Status     | Notes                                    |
+| ------- | ------------------ | ---------------------------------------- |
+| Chrome  | ✅ Fully Supported | Recommended                              |
+| Firefox | ✅ Fully Supported | Recommended                              |
+| Edge    | ✅ Fully Supported | Recommended                              |
+| Safari  | ❌ Not Supported   | Does not support `credentialless` policy |
+
+**Safari Users**: Safari does not support the `Cross-Origin-Embedder-Policy: credentialless` value. Users on Safari attempting to view CAD files will receive an error message directing them to use Chrome, Firefox, or Edge.
+
+### 2. Deployment Configuration
+
+The required headers are configured in your VAMS deployment:
+
+-   **CloudFront**: Headers set via response headers policies in CDK infrastructure
+-   **ALB**: Service worker in `index.html` adds headers for Application Load Balancer deployments
+
+**Verify your deployment includes proper header configuration before enabling OCCT.**
+
+### 3. License Considerations
+
+OCCT uses the **LGPL (Lesser General Public License)**, which is more restrictive than VAMS's Apache-2.0 license. Consult your legal team before enabling OCCT support in production deployments.
+
 ## Overview
 
 OCCT (Open CASCADE Technology) support for CAD file formats (STEP, IGES, BREP) is implemented as an **optional feature** that is **disabled by default** due to LGPL licensing restrictions.

@@ -27,6 +27,7 @@ const Tags = React.lazy(() => import("./pages/Tag/Tags"));
 const Subscriptions = React.lazy(() => import("./pages/Subscription/Subscriptions"));
 const Roles = React.lazy(() => import("./pages/auth/Roles"));
 const UserRoles = React.lazy(() => import("./pages/auth/UserRoles"));
+const CognitoUsers = React.lazy(() => import("./pages/auth/CognitoUsers"));
 const ModifyAssetsUploadsPage = React.lazy(() => import("./pages/AssetUpload/ModifyAssetsUploads"));
 const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
 const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
@@ -144,6 +145,11 @@ export const routeTable: RouteOption[] = [
         path: "/auth/userroles",
         Page: UserRoles,
         active: "#/auth/userroles/",
+    },
+    {
+        path: "/auth/cognitousers",
+        Page: CognitoUsers,
+        active: "#/auth/cognitousers/",
     },
     {
         path: "/metadataschema/:databaseId",
