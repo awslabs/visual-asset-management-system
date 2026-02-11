@@ -21,7 +21,7 @@ export const UserRolesListDefinition = new ListDefinition({
     singularNameTitleCase: "Users in Role",
     visibleColumns: ["userId", "roleName"],
     filterColumns: [{ name: "name", placeholder: "Name" }],
-    elementId: "name",
+    elementId: "userId",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         userRoleBody.userId = item.userId;
         try {

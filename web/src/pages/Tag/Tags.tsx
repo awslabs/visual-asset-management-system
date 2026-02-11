@@ -20,7 +20,7 @@ export const TagsListDefinition = new ListDefinition({
     singularNameTitleCase: "Tag",
     visibleColumns: ["tagName", "description", "tagTypeName"],
     filterColumns: [{ name: "tagName", placeholder: "Name" }],
-    elementId: "name",
+    elementId: "tagName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
             const response: any = await API.del("api", `tags/${item.tagName}`, {});
@@ -60,7 +60,7 @@ export const TagTypesListDefinition = new ListDefinition({
     singularNameTitleCase: "Tag Type",
     visibleColumns: ["tagTypeName", "description", "required", "tags"],
     filterColumns: [{ name: "name", placeholder: "Name" }],
-    elementId: "name",
+    elementId: "tagTypeName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
             const response: any = await API.del("api", `tag-types/${item.tagTypeName}`, {});

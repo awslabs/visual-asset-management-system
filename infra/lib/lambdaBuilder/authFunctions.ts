@@ -26,6 +26,7 @@ import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
 
 interface AuthFunctions {
     authConstraintsService: lambda.Function;
+    authConstraintsTemplateService: lambda.Function;
     authLoginProfile: lambda.Function;
     routes: lambda.Function;
     cognitoUserService: lambda.Function;
@@ -42,6 +43,15 @@ export function buildAuthFunctions(
 ): AuthFunctions {
     return {
         authConstraintsService: buildAuthConstraintsFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            authResources,
+            config,
+            vpc,
+            subnets
+        ),
+        authConstraintsTemplateService: buildAuthConstraintsTemplateFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
@@ -94,6 +104,41 @@ export function buildAuthConstraintsFunction(
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(1),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {},
+    });
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
+}
+
+export function buildAuthConstraintsTemplateFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    authResources: authResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "authConstraintsTemplateService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(2),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas

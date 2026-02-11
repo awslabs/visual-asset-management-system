@@ -509,6 +509,11 @@ class InvalidConstraintDataError(ConstraintError):
     pass
 
 
+class TemplateImportError(ConstraintError):
+    """Raised when constraint template import fails."""
+    pass
+
+
 # User role-related business logic exceptions
 class UserRoleError(BusinessLogicError):
     """Base class for user role-related errors."""

@@ -5,14 +5,11 @@ import {
     Form,
     FormField,
     Modal,
-    Select,
     SpaceBetween,
-    Multiselect,
     Input,
 } from "@cloudscape-design/components";
 import { API } from "aws-amplify";
 import { useState } from "react";
-import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
 
 interface RoleFields {
     source: string;
@@ -31,7 +28,7 @@ interface CreateConsraintProps {
     initState: any;
 }
 const roleBody = {
-    source: "",
+    source: "INTERNAL_SYSTEM",
     description: "",
     id: "",
     roleName: "",
@@ -47,10 +44,6 @@ function validateNameLength(name: string) {
 function validateName(name: string) {
     if (name === undefined) return undefined;
     return validateNameLength(name);
-}
-
-function validateSource(selectedOption: string | undefined): string | null {
-    return selectedOption === undefined ? "Please select a Source" : null;
 }
 
 function validateDescriptionLength(description: string) {
@@ -74,10 +67,7 @@ export default function CreateTagType({
     const [formError, setFormError] = useState("");
     const [formState, setFormState] = useState<RoleFields>({
         ...initState,
-    });
-    const [selectedSource, setSelectedSouce] = useState<OptionDefinition | null>({
-        label: formState.source,
-        value: formState.source,
+        source: initState?.source || "INTERNAL_SYSTEM",
     });
 
     return (
@@ -87,8 +77,8 @@ export default function CreateTagType({
                 setOpen(false);
                 setFormState({
                     ...initState,
+                    source: initState?.source || "INTERNAL_SYSTEM",
                 });
-                setSelectedSouce(null);
                 setFormError("");
             }}
             size="large"
@@ -102,9 +92,9 @@ export default function CreateTagType({
                                 setOpen(false);
                                 setFormState({
                                     ...initState,
+                                    source: initState?.source || "INTERNAL_SYSTEM",
                                 });
                                 setInProgress(true);
-                                setSelectedSouce(null);
                                 setFormError("");
                             }}
                         >
@@ -131,8 +121,8 @@ export default function CreateTagType({
                                             setReload(true);
                                             setFormState({
                                                 ...initState,
+                                                source: initState?.source || "INTERNAL_SYSTEM",
                                             });
-                                            setSelectedSouce(null);
                                             setFormError("");
                                         })
                                         .catch((err) => {
@@ -160,8 +150,8 @@ export default function CreateTagType({
                                             setReload(true);
                                             setFormState({
                                                 ...initState,
+                                                source: initState?.source || "INTERNAL_SYSTEM",
                                             });
-                                            setSelectedSouce(null);
                                             setFormError("");
                                         })
                                         .catch((err) => {
@@ -179,8 +169,7 @@ export default function CreateTagType({
                             disabled={
                                 inProgress ||
                                 validateName(formState.roleName) !== null ||
-                                validateDescriptionLength(formState.description) !== null ||
-                                validateSource(formState.source) !== null
+                                validateDescriptionLength(formState.description) !== null
                             }
                             data-testid={`${createOrUpdate}-authcriteria-button`}
                         >
@@ -210,26 +199,15 @@ export default function CreateTagType({
                     </FormField>
                     <FormField
                         label="Source"
-                        constraintText="Required. Select one Source"
-                        errorText={validateSource(formState.source)}
+                        constraintText="Optional. Defaults to INTERNAL_SYSTEM"
                     >
-                        <Select
-                            selectedOption={
-                                selectedSource || {
-                                    label: formState.source,
-                                    value: formState.source,
-                                }
-                            }
-                            placeholder="Entity Type"
-                            options={[{ label: "INTERNAL_SYSTEM", value: "INTERNAL_SYSTEM" }]}
-                            disabled={createOrUpdate === "Update"}
+                        <Input
+                            value={formState.source}
                             onChange={({ detail }) => {
-                                setSelectedSouce(detail.selectedOption as OptionDefinition);
-                                setFormState({
-                                    ...formState,
-                                    source: detail.selectedOption.value ?? "",
-                                });
+                                setFormState({ ...formState, source: detail.value });
                             }}
+                            placeholder="INTERNAL_SYSTEM"
+                            data-testid="source-input"
                         />
                     </FormField>
                     <FormField

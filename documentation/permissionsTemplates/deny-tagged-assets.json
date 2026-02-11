@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "name": "Deny Tagged Asset Editing",
+    "description": "Overlay template that denies editing (PUT/POST/DELETE) of assets with a specific tag. Apply on top of an existing role to create exceptions. DENY always overrides ALLOW.",
+    "version": "1.0"
+  },
+  "variables": [
+    {"name": "ROLE_NAME", "required": true, "description": "The existing role to add the deny constraint to"},
+    {"name": "TAG_VALUE", "required": true, "description": "The tag value to deny editing for (e.g., 'locked', 'approved', 'production')"}
+  ],
+  "constraints": [
+    {
+      "name": "{{ROLE_NAME}}-deny-tagged-{{TAG_VALUE}}",
+      "description": "Deny editing of assets tagged with '{{TAG_VALUE}}'",
+      "objectType": "asset",
+      "criteriaAnd": [
+        {"field": "tags", "operator": "contains", "value": "{{TAG_VALUE}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "PUT", "type": "deny"},
+        {"action": "POST", "type": "deny"},
+        {"action": "DELETE", "type": "deny"}
+      ]
+    }
+  ]
+}

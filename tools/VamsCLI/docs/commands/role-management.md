@@ -22,6 +22,8 @@ This guide covers the role management commands in VamsCLI, which allow you to cr
     -   [role constraint create](#role-constraint-create)
     -   [role constraint update](#role-constraint-update)
     -   [role constraint delete](#role-constraint-delete)
+-   [Constraint Template Commands](#constraint-template-commands)
+    -   [role constraint template import](#role-constraint-template-import)
 -   [Common Workflows](#common-workflows)
 -   [JSON Input/Output](#json-inputoutput)
 -   [Best Practices](#best-practices)
@@ -827,6 +829,112 @@ Are you sure you want to proceed? [y/N]: y
   Constraint ID: old-constraint
   Message: Constraint old-constraint deleted successfully
   Timestamp: 2024-01-01T00:00:00
+```
+
+## Constraint Template Commands
+
+Constraint templates allow you to import multiple constraints at once from a pre-defined JSON template. Templates use variable placeholders (e.g., `{{DATABASE_ID}}`) that are substituted with values you provide. This is useful for setting up standard permission patterns for roles.
+
+Pre-built templates are available in `documentation/permissionsTemplates/`:
+
+-   `database-admin.json` - Full admin access to a specific database
+-   `database-user.json` - Standard user access (create, edit, view)
+-   `database-readonly.json` - Read-only access to a specific database
+-   `global-readonly.json` - Read-only access across all databases
+-   `deny-tagged-assets.json` - Deny access to assets with specific tags
+
+For detailed explanations of what each template provides (constraint matrices, design decisions, GLOBAL keyword usage, and tier enforcement), see [documentation/PermissionsGuide.md](../../../../documentation/PermissionsGuide.md).
+
+### role constraint template import
+
+Import constraints from a JSON permission template.
+
+#### Basic Usage
+
+```bash
+# Import from a template file
+vamscli role constraint template import -j ./database-admin.json
+
+# Import with JSON output
+vamscli role constraint template import -j ./database-admin.json --json-output
+```
+
+#### Options
+
+-   `--json-input, -j TEXT` (required): Template JSON data as a string or path to a JSON file
+-   `--json-output`: Output raw JSON response
+
+#### Template JSON Format
+
+The template JSON must include:
+
+-   `variableValues`: Dictionary of variable substitutions (must include `ROLE_NAME`)
+-   `constraints`: List of constraint definitions
+
+Optional fields:
+
+-   `metadata`: Template name, description, and version
+-   `variables`: Variable definitions with descriptions and defaults
+
+```json
+{
+    "metadata": {
+        "name": "Database Admin",
+        "description": "Full admin access to a database",
+        "version": "1.0"
+    },
+    "variableValues": {
+        "ROLE_NAME": "my-db-admin",
+        "DATABASE_ID": "my-database-id"
+    },
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-asset-access",
+            "description": "Allow asset access in {{DATABASE_ID}}",
+            "objectType": "asset",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" }
+            ]
+        }
+    ]
+}
+```
+
+#### Example Output
+
+```
+Importing 13 constraint(s) from template 'Database Admin' for role 'my-db-admin'...
+
+Constraint template imported successfully!
+  Template: Database Admin
+  Role: my-db-admin
+  Constraints Created: 13
+  Constraint IDs:
+    - a1b2c3d4-...
+    - e5f6g7h8-...
+    ...
+  Message: Successfully imported 13 constraints from template 'Database Admin' for role 'my-db-admin'
+  Timestamp: 2024-01-01T00:00:00
+```
+
+#### Example: Using a Pre-built Template
+
+```bash
+# 1. Copy a template and fill in variable values
+cp documentation/permissionsTemplates/database-admin.json my-template.json
+
+# 2. Edit my-template.json to add variableValues:
+#    "variableValues": {"ROLE_NAME": "project-admin", "DATABASE_ID": "project-db"}
+
+# 3. Import the template
+vamscli role constraint template import -j my-template.json
+
+# 4. Verify the constraints were created
+vamscli role constraint list --json-output
 ```
 
 ## Common Workflows

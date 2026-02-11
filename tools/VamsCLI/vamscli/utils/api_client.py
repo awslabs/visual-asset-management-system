@@ -4071,6 +4071,53 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to delete constraint: {e}")
 
+    def import_constraints_template(self, template_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Import constraints from a permission template using the /auth/constraintsTemplateImport POST endpoint.
+
+        Args:
+            template_data: Template import data matching ImportConstraintsTemplateRequestModel:
+                - template: Optional template metadata (name, description, version)
+                - variables: Optional list of variable definitions
+                - variableValues: Dictionary of variable name -> value mappings (ROLE_NAME required)
+                - constraints: List of constraint definitions
+
+        Returns:
+            API response data with import results (constraintsCreated, constraintIds, etc.)
+
+        Raises:
+            InvalidConstraintDataError: When template data is invalid
+            TemplateImportError: When template import fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_CONSTRAINTS_TEMPLATE_IMPORT
+        from .exceptions import InvalidConstraintDataError, TemplateImportError
+
+        try:
+            response = self.post(API_CONSTRAINTS_TEMPLATE_IMPORT, data=template_data, include_auth=True)
+            result = response.json()
+
+            # Backend wraps response in "message" field for backward compatibility
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise InvalidConstraintDataError(f"Invalid template data: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise TemplateImportError(f"Template import failed: {e}")
+
+        except (InvalidConstraintDataError, AuthenticationError, TemplateImportError):
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to import constraints template: {e}")
+
     # User Role Management API Methods
 
     def list_user_roles(self, params: Dict[str, Any] = None) -> Dict[str, Any]:

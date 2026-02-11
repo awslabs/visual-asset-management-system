@@ -79,6 +79,7 @@ API_ROLE_BY_ID = "/roles/{roleId}"
 # Constraint Management API Endpoints
 API_CONSTRAINTS = "/auth/constraints"
 API_CONSTRAINT_BY_ID = "/auth/constraints/{constraintId}"
+API_CONSTRAINTS_TEMPLATE_IMPORT = "/auth/constraintsTemplateImport"
 
 # User Role Management API Endpoints
 API_USER_ROLES = "/user-roles"

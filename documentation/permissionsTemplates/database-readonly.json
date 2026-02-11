@@ -1,0 +1,155 @@
+{
+  "metadata": {
+    "name": "Database Read-Only",
+    "description": "Read-only access scoped to a specific database. Users can view all data types within the database but cannot modify, create, or delete anything.",
+    "version": "1.0"
+  },
+  "variables": [
+    {"name": "DATABASE_ID", "required": true, "description": "The databaseId to scope permissions to"},
+    {"name": "ROLE_NAME", "required": true, "description": "The role name to create"}
+  ],
+  "constraints": [
+    {
+      "name": "{{ROLE_NAME}}-web-routes",
+      "description": "Allow navigation to viewing pages for {{ROLE_NAME}}",
+      "objectType": "web",
+      "criteriaAnd": [],
+      "criteriaOr": [
+        {"field": "route__path", "operator": "starts_with", "value": "/assets"},
+        {"field": "route__path", "operator": "starts_with", "value": "/databases"},
+        {"field": "route__path", "operator": "starts_with", "value": "/pipelines"},
+        {"field": "route__path", "operator": "starts_with", "value": "/search"},
+        {"field": "route__path", "operator": "starts_with", "value": "/workflows"}
+      ],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-api-routes-get",
+      "description": "Allow GET API access for {{ROLE_NAME}}",
+      "objectType": "api",
+      "criteriaAnd": [],
+      "criteriaOr": [
+        {"field": "route__path", "operator": "starts_with", "value": "/secure-config"},
+        {"field": "route__path", "operator": "starts_with", "value": "/amplify-config"},
+        {"field": "route__path", "operator": "starts_with", "value": "/auth/routes"},
+        {"field": "route__path", "operator": "starts_with", "value": "/asset-links"},
+        {"field": "route__path", "operator": "starts_with", "value": "/assets"},
+        {"field": "route__path", "operator": "starts_with", "value": "/comments"},
+        {"field": "route__path", "operator": "starts_with", "value": "/database"},
+        {"field": "route__path", "operator": "starts_with", "value": "/metadata"},
+        {"field": "route__path", "operator": "starts_with", "value": "/metadataschema"},
+        {"field": "route__path", "operator": "starts_with", "value": "/pipelines"},
+        {"field": "route__path", "operator": "starts_with", "value": "/search"},
+        {"field": "route__path", "operator": "starts_with", "value": "/subscriptions"},
+        {"field": "route__path", "operator": "starts_with", "value": "/check-subscription"},
+        {"field": "route__path", "operator": "starts_with", "value": "/tags"},
+        {"field": "route__path", "operator": "starts_with", "value": "/tag-types"},
+        {"field": "route__path", "operator": "starts_with", "value": "/workflows"},
+        {"field": "route__path", "operator": "starts_with", "value": "/buckets"}
+      ],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-api-routes-post",
+      "description": "Allow non-mutating POST API access for {{ROLE_NAME}}",
+      "objectType": "api",
+      "criteriaAnd": [],
+      "criteriaOr": [
+        {"field": "route__path", "operator": "starts_with", "value": "/auth/routes"},
+        {"field": "route__path", "operator": "starts_with", "value": "/search"},
+        {"field": "route__path", "operator": "starts_with", "value": "/check-subscription"}
+      ],
+      "groupPermissions": [
+        {"action": "POST", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-database",
+      "description": "Allow read access to the {{DATABASE_ID}} database entity",
+      "objectType": "database",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-assets",
+      "description": "Allow read access to assets in {{DATABASE_ID}}",
+      "objectType": "asset",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-pipelines",
+      "description": "Allow read access to pipelines in {{DATABASE_ID}}",
+      "objectType": "pipeline",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-workflows",
+      "description": "Allow read access to workflows in {{DATABASE_ID}}",
+      "objectType": "workflow",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-metadataschemas",
+      "description": "Allow read access to metadata schemas in {{DATABASE_ID}}",
+      "objectType": "metadataSchema",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-tags",
+      "description": "Allow read access to all tags",
+      "objectType": "tag",
+      "criteriaAnd": [
+        {"field": "tagName", "operator": "contains", "value": ".*"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-tagtypes",
+      "description": "Allow read access to all tag types",
+      "objectType": "tagType",
+      "criteriaAnd": [
+        {"field": "tagTypeName", "operator": "contains", "value": ".*"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    }
+  ]
+}

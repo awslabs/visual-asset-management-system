@@ -1183,6 +1183,12 @@ export class ApiBuilderNestedStack extends NestedStack {
             });
         }
 
+        attachFunctionToApi(this, authFunctions.authConstraintsTemplateService, {
+            routePath: "/auth/constraintsTemplateImport",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
+
         attachFunctionToApi(this, authFunctions.routes, {
             routePath: "/auth/routes",
             method: apigateway.HttpMethod.POST,

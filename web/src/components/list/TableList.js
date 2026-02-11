@@ -111,13 +111,14 @@ export default function TableList(props) {
                 noMatch: (
                     <EmptyState
                         title="No matches"
-                        subtitle="We can’t find a match."
+                        subtitle="We can't find a match."
                         action={
                             <Button onClick={() => actions.setFiltering("")}>Clear filter</Button>
                         }
                     />
                 ),
                 filteringFunction: (item, filteringText) => {
+                    // First check active filters
                     for (let i = 0; i < filteredFilterColumns.length; i++) {
                         const filterColumnName = filteredFilterColumns[i].name;
                         if (activeFilters[filterColumnName] !== null) {
@@ -128,6 +129,7 @@ export default function TableList(props) {
 
                     const filteringTextLowerCase = filteringText.toLowerCase();
                     if (filteringTextLowerCase !== "") {
+                        // Check if ANY visible column matches
                         for (let i = 0; i < filteredVisibleColumns.length; i++) {
                             const visibleColumnName = filteredVisibleColumns[i];
                             const value = item[visibleColumnName];
@@ -141,8 +143,10 @@ export default function TableList(props) {
                                 return true;
                             }
                         }
+                        // If we get here, no match was found
                         return false;
                     }
+                    // If no filtering text, include the item
                     return true;
                 },
             },

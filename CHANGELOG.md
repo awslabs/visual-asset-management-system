@@ -22,6 +22,11 @@ All notable changes to this project will be documented in this file. See [standa
     -   **Web** Includes new navigation page for `Cognito User Management`
     -   New API endpoints `/user/cognito` GET/POST, `/user/cognito/{userId}` PUT/DELETE, `/user/cognito/{userId}/resetPassword` POST
 -   **CLI** Added commands for admin functionality such as adding new cognito users (with new APIs), users in role management, role management, and constraint management. This update finishes the CLI upgrades to have the majority of the web functionality as commands in the CLI.
+-   Added new `POST /auth/constraintsTemplateImport` API endpoint for bulk-importing permission constraints from JSON templates in a single API call. The API handles server-side variable substitution, UUID generation, groupId mapping, and constraint creation in DynamoDB, replacing the previous client-side XML parsing and one-by-one constraint creation approach.
+    -   **CLI** Added `vamscli role constraint template import` command to import permission constraint templates via the new API endpoint.
+    -   Added a new tool `tools/permissionsSetup/apply_template.py` that uses the CLI to automate the deployment of new roles and constraint templates as needed. This can be used by admins to help setup new permission structures for when new databases are created for an organization.
+    -   Added pre-built JSON permission templates in `documentation/permissionsTemplates/` for common permission profiles: `database-admin.json` (13 constraints), `database-user.json` (15 constraints), `database-readonly.json` (10 constraints), `global-readonly.json` (10 constraints), and `deny-tagged-assets.json` (1 constraint). Templates define complete constraint sets for roles with variable placeholders for database IDs and role names.
+    -   Added comprehensive Permissions Guide (`documentation/PermissionsGuide.md`) covering the full ABAC/RBAC constraint matrix, two-tier authorization enforcement, GLOBAL keyword usage, archive vs permanent delete enforcement, deny overlay patterns, and step-by-step examples for common permission profiles.
 
 ### Bug Fixes
 
@@ -30,6 +35,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Updated web initial amplify config logic to properly error if the API config cannot be fetched and not to set error valued config into cookies, causing future reloads to use the errored config (and not refetch the API) without a cookie/cache reset.
 -   **CLI** Continued fixes to various CLI commands to make sure outputs when using the `--json-ouput` parameter only return a JSON output. This round of fixes is to take care of both missing inputs that required confirmation or showing errors becuase of missing parameters
 -   **Web** Fixed the file selector pop-up on the asset upload for existing assets to work in Firefox; folder selection on Firefox is still not yet supported
+-   **Web** Fixed bug in some table lists that prevented single row selects in certain scenarios (would select all rows)
 
 ### Chores
 

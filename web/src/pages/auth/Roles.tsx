@@ -25,7 +25,7 @@ export const RoleListDefinition = new ListDefinition({
         "mfaRequired",
     ],
     filterColumns: [{ name: "name", placeholder: "Name" }],
-    elementId: "name",
+    elementId: "roleName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
             const response: any = await API.del("api", `roles/${item.roleName}`, {});

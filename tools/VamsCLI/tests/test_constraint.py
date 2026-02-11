@@ -1,6 +1,8 @@
 """Test constraint management functionality."""
 
 import json
+import os
+import tempfile
 import pytest
 import click
 from unittest.mock import Mock, patch
@@ -9,7 +11,7 @@ from click.testing import CliRunner
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     ConstraintNotFoundError, ConstraintAlreadyExistsError, ConstraintDeletionError,
-    InvalidConstraintDataError, SetupRequiredError
+    InvalidConstraintDataError, TemplateImportError, SetupRequiredError
 )
 
 
@@ -833,6 +835,272 @@ class TestConstraintCommandIntegration:
             assert len(call_args['criteriaOr']) == 1
             assert len(call_args['groupPermissions']) == 2
             assert len(call_args['userPermissions']) == 1
+
+
+class TestConstraintTemplateImportCommand:
+    """Test role constraint template import command."""
+
+    SAMPLE_TEMPLATE = {
+        "metadata": {
+            "name": "Database Admin",
+            "description": "Full admin access to a database",
+            "version": "1.0"
+        },
+        "variables": [
+            {"name": "DATABASE_ID", "required": True, "description": "The databaseId"},
+            {"name": "ROLE_NAME", "required": True, "description": "The role name"}
+        ],
+        "variableValues": {
+            "ROLE_NAME": "test-admin",
+            "DATABASE_ID": "my-database"
+        },
+        "constraints": [
+            {
+                "name": "{{ROLE_NAME}}-web-routes",
+                "description": "Allow web routes for {{ROLE_NAME}}",
+                "objectType": "web",
+                "criteriaOr": [
+                    {"field": "route__path", "operator": "starts_with", "value": "/assets"}
+                ],
+                "groupPermissions": [
+                    {"action": "GET", "type": "allow"}
+                ]
+            },
+            {
+                "name": "{{ROLE_NAME}}-asset-access",
+                "description": "Allow asset access in {{DATABASE_ID}}",
+                "objectType": "asset",
+                "criteriaAnd": [
+                    {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+                ],
+                "groupPermissions": [
+                    {"action": "GET", "type": "allow"},
+                    {"action": "PUT", "type": "allow"}
+                ]
+            }
+        ]
+    }
+
+    def test_template_import_help(self, cli_runner):
+        """Test template import command help."""
+        result = cli_runner.invoke(cli, ['role', 'constraint', 'template', 'import', '--help'])
+        assert result.exit_code == 0
+        assert 'Import constraints from a permission template' in result.output
+        assert '--json-input' in result.output
+        assert '--json-output' in result.output
+
+    def test_template_import_success_inline_json(self, cli_runner, constraint_command_mocks):
+        """Test successful template import with inline JSON."""
+        with constraint_command_mocks as mocks:
+            mocks['api_client'].import_constraints_template.return_value = {
+                'success': True,
+                'message': "Successfully imported 2 constraints from template 'Database Admin' for role 'test-admin'",
+                'constraintsCreated': 2,
+                'constraintIds': ['uuid-1', 'uuid-2'],
+                'timestamp': '2024-01-01T00:00:00Z'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'role', 'constraint', 'template', 'import',
+                '-j', json.dumps(self.SAMPLE_TEMPLATE)
+            ])
+
+            assert result.exit_code == 0
+            assert 'Constraint template imported successfully!' in result.output
+            assert 'Constraints Created: 2' in result.output
+
+            # Verify API call
+            mocks['api_client'].import_constraints_template.assert_called_once()
+            call_data = mocks['api_client'].import_constraints_template.call_args[0][0]
+            assert call_data['variableValues']['ROLE_NAME'] == 'test-admin'
+            assert len(call_data['constraints']) == 2
+
+    def test_template_import_success_from_file(self, cli_runner, constraint_command_mocks):
+        """Test successful template import from a JSON file."""
+        with constraint_command_mocks as mocks:
+            mocks['api_client'].import_constraints_template.return_value = {
+                'success': True,
+                'message': "Successfully imported 2 constraints",
+                'constraintsCreated': 2,
+                'constraintIds': ['uuid-1', 'uuid-2'],
+                'timestamp': '2024-01-01T00:00:00Z'
+            }
+
+            # Write template to a temp file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(self.SAMPLE_TEMPLATE, f)
+                temp_path = f.name
+
+            try:
+                result = cli_runner.invoke(cli, [
+                    'role', 'constraint', 'template', 'import',
+                    '-j', temp_path
+                ])
+
+                assert result.exit_code == 0
+                assert 'Constraint template imported successfully!' in result.output
+
+                # Verify API call
+                mocks['api_client'].import_constraints_template.assert_called_once()
+            finally:
+                os.unlink(temp_path)
+
+    def test_template_import_json_output(self, cli_runner, constraint_command_mocks):
+        """Test template import with JSON output."""
+        with constraint_command_mocks as mocks:
+            api_response = {
+                'success': True,
+                'message': "Successfully imported 2 constraints",
+                'constraintsCreated': 2,
+                'constraintIds': ['uuid-1', 'uuid-2'],
+                'timestamp': '2024-01-01T00:00:00Z'
+            }
+            mocks['api_client'].import_constraints_template.return_value = api_response
+
+            result = cli_runner.invoke(cli, [
+                'role', 'constraint', 'template', 'import',
+                '-j', json.dumps(self.SAMPLE_TEMPLATE),
+                '--json-output'
+            ])
+
+            assert result.exit_code == 0
+
+            # Verify output is valid JSON
+            parsed = json.loads(result.output)
+            assert parsed['success'] is True
+            assert parsed['constraintsCreated'] == 2
+            assert len(parsed['constraintIds']) == 2
+
+    def test_template_import_missing_variable_values(self, cli_runner, constraint_command_mocks):
+        """Test template import with missing variableValues."""
+        with constraint_command_mocks as mocks:
+            template_no_vars = {
+                "constraints": [
+                    {
+                        "name": "test",
+                        "description": "test",
+                        "objectType": "web",
+                        "criteriaOr": [{"field": "f", "operator": "equals", "value": "v"}],
+                        "groupPermissions": [{"action": "GET", "type": "allow"}]
+                    }
+                ]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'role', 'constraint', 'template', 'import',
+                '-j', json.dumps(template_no_vars)
+            ])
+
+            assert result.exit_code == 1
+            assert "variableValues" in result.output
+
+    def test_template_import_missing_role_name(self, cli_runner, constraint_command_mocks):
+        """Test template import with missing ROLE_NAME in variableValues."""
+        with constraint_command_mocks as mocks:
+            template_no_role = {
+                "variableValues": {"DATABASE_ID": "db1"},
+                "constraints": [
+                    {
+                        "name": "test",
+                        "description": "test",
+                        "objectType": "web",
+                        "criteriaOr": [{"field": "f", "operator": "equals", "value": "v"}],
+                        "groupPermissions": [{"action": "GET", "type": "allow"}]
+                    }
+                ]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'role', 'constraint', 'template', 'import',
+                '-j', json.dumps(template_no_role)
+            ])
+
+            assert result.exit_code == 1
+            assert "ROLE_NAME" in result.output
+
+    def test_template_import_missing_constraints(self, cli_runner, constraint_command_mocks):
+        """Test template import with missing constraints."""
+        with constraint_command_mocks as mocks:
+            template_no_constraints = {
+                "variableValues": {"ROLE_NAME": "test-role"},
+                "constraints": []
+            }
+
+            result = cli_runner.invoke(cli, [
+                'role', 'constraint', 'template', 'import',
+                '-j', json.dumps(template_no_constraints)
+            ])
+
+            assert result.exit_code == 1
+            assert "constraints" in result.output.lower()
+
+    def test_template_import_invalid_json(self, cli_runner, constraint_command_mocks):
+        """Test template import with invalid JSON input."""
+        with constraint_command_mocks as mocks:
+            result = cli_runner.invoke(cli, [
+                'role', 'constraint', 'template', 'import',
+                '-j', 'not-valid-json-and-not-a-file'
+            ])
+
+            assert result.exit_code != 0
+
+    def test_template_import_api_validation_error(self, cli_runner, constraint_command_mocks):
+        """Test template import when API returns validation error."""
+        with constraint_command_mocks as mocks:
+            mocks['api_client'].import_constraints_template.side_effect = InvalidConstraintDataError(
+                "Invalid template data: objectType 'invalid' not allowed"
+            )
+
+            result = cli_runner.invoke(cli, [
+                'role', 'constraint', 'template', 'import',
+                '-j', json.dumps(self.SAMPLE_TEMPLATE)
+            ])
+
+            assert result.exit_code == 1
+            assert 'Invalid Template Data' in result.output
+
+    def test_template_import_api_error(self, cli_runner, constraint_command_mocks):
+        """Test template import when API returns server error."""
+        with constraint_command_mocks as mocks:
+            mocks['api_client'].import_constraints_template.side_effect = TemplateImportError(
+                "Template import failed: Internal server error"
+            )
+
+            result = cli_runner.invoke(cli, [
+                'role', 'constraint', 'template', 'import',
+                '-j', json.dumps(self.SAMPLE_TEMPLATE)
+            ])
+
+            assert result.exit_code == 1
+            assert 'Template Import Error' in result.output
+
+    def test_template_import_no_setup(self, cli_runner, constraint_no_setup_mocks):
+        """Test template import without setup."""
+        with constraint_no_setup_mocks as mocks:
+            result = cli_runner.invoke(cli, [
+                'role', 'constraint', 'template', 'import',
+                '-j', json.dumps(self.SAMPLE_TEMPLATE)
+            ])
+
+            assert result.exit_code == 1
+            assert result.exception is not None
+            assert isinstance(result.exception, SetupRequiredError)
+
+    def test_template_import_missing_json_input(self, cli_runner):
+        """Test template import without required --json-input option."""
+        result = cli_runner.invoke(cli, [
+            'role', 'constraint', 'template', 'import'
+        ])
+
+        assert result.exit_code == 2  # Click parameter error
+        assert 'Missing option' in result.output or 'required' in result.output.lower()
+
+    def test_template_help_shows_subcommands(self, cli_runner):
+        """Test that template group shows available subcommands."""
+        result = cli_runner.invoke(cli, ['role', 'constraint', 'template', '--help'])
+        assert result.exit_code == 0
+        assert 'import' in result.output
+        assert 'Constraint template management' in result.output
 
 
 if __name__ == '__main__':

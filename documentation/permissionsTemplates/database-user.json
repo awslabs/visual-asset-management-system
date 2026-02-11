@@ -1,0 +1,239 @@
+{
+  "metadata": {
+    "name": "Database User",
+    "description": "Standard user access for a specific database. Can view all data, create/update assets, archive (soft delete) assets, and execute workflows. Cannot permanently delete assets, create/delete pipelines/workflows/schemas, delete the database, or use asset ingestion. Can view and execute global pipelines and workflows.",
+    "version": "1.0"
+  },
+  "variables": [
+    {"name": "DATABASE_ID", "required": true, "description": "The databaseId to scope permissions to"},
+    {"name": "ROLE_NAME", "required": true, "description": "The role name to create"}
+  ],
+  "constraints": [
+    {
+      "name": "{{ROLE_NAME}}-web-routes",
+      "description": "Allow navigation to standard user pages for {{ROLE_NAME}}",
+      "objectType": "web",
+      "criteriaAnd": [],
+      "criteriaOr": [
+        {"field": "route__path", "operator": "starts_with", "value": "/assets"},
+        {"field": "route__path", "operator": "starts_with", "value": "/databases"},
+        {"field": "route__path", "operator": "starts_with", "value": "/pipelines"},
+        {"field": "route__path", "operator": "starts_with", "value": "/search"},
+        {"field": "route__path", "operator": "starts_with", "value": "/workflows"},
+        {"field": "route__path", "operator": "starts_with", "value": "/upload"},
+        {"field": "route__path", "operator": "starts_with", "value": "/metadataschema"}
+      ],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-api-routes-get",
+      "description": "Allow GET API access for {{ROLE_NAME}}",
+      "objectType": "api",
+      "criteriaAnd": [],
+      "criteriaOr": [
+        {"field": "route__path", "operator": "starts_with", "value": "/secure-config"},
+        {"field": "route__path", "operator": "starts_with", "value": "/amplify-config"},
+        {"field": "route__path", "operator": "starts_with", "value": "/auth/routes"},
+        {"field": "route__path", "operator": "starts_with", "value": "/asset-links"},
+        {"field": "route__path", "operator": "starts_with", "value": "/assets"},
+        {"field": "route__path", "operator": "starts_with", "value": "/comments"},
+        {"field": "route__path", "operator": "starts_with", "value": "/database"},
+        {"field": "route__path", "operator": "starts_with", "value": "/metadata"},
+        {"field": "route__path", "operator": "starts_with", "value": "/metadataschema"},
+        {"field": "route__path", "operator": "starts_with", "value": "/pipelines"},
+        {"field": "route__path", "operator": "starts_with", "value": "/search"},
+        {"field": "route__path", "operator": "starts_with", "value": "/subscriptions"},
+        {"field": "route__path", "operator": "starts_with", "value": "/check-subscription"},
+        {"field": "route__path", "operator": "starts_with", "value": "/tags"},
+        {"field": "route__path", "operator": "starts_with", "value": "/tag-types"},
+        {"field": "route__path", "operator": "starts_with", "value": "/workflows"},
+        {"field": "route__path", "operator": "starts_with", "value": "/buckets"}
+      ],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-api-routes-post",
+      "description": "Allow POST API access for asset operations and workflow execution for {{ROLE_NAME}}",
+      "objectType": "api",
+      "criteriaAnd": [],
+      "criteriaOr": [
+        {"field": "route__path", "operator": "starts_with", "value": "/auth/routes"},
+        {"field": "route__path", "operator": "starts_with", "value": "/search"},
+        {"field": "route__path", "operator": "starts_with", "value": "/check-subscription"},
+        {"field": "route__path", "operator": "starts_with", "value": "/assets"},
+        {"field": "route__path", "operator": "starts_with", "value": "/uploads"},
+        {"field": "route__path", "operator": "starts_with", "value": "/database"},
+        {"field": "route__path", "operator": "starts_with", "value": "/comments"},
+        {"field": "route__path", "operator": "starts_with", "value": "/asset-links"},
+        {"field": "route__path", "operator": "starts_with", "value": "/subscriptions"}
+      ],
+      "groupPermissions": [
+        {"action": "POST", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-api-routes-put",
+      "description": "Allow PUT API access for asset updates for {{ROLE_NAME}}",
+      "objectType": "api",
+      "criteriaAnd": [],
+      "criteriaOr": [
+        {"field": "route__path", "operator": "starts_with", "value": "/assets"},
+        {"field": "route__path", "operator": "starts_with", "value": "/database"},
+        {"field": "route__path", "operator": "starts_with", "value": "/comments"},
+        {"field": "route__path", "operator": "starts_with", "value": "/asset-links"},
+        {"field": "route__path", "operator": "starts_with", "value": "/subscriptions"}
+      ],
+      "groupPermissions": [
+        {"action": "PUT", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-api-routes-delete",
+      "description": "Allow DELETE API access for archive operations only for {{ROLE_NAME}}",
+      "objectType": "api",
+      "criteriaAnd": [],
+      "criteriaOr": [
+        {"field": "route__path", "operator": "contains", "value": "archiveAsset"},
+        {"field": "route__path", "operator": "contains", "value": "archiveFile"},
+        {"field": "route__path", "operator": "starts_with", "value": "/unsubscribe"},
+        {"field": "route__path", "operator": "starts_with", "value": "/subscriptions"},
+        {"field": "route__path", "operator": "starts_with", "value": "/asset-links"},
+        {"field": "route__path", "operator": "starts_with", "value": "/comments"}
+      ],
+      "groupPermissions": [
+        {"action": "DELETE", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-database",
+      "description": "Allow read-only access to the {{DATABASE_ID}} database entity",
+      "objectType": "database",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-assets",
+      "description": "Allow create, update, and archive access to assets in {{DATABASE_ID}}",
+      "objectType": "asset",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"},
+        {"action": "PUT", "type": "allow"},
+        {"action": "POST", "type": "allow"},
+        {"action": "DELETE", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-pipelines-scoped",
+      "description": "Allow viewing and executing pipelines in {{DATABASE_ID}}",
+      "objectType": "pipeline",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"},
+        {"action": "POST", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-pipelines-global",
+      "description": "Allow viewing and executing GLOBAL pipelines",
+      "objectType": "pipeline",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "GLOBAL"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"},
+        {"action": "POST", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-workflows-scoped",
+      "description": "Allow viewing and executing workflows in {{DATABASE_ID}}",
+      "objectType": "workflow",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"},
+        {"action": "POST", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-workflows-global",
+      "description": "Allow viewing and executing GLOBAL workflows",
+      "objectType": "workflow",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "GLOBAL"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"},
+        {"action": "POST", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-metadataschemas-scoped",
+      "description": "Allow viewing metadata schemas in {{DATABASE_ID}}",
+      "objectType": "metadataSchema",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-metadataschemas-global",
+      "description": "Allow viewing GLOBAL metadata schemas",
+      "objectType": "metadataSchema",
+      "criteriaAnd": [
+        {"field": "databaseId", "operator": "equals", "value": "GLOBAL"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-tags",
+      "description": "Allow read-only access to all tags",
+      "objectType": "tag",
+      "criteriaAnd": [
+        {"field": "tagName", "operator": "contains", "value": ".*"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    },
+    {
+      "name": "{{ROLE_NAME}}-tagtypes",
+      "description": "Allow read access to all tag types",
+      "objectType": "tagType",
+      "criteriaAnd": [
+        {"field": "tagTypeName", "operator": "contains", "value": ".*"}
+      ],
+      "criteriaOr": [],
+      "groupPermissions": [
+        {"action": "GET", "type": "allow"}
+      ]
+    }
+  ]
+}

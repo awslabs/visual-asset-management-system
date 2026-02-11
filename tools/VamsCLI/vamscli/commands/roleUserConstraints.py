@@ -4,13 +4,14 @@ import json
 import click
 from typing import Dict, Any, Optional
 
-from ..constants import API_ROLES, API_ROLE_BY_ID, API_CONSTRAINTS, API_CONSTRAINT_BY_ID
+from ..constants import API_ROLES, API_ROLE_BY_ID, API_CONSTRAINTS, API_CONSTRAINT_BY_ID, API_CONSTRAINTS_TEMPLATE_IMPORT
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import (
     RoleNotFoundError, RoleAlreadyExistsError, RoleDeletionError, InvalidRoleDataError,
-    ConstraintNotFoundError, ConstraintAlreadyExistsError, ConstraintDeletionError, InvalidConstraintDataError
+    ConstraintNotFoundError, ConstraintAlreadyExistsError, ConstraintDeletionError, InvalidConstraintDataError,
+    TemplateImportError
 )
 
 
@@ -1053,7 +1054,7 @@ def delete_constraint(ctx: click.Context, constraint_id: str, confirm: bool, jso
     """
     Delete a constraint.
     
-    ⚠️  WARNING: This action will delete the constraint! ⚠️
+    WARNING: This action will delete the constraint!
     
     This command deletes a constraint from VAMS. The constraint and all its
     associated permissions will be permanently removed.
@@ -1622,6 +1623,159 @@ def delete_user_roles(ctx: click.Context, user_id: str, confirm: bool, json_outp
                 json_output,
                 error_type="User Role Deletion Error",
                 helpful_message="Check for dependencies or contact your administrator."
+            )
+            raise click.ClickException(str(e))
+        else:
+            raise
+
+
+#######################
+# Template Commands
+#######################
+
+@click.group()
+def template():
+    """Constraint template management commands."""
+    pass
+
+
+# Register template as a sub-group of constraint
+constraint.add_command(template)
+
+
+@template.command('import')
+@click.option('--json-input', '-j', required=True,
+              help='Template JSON data as a string or path to a JSON file')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def template_import(ctx: click.Context, json_input: str, json_output: bool):
+    """
+    Import constraints from a permission template.
+
+    This command imports constraints from a JSON permission template file.
+    The template defines constraints with variable placeholders (e.g., {{DATABASE_ID}})
+    that are substituted with the values provided in variableValues.
+
+    The ROLE_NAME variable is always required in variableValues and is used as the
+    groupId for all created constraint permissions.
+
+    Examples:
+        # Import from a template JSON file
+        vamscli role constraint template import -j ./database-admin.json
+
+        # Import from inline JSON
+        vamscli role constraint template import -j '{"variableValues": {"ROLE_NAME": "my-admin", "DATABASE_ID": "db1"}, "constraints": [...]}'
+
+        # Import with JSON output
+        vamscli role constraint template import -j ./database-admin.json --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        # Parse JSON input (handles both JSON strings and file paths)
+        template_data = parse_json_input(json_input)
+
+        if not template_data:
+            output_error(
+                ValueError("Template data is empty"),
+                json_output,
+                error_type="Invalid Template Data",
+                helpful_message="Provide a valid JSON template file or JSON string with --json-input."
+            )
+            raise click.ClickException("Template data is empty")
+
+        # Validate required fields
+        if 'variableValues' not in template_data:
+            output_error(
+                ValueError("Missing 'variableValues' field"),
+                json_output,
+                error_type="Invalid Template Data",
+                helpful_message="Template must include 'variableValues' with at least 'ROLE_NAME'."
+            )
+            raise click.ClickException("Missing 'variableValues' field in template data")
+
+        if 'ROLE_NAME' not in template_data.get('variableValues', {}):
+            output_error(
+                ValueError("Missing 'ROLE_NAME' in variableValues"),
+                json_output,
+                error_type="Invalid Template Data",
+                helpful_message="variableValues must include 'ROLE_NAME' (used as groupId for all constraints)."
+            )
+            raise click.ClickException("Missing 'ROLE_NAME' in variableValues")
+
+        if 'constraints' not in template_data or not template_data['constraints']:
+            output_error(
+                ValueError("Missing or empty 'constraints' field"),
+                json_output,
+                error_type="Invalid Template Data",
+                helpful_message="Template must include at least one constraint definition."
+            )
+            raise click.ClickException("Missing or empty 'constraints' field in template data")
+
+        role_name = template_data['variableValues']['ROLE_NAME']
+        constraint_count = len(template_data['constraints'])
+        template_name = template_data.get('metadata', {}).get('name', 'unknown')
+
+        output_status(
+            f"Importing {constraint_count} constraint(s) from template '{template_name}' for role '{role_name}'...",
+            json_output
+        )
+
+        # Call the API
+        result = api_client.import_constraints_template(template_data)
+
+        def format_import_result(data):
+            """Format template import result for CLI display."""
+            lines = []
+            lines.append(f"  Template: {template_name}")
+            lines.append(f"  Role: {role_name}")
+            lines.append(f"  Constraints Created: {data.get('constraintsCreated', 0)}")
+
+            constraint_ids = data.get('constraintIds', [])
+            if constraint_ids:
+                lines.append(f"  Constraint IDs:")
+                for cid in constraint_ids:
+                    lines.append(f"    - {cid}")
+
+            if data.get('message'):
+                lines.append(f"  Message: {data.get('message')}")
+            if data.get('timestamp'):
+                lines.append(f"  Timestamp: {data.get('timestamp')}")
+            return '\n'.join(lines)
+
+        output_result(
+            result,
+            json_output,
+            success_message="Constraint template imported successfully!",
+            cli_formatter=format_import_result
+        )
+
+        return result
+
+    except click.ClickException:
+        raise
+    except click.BadParameter:
+        raise
+    except Exception as e:
+        if isinstance(e, InvalidConstraintDataError):
+            output_error(
+                e,
+                json_output,
+                error_type="Invalid Template Data",
+                helpful_message="Check your template JSON format and variable values. "
+                                "See 'documentation/permissionsTemplates/' for example templates."
+            )
+            raise click.ClickException(str(e))
+        elif isinstance(e, TemplateImportError):
+            output_error(
+                e,
+                json_output,
+                error_type="Template Import Error",
+                helpful_message="The template import failed on the server. Check the template data and try again."
             )
             raise click.ClickException(str(e))
         else:

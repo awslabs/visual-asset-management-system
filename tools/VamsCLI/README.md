@@ -107,6 +107,11 @@ vamscli role constraint create -c db-access --json-input constraint.json
 vamscli role constraint update -c db-access --name "Updated Name"
 vamscli role constraint delete -c old-constraint --confirm
 
+# Import constraints from a permission template
+# See documentation/PermissionsGuide.md for template details and constraint design
+vamscli role constraint template import -j ./documentation/permissionsTemplates/database-admin.json
+vamscli role constraint template import -j ./my-template.json --json-output
+
 # Manage Cognito users (requires Cognito enabled)
 vamscli user cognito list --auto-paginate
 vamscli user cognito create -u user@example.com -e user@example.com -p +12345678900

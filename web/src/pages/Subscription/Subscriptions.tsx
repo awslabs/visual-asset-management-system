@@ -24,7 +24,7 @@ export const SubscriptionListDefinition = new ListDefinition({
     singularNameTitleCase: "Subscription",
     visibleColumns: ["eventName", "entityName", "entityValue", "subscribers"],
     filterColumns: [{ name: "name", placeholder: "Name" }],
-    elementId: "name",
+    elementId: "entityId",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         console.log(item);
         ruleBody.entityName = item.entityName;
