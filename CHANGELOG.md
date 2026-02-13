@@ -42,6 +42,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed bug in some table lists that prevented single row selects in certain scenarios (would select all rows)
 -   Fixed bug in workflow creation and executions where assetId and databaseId was not being passed through. This will only be fixed for existing workflows that are re-created or edited but should not affect existing pipelines that are currently working already.
 -   Added additional createWorkflow API input validation checks for edge input scenarios and cases where a user creating a workflow does not have authorization access to an underlying pipeline being specified
+-   Fixed typo in reserved S3 prefix list (`piplines`->`pipelines`) which auto-created assets in some cases for reserved prefix folders
+-   Attempted to fix edge cases where local web debugging was causing CSP policy errors for some development users
 
 ### Chores
 
