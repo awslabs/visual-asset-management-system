@@ -19,6 +19,7 @@ import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dB
 import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
 import { IsaacLabTrainingBuilderNestedStack } from "./simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack";
+import { Preview3dThumbnailBuilderNestedStack } from "./preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -133,6 +134,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
         ////VPC-Required Pipelines
         if (
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
+            props.config.app.pipelines.usePreview3dThumbnail.enabled ||
             props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
@@ -157,6 +159,30 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
                     previewPcPotreeViewerPipelineNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            if (props.config.app.pipelines.usePreview3dThumbnail.enabled) {
+                const preview3dThumbnailPipelineNestedStack =
+                    new Preview3dThumbnailBuilderNestedStack(
+                        this,
+                        "Preview3dThumbnailBuilderNestedStack",
+                        {
+                            ...props,
+                            config: props.config,
+                            storageResources: props.storageResources,
+                            lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                            vpc: props.vpc,
+                            pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                            pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                            importGlobalPipelineWorkflowFunctionName:
+                                props.importGlobalPipelineWorkflowFunctionName,
+                        }
+                    );
+
+                //Add function name to array for stack output
+                this.pipelineVamsLambdaFunctionNames.push(
+                    preview3dThumbnailPipelineNestedStack.pipelineVamsLambdaFunctionName
                 );
             }
 

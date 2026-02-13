@@ -202,6 +202,17 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    if (config.app.pipelines.usePreview3dThumbnail == undefined) {
+        config.app.pipelines.usePreview3dThumbnail = {
+            enabled: false,
+            autoRegisterWithVAMS: false,
+            autoRegisterAutoTriggerOnFileUpload: false,
+        };
+    }
+    if (config.app.pipelines.usePreview3dThumbnail.enabled == undefined) {
+        config.app.pipelines.usePreview3dThumbnail.enabled = false;
+    }
+
     if (config.app.addons.useGarnetFramework.enabled == undefined) {
         config.app.addons.useGarnetFramework.enabled = false;
     }
@@ -364,6 +375,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useRapidPipeline.useEks.enabled ||
         config.app.pipelines.useModelOps.enabled ||
         config.app.pipelines.useIsaacLabTraining.enabled ||
+        config.app.pipelines.usePreview3dThumbnail.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
@@ -893,6 +905,11 @@ export interface ConfigPublic {
                 acceptNvidiaEula: boolean;
                 autoRegisterWithVAMS: boolean;
                 keepWarmInstance: boolean;
+            };
+            usePreview3dThumbnail: {
+                enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
             };
         };
         addons: {

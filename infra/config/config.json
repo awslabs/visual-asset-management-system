@@ -72,6 +72,11 @@
                 "enabled": true,
                 "autoRegisterWithVAMS": true
             },
+            "usePreview3dThumbnail": {
+                "enabled": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true
+            },
             "useConversionCadMeshMetadataExtraction": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,

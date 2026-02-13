@@ -539,6 +539,7 @@ export class VPCBuilderNestedStack extends NestedStack {
             //Pipeline-Only Required Endpoints
             if (
                 props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
+                props.config.app.pipelines.usePreview3dThumbnail.enabled ||
                 props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||

@@ -10,6 +10,10 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   **Pipeline** Added new Preview 3D Thumbnail use-case pipeline (`usePreview3dThumbnail`) that generates animated GIF or static image preview thumbnails from 3D files. Supports mesh formats (PLY, STL, OBJ, GLB, GLTF, FBX, DRC), point clouds (LAS, LAZ, E57, PTX, PCD, FLS, FWS), CAD files (STP, STEP), and USD files (USD, USDA, USDC, USDZ). Uses CPU-based headless rendering via PyVista/VTK with Xvfb in an AWS Batch Fargate container. This pipeline is turned off by default in the configuration file due to some restrictive used library licenses [LGPL, etc.] (see NOTICE.md).
+    -   100 GB maximum input file size with pre-download S3 size validation (can be extended but may require a EFS Fargate implementation)
+    -   Configurable `overwriteExistingPreviewFiles` pipeline input parameter to control preview file overwrite behavior
+    -   Auto-registration with VAMS pipelines and workflows via CDK custom resources
 -   **Web** Added new open-source Needle USD 3D WASM Web Viewer to the viewer plugin system for `.usd, .usda, .usdc, .usdz` files. Supports full dependency chain loading of files although Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
     -   Note: Uses WASM which relies on either the Cloudfront deployment mode or the newly implemented front-end service worker to set proper https headers to allow WASM to load. If these are not set due to additional organizational security restrictions, this viewer will not load. Safari currently does not support the way we implemented this viewer.
     -   Note: Needle Viewer in our implementation has issues with loading dependencies from compressed (USDC) files as these cannot be reliabiliy parsed out ahead of time.
@@ -36,6 +40,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CLI** Continued fixes to various CLI commands to make sure outputs when using the `--json-ouput` parameter only return a JSON output. This round of fixes is to take care of both missing inputs that required confirmation or showing errors becuase of missing parameters
 -   **Web** Fixed the file selector pop-up on the asset upload for existing assets to work in Firefox; folder selection on Firefox is still not yet supported
 -   **Web** Fixed bug in some table lists that prevented single row selects in certain scenarios (would select all rows)
+-   Fixed bug in workflow creation and executions where assetId and databaseId was not being passed through. This will only be fixed for existing workflows that are re-created or edited but should not affect existing pipelines that are currently working already.
+-   Added additional createWorkflow API input validation checks for edge input scenarios and cases where a user creating a workflow does not have authorization access to an underlying pipeline being specified
 
 ### Chores
 

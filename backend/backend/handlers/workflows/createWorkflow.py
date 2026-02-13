@@ -276,6 +276,10 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
                     "inputOutputS3AssetAuxiliaryFilesPath.$": inputOutput_s3_assetAuxiliary_files_uri,
                     "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
                     "bucketAsset.$": "$.bucketAsset",
+                    "assetId.$": "$.assetId",
+                    "databaseId.$": "$.databaseId",
+                    "workflowDatabaseId.$": "$.workflowDatabaseId",
+                    "workflowId.$": "$.workflowId",
                     "inputAssetFileKey.$": "$.inputAssetFileKey",
                     "inputAssetLocationKey.$": "$.inputAssetLocationKey",
                     "outputType": pipeline["outputType"],
@@ -326,7 +330,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
             "pipeline": last_pipeline['name'],
             "outputType": last_pipeline["outputType"],
             "executingUserName.$": "$.executingUserName",
-            "executingRequestContext.$": "$.executingRequestContext"
+            "executingRequestContext.$": "$.executingRequestContext",
         }
     }
 
@@ -606,6 +610,21 @@ def lambda_handler(event, context):
                 logger.error(response)
                 return response
 
+            # Validate required fields in each pipeline entry before proceeding
+            pipeline_required_fields = ['name', 'databaseId', 'pipelineType', 'pipelineExecutionType',
+                                        'outputType', 'waitForCallback', 'userProvidedResource']
+            for idx, pipeline in enumerate(event['body']['specifiedPipelines']['functions']):
+                missing_pipeline_fields = [f for f in pipeline_required_fields if f not in pipeline or not pipeline[f]]
+                if missing_pipeline_fields:
+                    message = f"Pipeline entry {idx} is missing required field(s): {', '.join(missing_pipeline_fields)}"
+                    response['statusCode'] = 400
+                    response['body'] = json.dumps({"message": message})
+                    logger.error(response)
+                    return response
+
+            # Extract pipeline names for ID format validation
+            pipelineArray = [p['name'] for p in event['body']['specifiedPipelines']['functions']]
+
             (valid, message) = validate({
                 'databaseId': {
                     'value': event['body']['databaseId'],
@@ -642,7 +661,6 @@ def lambda_handler(event, context):
                     logger.error(response)
                     return response
 
-            pipelineArray = []
             for pipeline in event['body']['specifiedPipelines']['functions']:
                 logger.info("pipeline in workflow creation: ")
                 logger.info(pipeline)
@@ -671,9 +689,7 @@ def lambda_handler(event, context):
                     if casbin_enforcer.enforce(pipeline, "GET"):
                         pipeline_allowed = True
 
-                if pipeline_allowed:
-                    pipelineArray.append(pipeline['name'])
-                else:
+                if not pipeline_allowed:
                     response['statusCode'] = 403
                     response['body'] = json.dumps({"message": "Not Authorized to read the pipeline"})
                     return response
@@ -720,6 +736,11 @@ def lambda_handler(event, context):
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})
             return response
+    except KeyError as e:
+        logger.exception(f"Missing required field in workflow creation: {e}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": f"Missing required field: {e}"})
+        return response
     except Exception as e:
         logger.exception("Internal error in workflow creation")
         response['statusCode'] = 500

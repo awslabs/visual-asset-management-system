@@ -643,6 +643,7 @@ Please take note:
 -   While we are limited to these formats to view assets, any file format may be uploaded to VAMS.
 -   There are some limitations with formats that leverage multiple files such as glTF that uses json with references to other files.
 -   Some viewers like Potree Viewer requires additional pipelines to be deployed to fully generate and view point cloud files.
+-   The **Preview 3D Thumbnail** pipeline (`usePreview3dThumbnail`) can generate animated GIF or static image preview thumbnails for most 3D file types including meshes (PLY, STL, OBJ, GLB, GLTF, FBX, DRC), point clouds (LAS, LAZ, E57, PTX, PCD, FLS, FWS), CAD files (STP, STEP), and USD files (USD, USDA, USDC, USDZ). When enabled and auto-registered, this pipeline is triggered on file upload and generates a preview file (`.previewFile.gif` or `.previewFile.jpg`) alongside the original asset. See [backendPipelines/preview/3dThumbnail/README.md](../backendPipelines/preview/3dThumbnail/README.md) for details.
 
 Optional\* notes:
 
@@ -2702,6 +2703,37 @@ NOTE: If pipeline registered separately in VAMS Pipelines, it must be registered
 | Input File Types Supported        | Base Lambda Function Name - VAMS trigger | Base Lambda Function Name - SNS trigger |
 | :-------------------------------- | :--------------------------------------- | --------------------------------------- |
 | LAS, LAZ, E57, PLY (Point Clouds) | vamsExecutePreviewPcPotreeViewerPipeline | snsExecutePrviewPcPotreeViewerPipeline  |
+
+### Preview Type - 3D Thumbnail Preview Pipeline (Asynchronous)
+
+The 3D Thumbnail Preview Pipeline generates animated GIF or static image preview thumbnails from 3D asset files. The pipeline renders a 36-frame rotation of the 3D object at 800x600 resolution and saves the result as an optimized GIF. If rendering fails or only a single frame is produced, a static JPEG fallback is used. The output preview file is stored alongside the original asset in S3.
+
+If you wish to trigger this pipeline additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
+
+The pipeline uses CPU-based headless rendering via PyVista/VTK with Xvfb inside an AWS Batch Fargate container. It supports a broad range of 3D file formats through specialized format handlers:
+
+-   **Mesh formats**: Loaded via the open-source Trimesh library (PLY, STL, OBJ, GLB, GLTF, FBX, DRC)
+-   **Point cloud formats**: Loaded via laspy (LAS/LAZ), pye57 (E57), and Open3D (PCD, FLS, FWS). PTX files are parsed directly. Point clouds exceeding 20 million points are downsampled for rendering performance.
+-   **CAD formats**: Loaded via the open-source CADQuery library for STEP/STP tessellation
+-   **USD formats**: Loaded via OpenUSD Python bindings (usd-core). Supports texture extraction from UsdShade material bindings including textures embedded in USDZ archives.
+
+The pipeline uses percentile-based camera framing (2nd-98th percentile) to handle sparse scenes such as single-position LiDAR scans where distant outlier points would otherwise cause the dense content to appear very small. All data is normalized to Y-up for consistent rendering. The maximum input file size is 100 GB. The Fargate container uses 200 GiB of ephemeral storage to accommodate large files.
+
+The following inputParameters are supported:
+
+```
+{
+    "overwriteExistingPreviewFiles": true  // Default: false. When false, the pipeline will fail if a preview file already exists for the input file. Set to true to overwrite existing preview files.
+}
+```
+
+NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token"
+
+| Input File Types Supported                                                                                         | Base Lambda Function Name             |
+| :----------------------------------------------------------------------------------------------------------------- | :------------------------------------ |
+| PLY, STL, OBJ, GLB, GLTF, FBX, DRC, LAS, LAZ, E57, PTX, PCD, FLS, FWS, STP, STEP, USD, USDA, USDC, USDZ (3D Files) | vamsExecutePreview3dThumbnailPipeline |
+
+See the [Preview 3D Thumbnail Pipeline README](../backendPipelines/preview/3dThumbnail/README.md) for detailed Docker build/run instructions, rendering details, and local testing information.
 
 ### Standard Type - GenerativeAI 3D Metadata Labeling Pipeline (Asynchronous)
 
