@@ -1,5 +1,6 @@
 import React, { useContext, useState, useEffect, useRef } from "react";
 import {
+    Alert,
     Box,
     Button,
     Header,
@@ -501,20 +502,22 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     <>
                                         {/* Check if all files are archived */}
                                         {selectedItems.every((item) => item.isArchived) ? (
-                                            <>
-                                                <Button
-                                                    iconName="refresh"
-                                                    onClick={() => setShowUnarchiveModal(true)}
-                                                >
-                                                    Unarchive Files
-                                                </Button>
-                                                <Button
-                                                    iconName="remove"
-                                                    onClick={() => setShowDeleteModal(true)}
-                                                >
-                                                    Permanently Delete Files
-                                                </Button>
-                                            </>
+                                            !state.readOnly ? (
+                                                <>
+                                                    <Button
+                                                        iconName="refresh"
+                                                        onClick={() => setShowUnarchiveModal(true)}
+                                                    >
+                                                        Unarchive Files
+                                                    </Button>
+                                                    <Button
+                                                        iconName="remove"
+                                                        onClick={() => setShowDeleteModal(true)}
+                                                    >
+                                                        Permanently Delete Files
+                                                    </Button>
+                                                </>
+                                            ) : null
                                         ) : selectedItems.some((item) => item.isArchived) ? (
                                             // Mix of archived and non-archived files - don't show any buttons
                                             <Box padding="s">
@@ -526,41 +529,45 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         ) : (
                                             // All files are non-archived
                                             <>
-                                                <ButtonDropdown
-                                                    items={[
-                                                        {
-                                                            id: "set-primary",
-                                                            text: "Set Primary Type",
-                                                            iconName: "settings",
-                                                        },
-                                                        {
-                                                            id: "move-copy",
-                                                            text: "Move/Copy Files",
-                                                            iconName: "copy",
-                                                        },
-                                                        {
-                                                            id: "delete",
-                                                            text: "Delete Files",
-                                                            iconName: "remove",
-                                                            disabled: !canDelete,
-                                                        },
-                                                    ]}
-                                                    onItemClick={({ detail }) => {
-                                                        switch (detail.id) {
-                                                            case "delete":
-                                                                setShowDeleteModal(true);
-                                                                break;
-                                                            case "move-copy":
-                                                                setShowMoveFilesModal(true);
-                                                                break;
-                                                            case "set-primary":
-                                                                setShowSetPrimaryTypeModal(true);
-                                                                break;
-                                                        }
-                                                    }}
-                                                >
-                                                    File Operations
-                                                </ButtonDropdown>
+                                                {!state.readOnly && (
+                                                    <ButtonDropdown
+                                                        items={[
+                                                            {
+                                                                id: "set-primary",
+                                                                text: "Set Primary Type",
+                                                                iconName: "settings",
+                                                            },
+                                                            {
+                                                                id: "move-copy",
+                                                                text: "Move/Copy Files",
+                                                                iconName: "copy",
+                                                            },
+                                                            {
+                                                                id: "delete",
+                                                                text: "Delete Files",
+                                                                iconName: "remove",
+                                                                disabled: !canDelete,
+                                                            },
+                                                        ]}
+                                                        onItemClick={({ detail }) => {
+                                                            switch (detail.id) {
+                                                                case "delete":
+                                                                    setShowDeleteModal(true);
+                                                                    break;
+                                                                case "move-copy":
+                                                                    setShowMoveFilesModal(true);
+                                                                    break;
+                                                                case "set-primary":
+                                                                    setShowSetPrimaryTypeModal(
+                                                                        true
+                                                                    );
+                                                                    break;
+                                                            }
+                                                        }}
+                                                    >
+                                                        File Operations
+                                                    </ButtonDropdown>
+                                                )}
 
                                                 <ButtonDropdown
                                                     items={[
@@ -642,7 +649,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const handleDownload = () => {
         dispatch({
             type: "DOWNLOAD_FILE",
-            payload: { key: selectedItem.keyPrefix },
+            payload: { key: selectedItem.keyPrefix, versionId: selectedItem.versionId || "" },
         });
     };
 
@@ -916,6 +923,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         assetId={assetId!}
                         filePath={selectedItem.keyPrefix}
                         fileName={selectedItem.name}
+                        currentVersionId={selectedItem.versionId}
                         onVersionRevert={() => {
                             // Refresh file list after successful revert
                             dispatch({ type: "REFRESH_FILES", payload: null });
@@ -978,45 +986,48 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         {isFolder ? (
                             <SpaceBetween direction="horizontal" size="xs">
                                 {/* Show operations dropdown for all folders, with different options based on level */}
-                                <ButtonDropdown
-                                    items={
-                                        selectedItem.relativePath === "/" &&
-                                        selectedItem.level === 0
-                                            ? [
-                                                  {
-                                                      id: "create-subfolder",
-                                                      text: "Create Sub-Folder",
-                                                      iconName: "folder",
-                                                  },
-                                              ]
-                                            : [
-                                                  {
-                                                      id: "create-subfolder",
-                                                      text: "Create Sub-Folder",
-                                                      iconName: "folder",
-                                                  },
-                                                  {
-                                                      id: "delete-folder",
-                                                      text: "Delete Folder",
-                                                      iconName: "remove",
-                                                  },
-                                              ]
-                                    }
-                                    onItemClick={({ detail }) => {
-                                        switch (detail.id) {
-                                            case "delete-folder":
-                                                setShowDeleteModal(true);
-                                                break;
-                                            case "create-subfolder":
-                                                setCreateFolderModalVisible(true);
-                                                break;
+                                {!state.readOnly && (
+                                    <ButtonDropdown
+                                        items={
+                                            selectedItem.relativePath === "/" &&
+                                            selectedItem.level === 0
+                                                ? [
+                                                      {
+                                                          id: "create-subfolder",
+                                                          text: "Create Sub-Folder",
+                                                          iconName: "folder",
+                                                      },
+                                                  ]
+                                                : [
+                                                      {
+                                                          id: "create-subfolder",
+                                                          text: "Create Sub-Folder",
+                                                          iconName: "folder",
+                                                      },
+                                                      {
+                                                          id: "delete-folder",
+                                                          text: "Delete Folder",
+                                                          iconName: "remove",
+                                                      },
+                                                  ]
                                         }
-                                    }}
-                                >
-                                    {selectedItem.relativePath === "/" && selectedItem.level === 0
-                                        ? "Asset Operations"
-                                        : "Folder Operations"}
-                                </ButtonDropdown>
+                                        onItemClick={({ detail }) => {
+                                            switch (detail.id) {
+                                                case "delete-folder":
+                                                    setShowDeleteModal(true);
+                                                    break;
+                                                case "create-subfolder":
+                                                    setCreateFolderModalVisible(true);
+                                                    break;
+                                            }
+                                        }}
+                                    >
+                                        {selectedItem.relativePath === "/" &&
+                                        selectedItem.level === 0
+                                            ? "Asset Operations"
+                                            : "Folder Operations"}
+                                    </ButtonDropdown>
+                                )}
 
                                 <ButtonDropdown
                                     items={[
@@ -1051,75 +1062,81 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     Export
                                 </ButtonDropdown>
 
-                                <Button
-                                    iconName="upload"
-                                    variant={"primary"}
-                                    onClick={handleUpload}
-                                >
-                                    Upload Files
-                                </Button>
+                                {!state.readOnly && (
+                                    <Button
+                                        iconName="upload"
+                                        variant={"primary"}
+                                        onClick={handleUpload}
+                                    >
+                                        Upload Files
+                                    </Button>
+                                )}
                             </SpaceBetween>
                         ) : (
                             <SpaceBetween direction="horizontal" size="xs">
-                                {selectedItem.isArchived ? (
-                                    <>
-                                        <Button
-                                            iconName="refresh"
-                                            onClick={() => setShowUnarchiveModal(true)}
-                                        >
-                                            Unarchive File
-                                        </Button>
-                                        <Button
-                                            iconName="remove"
-                                            onClick={() => setShowDeleteModal(true)}
-                                        >
-                                            Permanently Delete File
-                                        </Button>
-                                    </>
+                                {selectedItem.isPermanentlyDeleted ? null : selectedItem.isArchived ? (
+                                    !state.readOnly ? (
+                                        <>
+                                            <Button
+                                                iconName="refresh"
+                                                onClick={() => setShowUnarchiveModal(true)}
+                                            >
+                                                Unarchive File
+                                            </Button>
+                                            <Button
+                                                iconName="remove"
+                                                onClick={() => setShowDeleteModal(true)}
+                                            >
+                                                Permanently Delete File
+                                            </Button>
+                                        </>
+                                    ) : null
                                 ) : (
                                     <>
-                                        <ButtonDropdown
-                                            items={[
-                                                {
-                                                    id: "set-primary",
-                                                    text: "Set Primary Type",
-                                                    iconName: "settings",
-                                                },
-                                                {
-                                                    id: "rename",
-                                                    text: "Rename File",
-                                                    iconName: "edit",
-                                                },
-                                                {
-                                                    id: "move-copy",
-                                                    text: "Move/Copy File",
-                                                    iconName: "copy",
-                                                },
-                                                {
-                                                    id: "delete",
-                                                    text: "Delete File",
-                                                    iconName: "remove",
-                                                },
-                                            ]}
-                                            onItemClick={({ detail }) => {
-                                                switch (detail.id) {
-                                                    case "delete":
-                                                        setShowDeleteModal(true);
-                                                        break;
-                                                    case "move-copy":
-                                                        setShowMoveFilesModal(true);
-                                                        break;
-                                                    case "set-primary":
-                                                        setShowSetPrimaryTypeModal(true);
-                                                        break;
-                                                    case "rename":
-                                                        setShowRenameFileModal(true);
-                                                        break;
-                                                }
-                                            }}
-                                        >
-                                            File Operations
-                                        </ButtonDropdown>
+                                        {!state.readOnly && (
+                                            <ButtonDropdown
+                                                items={[
+                                                    {
+                                                        id: "set-primary",
+                                                        text: "Set Primary Type",
+                                                        iconName: "settings",
+                                                    },
+                                                    {
+                                                        id: "rename",
+                                                        text: "Rename File",
+                                                        iconName: "edit",
+                                                    },
+                                                    {
+                                                        id: "move-copy",
+                                                        text: "Move/Copy File",
+                                                        iconName: "copy",
+                                                    },
+                                                    {
+                                                        id: "delete",
+                                                        text: "Delete File",
+                                                        iconName: "remove",
+                                                    },
+                                                ]}
+                                                onItemClick={({ detail }) => {
+                                                    switch (detail.id) {
+                                                        case "delete":
+                                                            setShowDeleteModal(true);
+                                                            break;
+                                                        case "move-copy":
+                                                            setShowMoveFilesModal(true);
+                                                            break;
+                                                        case "set-primary":
+                                                            setShowSetPrimaryTypeModal(true);
+                                                            break;
+                                                        case "rename":
+                                                            setShowRenameFileModal(true);
+                                                            break;
+                                                    }
+                                                }}
+                                            >
+                                                File Operations
+                                            </ButtonDropdown>
+                                        )}
 
                                         <ButtonDropdown
                                             items={[
@@ -1163,11 +1180,19 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 </div>
 
                 <div className="file-info-content">
+                    {selectedItem.isPermanentlyDeleted && (
+                        <Alert type="error" statusIconAriaLabel="Error">
+                            This file has been permanently deleted. All S3 versions have been
+                            removed and the file is no longer available for download, viewing,
+                            or recovery.
+                        </Alert>
+                    )}
+
                     <div className="file-info-item">
                         <div className="file-info-label">Name:</div>
                         <div className="file-info-value">
                             {selectedItem.name}
-                            {!isFolder && selectedItem.level > 0 && (
+                            {!isFolder && selectedItem.level > 0 && !selectedItem.isPermanentlyDeleted && (
                                 <span style={{ marginLeft: "8px" }}>
                                     <Link onFollow={handleFileViewerModal} fontSize="body-s">
                                         (Viewer Popup)
@@ -1268,11 +1293,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
 
                     {selectedItem.versionId && (
                         <div className="file-info-item">
-                            <div className="file-info-label">Latest Version:</div>
+                            <div className="file-info-label">{state.assetVersionId ? "Version:" : "Latest Version:"}</div>
                             <div className="file-info-value">
                                 <div>
                                     {selectedItem.versionId}
-                                    {!isFolder && (
+                                    {!isFolder && !selectedItem.isPermanentlyDeleted && (
                                         <span style={{ marginLeft: "8px" }}>
                                             <Link
                                                 onFollow={() => setShowFileVersionsModal(true)}
@@ -1388,12 +1413,16 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     {shouldShowMetadata && (
                         <div className="file-metadata-section">
                             <FileMetadata
-                                key={selectedItem.keyPrefix} // Force remount when file changes
+                                key={`${selectedItem.keyPrefix}-${
+                                    state.assetVersionId || "latest"
+                                }`}
                                 databaseId={databaseId!}
                                 assetId={assetId!}
                                 prefix={selectedItem.keyPrefix}
                                 showHeader={false}
                                 className="file-details-metadata"
+                                assetVersionId={state.assetVersionId}
+                                readOnly={state.readOnly}
                             />
                         </div>
                     )}

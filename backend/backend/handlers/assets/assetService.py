@@ -168,7 +168,6 @@ def get_current_version_info(asset):
                 DateModified=version_item.get('dateCreated', ''),
                 Comment=version_item.get('comment', ''),
                 description=version_item.get('description', ''),
-                specifiedPipelines=version_item.get('specifiedPipelines', []),
                 createdBy=version_item.get('createdBy', 'SYSTEM_USER')
             )
     except Exception as e:
@@ -769,22 +768,24 @@ def get_assets(databaseId, query_params, showArchived=False):
             response = dynamodb_client.query(**query_params_dict)
             
             # Process items and check permissions
+            # Create enforcer once outside the loop to avoid per-item instantiation overhead
+            casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+
             for item in response.get('Items', []):
                 # Deserialize the item
                 deserialized_item = {k: TypeDeserializer().deserialize(v) for k, v in item.items()}
-                
+
                 # Add status field for archived assets if not present
                 if db_id.endswith('#deleted') and 'status' not in deserialized_item:
                     deserialized_item['status'] = 'archived'
-                
+
                 # Add object type for Casbin enforcement
                 deserialized_item.update({"object__type": "asset"})
-                
+
                 # Check if user has permission to GET the asset
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if casbin_enforcer.enforce(deserialized_item, "GET"):
-                        all_items.append(deserialized_item)
+                # Default deny: only allow if enforcer exists AND grants access
+                if casbin_enforcer and casbin_enforcer.enforce(deserialized_item, "GET"):
+                    all_items.append(deserialized_item)
             
             # Keep track of the next token from the last query (base64 encoded)
             if 'LastEvaluatedKey' in response:
@@ -848,23 +849,25 @@ def get_all_assets(query_params, showArchived=False):
         
         # Process results
         items = []
-        
+
+        # Create enforcer once outside the loop to avoid per-item instantiation overhead
+        casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+
         for item in response.get('Items', []):
             # Deserialize the DynamoDB item
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-            
+
             # Add status field for archived assets if not present
             if '#deleted' in deserialized_document.get('databaseId', '') and 'status' not in deserialized_document:
                 deserialized_document['status'] = 'archived'
-            
+
             # Add object type for Casbin enforcement
             deserialized_document.update({"object__type": "asset"})
-            
+
             # Check if user has permission to GET the asset
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if casbin_enforcer.enforce(deserialized_document, "GET"):
-                    items.append(deserialized_document)
+            # Default deny: only allow if enforcer exists AND grants access
+            if casbin_enforcer and casbin_enforcer.enforce(deserialized_document, "GET"):
+                items.append(deserialized_document)
         
         # Build response with nextToken
         result = {'Items': items}

@@ -30,7 +30,6 @@ class CurrentVersionModel(BaseModel, extra='ignore'):
     DateModified: str
     Comment: str = ""
     description: str = ""
-    specifiedPipelines: List[str] = []
     createdBy: str = "system"
 
 class AssetVersionListItemModel(BaseModel, extra='ignore'):
@@ -39,7 +38,6 @@ class AssetVersionListItemModel(BaseModel, extra='ignore'):
     DateModified: str
     Comment: str = ""
     description: str = ""
-    specifiedPipelines: List[str] = []
     createdBy: str = "system"
     isCurrent: bool = False
     fileCount: int = 0  # Number of available files for this version
@@ -335,7 +333,8 @@ class AssetFileItemModel(BaseModel, extra='ignore'):
     versionId: Optional[str] = None  # S3 version ID (None in basic mode)
     storageClass: Optional[str] = None  # To identify archived files
     isArchived: bool = False  # Computed field based on metadata
-    currentAssetVersionFileVersionMismatch: bool = False  # Indicates if file version doesn't match asset version
+    currentAssetVersionFileVersionMismatch: Optional[bool] = False  # Indicates if file version doesn't match asset version
+    isPermanentlyDeleted: Optional[bool] = False  # True when file no longer exists in S3 (all versions removed)
     primaryType: Optional[str] = None  # Primary type metadata from S3
     previewFile: Optional[str] = ""  # Path to preview file for this file
 
@@ -347,6 +346,7 @@ class ListAssetFilesRequestModel(BaseModel, extra='ignore'):
     prefix: Optional[str] = None
     includeArchived: Optional[bool] = Field(default=False)  # Show archived files
     basic: Optional[bool] = Field(default=False)  # Skip expensive lookups (head_object, preview files, version checks)
+    assetVersionId: Optional[str] = None  # Filter files by specific asset version
 
 class ListAssetFilesResponseModel(BaseModel, extra='ignore'):
     """Response model for listing asset files"""

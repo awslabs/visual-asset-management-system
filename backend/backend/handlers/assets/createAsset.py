@@ -360,7 +360,6 @@ def create_initial_version_record(asset_id, version_id, description, created_by=
             'dateCreated': now,
             'comment': f'Initial asset creation - Version {version_id} (No Files, No Metadata)',
             'description': description,
-            'specifiedPipelines': [],
             'createdBy': created_by,
             'isCurrentVersion': True
         }

@@ -5,6 +5,7 @@ import os
 import boto3
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from boto3.dynamodb.conditions import Key
@@ -27,6 +28,7 @@ from models.assetsV3 import (
     SetPrimaryFileRequestModel, SetPrimaryFileResponseModel, CreateFolderRequestModel, CreateFolderResponseModel,
     DeleteAssetPreviewResponseModel, DeleteAuxiliaryPreviewAssetFilesRequestModel, DeleteAuxiliaryPreviewAssetFilesResponseModel
 )
+from handlers.assets.assetVersions import validate_asset_version_exists
 
 # Configure AWS clients with retry configuration
 region = os.environ.get('AWS_REGION', 'us-east-1')
@@ -49,11 +51,11 @@ logger = safeLogger(service_name="AssetFiles")
 try:
     s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_database_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"] 
-    asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
+    asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
+    asset_aux_bucket_name = os.environ.get("S3_ASSET_AUXILIARY_BUCKET", "")
     asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
     file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
-    send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
+    send_email_function_name = os.environ.get("SEND_EMAIL_FUNCTION_NAME", "")
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -915,10 +917,18 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                     MaxKeys=100  # Limit to 100 versions
                 )
                 
+                # Build a set of delete marker version IDs from the SAME response
+                # to avoid redundant list_object_versions calls per version
+                delete_marker_version_ids = {
+                    marker['VersionId']
+                    for marker in versions_response.get('DeleteMarkers', [])
+                    if marker['Key'] == key
+                }
+
                 versions = []
                 for version in versions_response.get('Versions', []):
                     if version['Key'] == key:
-                        # Enhanced version information
+                        # Check archive status against pre-built set (O(1) lookup)
                         version_info = {
                             'versionId': version['VersionId'],
                             'lastModified': version['LastModified'].isoformat(),
@@ -926,10 +936,10 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                             'isLatest': version['IsLatest'],
                             'storageClass': version.get('StorageClass', 'STANDARD'),
                             'etag': version.get('ETag', '').strip('"'),
-                            'isArchived': is_file_archived(bucket, key, version['VersionId'])
+                            'isArchived': version['VersionId'] in delete_marker_version_ids
                         }
                         versions.append(version_info)
-                
+
                 # Sort versions by date (newest first)
                 versions.sort(key=lambda x: x['lastModified'], reverse=True)
                 result['versions'] = versions
@@ -1065,6 +1075,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         # Single S3 list call
         page = s3_client.list_objects_v2(**list_params)
         
+        # Items that need head_object enrichment (non-basic mode)
+        items_needing_enrichment = []
+
         # Process objects from this single page
         for obj in page.get('Contents', []):
             # Extract filename from key
@@ -1101,36 +1114,45 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                 item['versionId'] = None
                 item['isArchived'] = False  # Can't determine without head_object
                 item['primaryType'] = None
+                result["items"].append(item)
             else:
-                # Full mode: Get version ID, archive status, and metadata
+                # Full mode: collect items for parallel head_object enrichment
+                # Objects returned by list_objects_v2 are always live (no delete marker),
+                # so isArchived is always False here. Archive detection for delete-marker'd
+                # files is handled separately below via list_object_versions.
+                item['isArchived'] = False
+                items_needing_enrichment.append((item, is_folder))
+        
+        # Parallel head_object enrichment for non-basic mode
+        if items_needing_enrichment:
+            def _enrich_item(item_tuple):
+                """Enrich a single item with head_object metadata."""
+                item, is_folder = item_tuple
                 try:
                     version_info = s3_client.head_object(
                         Bucket=bucket,
-                        Key=obj['Key']
+                        Key=item['key']
                     )
                     item['versionId'] = version_info.get('VersionId', 'null')
-                    
-                    # Check if file is archived
-                    item['isArchived'] = is_file_archived(bucket, obj['Key'])
-                    
-                    # Add primaryType from S3 metadata (only for non-folder objects)
                     if not is_folder:
                         metadata = version_info.get('Metadata', {})
                         primary_type = metadata.get('vams-primarytype', '')
                         item['primaryType'] = primary_type if primary_type else None
                     else:
                         item['primaryType'] = None
-                    
                 except Exception as e:
-                    logger.warning(f"Error getting version info for {obj['Key']}: {e}")
+                    logger.warning(f"Error getting version info for {item['key']}: {e}")
                     item['versionId'] = 'null'
-                    item['isArchived'] = False
                     item['primaryType'] = None
-            
-            # Only add non-archived files unless include_archived is True
-            if not item['isArchived'] or include_archived:
-                result["items"].append(item)
-        
+                return item
+
+            max_workers = min(10, len(items_needing_enrichment))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                enriched_items = list(executor.map(_enrich_item, items_needing_enrichment))
+
+            # All items from list_objects_v2 are live (isArchived=False), so always add them
+            result["items"].extend(enriched_items)
+
         # Return the NextContinuationToken directly from S3
         if 'NextContinuationToken' in page:
             result['NextToken'] = page['NextContinuationToken']
@@ -2506,28 +2528,18 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
         raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata.")
 
 def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict) -> ListAssetFilesResponseModel:
-    """List files for an asset
-    
-    Args:
-        databaseId: The database ID
-        assetId: The asset ID
-        query_params: Dictionary containing query parameters
-        claims_and_roles: The claims and roles from the request
-        
-    Returns:
-        ListAssetFilesResponseModel with the list of files
-    """
+    """List files for an asset, optionally filtered by asset version"""
     # Get asset and verify permissions
     asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
-    
+
     # Get asset location
     bucket, key = get_asset_s3_location(asset)
-    
+
     # Parse basic flag first to determine defaults
     basic_mode = query_params.get('basic', 'false').lower() == 'true'
-    
-    # Parse query parameters with conditional defaults based on basic mode
-    # Convert string values to appropriate types
+    asset_version_id = query_params.get('assetVersionId')
+
+    # Parse query parameters
     max_items = query_params.get('maxItems')
     page_size = query_params.get('pageSize')
 
@@ -2537,9 +2549,24 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         startingToken=query_params.get('startingToken'),
         prefix=query_params.get('prefix'),
         includeArchived=query_params.get('includeArchived', 'false').lower() == 'true',
-        basic=basic_mode
+        basic=basic_mode,
+        assetVersionId=asset_version_id
     )
-    
+
+    # Branch: version listing vs current listing
+    if request_model.assetVersionId:
+        return list_asset_files_from_version(
+            databaseId, assetId, asset, bucket, key, request_model
+        )
+    else:
+        return list_asset_files_current(
+            databaseId, assetId, asset, bucket, key, request_model
+        )
+
+def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
+                             bucket: str, key: str,
+                             request_model: ListAssetFilesRequestModel) -> ListAssetFilesResponseModel:
+    """List current files for an asset (existing S3-based logic)"""
     # Create resolved query params for S3 listing
     resolved_query_params = {
         'maxItems': request_model.maxItems,
@@ -2547,19 +2574,19 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         'startingToken': request_model.startingToken,
         'prefix': request_model.prefix
     }
-    
+
     # List files with archive status, passing basic_mode flag
     result = list_s3_objects_with_archive_status(
-        bucket, 
-        key, 
+        bucket,
+        key,
         resolved_query_params,
         request_model.includeArchived,
         basic_mode=request_model.basic
     )
-    
+
     # Convert to response model
     file_items = []
-    
+
     if request_model.basic:
         # Basic mode: Skip preview file processing and version checks
         # Just convert items directly to response models
@@ -2573,7 +2600,7 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         # Full mode: Process preview files and version checks
         preview_files = []
         base_files = {}
-        
+
         # First pass: separate preview files and base files
         for item in result.get('items', []):
             if is_preview_file(item['key']):
@@ -2584,20 +2611,20 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
                 file_items.append(AssetFileItemModel(**item))
                 # Store in lookup dictionary for preview file matching
                 base_files[item['key']] = len(file_items) - 1
-        
+
         # Process preview files
         orphaned_preview_files = []
-        
+
         for preview_item in preview_files:
             # Get the base file key for this preview file
             base_key = get_base_file_for_preview(preview_item['key'])
-            
+
             # Check if the base file exists
             if base_key in base_files:
                 # Base file exists, add this preview file to it if it has an allowed extension
                 if is_allowed_preview_extension(preview_item['key']):
                     base_file_index = base_files[base_key]
-                    
+
                     # Only add if the base file doesn't already have a preview file
                     if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
                         # Add relative path to the preview file
@@ -2605,33 +2632,33 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
                             relative_preview_path = '/' + preview_item['key'][len(key):]
                         else:
                             relative_preview_path = '/' + preview_item['key']
-                        
+
                         # Add preview file to base file
                         file_items[base_file_index].previewFile = relative_preview_path
             else:
                 # Base file doesn't exist, this is an orphaned preview file
                 orphaned_preview_files.append(preview_item['key'])
-        
+
         # Log orphaned preview files
         if orphaned_preview_files:
             logger.warning(f"Found {len(orphaned_preview_files)} orphaned preview files: {orphaned_preview_files}")
-        
+
         # Initialize previewFile field for files that don't have one
         for file_item in file_items:
             if not hasattr(file_item, 'previewFile'):
                 file_item.previewFile = ""
-        
+
         # Check for Asset Version Mismatch
         # Get current asset version ID if available
         current_version_id = None
         if asset.get('currentVersionId'):
             current_version_id = asset.get('currentVersionId', '0')
-        
+
         # If we have a current version, check file versions against asset version files
         if current_version_id:
             # Get all file versions for the current asset version
             asset_file_versions = get_asset_file_versions(assetId, current_version_id, None)
-            
+
             # Create a lookup dictionary for faster matching
             file_version_lookup = {}
             if asset_file_versions and asset_file_versions.get('files'):
@@ -2639,34 +2666,226 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
                     relative_key = file_version.get('relativeKey')
                     if relative_key:
                         file_version_lookup[relative_key] = file_version
-            
+
             # Check each file against the asset version files
             for file_item in file_items:
                 # Separate Folder assets are not included ever in asset versions
                 if file_item.isFolder:
                     continue
-                    
+
                 # If file is archived, it's automatically a mismatch
                 if file_item.isArchived:
                     file_item.currentAssetVersionFileVersionMismatch = True
                     continue
-                
+
                 # Get the relative path without leading slash for comparison
                 relative_path = file_item.relativePath.lstrip('/')
-                
+
                 # Find matching record in asset file versions
                 matching_version = file_version_lookup.get(relative_path)
-                
+
                 # Set mismatch flag
                 if matching_version and matching_version.get('versionId') == file_item.versionId:
                     file_item.currentAssetVersionFileVersionMismatch = False
                 else:
                     file_item.currentAssetVersionFileVersionMismatch = True
-    
+
     return ListAssetFilesResponseModel(
         items=file_items,
         NextToken=result.get('NextToken')
     )
+
+def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
+                                  bucket: str, key: str,
+                                  request_model: ListAssetFilesRequestModel) -> ListAssetFilesResponseModel:
+    """List files for a specific asset version
+
+    For basic mode: constructs file list directly from DynamoDB version snapshot (no S3 calls).
+    For detailed mode: lists S3 objects, filters to versioned files, overlays saved versionId.
+    """
+    asset_version_id = request_model.assetVersionId
+    logger.info(f"Listing files from asset version {asset_version_id} (basic_mode={request_model.basic})")
+
+    # Validate version exists
+    validate_asset_version_exists(assetId, asset_version_id)
+
+    # Get versioned file list from DynamoDB
+    asset_file_versions = get_asset_file_versions(assetId, asset_version_id, None)
+
+    if not asset_file_versions or not asset_file_versions.get('files'):
+        logger.info(f"No files found in version {asset_version_id}")
+        return ListAssetFilesResponseModel(items=[], NextToken=None)
+
+    versioned_files = asset_file_versions.get('files', [])
+    logger.info(f"Found {len(versioned_files)} files in version snapshot")
+
+    if request_model.basic:
+        # BASIC MODE: Construct file list directly from DynamoDB snapshot - NO S3 calls
+        file_items = []
+        for file_info in versioned_files:
+            relative_key = file_info.get('relativeKey', '')
+            file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
+            relative_path = '/' + relative_key.lstrip('/')
+            full_key = key + relative_key.lstrip('/')
+
+            item = {
+                'fileName': file_name,
+                'key': full_key,
+                'relativePath': relative_path,
+                'isFolder': False,
+                'size': file_info.get('size', 0),
+                'dateCreatedCurrentVersion': file_info.get('lastModified', ''),
+                'storageClass': 'STANDARD',
+                'versionId': file_info.get('versionId'),
+                'isArchived': False,
+                'primaryType': None,
+                'previewFile': "",
+                'currentAssetVersionFileVersionMismatch': None
+            }
+            file_items.append(AssetFileItemModel(**item))
+
+        return ListAssetFilesResponseModel(items=file_items, NextToken=None)
+
+    else:
+        # DETAILED MODE: List S3, filter to versioned files, overlay saved versionId
+
+        # Build lookup of versioned files by relative key
+        versioned_file_lookup = {}
+        for file_info in versioned_files:
+            relative_key = file_info.get('relativeKey', '')
+            versioned_file_lookup[relative_key] = file_info
+
+        # List all S3 objects including archived (delete-marker'd) files.
+        # include_archived=True ensures soft-deleted files appear in the listing,
+        # reducing the number of per-file list_object_versions checks needed.
+        resolved_query_params = {
+            'maxItems': 10000,
+            'pageSize': 1500,
+            'startingToken': None,
+            'prefix': None
+        }
+
+        s3_result = list_s3_objects_with_archive_status(
+            bucket, key, resolved_query_params,
+            include_archived=True,
+            basic_mode=False
+        )
+
+        # Filter and process
+        file_items = []
+        preview_files = []
+        base_files = {}
+        found_relative_keys = set()
+
+        for s3_item in s3_result.get('items', []):
+            # Extract relative key from full S3 key
+            if s3_item['key'].startswith(key):
+                relative_key = s3_item['key'][len(key):].lstrip('/')
+            else:
+                relative_key = s3_item['key']
+
+            # Check if it's a preview file for a versioned file
+            if is_preview_file(s3_item['key']):
+                # Check if its base file is in the version
+                base_file_key = get_base_file_for_preview(s3_item['key'])
+                if base_file_key.startswith(key):
+                    base_relative = base_file_key[len(key):].lstrip('/')
+                else:
+                    base_relative = base_file_key
+                if base_relative in versioned_file_lookup:
+                    preview_files.append(s3_item)
+                continue
+
+            # Check if this file is in the version snapshot
+            if relative_key in versioned_file_lookup:
+                version_info = versioned_file_lookup[relative_key]
+                # Overlay saved versionId from the version snapshot
+                s3_item['versionId'] = version_info.get('versionId')
+                s3_item['currentAssetVersionFileVersionMismatch'] = None
+                file_items.append(AssetFileItemModel(**s3_item))
+                base_files[s3_item['key']] = len(file_items) - 1
+                found_relative_keys.add(relative_key)
+
+        # Check for permanently deleted files: versioned files not found in S3.
+        # Since we used include_archived=True above, only truly missing files
+        # (permanently deleted from S3) remain in this set.
+        missing_relative_keys = set(versioned_file_lookup.keys()) - found_relative_keys
+        if missing_relative_keys:
+            logger.info(f"Checking {len(missing_relative_keys)} version snapshot files not found in S3 listing")
+
+            def _check_permanently_deleted(relative_key_to_check: str) -> Tuple[str, bool]:
+                """Check if a single file has been permanently deleted from S3."""
+                full_key = key + relative_key_to_check.lstrip('/')
+                try:
+                    versions_response = s3_client.list_object_versions(
+                        Bucket=bucket,
+                        Prefix=full_key,
+                        MaxKeys=1
+                    )
+                    has_versions = any(
+                        v['Key'] == full_key for v in versions_response.get('Versions', [])
+                    )
+                    has_delete_markers = any(
+                        m['Key'] == full_key for m in versions_response.get('DeleteMarkers', [])
+                    )
+                    return relative_key_to_check, not has_versions and not has_delete_markers
+                except Exception as e:
+                    logger.warning(f"Error checking S3 versions for {full_key}: {e}")
+                    return relative_key_to_check, True
+
+            # Parallelize S3 version checks for better performance with many missing files
+            max_workers = min(10, len(missing_relative_keys))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(_check_permanently_deleted, rk): rk
+                    for rk in missing_relative_keys
+                }
+                for future in as_completed(futures):
+                    relative_key, is_permanently_deleted = future.result()
+                    if is_permanently_deleted:
+                        version_info = versioned_file_lookup[relative_key]
+                        file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
+                        relative_path = '/' + relative_key.lstrip('/')
+                        full_s3_key = key + relative_key.lstrip('/')
+
+                        item = {
+                            'fileName': file_name,
+                            'key': full_s3_key,
+                            'relativePath': relative_path,
+                            'isFolder': False,
+                            'size': version_info.get('size', 0),
+                            'dateCreatedCurrentVersion': version_info.get('lastModified', ''),
+                            'storageClass': 'STANDARD',
+                            'versionId': version_info.get('versionId'),
+                            'isArchived': False,
+                            'isPermanentlyDeleted': True,
+                            'primaryType': None,
+                            'previewFile': "",
+                            'currentAssetVersionFileVersionMismatch': None
+                        }
+                        file_items.append(AssetFileItemModel(**item))
+                        logger.info(f"File permanently deleted from S3: {relative_key}")
+
+        # Process preview files for versioned base files
+        for preview_item in preview_files:
+            base_key_for_preview = get_base_file_for_preview(preview_item['key'])
+            if base_key_for_preview in base_files:
+                if is_allowed_preview_extension(preview_item['key']):
+                    base_file_index = base_files[base_key_for_preview]
+                    if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
+                        if preview_item['key'].startswith(key):
+                            relative_preview_path = '/' + preview_item['key'][len(key):]
+                        else:
+                            relative_preview_path = '/' + preview_item['key']
+                        file_items[base_file_index].previewFile = relative_preview_path
+
+        # Initialize previewFile field for files that don't have one
+        for file_item in file_items:
+            if not hasattr(file_item, 'previewFile'):
+                file_item.previewFile = ""
+
+        logger.info(f"Returning {len(file_items)} files in detailed mode from version {asset_version_id}")
+        return ListAssetFilesResponseModel(items=file_items, NextToken=None)
 
 def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle DELETE /deleteFile requests

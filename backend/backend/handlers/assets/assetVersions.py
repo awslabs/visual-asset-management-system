@@ -52,8 +52,8 @@ try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_file_versions_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
-    asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
-    send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
+    asset_aux_bucket_name = os.environ.get("S3_ASSET_AUXILIARY_BUCKET", "")
+    send_email_function_name = os.environ.get("SEND_EMAIL_FUNCTION_NAME", "")
     asset_file_metadata_versions_table_name = os.environ.get("ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME")
     asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
     file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
@@ -73,6 +73,35 @@ file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribu
 #######################
 # Utility Functions
 #######################
+
+def validate_asset_version_exists(assetId: str, assetVersionId: str) -> bool:
+    """Validate that an asset version exists by checking the asset versions table.
+
+    Args:
+        assetId: The asset ID
+        assetVersionId: The asset version ID
+
+    Returns:
+        True if version exists
+
+    Raises:
+        VAMSGeneralErrorResponse: If version not found or error occurs
+    """
+    try:
+        response = asset_versions_table.get_item(
+            Key={
+                'assetId': assetId,
+                'assetVersionId': assetVersionId
+            }
+        )
+        if not response.get('Item'):
+            raise VAMSGeneralErrorResponse(f"Asset version '{assetVersionId}' not found for asset")
+        return True
+    except VAMSGeneralErrorResponse:
+        raise
+    except Exception as e:
+        logger.exception(f"Error validating asset version: {e}")
+        raise VAMSGeneralErrorResponse("Error validating asset version")
 
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
@@ -582,7 +611,6 @@ def save_asset_version_metadata(assetId: str, assetVersionId: str,
             'dateCreated': now,
             'comment': comment,
             'description': description,
-            'specifiedPipelines': [],
             'createdBy': created_by,
             'isCurrentVersion': isCurrent
         }
@@ -1550,7 +1578,6 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
                 DateModified=deserialized_item.get('dateCreated', ''),
                 Comment=deserialized_item.get('comment', ''),
                 description=deserialized_item.get('description', ''),
-                specifiedPipelines=deserialized_item.get('specifiedPipelines', []),
                 createdBy=deserialized_item.get('createdBy', 'SYSTEM_USER'),
                 isCurrent=deserialized_item.get('isCurrentVersion', False),
                 fileCount=file_count

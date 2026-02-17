@@ -6,6 +6,7 @@ import boto3
 import json
 import gzip
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 from boto3.dynamodb.conditions import Key
@@ -686,82 +687,86 @@ def process_asset_batch(
     claims_and_roles: Dict
 ) -> List[Dict]:
     """Process a batch of assets and gather all related data"""
-    
+
     # Step 1: Batch get all asset details
     logger.info(f"Processing batch of {len(asset_identifiers)} assets")
     asset_details = batch_get_assets(asset_identifiers)
-    
+
+    # Step 2: Create enforcer once and run Casbin checks (sequential, CPU-bound)
+    casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+
+    authorized_assets = []  # (asset_info, asset) tuples for parallel I/O
     processed_assets = []
-    
+
     for asset_info in asset_identifiers:
         asset_key = f"{asset_info['databaseId']}:{asset_info['assetId']}"
         asset = asset_details.get(asset_key)
-        
+
         if not asset:
             logger.warning(f"Asset not found: {asset_info['assetId']}")
             continue
-        
-        try:
-            # Check permissions for this asset
-            asset["object__type"] = "asset"
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not casbin_enforcer.enforce(asset, "GET"):
-                    # Permission denied - add unauthorized placeholder
-                    logger.warning(f"Permission denied for asset {asset_info['assetId']}")
-                    unauthorized_asset = {
-                        'assetId': asset_info['assetId'],
-                        'databaseId': asset_info['databaseId'],
-                        'unauthorizedAsset': True
-                    }
-                    processed_assets.append(unauthorized_asset)
-                    continue
+
+        asset["object__type"] = "asset"
+        # Default deny: only authorize if enforcer exists AND grants access
+        if casbin_enforcer and casbin_enforcer.enforce(asset, "GET"):
+            authorized_assets.append((asset_info, asset))
+        else:
+            logger.warning(f"Permission denied for asset {asset_info['assetId']}")
+            processed_assets.append({
+                'assetId': asset_info['assetId'],
+                'databaseId': asset_info['databaseId'],
+                'unauthorizedAsset': True
+            })
             
+    # Step 3: Process authorized assets with parallelized I/O
+    def _process_single_asset(asset_tuple):
+        """Process a single authorized asset (I/O-heavy, suitable for threading)."""
+        asset_info, asset = asset_tuple
+        try:
             # Get bucket details
             bucket_details = get_default_bucket_details(asset['bucketId'])
             bucket_name = bucket_details['bucketName']
             bucket_prefix = bucket_details['baseAssetsPrefix']
-            
+
             # Get version info
             current_version_id = asset.get('currentVersionId', '0')
             version_info = get_asset_version_info(asset['assetId'], current_version_id)
-            
+
             # Get asset metadata if requested
             asset_metadata = {}
             if request_model.includeAssetMetadata:
                 raw_metadata = get_asset_metadata(asset_info['databaseId'], asset_info['assetId'])
-                # Convert to export format (all as string type per requirement #8)
                 for key, value in raw_metadata.items():
-                    if not key.startswith('_'):  # Skip private keys
+                    if not key.startswith('_'):
                         asset_metadata[key] = {
                             'valueType': 'string',
                             'value': str(value)
                         }
-            
+
             # Get files
             asset_location_key = asset.get('assetLocation', {}).get('Key', '')
             files = list_s3_files(bucket_name, asset_location_key)
-            
+
             # Apply filters
             filtered_files = apply_file_filters(files, request_model)
-            
+
             # Get file versions for version mismatch check
             file_versions = get_asset_file_versions(asset['assetId'], current_version_id)
             file_version_lookup = {}
             if file_versions and file_versions.get('files'):
                 for fv in file_versions['files']:
                     file_version_lookup[fv['relativeKey']] = fv
-            
+
             # Separate preview files from base files
             preview_files_list = []
             base_files_list = []
-            
+
             for file in filtered_files:
                 if is_preview_file(file['key']):
                     preview_files_list.append(file)
                 else:
                     base_files_list.append(file)
-            
+
             # Create lookup for preview files by base file key
             preview_lookup = {}
             for preview_file in preview_files_list:
@@ -769,14 +774,14 @@ def process_asset_batch(
                 if base_key not in preview_lookup:
                     preview_lookup[base_key] = []
                 preview_lookup[base_key].append(preview_file['key'])
-            
+
             # Process each base file
             export_files = []
             for file in base_files_list:
                 # Check version mismatch
                 relative_key = file['relativePath'].lstrip('/')
                 matching_version = file_version_lookup.get(relative_key)
-                
+
                 if file['isFolder']:
                     version_mismatch = False
                 elif file.get('isArchived'):
@@ -785,14 +790,13 @@ def process_asset_batch(
                     version_mismatch = False
                 else:
                     version_mismatch = True
-                
+
                 file['currentAssetVersionFileVersionMismatch'] = version_mismatch
-                
-                # Get file metadata if requested - always return {} if no metadata
+
+                # Get file metadata if requested
                 file_metadata = {}
                 file_attributes = {}
                 if request_model.includeFileMetadata and not file['isFolder']:
-                    # Get file metadata
                     raw_file_metadata = get_file_metadata(
                         asset_info['databaseId'],
                         asset_info['assetId'],
@@ -805,8 +809,7 @@ def process_asset_batch(
                                     'valueType': 'string',
                                     'value': str(value)
                                 }
-                    
-                    # Get file attributes separately
+
                     raw_file_attributes = get_file_attributes(
                         asset_info['databaseId'],
                         asset_info['assetId'],
@@ -819,7 +822,7 @@ def process_asset_batch(
                                     'valueType': 'string',
                                     'value': str(value)
                                 }
-                
+
                 # Generate presigned URL if requested (skip for archived files)
                 presigned_url = None
                 presigned_expires = None
@@ -831,26 +834,20 @@ def process_asset_batch(
                     )
                     if presigned_url:
                         presigned_expires = int(presigned_url_timeout)
-                
+
                 # Find preview file for this base file
                 preview_file_path = ''
                 if not file['isFolder']:
-                    # Get preview files for this base file
                     base_file_key = file['key']
                     preview_files_for_base = preview_lookup.get(base_file_key, [])
-                    
-                    # Get the top preview file with allowed extension
                     top_preview = get_top_preview_file(preview_files_for_base, filter_extensions=True)
-                    
                     if top_preview:
-                        # Convert to relative path
                         if top_preview.startswith(asset_location_key):
                             preview_relative = top_preview[len(asset_location_key):]
                             if not preview_relative.startswith('/'):
                                 preview_relative = '/' + preview_relative
                             preview_file_path = preview_relative
-                
-                # Build export file model
+
                 export_file = {
                     'fileName': file['fileName'],
                     'key': file['key'],
@@ -869,11 +866,10 @@ def process_asset_batch(
                     'presignedFileDownloadUrl': presigned_url,
                     'presignedFileDownloadExpiresIn': presigned_expires
                 }
-                
                 export_files.append(export_file)
-            
+
             # Build export asset model
-            export_asset = {
+            return {
                 'is_root_lookup_asset': asset_info.get('isRoot', False),
                 'id': asset['assetId'],
                 'databaseid': asset['databaseId'],
@@ -890,17 +886,26 @@ def process_asset_batch(
                 'asset_version_createdate': version_info.get('dateCreated', '') if version_info else '',
                 'asset_version_comment': version_info.get('comment', '') if version_info else '',
                 'archived': asset.get('status') == 'archived',
-                'metadata': asset_metadata,  # Always a dict, either populated or {}
+                'metadata': asset_metadata,
                 'files': export_files
             }
-            
-            processed_assets.append(export_asset)
-            
+
         except Exception as e:
             logger.exception(f"Error processing asset {asset_info['assetId']}: {e}")
-            # Continue with other assets
-            continue
-    
+            return None
+
+    if authorized_assets:
+        max_workers = min(10, len(authorized_assets))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_process_single_asset, asset_tuple): asset_tuple
+                for asset_tuple in authorized_assets
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    processed_assets.append(result)
+
     return processed_assets
 
 def export_assets(

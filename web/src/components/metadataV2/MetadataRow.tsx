@@ -148,7 +148,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
         const commonProps = {
             value: row.editValue,
             onChange: onValueChange,
-            disabled: isDisabledDueToDeps,
+            disabled: readOnly || isDisabledDueToDeps,
             ariaLabel: `${row.editKey} value`,
             error: row.validationError,
         };

@@ -105,10 +105,6 @@ def format_version_list_output(versions_data: Dict[str, Any], json_output: bool 
         if description:
             output_lines.append(f"  Description: {description}")
         
-        pipelines = version.get('specifiedPipelines', [])
-        if pipelines:
-            output_lines.append(f"  Pipelines: {', '.join(pipelines)}")
-        
         output_lines.append("-" * 80)
     
     # Show nextToken for manual pagination

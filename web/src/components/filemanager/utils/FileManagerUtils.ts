@@ -238,6 +238,10 @@ export function mergeFiles(
                         update.currentAssetVersionFileVersionMismatch !== undefined
                             ? update.currentAssetVersionFileVersionMismatch
                             : newNode.currentAssetVersionFileVersionMismatch;
+                    newNode.isPermanentlyDeleted =
+                        update.isPermanentlyDeleted !== undefined
+                            ? update.isPermanentlyDeleted
+                            : newNode.isPermanentlyDeleted;
                     newNode.dateCreatedCurrentVersion =
                         update.dateCreatedCurrentVersion || newNode.dateCreatedCurrentVersion;
                     newNode.size = update.size !== undefined ? update.size : newNode.size;
@@ -391,6 +395,7 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
                     isArchived: fileKey.isArchived,
                     currentAssetVersionFileVersionMismatch:
                         fileKey.currentAssetVersionFileVersionMismatch,
+                    isPermanentlyDeleted: fileKey.isPermanentlyDeleted,
                     primaryType: fileKey.primaryType,
                     previewFile: fileKey.previewFile,
                 });
@@ -465,6 +470,7 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
                     isArchived: fileKey.isArchived,
                     currentAssetVersionFileVersionMismatch:
                         fileKey.currentAssetVersionFileVersionMismatch,
+                    isPermanentlyDeleted: fileKey.isPermanentlyDeleted,
                     primaryType: fileKey.primaryType,
                     previewFile: fileKey.previewFile,
                 });
@@ -635,13 +641,18 @@ export function toggleExpanded(fileTree: FileTree, relativePath: string): FileTr
     };
 }
 
-export async function downloadFile(assetId: string, databaseId: string, keyPrefix: string) {
+export async function downloadFile(
+    assetId: string,
+    databaseId: string,
+    keyPrefix: string,
+    versionId: string = ""
+) {
     try {
         const response = await downloadAsset({
             assetId: assetId,
             databaseId: databaseId,
             key: keyPrefix,
-            versionId: "",
+            versionId: versionId,
             downloadType: "assetFile",
         });
 

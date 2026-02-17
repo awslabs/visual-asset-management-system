@@ -90,17 +90,28 @@ function TreeItem({ item }: TreeItemProps) {
                     {!isFolder && item.primaryType && (
                         <span className="folder-count">({item.primaryType})</span>
                     )}
-                    {item.isArchived && (
+                    {item.isPermanentlyDeleted && (
+                        <span className="deleted-icon" title="Permanently Deleted">
+                            <Icon name="status-negative" variant="error" />
+                        </span>
+                    )}
+                    {!item.isPermanentlyDeleted && item.isArchived && (
                         <span className="archived-icon" title="Archived">
                             <Icon name="status-negative" />
                         </span>
                     )}
                     {/* Only show warning icon for files (not folders or top node) */}
-                    {item.currentAssetVersionFileVersionMismatch && !isFolder && item.level > 0 && (
-                        <span className="not-included-icon" title="Not included in Asset Version">
-                            <Icon name="status-warning" />
-                        </span>
-                    )}
+                    {!item.isPermanentlyDeleted &&
+                        item.currentAssetVersionFileVersionMismatch &&
+                        !isFolder &&
+                        item.level > 0 && (
+                            <span
+                                className="not-included-icon"
+                                title="Not included in Asset Version"
+                            >
+                                <Icon name="status-warning" />
+                            </span>
+                        )}
                 </span>
             </div>
 
@@ -173,13 +184,19 @@ function SearchResults({}: SearchResultsProps) {
                             {!isFolder && item.primaryType && (
                                 <span className="folder-count">({item.primaryType})</span>
                             )}
-                            {item.isArchived && (
+                            {item.isPermanentlyDeleted && (
+                                <span className="deleted-icon" title="Permanently Deleted">
+                                    <Icon name="status-negative" variant="error" />
+                                </span>
+                            )}
+                            {!item.isPermanentlyDeleted && item.isArchived && (
                                 <span className="archived-icon" title="Archived">
                                     <Icon name="status-negative" />
                                 </span>
                             )}
                             {/* Only show warning icon for files (not folders or top node) */}
-                            {item.currentAssetVersionFileVersionMismatch &&
+                            {!item.isPermanentlyDeleted &&
+                                item.currentAssetVersionFileVersionMismatch &&
                                 !isFolder &&
                                 item.level > 0 && (
                                     <span

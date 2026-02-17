@@ -2472,6 +2472,12 @@ paths:
                 schema:
                     type: boolean
                     default: false
+              - name: assetVersionId
+                in: query
+                required: false
+                schema:
+                    type: string
+                description: Optional asset version ID. When provided, returns files from the specified version snapshot instead of current state.
     /database/{databaseId}/assets/{assetId}/fileInfo:
         get:
             summary: "Get detailed information about a specific file."
@@ -4055,6 +4061,12 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - name: assetVersionId
+                in: query
+                required: false
+                schema:
+                    type: string
+                description: Optional asset version ID. When provided, returns metadata from the specified version snapshot instead of current state.
             security:
               - DefaultCognitoAuthorizer: []
         post:
@@ -4286,6 +4298,12 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - name: assetVersionId
+                in: query
+                required: false
+                schema:
+                    type: string
+                description: Optional asset version ID. When provided, returns file metadata from the specified version snapshot instead of current state.
             security:
               - DefaultCognitoAuthorizer: []
         post:
@@ -7318,10 +7336,6 @@ components:
                     type: string
                 description:
                     type: string
-                specifiedPipelines:
-                    type: array
-                    items:
-                        type: string
         assetUpdate:
             type: object
             properties:
@@ -7898,11 +7912,6 @@ components:
                 description:
                     type: string
                     description: "Description of this version"
-                specifiedPipelines:
-                    type: array
-                    items:
-                        type: string
-                    description: "Pipelines specified for this version"
                 createdBy:
                     type: string
                     description: "User who created this version"

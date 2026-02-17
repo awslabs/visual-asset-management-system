@@ -2211,19 +2211,20 @@ class APIClient:
 
     # Unified Metadata API Methods (v2.2+)
 
-    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
+    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 3000, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
         """
         Get metadata for an asset using the new unified API.
-        
+
         Args:
             database_id: Database ID
             asset_id: Asset ID
             page_size: Page size for pagination (default: 3000)
             starting_token: Token for pagination
-        
+            asset_version_id: Optional asset version ID to retrieve metadata snapshot
+
         Returns:
             API response with metadata list and optional NextToken
-        
+
         Raises:
             AssetNotFoundError: When asset is not found
             DatabaseNotFoundError: When database doesn't exist
@@ -2235,6 +2236,8 @@ class APIClient:
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
+            if asset_version_id:
+                params['assetVersionId'] = asset_version_id
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2353,11 +2356,11 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to delete asset metadata: {e}")
 
-    def get_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str = 'metadata', 
-                            page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
+    def get_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str = 'metadata',
+                            page_size: int = 3000, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
         """
         Get metadata or attributes for a file using the new unified API.
-        
+
         Args:
             database_id: Database ID
             asset_id: Asset ID
@@ -2365,10 +2368,11 @@ class APIClient:
             metadata_type: 'metadata' or 'attribute'
             page_size: Page size for pagination (default: 3000)
             starting_token: Token for pagination
-        
+            asset_version_id: Optional asset version ID to retrieve metadata snapshot
+
         Returns:
             API response with metadata list and optional NextToken
-        
+
         Raises:
             AssetNotFoundError: When asset is not found
             DatabaseNotFoundError: When database doesn't exist
@@ -2384,6 +2388,8 @@ class APIClient:
             }
             if starting_token:
                 params['startingToken'] = starting_token
+            if asset_version_id:
+                params['assetVersionId'] = asset_version_id
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()

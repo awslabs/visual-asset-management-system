@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Container, Alert, SpaceBetween, Tabs } from "@cloudscape-design/components";
+import { Container, Alert, Header, SpaceBetween, Tabs } from "@cloudscape-design/components";
 import {
     EntityType,
     FileMetadataType,
@@ -36,10 +36,14 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     onDataChange,
     onHasChangesChange,
     onValidationChange,
+    assetVersionId,
     readOnly = false,
     showBulkEdit = true,
     restrictMetadataOutsideSchemas = false,
 }) => {
+    // When viewing a specific version, force read-only mode
+    const effectiveReadOnly = readOnly || !!assetVersionId;
+
     const [editMode, setEditMode] = useState<EditMode>("normal");
     const [error, setError] = useState<string | null>(null);
     const [refreshing, setRefreshing] = useState(false);
@@ -85,7 +89,8 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
         databaseId,
         filePath,
         entityType === "file" ? activeFileType || "attribute" : fileType,
-        mode
+        mode,
+        assetVersionId
     );
 
     const {
@@ -650,7 +655,13 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
         const displayMetadataCount = metadataCount !== undefined ? metadataCount : "...";
 
         return (
-            <Container>
+            <Container
+                header={
+                    assetVersionId ? (
+                        <Header variant="h2">{`Metadata (v${assetVersionId})`}</Header>
+                    ) : undefined
+                }
+            >
                 <SpaceBetween direction="vertical" size="m">
                     {(error || (fetchError && !dismissedFetchError)) && (
                         <Alert
@@ -715,7 +726,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             onRefresh={handleRefresh}
                                             hasChanges={hasChanges}
                                             canCommit={canCommitChanges(rows)}
-                                            readOnly={readOnly}
+                                            readOnly={effectiveReadOnly}
                                             isFileAttribute={true}
                                             refreshing={refreshing}
                                             restrictMetadata={restrictMetadata && hasSchemas}
@@ -757,7 +768,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             onRefresh={handleRefresh}
                                             hasChanges={hasChanges}
                                             canCommit={canCommitChanges(rows)}
-                                            readOnly={readOnly}
+                                            readOnly={effectiveReadOnly}
                                             isFileAttribute={false}
                                             refreshing={refreshing}
                                             restrictMetadata={restrictMetadata && hasSchemas}
@@ -773,7 +784,13 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
 
     // Render for other entity types (no tabs)
     return (
-        <Container>
+        <Container
+            header={
+                assetVersionId ? (
+                    <Header variant="h2">{`Metadata (v${assetVersionId})`}</Header>
+                ) : undefined
+            }
+        >
             <SpaceBetween direction="vertical" size="m">
                 {(error || (fetchError && !dismissedFetchError)) && (
                     <Alert
@@ -827,7 +844,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                         onRefresh={handleRefresh}
                         hasChanges={hasChanges}
                         canCommit={canCommitChanges(rows)}
-                        readOnly={readOnly}
+                        readOnly={effectiveReadOnly}
                         isFileAttribute={false}
                         refreshing={refreshing}
                         restrictMetadata={restrictMetadata && hasSchemas}

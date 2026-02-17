@@ -162,6 +162,12 @@ vamscli asset-version get -d my-database -a my-asset -v 1
 # Revert to previous version if needed
 vamscli asset-version revert -d my-database -a my-asset -v 1 --comment "Reverting to stable version"
 
+# View files and metadata from a specific version snapshot
+vamscli file list -d my-database -a my-asset --asset-version-id ver-123
+vamscli file list -d my-database -a my-asset --asset-version-id ver-123 --basic  # Fastest (no S3 calls)
+vamscli metadata asset list -d my-database -a my-asset --asset-version-id ver-123
+vamscli metadata file list -d my-database -a my-asset --file-path "models/file.gltf" --type metadata --asset-version-id ver-123
+
 # Check metadata schema for validation rules
 vamscli metadata-schema get -d my-database
 
@@ -180,7 +186,7 @@ vamscli metadata file update -d my-database -a my-asset -f file-uuid --json-inpu
 
 # List metadata
 vamscli metadata asset list -d my-database -a my-asset
-vamscli metadata file list -d my-database -a my-asset -f file-uuid
+vamscli metadata file list -d my-database -a my-asset --file-path "models/file.gltf" --type metadata
 
 # Update metadata (upsert mode - keeps existing keys)
 vamscli metadata asset update -d my-database -a my-asset --json-input '[

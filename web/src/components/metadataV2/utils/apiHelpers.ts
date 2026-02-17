@@ -22,6 +22,7 @@ export const fetchMetadata = async (
     databaseId?: string,
     filePath?: string,
     fileType?: FileMetadataType,
+    assetVersionId?: string,
     api = API
 ): Promise<MetadataAPIResponse> => {
     try {
@@ -54,6 +55,9 @@ export const fetchMetadata = async (
         if (entityType === "file" && filePath && fileType) {
             queryParams.filePath = filePath;
             queryParams.type = fileType;
+        }
+        if (assetVersionId) {
+            queryParams.assetVersionId = assetVersionId;
         }
 
         const response = await api.get("api", endpoint, {

@@ -35,7 +35,6 @@ export interface AssetVersion {
     DateModified: string;
     Comment: string;
     description: string;
-    specifiedPipelines: string[];
     createdBy: string;
     isCurrent: boolean;
     fileCount: number;

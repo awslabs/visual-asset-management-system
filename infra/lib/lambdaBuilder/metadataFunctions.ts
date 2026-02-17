@@ -69,10 +69,19 @@ export function buildMetadataService(
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             METADATA_SCHEMA_STORAGE_TABLE_V2_NAME:
                 storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataVersionsStorageTable.tableName,
         },
     });
 
     // Grant DynamoDB permissions
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileMetadataVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);

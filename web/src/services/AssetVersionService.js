@@ -11,7 +11,7 @@ import { fetchAssetS3Files } from "./APIService";
  * @param {Object} params - Parameters object
  * @param {string} params.databaseId - Database ID
  * @param {string} params.assetId - Asset ID
- * @param {number} params.pageSize - Page size for fetching (optional, default 100)
+ * @param {number} [params.pageSize=100] - Page size for fetching (optional, default 100)
  * @returns {Promise<[boolean, any]>}
  */
 export const fetchAllAssetVersions = async ({ databaseId, assetId, pageSize = 100 }, api = API) => {

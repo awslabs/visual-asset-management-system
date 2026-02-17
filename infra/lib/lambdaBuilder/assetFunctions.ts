@@ -210,6 +210,8 @@ export function buildAssetFiles(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
             ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileMetadataStorageTable.tableName,
             FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
@@ -223,6 +225,7 @@ export function buildAssetFiles(
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     sendEmailFunction.grantInvoke(fun);

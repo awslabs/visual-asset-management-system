@@ -229,7 +229,12 @@ export function fileManagerReducer(
 
         case "DOWNLOAD_FILE":
             const handleDownloadFile = async () => {
-                await downloadFile(state.assetId, state.databaseId, action.payload.key);
+                await downloadFile(
+                    state.assetId,
+                    state.databaseId,
+                    action.payload.key,
+                    action.payload.versionId || ""
+                );
             };
             handleDownloadFile();
             return state;
@@ -581,6 +586,13 @@ export function fileManagerReducer(
                 flattenedItems: updatedFlattenedItems,
             };
         }
+
+        case "SET_READ_ONLY":
+            return {
+                ...state,
+                readOnly: action.payload.readOnly,
+                assetVersionId: action.payload.assetVersionId,
+            };
 
         default:
             return state;

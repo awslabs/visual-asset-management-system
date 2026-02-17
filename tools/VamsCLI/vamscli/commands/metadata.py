@@ -141,28 +141,30 @@ def asset():
 @asset.command()
 @click.option('-d', '--database-id', required=True, help='Database ID')
 @click.option('-a', '--asset-id', required=True, help='Asset ID')
+@click.option('--asset-version-id', help='Filter metadata by a specific asset version')
 @click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list(ctx: click.Context, database_id: str, asset_id: str, page_size: int, starting_token: str, json_output: bool):
+def list(ctx: click.Context, database_id: str, asset_id: str, asset_version_id: str, page_size: int, starting_token: str, json_output: bool):
     """
     List all metadata for an asset.
-    
+
     Examples:
         vamscli metadata asset list -d my-db -a my-asset
         vamscli metadata asset list -d my-db -a my-asset --json-output
         vamscli metadata asset list -d my-db -a my-asset --page-size 100
+        vamscli metadata asset list -d my-db -a my-asset --asset-version-id ver123
     """
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         output_status("Retrieving asset metadata...", json_output)
-        
-        result = api_client.get_asset_metadata_v2(database_id, asset_id, page_size, starting_token)
+
+        result = api_client.get_asset_metadata_v2(database_id, asset_id, page_size, starting_token, asset_version_id)
         
         def format_list_output(data):
             metadata_list = data.get('metadata', [])
@@ -337,28 +339,30 @@ def file():
 @click.option('--file-path', required=True, help='Relative file path')
 @click.option('--type', 'metadata_type', type=click.Choice(['metadata', 'attribute']), required=True,
               help='Type: metadata or attribute')
+@click.option('--asset-version-id', help='Filter metadata by a specific asset version')
 @click.option('--page-size', default=3000, type=int, help='Page size for pagination (default: 3000)')
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list(ctx: click.Context, database_id: str, asset_id: str, file_path: str, metadata_type: str, 
-         page_size: int, starting_token: str, json_output: bool):
+def list(ctx: click.Context, database_id: str, asset_id: str, file_path: str, metadata_type: str,
+         asset_version_id: str, page_size: int, starting_token: str, json_output: bool):
     """
     List all metadata or attributes for a file.
-    
+
     Examples:
         vamscli metadata file list -d my-db -a my-asset --file-path "models/file.gltf" --type metadata
         vamscli metadata file list -d my-db -a my-asset --file-path "models/file.gltf" --type attribute --json-output
+        vamscli metadata file list -d my-db -a my-asset --file-path "models/file.gltf" --type metadata --asset-version-id ver123
     """
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         output_status(f"Retrieving file {metadata_type}...", json_output)
-        
-        result = api_client.get_file_metadata_v2(database_id, asset_id, file_path, metadata_type, page_size, starting_token)
+
+        result = api_client.get_file_metadata_v2(database_id, asset_id, file_path, metadata_type, page_size, starting_token, asset_version_id)
         
         def format_list_output(data):
             metadata_list = data.get('metadata', [])

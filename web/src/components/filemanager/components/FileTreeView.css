@@ -250,3 +250,12 @@
     vertical-align: middle;
     font-size: 14px;
 }
+
+.deleted-icon {
+    margin-left: 4px;
+    color: #d13212;
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    font-size: 14px;
+}

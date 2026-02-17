@@ -412,6 +412,7 @@ class GetAssetMetadataRequestModel(BaseModel, extra='ignore'):
     maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
     pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, description="Token for pagination")
+    assetVersionId: Optional[str] = Field(None, description="Optional asset version ID to retrieve metadata snapshot")
 
 
 class CreateAssetMetadataRequestModel(BaseModel, extra='ignore'):
@@ -527,12 +528,13 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
     maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
     pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, description="Token for pagination")
+    assetVersionId: Optional[str] = Field(None, description="Optional asset version ID to retrieve metadata snapshot")
 
     @root_validator
     def validate_fields(cls, values):
         """Normalize and validate file path"""
         from common.validators import validate
-        
+
         # Normalize: Add leading slash if missing
         file_path = values.get('filePath', '')
         if file_path and not file_path.startswith('/'):

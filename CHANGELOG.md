@@ -25,12 +25,14 @@ All notable changes to this project will be documented in this file. See [standa
 -   Added new API, web, and CLI functionality to manage cognito users to remove the requirement of needing to go into the AWS Console or CLI to add/update/remove/reset password for users. This is only enabled when Cognito authentication is enabled.
     -   **Web** Includes new navigation page for `Cognito User Management`
     -   New API endpoints `/user/cognito` GET/POST, `/user/cognito/{userId}` PUT/DELETE, `/user/cognito/{userId}/resetPassword` POST
--   **CLI** Added commands for admin functionality such as adding new cognito users (with new APIs), users in role management, role management, and constraint management. This update finishes the CLI upgrades to have the majority of the web functionality as commands in the CLI.
+-   **CLI** Added commands for admin functionality such as adding new cognito users (with new APIs), users in role management, role management, and constraint management.
 -   Added new `POST /auth/constraintsTemplateImport` API endpoint for bulk-importing permission constraints from JSON templates in a single API call. The API handles server-side variable substitution, UUID generation, groupId mapping, and constraint creation in DynamoDB, replacing the previous client-side XML parsing and one-by-one constraint creation approach.
     -   **CLI** Added `vamscli role constraint template import` command to import permission constraint templates via the new API endpoint.
     -   Added a new tool `tools/permissionsSetup/apply_template.py` that uses the CLI to automate the deployment of new roles and constraint templates as needed. This can be used by admins to help setup new permission structures for when new databases are created for an organization.
     -   Added pre-built JSON permission templates in `documentation/permissionsTemplates/` for common permission profiles: `database-admin.json` (13 constraints), `database-user.json` (15 constraints), `database-readonly.json` (10 constraints), `global-readonly.json` (10 constraints), and `deny-tagged-assets.json` (1 constraint). Templates define complete constraint sets for roles with variable placeholders for database IDs and role names.
     -   Added comprehensive Permissions Guide (`documentation/PermissionsGuide.md`) covering the full ABAC/RBAC constraint matrix, two-tier authorization enforcement, GLOBAL keyword usage, archive vs permanent delete enforcement, deny overlay patterns, and step-by-step examples for common permission profiles.
+-   **Web** Added version selector on view asset page to easily show files and metadata for a particular stored version
+    -   APIs updated for getting asset file information and metadata for assets / files to have an optional parameter for specifying a asset version id.
 
 ### Bug Fixes
 
@@ -53,6 +55,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   Added featuresEnabled dynamoDB table writing check during CDK deployment to de-deplicate and overwrite existing values
 -   Updated description of viewers that currently do not support showing non-current version files for the primary selected file (will always show the latest file).
 -   **Web** Changed some of the columns that show up on the new asset and existing asset file table to not show the progress bar or status. This will help alleviate confusion on the pre-upload screen for users who were expecting files to start uploading after immediate selection.
+-   Further API performance improvements in listing asset files and gathering asset export data
 -   Updated CLINE/KIRO workflows for clarifying CLI patterns for json-output
 
 ### Known Outstanding Issues

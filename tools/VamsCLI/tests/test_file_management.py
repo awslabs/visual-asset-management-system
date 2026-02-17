@@ -341,6 +341,7 @@ class TestFileListCommand:
         assert '--basic' in result.output
         assert '--max-items' in result.output
         assert '--auto-paginate' in result.output
+        assert '--asset-version-id' in result.output
     
     def test_list_success(self, cli_runner, file_command_mocks):
         """Test successful file listing."""
@@ -670,6 +671,123 @@ class TestFileListCommand:
             # Should output raw JSON
             output_json = json.loads(result.output.strip())
             assert output_json == api_response
+
+    def test_list_with_asset_version_id(self, cli_runner, file_command_mocks):
+        """Test file listing filtered by asset version ID."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {
+                        'fileName': 'model.gltf',
+                        'relativePath': '/model.gltf',
+                        'isFolder': False,
+                        'size': 1024,
+                        'isArchived': False
+                    }
+                ]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--asset-version-id', 'ver-123'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Found 1 file(s):' in result.output
+
+            # Verify API call includes assetVersionId
+            expected_params = {'assetVersionId': 'ver-123'}
+            mocks['api_client'].list_asset_files.assert_called_once_with(
+                'test-db', 'test-asset', expected_params
+            )
+
+    def test_list_with_asset_version_id_and_basic(self, cli_runner, file_command_mocks):
+        """Test file listing with asset version ID and basic mode."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {
+                        'fileName': 'model.gltf',
+                        'relativePath': '/model.gltf',
+                        'isFolder': False,
+                        'size': 512,
+                        'isArchived': False
+                    }
+                ]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--asset-version-id', 'ver-123',
+                '--basic'
+            ])
+
+            assert result.exit_code == 0
+
+            # Verify API call includes both assetVersionId and basic
+            expected_params = {'basic': 'true', 'assetVersionId': 'ver-123'}
+            mocks['api_client'].list_asset_files.assert_called_once_with(
+                'test-db', 'test-asset', expected_params
+            )
+
+    def test_list_with_asset_version_id_auto_paginate(self, cli_runner, file_command_mocks):
+        """Test file listing with asset version ID and auto-pagination."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False, 'size': 100}
+                    for i in range(50)
+                ],
+                'NextToken': None
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--asset-version-id', 'ver-123',
+                '--auto-paginate'
+            ])
+
+            assert result.exit_code == 0
+
+            # Verify API call includes assetVersionId
+            call_args = mocks['api_client'].list_asset_files.call_args
+            assert call_args[0][2]['assetVersionId'] == 'ver-123'
+
+    def test_list_with_asset_version_id_json_input(self, cli_runner, file_command_mocks):
+        """Test file listing with asset version ID from JSON input."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {
+                        'fileName': 'model.gltf',
+                        'relativePath': '/model.gltf',
+                        'isFolder': False,
+                        'size': 1024
+                    }
+                ]
+            }
+
+            json_input = json.dumps({'asset_version_id': 'ver-from-json'})
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--json-input', json_input
+            ])
+
+            assert result.exit_code == 0
+
+            # Verify API call includes assetVersionId from JSON input
+            expected_params = {'assetVersionId': 'ver-from-json'}
+            mocks['api_client'].list_asset_files.assert_called_once_with(
+                'test-db', 'test-asset', expected_params
+            )
 
 
 class TestFileInfoCommand:

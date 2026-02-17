@@ -31,7 +31,8 @@ export const useMetadataFetch = (
     databaseId?: string,
     filePath?: string,
     fileType?: FileMetadataType,
-    mode: "online" | "offline" = "online"
+    mode: "online" | "offline" = "online",
+    assetVersionId?: string
 ): UseMetadataFetchResult => {
     const [data, setData] = useState<MetadataRecord[]>([]);
     const [loading, setLoading] = useState(false);
@@ -66,7 +67,8 @@ export const useMetadataFetch = (
                     entityId,
                     databaseId,
                     filePath,
-                    otherType
+                    otherType,
+                    assetVersionId
                 );
 
                 if (otherType === "attribute") {
@@ -85,7 +87,7 @@ export const useMetadataFetch = (
                 // Don't set error state for count fetching failures
             }
         },
-        [entityType, entityId, databaseId, filePath, mode]
+        [entityType, entityId, databaseId, filePath, mode, assetVersionId]
     );
 
     const refetch = useCallback(async () => {
@@ -127,7 +129,8 @@ export const useMetadataFetch = (
                 entityId,
                 databaseId,
                 filePath,
-                fileType
+                fileType,
+                assetVersionId
             );
 
             console.log("[useMetadataFetch] Response:", response);
@@ -167,13 +170,22 @@ export const useMetadataFetch = (
         } finally {
             setLoading(false);
         }
-    }, [entityType, entityId, databaseId, filePath, fileType, mode, fetchOtherFileTypeCount]);
+    }, [
+        entityType,
+        entityId,
+        databaseId,
+        filePath,
+        fileType,
+        mode,
+        assetVersionId,
+        fetchOtherFileTypeCount,
+    ]);
 
     // Auto-fetch on mount and when dependencies change
     useEffect(() => {
         refetch();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [entityType, entityId, databaseId, filePath, fileType, mode]);
+    }, [entityType, entityId, databaseId, filePath, fileType, mode, assetVersionId]);
 
     return {
         data,
