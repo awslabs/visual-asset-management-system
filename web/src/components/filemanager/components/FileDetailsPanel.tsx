@@ -1183,8 +1183,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     {selectedItem.isPermanentlyDeleted && (
                         <Alert type="error" statusIconAriaLabel="Error">
                             This file has been permanently deleted. All S3 versions have been
-                            removed and the file is no longer available for download, viewing,
-                            or recovery.
+                            removed and the file is no longer available for download, viewing, or
+                            recovery.
                         </Alert>
                     )}
 
@@ -1192,13 +1192,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         <div className="file-info-label">Name:</div>
                         <div className="file-info-value">
                             {selectedItem.name}
-                            {!isFolder && selectedItem.level > 0 && !selectedItem.isPermanentlyDeleted && (
-                                <span style={{ marginLeft: "8px" }}>
-                                    <Link onFollow={handleFileViewerModal} fontSize="body-s">
-                                        (Viewer Popup)
-                                    </Link>
-                                </span>
-                            )}
+                            {!isFolder &&
+                                selectedItem.level > 0 &&
+                                !selectedItem.isPermanentlyDeleted && (
+                                    <span style={{ marginLeft: "8px" }}>
+                                        <Link onFollow={handleFileViewerModal} fontSize="body-s">
+                                            (Viewer Popup)
+                                        </Link>
+                                    </span>
+                                )}
                         </div>
                     </div>
 
@@ -1293,7 +1295,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
 
                     {selectedItem.versionId && (
                         <div className="file-info-item">
-                            <div className="file-info-label">{state.assetVersionId ? "Version:" : "Latest Version:"}</div>
+                            <div className="file-info-label">
+                                {state.assetVersionId ? "Version:" : "Latest Version:"}
+                            </div>
                             <div className="file-info-value">
                                 <div>
                                     {selectedItem.versionId}
