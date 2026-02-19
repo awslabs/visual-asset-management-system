@@ -1317,7 +1317,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     !isFolder &&
                                     selectedItem.relativePath !== "/" && (
                                         <div className="not-included-label">
-                                            Not Included in Asset Version
+                                            Not Included in Current Asset Version
                                         </div>
                                     )}
                             </div>

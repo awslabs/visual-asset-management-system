@@ -237,7 +237,7 @@ class AssetDocumentModel(BaseModel, extra='allow'):
     list_tags: Optional[List[str]] = Field(None, description="Asset tags")
     
     # Version information
-    str_asset_version_id: Optional[str] = Field(None, description="Current version ID")
+    str_asset_version_id: Optional[str] = Field(None, description="Current version ID (with alias if set)")
     date_asset_version_createdate: Optional[str] = Field(None, description="Version creation date")
     str_asset_version_comment: Optional[str] = Field(None, description="Version comment")
     

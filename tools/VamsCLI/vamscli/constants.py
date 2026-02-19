@@ -40,6 +40,9 @@ API_CREATE_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/createVersio
 API_REVERT_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}"
 API_GET_ASSET_VERSIONS = "/database/{databaseId}/assets/{assetId}/getVersions"
 API_GET_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}"
+API_ASSET_VERSION_BY_ID = "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}"
+API_ASSET_VERSION_ARCHIVE = "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive"
+API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive"
 
 # Database Management API Endpoints
 API_DATABASE = "/database"

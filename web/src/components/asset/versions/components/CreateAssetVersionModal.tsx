@@ -11,6 +11,7 @@ import {
     SpaceBetween,
     Alert,
     FormField,
+    Input,
     Textarea,
     SegmentedControl,
     Container,
@@ -51,6 +52,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [comment, setComment] = useState<string>("");
+    const [versionAlias, setVersionAlias] = useState<string>("");
     const [creationMode, setCreationMode] = useState<CreationMode>("current");
 
     // Files state
@@ -93,6 +95,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
             setLoading(false);
             setError(null);
             setComment("");
+            setVersionAlias("");
             setCreationMode("current");
             setSelectedFiles([]);
             setShowArchived(false);
@@ -307,6 +310,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                     useLatestFiles: true,
                     files: [], // Provide empty array to satisfy TypeScript
                     comment,
+                    versionAlias,
                 });
             } else if (creationMode === "select" || creationMode === "modify") {
                 // Use selected files
@@ -322,6 +326,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                     useLatestFiles: false,
                     files: selectedFiles,
                     comment,
+                    versionAlias,
                 });
             }
 
@@ -733,6 +738,23 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                 </Alert>
 
                 {renderCreationModeContent()}
+
+                <FormField
+                    label="Version Alias"
+                    description="An optional short name for this version (e.g., RC1, GA, Beta). Max 64 characters."
+                    constraintText={`${versionAlias.length}/64 characters`}
+                >
+                    <Input
+                        value={versionAlias}
+                        onChange={({ detail }) => {
+                            if (detail.value.length <= 64) {
+                                setVersionAlias(detail.value);
+                            }
+                        }}
+                        placeholder="e.g., RC1, GA, Beta"
+                        disabled={loading}
+                    />
+                </FormField>
 
                 <FormField
                     label="Version Comment *"

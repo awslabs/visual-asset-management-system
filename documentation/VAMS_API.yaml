@@ -3204,9 +3204,16 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - name: showArchived
+                in: query
+                required: false
+                schema:
+                    type: boolean
+                    default: false
+                description: Whether to include archived versions in the results. Defaults to false (archived versions are hidden).
             security:
               - DefaultCognitoAuthorizer: []
-    
+
     /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}:
         get:
             summary: "Get details for a specific asset version."
@@ -3256,7 +3263,196 @@ paths:
                     type: string
             security:
               - DefaultCognitoAuthorizer: []
-    
+
+    /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}:
+        put:
+            summary: "Update an asset version's comment and/or alias."
+            description: "Updates the comment and/or version alias for a specific asset version. At least one of comment or versionAlias must be provided. To clear a versionAlias, pass an empty string."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateAssetVersionRequest"
+            responses:
+                "200":
+                    description: Asset version updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Asset version updated successfully"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetVersionId
+                in: path
+                description: Asset version ID to update
+                required: true
+                schema:
+                    type: string
+            security:
+              - DefaultCognitoAuthorizer: []
+
+    /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive:
+        post:
+            summary: "Archive an asset version."
+            description: "Archives a specific asset version. The current version cannot be archived."
+            responses:
+                "200":
+                    description: Asset version archived successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Asset version archived successfully"
+                "400":
+                    description: Invalid parameters or version cannot be archived.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetVersionId
+                in: path
+                description: Asset version ID to archive
+                required: true
+                schema:
+                    type: string
+            security:
+              - DefaultCognitoAuthorizer: []
+
+    /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive:
+        post:
+            summary: "Unarchive an asset version."
+            description: "Unarchives a previously archived asset version, making it active again."
+            responses:
+                "200":
+                    description: Asset version unarchived successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Asset version unarchived successfully"
+                "400":
+                    description: Invalid parameters or version is not archived.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetVersionId
+                in: path
+                description: Asset version ID to unarchive
+                required: true
+                schema:
+                    type: string
+            security:
+              - DefaultCognitoAuthorizer: []
+
     /database/{databaseId}/assets/{assetId}/archiveAsset:
         delete:
             summary: "Archive an asset (soft delete)."
@@ -7871,6 +8067,9 @@ components:
                 assetVersionId:
                     type: string
                     description: "Asset version ID"
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID this asset version belongs to"
                 dateCreated:
                     type: string
                     format: date-time
@@ -7878,6 +8077,13 @@ components:
                 comment:
                     type: string
                     description: "Comment for this version"
+                versionAlias:
+                    type: string
+                    description: "Optional alias name for this version"
+                isArchived:
+                    type: boolean
+                    description: "Whether this version is archived"
+                    default: false
                 files:
                     type: array
                     items:
@@ -7902,6 +8108,12 @@ components:
                 Version:
                     type: string
                     description: "Asset version ID"
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID this version belongs to"
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID this asset version belongs to"
                 DateModified:
                     type: string
                     format: date-time
@@ -7921,6 +8133,13 @@ components:
                 fileCount:
                     type: integer
                     description: "Number of files in this version"
+                versionAlias:
+                    type: string
+                    description: "Optional alias name for this version"
+                isArchived:
+                    type: boolean
+                    description: "Whether this version is archived"
+                    default: false
             required:
                 - Version
                 - DateModified
@@ -7954,7 +8173,7 @@ components:
                     description: "Asset version ID"
                 operation:
                     type: string
-                    description: "Operation performed (create, revert)"
+                    description: "Operation performed (create, revert, archive, unarchive)"
                 timestamp:
                     type: string
                     format: date-time
@@ -7972,6 +8191,20 @@ components:
                 - operation
                 - timestamp
         
+        updateAssetVersionRequest:
+            type: object
+            description: "Request model for updating an asset version. At least one of comment or versionAlias must be provided."
+            properties:
+                comment:
+                    type: string
+                    description: "Updated comment for this version. Cannot be empty."
+                    minLength: 1
+                    maxLength: 1024
+                versionAlias:
+                    type: string
+                    description: "Optional alias name for this version. Pass empty string to clear an existing alias."
+                    maxLength: 64
+
         createAssetVersionRequest:
             type: object
             properties:
@@ -8073,6 +8306,10 @@ components:
                 startingToken:
                     type: string
                     description: "Token for pagination"
+                showArchived:
+                    type: boolean
+                    description: "Whether to include archived versions in the results"
+                    default: false
         
         workflow:
             type: object

@@ -274,6 +274,12 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}` - PUT
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
+-   `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/export` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/download` - POST

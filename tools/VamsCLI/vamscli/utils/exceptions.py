@@ -327,6 +327,11 @@ class AssetVersionRevertError(AssetVersionError):
     pass
 
 
+class AssetVersionArchiveError(AssetVersionError):
+    """Raised when archive/unarchive operation fails."""
+    pass
+
+
 # Asset link-related business logic exceptions
 class AssetLinkError(BusinessLogicError):
     """Base class for asset link errors."""

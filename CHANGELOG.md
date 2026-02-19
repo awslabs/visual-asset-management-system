@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### ⚠ BREAKING CHANGES
 
+Asset versions have database table changes that require the running of migration scripts to properly update the table to include newly needed column data to avoid future system-wide conflicts with assets that share a similar ID across databases
+
+**Recommended Upgrade Path:** Run the upgrade script to migrate permission constraints from the old table to the new one if custom constraints were added or modified beyond VAMS defaults: `infra\deploymentDataMigration\v2.4_to_v2.5\upgrade`
+
 ### Features
 
 -   **Pipeline** Added new Preview 3D Thumbnail use-case pipeline (`usePreview3dThumbnail`) that generates animated GIF or static image preview thumbnails from 3D files. Supports mesh formats (PLY, STL, OBJ, GLB, GLTF, FBX, DRC), point clouds (LAS, LAZ, E57, PTX, PCD, FLS, FWS), CAD files (STP, STEP), and USD files (USD, USDA, USDC, USDZ). Uses CPU-based headless rendering via PyVista/VTK with Xvfb in an AWS Batch Fargate container. This pipeline is turned off by default in the configuration file due to some restrictive used library licenses [LGPL, etc.] (see NOTICE.md).
@@ -33,6 +37,10 @@ All notable changes to this project will be documented in this file. See [standa
     -   Added comprehensive Permissions Guide (`documentation/PermissionsGuide.md`) covering the full ABAC/RBAC constraint matrix, two-tier authorization enforcement, GLOBAL keyword usage, archive vs permanent delete enforcement, deny overlay patterns, and step-by-step examples for common permission profiles.
 -   **Web** Added version selector on view asset page to easily show files and metadata for a particular stored version
     -   APIs updated for getting asset file information and metadata for assets / files to have an optional parameter for specifying a asset version id.
+-   **Web** Added a toggle ability to get both embedded auth presigned URLs for asset files as well as long-lasting URI's that require users to embed their VAMS authorization token into the Share URLs component
+-   **Web** Added functionality to the view asset page to allow selection of a particular asset version. This filters the file manager and metadata components to only showing a read-only version of what is in that asset version
+-   Added functionality for asset versions to be archived/unarchived, be able to specify a version alias name, and be able to edit an existing asset version to change the alias name and/or associated comment. Asset versions in dynamoDB now properly store the asset's database id to prevent future system conflicts. This feature added new API routes, web UI, and CLI commands.
+    -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions
 
 ### Bug Fixes
 
@@ -60,7 +68,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Known Outstanding Issues
 
--   With multiple S3 bucket support, scenarios may occur where identical assetIds exist across different buckets/prefixes in different databases, causing lookup conflicts in Asset Versions, Comments, and subscriptions functionality. This can only occur with manual S3 changes, as assetIds generated from VAMS uploads use unique GUIDs.
+-   With multiple S3 bucket support, scenarios may occur where identical assetIds exist across different buckets/prefixes in different databases, causing lookup conflicts in comments and subscriptions functionality. This can only occur with manual S3 changes, as assetIds generated from VAMS uploads use unique GUIDs.
 -   Using the same pipeline ID in both GLOBAL and non-GLOBAL databases will cause overlap conflicts and issues.
 -   Pipeline metadata inputs have a limit when sending to ECS pipelines. Assets and/or files with extensive metadata may exceed the ECS limit for JSON metadata input (8k characters). Future pipeline overhauls will convert metadata input to a file to resolve this.
 -   When dealing with hundreds to thousands of files per asset or very large files (TB-size), some API asset/file operations may time-out on the request (after 29 seconds) however the lambda may still be processing the request and successfully complete the operation (up to 15 minutes). This also goes for OpenSearch indexing when there are hundreds of thousands to millions of files to re-index. The re-index may actually not finish after the 15 minute lambda time-out with millions of files and require different re-indexing technique locally or in a container. Asynchronous methods and optional containerized processing are being evaluated for the future for all API requests to prevent this.

@@ -464,19 +464,20 @@ def get_file_attributes(databaseId: str, assetId: str, relative_path: str) -> Di
         logger.warning(f"Error getting file attributes for {relative_path}: {e}")
         return {}
 
-def get_asset_version_info(assetId: str, versionId: str) -> Optional[Dict]:
-    """Get asset version information"""
+def get_asset_version_info(databaseId: str, assetId: str, versionId: str) -> Optional[Dict]:
+    """Get asset version information using the databaseIdAssetId GSI"""
     try:
-        response = asset_versions_table.get_item(
-            Key={
-                'assetId': assetId,
-                'assetVersionId': versionId
-            }
+        composite_key = f"{databaseId}:{assetId}"
+        response = asset_versions_table.query(
+            IndexName='databaseIdAssetIdIndex',
+            KeyConditionExpression=Key('databaseId:assetId').eq(composite_key) & Key('assetVersionId').eq(versionId),
+            Limit=1
         )
-        
-        return response.get('Item')
+
+        items = response.get('Items', [])
+        return items[0] if items else None
     except Exception as e:
-        logger.warning(f"Error getting version info for {assetId} version {versionId}: {e}")
+        logger.warning(f"Error getting version info for {databaseId}:{assetId} version {versionId}: {e}")
         return None
 
 def get_asset_file_versions(assetId: str, assetVersionId: str) -> Optional[Dict]:
@@ -730,7 +731,7 @@ def process_asset_batch(
 
             # Get version info
             current_version_id = asset.get('currentVersionId', '0')
-            version_info = get_asset_version_info(asset['assetId'], current_version_id)
+            version_info = get_asset_version_info(asset_info['databaseId'], asset['assetId'], current_version_id)
 
             # Get asset metadata if requested
             asset_metadata = {}

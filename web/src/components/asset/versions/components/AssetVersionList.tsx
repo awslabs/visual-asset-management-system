@@ -4,34 +4,40 @@
  */
 
 import React, { useContext, useState, useEffect } from "react";
-import {
-    Box,
-    Button,
-    Pagination,
-    SpaceBetween,
-    Spinner,
-    Table,
-    TextFilter,
-    Badge,
-    Modal,
-    Select,
-    CollectionPreferences,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Pagination from "@cloudscape-design/components/pagination";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Spinner from "@cloudscape-design/components/spinner";
+import Table from "@cloudscape-design/components/table";
+import TextFilter from "@cloudscape-design/components/text-filter";
+import Badge from "@cloudscape-design/components/badge";
+import Modal from "@cloudscape-design/components/modal";
+import Select from "@cloudscape-design/components/select";
+import Toggle from "@cloudscape-design/components/toggle";
+import CollectionPreferences from "@cloudscape-design/components/collection-preferences";
 import { useNavigate, useParams } from "react-router";
 import { AssetVersionContext, AssetVersion, FileVersion } from "../AssetVersionManager";
-import { fetchAssetVersion } from "../../../../services/AssetVersionService";
+import { fetchAssetVersion, unarchiveAssetVersion } from "../../../../services/AssetVersionService";
 
 interface AssetVersionListProps {
     onRevertVersion: (version: AssetVersion) => void;
     onVersionSelect: (version: AssetVersion) => void;
+    onEditVersion: (version: AssetVersion) => void;
+    onArchiveVersion: (version: AssetVersion) => void;
 }
 
 export const AssetVersionList: React.FC<AssetVersionListProps> = ({
     onRevertVersion,
     onVersionSelect,
+    onEditVersion,
+    onArchiveVersion,
 }) => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
     const navigate = useNavigate();
+
+    // State for unarchive loading
+    const [unarchiveLoading, setUnarchiveLoading] = useState<string | null>(null);
 
     // State for download confirmation modal
     const [showDownloadModal, setShowDownloadModal] = useState(false);
@@ -84,6 +90,9 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         // Additional properties needed for comparison UI
         showComparisonOptions,
         comparisonType,
+        // Show/hide archived versions toggle
+        showArchivedVersions,
+        setShowArchivedVersions,
     } = context;
 
     // Debug effect to track re-renders
@@ -254,6 +263,35 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         return `${count} ${count === 1 ? "file" : "files"}`;
     };
 
+    // Format version display with optional alias
+    const formatVersionDisplay = (version: AssetVersion): string => {
+        return version.versionAlias
+            ? `${version.Version} (${version.versionAlias})`
+            : version.Version;
+    };
+
+    // Handle unarchive version
+    const handleUnarchiveVersion = async (version: AssetVersion) => {
+        setUnarchiveLoading(version.Version);
+        try {
+            const [success, response] = await unarchiveAssetVersion({
+                databaseId: databaseId!,
+                assetId: assetId!,
+                assetVersionId: version.Version,
+            });
+
+            if (success) {
+                refreshVersions();
+            } else {
+                console.log("Failed to unarchive version:", response);
+            }
+        } catch (error) {
+            console.log("Error unarchiving version:", error);
+        } finally {
+            setUnarchiveLoading(null);
+        }
+    };
+
     // Table columns
     const columns = [
         {
@@ -324,9 +362,22 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             header: "Version",
             cell: (item: AssetVersion) => (
                 <Box>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        v{item.Version}
+                    <div
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            ...(item.isArchived ? { opacity: 0.6 } : {}),
+                        }}
+                    >
+                        <span>
+                            v{item.Version}
+                            {item.versionAlias && (
+                                <span style={{ color: "#5f6b7a" }}> ({item.versionAlias})</span>
+                            )}
+                        </span>
                         {item.isCurrent && <Badge color="blue">Current</Badge>}
+                        {item.isArchived && <Badge color="grey">Archived</Badge>}
                         {item.hasMetadata && (
                             <span
                                 title="This version includes metadata snapshot"
@@ -377,6 +428,13 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             cell: (item: AssetVersion) => (
                 <SpaceBetween direction="horizontal" size="xs">
                     <Button
+                        onClick={() => onEditVersion(item)}
+                        iconName="edit"
+                        ariaLabel={`Edit version ${formatVersionDisplay(item)}`}
+                    >
+                        Edit
+                    </Button>
+                    <Button
                         onClick={() => showDownloadConfirmation(item)}
                         iconName="download"
                         disabled={item.fileCount === 0}
@@ -386,12 +444,31 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                                 : "No files available for download"
                         }
                     >
-                        Download Assets
+                        Download
                     </Button>
                     {/* Only show revert button for non-current versions */}
-                    {!item.isCurrent && (
+                    {!item.isCurrent && !item.isArchived && (
                         <Button onClick={() => onRevertVersion(item)} iconName="undo">
-                            Revert to this Version
+                            Revert
+                        </Button>
+                    )}
+                    {/* Archive button: only for non-current, non-archived versions */}
+                    {!item.isCurrent && !item.isArchived && (
+                        <Button
+                            onClick={() => onArchiveVersion(item)}
+                            ariaLabel={`Archive version ${formatVersionDisplay(item)}`}
+                        >
+                            Archive
+                        </Button>
+                    )}
+                    {/* Unarchive button: only for archived versions */}
+                    {item.isArchived && (
+                        <Button
+                            onClick={() => handleUnarchiveVersion(item)}
+                            loading={unarchiveLoading === item.Version}
+                            ariaLabel={`Unarchive version ${formatVersionDisplay(item)}`}
+                        >
+                            Unarchive
                         </Button>
                     )}
                 </SpaceBetween>
@@ -430,6 +507,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
     return (
         <>
             <Table
+                trackBy="Version"
                 columnDefinitions={columns}
                 items={versions}
                 loading={loading}
@@ -481,7 +559,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                                     {selectedVersion && !compareMode && (
                                         <span style={{ marginLeft: "12px" }}>
                                             <Badge color="blue">
-                                                Selected: v{selectedVersion.Version}
+                                                Selected: v{formatVersionDisplay(selectedVersion)}
                                             </Badge>
                                         </span>
                                     )}
@@ -527,20 +605,28 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                     </SpaceBetween>
                 }
                 pagination={
-                    <Pagination
-                        currentPageIndex={currentPage}
-                        pagesCount={Math.max(1, Math.ceil(totalVersions / pageSize))}
-                        onChange={({ detail }) => setCurrentPage(detail.currentPageIndex)}
-                        ariaLabels={{
-                            nextPageLabel: "Next page",
-                            previousPageLabel: "Previous page",
-                            pageLabel: (pageNumber) =>
-                                `Page ${pageNumber} of ${Math.max(
-                                    1,
-                                    Math.ceil(totalVersions / pageSize)
-                                )}`,
-                        }}
-                    />
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Toggle
+                            onChange={({ detail }) => setShowArchivedVersions(detail.checked)}
+                            checked={showArchivedVersions}
+                        >
+                            Show archived
+                        </Toggle>
+                        <Pagination
+                            currentPageIndex={currentPage}
+                            pagesCount={Math.max(1, Math.ceil(totalVersions / pageSize))}
+                            onChange={({ detail }) => setCurrentPage(detail.currentPageIndex)}
+                            ariaLabels={{
+                                nextPageLabel: "Next page",
+                                previousPageLabel: "Previous page",
+                                pageLabel: (pageNumber) =>
+                                    `Page ${pageNumber} of ${Math.max(
+                                        1,
+                                        Math.ceil(totalVersions / pageSize)
+                                    )}`,
+                            }}
+                        />
+                    </SpaceBetween>
                 }
                 preferences={
                     <CollectionPreferences

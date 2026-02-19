@@ -302,7 +302,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                     {item.currentAssetVersionFileVersionMismatch && (
                         <span style={{ marginLeft: "12px" }}>
                             <StatusIndicator type="warning">
-                                Not Included in Asset Version
+                                Not Included in Current Asset Version
                             </StatusIndicator>
                         </span>
                     )}

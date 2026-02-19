@@ -9,8 +9,8 @@ from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from
 from ..utils.json_output import output_status, output_result, output_error
 from ..utils.exceptions import (
     AssetVersionError, AssetVersionNotFoundError, AssetVersionOperationError,
-    InvalidAssetVersionDataError, AssetVersionRevertError, AssetNotFoundError,
-    DatabaseNotFoundError
+    InvalidAssetVersionDataError, AssetVersionRevertError, AssetVersionArchiveError,
+    AssetNotFoundError, DatabaseNotFoundError
 )
 
 
@@ -90,21 +90,31 @@ def format_version_list_output(versions_data: Dict[str, Any], json_output: bool 
     for version in versions:
         version_id = version.get('Version', 'N/A')
         is_current = version.get('isCurrent', False)
-        current_marker = " (CURRENT)" if is_current else ""
-        
-        output_lines.append(f"Version: {version_id}{current_marker}")
+        is_archived = version.get('isArchived', False)
+        version_alias = version.get('versionAlias', '')
+
+        # Build version display with alias and markers
+        version_display = f"Version: {version_id}"
+        if version_alias:
+            version_display += f" ({version_alias})"
+        if is_current:
+            version_display += " (CURRENT)"
+        if is_archived:
+            version_display += " (ARCHIVED)"
+
+        output_lines.append(version_display)
         output_lines.append(f"  Created: {version.get('DateModified', 'N/A')}")
         output_lines.append(f"  Created By: {version.get('createdBy', 'N/A')}")
         output_lines.append(f"  File Count: {version.get('fileCount', 0)}")
-        
+
         comment = version.get('Comment', '')
         if comment:
             output_lines.append(f"  Comment: {comment}")
-        
+
         description = version.get('description', '')
         if description:
             output_lines.append(f"  Description: {description}")
-        
+
         output_lines.append("-" * 80)
     
     # Show nextToken for manual pagination
@@ -127,7 +137,15 @@ def format_version_details_output(version_data: Dict[str, Any], json_output: boo
     output_lines.append(f"Version ID: {version_data.get('assetVersionId', 'N/A')}")
     output_lines.append(f"Created: {version_data.get('dateCreated', 'N/A')}")
     output_lines.append(f"Created By: {version_data.get('createdBy', 'N/A')}")
-    
+
+    version_alias = version_data.get('versionAlias', '')
+    if version_alias:
+        output_lines.append(f"Alias: {version_alias}")
+
+    is_archived = version_data.get('isArchived', False)
+    if is_archived:
+        output_lines.append("Status: ARCHIVED")
+
     comment = version_data.get('comment', '')
     if comment:
         output_lines.append(f"Comment: {comment}")
@@ -279,23 +297,25 @@ def asset_version():
 @click.option('-d', '--database', required=True, help='Database ID containing the asset')
 @click.option('-a', '--asset', required=True, help='Asset ID to create version for')
 @click.option('--comment', required=True, help='Comment for the new version')
+@click.option('--alias', default=None, help='Optional alias for the version (e.g., RC1, GA, Beta). Max 64 characters.')
 @click.option('--use-latest-files/--no-use-latest-files', default=True, help='Use latest files in S3 (default: true)')
 @click.option('--files', help='JSON string or file path with specific files to version')
 @click.option('--json-input', help='JSON input file path or JSON string with complete request data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def create(ctx: click.Context, database: str, asset: str, comment: str, use_latest_files: bool,
-          files: Optional[str], json_input: Optional[str], json_output: bool):
+def create(ctx: click.Context, database: str, asset: str, comment: str, alias: Optional[str],
+          use_latest_files: bool, files: Optional[str], json_input: Optional[str], json_output: bool):
     """
     Create a new asset version.
-    
+
     This command creates a new version of an asset, capturing the current state
     of files or specific file versions. By default, it uses the latest files
     in the S3 bucket.
-    
+
     Examples:
         vamscli asset-version create -d my-db -a my-asset --comment "New version"
+        vamscli asset-version create -d my-db -a my-asset --comment "New version" --alias "RC1"
         vamscli asset-version create -d my-db -a my-asset --comment "Specific files" --files '[{"relativeKey":"file.obj","versionId":"abc123","isArchived":false}]'
         vamscli asset-version create -d my-db -a my-asset --json-input version-data.json
         vamscli asset-version create -d my-db -a my-asset --comment "Version" --json-output
@@ -316,7 +336,11 @@ def create(ctx: click.Context, database: str, asset: str, comment: str, use_late
                 'useLatestFiles': use_latest_files,
                 'comment': comment
             }
-            
+
+            # Include alias if provided
+            if alias is not None:
+                request_data['versionAlias'] = alias
+
             # Handle files input
             if files and not use_latest_files:
                 request_data['files'] = parse_files_input(files)
@@ -460,34 +484,38 @@ def revert(ctx: click.Context, database: str, asset: str, version: str, comment:
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
+@click.option('--show-archived', is_flag=True, help='Include archived versions in results (hidden by default)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def list(ctx: click.Context, database: str, asset: str, page_size: Optional[int], max_items: Optional[int],
-         starting_token: Optional[str], auto_paginate: bool, json_output: bool):
+         starting_token: Optional[str], auto_paginate: bool, show_archived: bool, json_output: bool):
     """
     List all versions for an asset.
-    
+
     This command retrieves all versions for the specified asset with optional pagination
-    and filtering.
-    
+    and filtering. Archived versions are hidden by default.
+
     Examples:
-        # Basic listing (uses API defaults)
+        # Basic listing (uses API defaults, archived versions hidden)
         vamscli asset-version list -d my-db -a my-asset
-        
+
+        # Include archived versions
+        vamscli asset-version list -d my-db -a my-asset --show-archived
+
         # Auto-pagination to fetch all versions (default: up to 10,000)
         vamscli asset-version list -d my-db -a my-asset --auto-paginate
-        
+
         # Auto-pagination with custom limit
         vamscli asset-version list -d my-db -a my-asset --auto-paginate --max-items 5000
-        
+
         # Auto-pagination with custom page size
         vamscli asset-version list -d my-db -a my-asset --auto-paginate --page-size 500
-        
+
         # Manual pagination with page size
         vamscli asset-version list -d my-db -a my-asset --page-size 200
         vamscli asset-version list -d my-db -a my-asset --starting-token "token123" --page-size 200
-        
+
         # JSON output
         vamscli asset-version list -d my-db -a my-asset --json-output
     """
@@ -523,16 +551,18 @@ def list(ctx: click.Context, database: str, asset: str, page_size: Optional[int]
             
             while True:
                 page_count += 1
-                
+
                 # Prepare query parameters for this page
                 params = {}
                 if page_size:
                     params['pageSize'] = page_size  # Pass pageSize to API
                 if next_token:
                     params['startingToken'] = next_token
-                
+                if show_archived:
+                    params['showArchived'] = 'true'
+
                 # Note: maxItems is NOT passed to API - it's CLI-side limit only
-                
+
                 # Make API call
                 page_result = api_client.get_asset_versions(database, asset, params)
                 
@@ -591,9 +621,11 @@ def list(ctx: click.Context, database: str, asset: str, page_size: Optional[int]
                 params['pageSize'] = page_size  # Pass pageSize to API
             if starting_token:
                 params['startingToken'] = starting_token
-            
+            if show_archived:
+                params['showArchived'] = 'true'
+
             # Note: maxItems is NOT passed to API in manual mode
-            
+
             # Get the versions
             result = api_client.get_asset_versions(database, asset, params)
         
@@ -651,15 +683,15 @@ def get(ctx: click.Context, database: str, asset: str, version: str, json_output
         
         # Get the version details
         result = api_client.get_asset_version(database, asset, version)
-        
+
         output_result(
             result,
             json_output,
             cli_formatter=lambda r: format_version_details_output(r, json_output=False)
         )
-        
+
         return result
-        
+
     except AssetNotFoundError as e:
         output_error(
             e,
@@ -684,3 +716,250 @@ def get(ctx: click.Context, database: str, asset: str, version: str, json_output
             helpful_message="Use 'vamscli database list' to see available databases."
         )
         raise click.ClickException(str(e))
+
+
+@asset_version.command()
+@click.option('-d', '--database', required=True, help='Database ID containing the asset')
+@click.option('-a', '--asset', required=True, help='Asset ID containing the version')
+@click.option('-v', '--version', required=True, help='Version ID to update')
+@click.option('--comment', default=None, help='New comment for the version')
+@click.option('--alias', default=None, help='Version alias (e.g., "RC1", "Final")')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def update(ctx: click.Context, database: str, asset: str, version: str,
+           comment: Optional[str], alias: Optional[str], json_output: bool):
+    """
+    Update an asset version's comment or alias.
+
+    At least one of --comment or --alias must be provided.
+
+    Examples:
+        vamscli asset-version update -d my-db -a my-asset -v 1 --comment "Updated comment"
+        vamscli asset-version update -d my-db -a my-asset -v 1 --alias "RC1"
+        vamscli asset-version update -d my-db -a my-asset -v 1 --comment "Final" --alias "v1.0"
+        vamscli asset-version update -d my-db -a my-asset -v 1 --alias "RC1" --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    # Validate that at least one option is provided
+    if comment is None and alias is None:
+        raise click.ClickException("At least one of --comment or --alias must be provided.")
+
+    try:
+        # Build update data
+        update_data = {}
+        if comment is not None:
+            update_data['comment'] = comment
+        if alias is not None:
+            update_data['versionAlias'] = alias
+
+        output_status(f"Updating version '{version}' of asset '{asset}' in database '{database}'...", json_output)
+
+        result = api_client.update_asset_version(database, asset, version, update_data)
+
+        output_result(
+            result,
+            json_output,
+            success_message="Asset version updated successfully!",
+            cli_formatter=lambda r: format_update_output(r)
+        )
+
+        return result
+
+    except AssetNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists."
+        )
+        raise click.ClickException(str(e))
+    except AssetVersionNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Version Not Found",
+            helpful_message=f"Use 'vamscli asset-version list -d {database} -a {asset}' to see available versions."
+        )
+        raise click.ClickException(str(e))
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))
+    except InvalidAssetVersionDataError as e:
+        output_error(e, json_output, error_type="Invalid Version Data")
+        raise click.ClickException(str(e))
+    except AssetVersionOperationError as e:
+        output_error(e, json_output, error_type="Version Update Failed")
+        raise click.ClickException(str(e))
+
+
+@asset_version.command()
+@click.option('-d', '--database', required=True, help='Database ID containing the asset')
+@click.option('-a', '--asset', required=True, help='Asset ID containing the version')
+@click.option('-v', '--version', required=True, help='Version ID to archive')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def archive(ctx: click.Context, database: str, asset: str, version: str, json_output: bool):
+    """
+    Archive an asset version.
+
+    Archived versions are retained but marked as inactive. The current
+    version cannot be archived.
+
+    Examples:
+        vamscli asset-version archive -d my-db -a my-asset -v 2
+        vamscli asset-version archive -d my-db -a my-asset -v 2 --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        output_status(f"Archiving version '{version}' of asset '{asset}' in database '{database}'...", json_output)
+
+        result = api_client.archive_asset_version(database, asset, version)
+
+        output_result(
+            result,
+            json_output,
+            success_message="Asset version archived successfully!",
+            cli_formatter=lambda r: format_archive_output(r, "archive")
+        )
+
+        return result
+
+    except AssetNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists."
+        )
+        raise click.ClickException(str(e))
+    except AssetVersionNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Version Not Found",
+            helpful_message=f"Use 'vamscli asset-version list -d {database} -a {asset}' to see available versions."
+        )
+        raise click.ClickException(str(e))
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))
+    except AssetVersionArchiveError as e:
+        output_error(e, json_output, error_type="Archive Failed")
+        raise click.ClickException(str(e))
+
+
+@asset_version.command()
+@click.option('-d', '--database', required=True, help='Database ID containing the asset')
+@click.option('-a', '--asset', required=True, help='Asset ID containing the version')
+@click.option('-v', '--version', required=True, help='Version ID to unarchive')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def unarchive(ctx: click.Context, database: str, asset: str, version: str, json_output: bool):
+    """
+    Unarchive a previously archived asset version.
+
+    This restores an archived version back to active status.
+
+    Examples:
+        vamscli asset-version unarchive -d my-db -a my-asset -v 2
+        vamscli asset-version unarchive -d my-db -a my-asset -v 2 --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        output_status(f"Unarchiving version '{version}' of asset '{asset}' in database '{database}'...", json_output)
+
+        result = api_client.unarchive_asset_version(database, asset, version)
+
+        output_result(
+            result,
+            json_output,
+            success_message="Asset version unarchived successfully!",
+            cli_formatter=lambda r: format_archive_output(r, "unarchive")
+        )
+
+        return result
+
+    except AssetNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset}' to check if the asset exists."
+        )
+        raise click.ClickException(str(e))
+    except AssetVersionNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Version Not Found",
+            helpful_message=f"Use 'vamscli asset-version list -d {database} -a {asset}' to see available versions."
+        )
+        raise click.ClickException(str(e))
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))
+    except AssetVersionArchiveError as e:
+        output_error(e, json_output, error_type="Unarchive Failed")
+        raise click.ClickException(str(e))
+
+
+def format_update_output(result: Dict[str, Any]) -> str:
+    """Format asset version update result for CLI output."""
+    output_lines = []
+    output_lines.append(
+        click.style("Asset version updated successfully!", fg='green', bold=True)
+    )
+    output_lines.append(f"  Asset ID: {result.get('assetId', 'N/A')}")
+    output_lines.append(f"  Version ID: {result.get('assetVersionId', 'N/A')}")
+
+    if result.get('comment'):
+        output_lines.append(f"  Comment: {result['comment']}")
+    if result.get('versionAlias'):
+        output_lines.append(f"  Alias: {result['versionAlias']}")
+
+    output_lines.append(f"  Message: {result.get('message', 'N/A')}")
+
+    return '\n'.join(output_lines)
+
+
+def format_archive_output(result: Dict[str, Any], operation: str) -> str:
+    """Format asset version archive/unarchive result for CLI output."""
+    output_lines = []
+    output_lines.append(
+        click.style(f"Asset version {operation}d successfully!", fg='green', bold=True)
+    )
+    output_lines.append(f"  Asset ID: {result.get('assetId', 'N/A')}")
+    output_lines.append(f"  Version ID: {result.get('assetVersionId', 'N/A')}")
+    output_lines.append(f"  Message: {result.get('message', 'N/A')}")
+
+    return '\n'.join(output_lines)

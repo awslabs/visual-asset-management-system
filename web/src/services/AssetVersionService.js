@@ -12,9 +12,13 @@ import { fetchAssetS3Files } from "./APIService";
  * @param {string} params.databaseId - Database ID
  * @param {string} params.assetId - Asset ID
  * @param {number} [params.pageSize=100] - Page size for fetching (optional, default 100)
+ * @param {boolean} [params.showArchived=false] - Whether to include archived versions
  * @returns {Promise<[boolean, any]>}
  */
-export const fetchAllAssetVersions = async ({ databaseId, assetId, pageSize = 100 }, api = API) => {
+export const fetchAllAssetVersions = async (
+    { databaseId, assetId, pageSize = 100, showArchived = false },
+    api = API
+) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -30,12 +34,13 @@ export const fetchAllAssetVersions = async ({ databaseId, assetId, pageSize = 10
                     assetId,
                     pageSize,
                     startingToken: nextToken,
+                    showArchived,
                 },
                 api
             );
 
             if (!success || !response) {
-                console.error("Failed to fetch page of versions");
+                console.log("Failed to fetch page of versions");
                 break;
             }
 
@@ -53,7 +58,7 @@ export const fetchAllAssetVersions = async ({ databaseId, assetId, pageSize = 10
         console.log(`Finished fetching all versions, total: ${allVersions.length}`);
         return [true, { versions: allVersions, totalCount: allVersions.length }];
     } catch (error) {
-        console.error("Error fetching all asset versions:", error);
+        console.log("Error fetching all asset versions:", error);
         return [false, error?.message || "Failed to fetch all asset versions"];
     }
 };
@@ -65,10 +70,11 @@ export const fetchAllAssetVersions = async ({ databaseId, assetId, pageSize = 10
  * @param {string} params.assetId - Asset ID
  * @param {number} params.pageSize - Page size (optional, default 100)
  * @param {string|null} params.startingToken - Pagination token (optional)
+ * @param {boolean} [params.showArchived=false] - Whether to include archived versions
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchAssetVersions = async (
-    { databaseId, assetId, pageSize = 100, startingToken = null },
+    { databaseId, assetId, pageSize = 100, startingToken = null, showArchived = false },
     api = API
 ) => {
     try {
@@ -79,6 +85,10 @@ export const fetchAssetVersions = async (
         const queryParams = {
             pageSize: pageSize.toString(),
         };
+
+        if (showArchived) {
+            queryParams.showArchived = "true";
+        }
 
         if (startingToken && startingToken != "") {
             queryParams.startingToken = startingToken;
@@ -136,11 +146,11 @@ export const fetchAssetVersions = async (
                 return [true, response.message];
             }
         } else {
-            console.error("No valid response received:", response);
+            console.log("No valid response received:", response);
             return [false, "No response received"];
         }
     } catch (error) {
-        console.error("Error fetching asset versions:", error);
+        console.log("Error fetching asset versions:", error);
         return [false, error?.message || "Failed to fetch asset versions"];
     }
 };
@@ -182,11 +192,11 @@ export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId },
             console.log("Response exists but doesn't match expected format, returning as-is");
             return [true, response];
         } else {
-            console.error("No valid response received:", response);
+            console.log("No valid response received:", response);
             return [false, "No response received"];
         }
     } catch (error) {
-        console.error("Error fetching asset version:", error);
+        console.log("Error fetching asset version:", error);
         return [false, error?.message || "Failed to fetch asset version"];
     }
 };
@@ -201,8 +211,12 @@ export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId },
  * @param {string} params.comment - Version comment (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
+/**
+ * @param {{ databaseId: string, assetId: string, useLatestFiles?: boolean, files?: any[], comment: string, versionAlias?: string }} params
+ * @param {*} api
+ */
 export const createAssetVersion = async (
-    { databaseId, assetId, useLatestFiles = true, files = [], comment },
+    { databaseId, assetId, useLatestFiles = true, files = [], comment, versionAlias },
     api = API
 ) => {
     try {
@@ -218,6 +232,10 @@ export const createAssetVersion = async (
             useLatestFiles,
             comment: comment.trim(),
         };
+
+        if (versionAlias && versionAlias.trim()) {
+            body.versionAlias = versionAlias.trim();
+        }
 
         if (!useLatestFiles && files.length > 0) {
             // Format files according to the new model structure
@@ -241,7 +259,7 @@ export const createAssetVersion = async (
                 if (response.message.success) {
                     return [true, response.message];
                 } else {
-                    console.error("Create version error:", response.message.message);
+                    console.log("Create version error:", response.message.message);
                     return [false, response.message.message || "Version creation failed"];
                 }
             } else if (
@@ -249,7 +267,7 @@ export const createAssetVersion = async (
                 (response.message.indexOf("error") !== -1 ||
                     response.message.indexOf("Error") !== -1)
             ) {
-                console.error("Create version error:", response.message);
+                console.log("Create version error:", response.message);
                 return [false, response.message];
             } else {
                 return [true, response.message];
@@ -258,7 +276,7 @@ export const createAssetVersion = async (
             return [false, "No response received"];
         }
     } catch (error) {
-        console.error("Error creating asset version:", error);
+        console.log("Error creating asset version:", error);
         return [false, error?.message || "Failed to create asset version"];
     }
 };
@@ -304,7 +322,7 @@ export const revertAssetVersion = async (
                 if (response.message.success) {
                     return [true, response.message];
                 } else {
-                    console.error("Revert version error:", response.message.message);
+                    console.log("Revert version error:", response.message.message);
                     return [false, response.message.message || "Version revert failed"];
                 }
             } else if (
@@ -312,7 +330,7 @@ export const revertAssetVersion = async (
                 (response.message.indexOf("error") !== -1 ||
                     response.message.indexOf("Error") !== -1)
             ) {
-                console.error("Revert version error:", response.message);
+                console.log("Revert version error:", response.message);
                 return [false, response.message];
             } else {
                 return [true, response.message];
@@ -321,7 +339,7 @@ export const revertAssetVersion = async (
             return [false, "No response received"];
         }
     } catch (error) {
-        console.error("Error reverting asset version:", error);
+        console.log("Error reverting asset version:", error);
         return [false, error?.message || "Failed to revert asset version"];
     }
 };
@@ -413,7 +431,7 @@ export const compareAssetVersions = async (
         const comparison = generateComparison(version1, version2);
         return [true, comparison];
     } catch (error) {
-        console.error("Error comparing versions:", error);
+        console.log("Error comparing versions:", error);
         return [false, error?.message || "Failed to compare versions"];
     }
 };
@@ -522,7 +540,171 @@ export const fetchFileVersions = async ({ databaseId, assetId, filePath }, api =
             return [false, "No response received"];
         }
     } catch (error) {
-        console.error("Error fetching file versions:", error);
+        console.log("Error fetching file versions:", error);
         return [false, error?.message || "Failed to fetch file versions"];
+    }
+};
+
+/**
+ * Updates an asset version's comment and/or alias
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.assetVersionId - Asset version ID
+ * @param {Object} params.body - Update body with optional comment and versionAlias
+ * @returns {Promise<[boolean, any]>}
+ */
+export const updateAssetVersion = async (
+    { databaseId, assetId, assetVersionId, body },
+    api = API
+) => {
+    try {
+        if (!databaseId || !assetId || !assetVersionId) {
+            return [false, "Database ID, Asset ID, and Asset Version ID are required"];
+        }
+
+        if (
+            !body ||
+            (!body.comment && body.comment !== "" && !body.versionAlias && body.versionAlias !== "")
+        ) {
+            return [false, "At least one of comment or versionAlias is required"];
+        }
+
+        const response = await api.put(
+            "api",
+            `database/${databaseId}/assets/${assetId}/assetversions/${assetVersionId}`,
+            {
+                body: body,
+            }
+        );
+
+        if (response.message) {
+            if (response.message.success !== undefined) {
+                if (response.message.success) {
+                    return [true, response.message];
+                } else {
+                    console.log("Update version error:", response.message.message);
+                    return [false, response.message.message || "Version update failed"];
+                }
+            } else if (
+                typeof response.message === "string" &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Update version error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else if (response && Object.keys(response).length > 0) {
+            return [true, response];
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error updating asset version:", error);
+        return [false, error?.message || "Failed to update asset version"];
+    }
+};
+
+/**
+ * Archives an asset version
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.assetVersionId - Asset version ID
+ * @returns {Promise<[boolean, any]>}
+ */
+export const archiveAssetVersion = async ({ databaseId, assetId, assetVersionId }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !assetVersionId) {
+            return [false, "Database ID, Asset ID, and Asset Version ID are required"];
+        }
+
+        const response = await api.post(
+            "api",
+            `database/${databaseId}/assets/${assetId}/assetversions/${assetVersionId}/archive`,
+            {
+                body: {},
+            }
+        );
+
+        if (response.message) {
+            if (response.message.success !== undefined) {
+                if (response.message.success) {
+                    return [true, response.message];
+                } else {
+                    console.log("Archive version error:", response.message.message);
+                    return [false, response.message.message || "Version archive failed"];
+                }
+            } else if (
+                typeof response.message === "string" &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Archive version error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else if (response && Object.keys(response).length > 0) {
+            return [true, response];
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error archiving asset version:", error);
+        return [false, error?.message || "Failed to archive asset version"];
+    }
+};
+
+/**
+ * Unarchives an asset version
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.assetVersionId - Asset version ID
+ * @returns {Promise<[boolean, any]>}
+ */
+export const unarchiveAssetVersion = async ({ databaseId, assetId, assetVersionId }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !assetVersionId) {
+            return [false, "Database ID, Asset ID, and Asset Version ID are required"];
+        }
+
+        const response = await api.post(
+            "api",
+            `database/${databaseId}/assets/${assetId}/assetversions/${assetVersionId}/unarchive`,
+            {
+                body: {},
+            }
+        );
+
+        if (response.message) {
+            if (response.message.success !== undefined) {
+                if (response.message.success) {
+                    return [true, response.message];
+                } else {
+                    console.log("Unarchive version error:", response.message.message);
+                    return [false, response.message.message || "Version unarchive failed"];
+                }
+            } else if (
+                typeof response.message === "string" &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Unarchive version error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else if (response && Object.keys(response).length > 0) {
+            return [true, response];
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error unarchiving asset version:", error);
+        return [false, error?.message || "Failed to unarchive asset version"];
     }
 };

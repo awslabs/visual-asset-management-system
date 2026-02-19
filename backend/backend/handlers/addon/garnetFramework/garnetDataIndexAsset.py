@@ -720,28 +720,31 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
         logger.exception(f"Error getting asset metadata for {database_id}/{asset_id}: {e}")
         return {}
 
-def get_asset_version_info(asset_id: str) -> Dict[str, Any]:
-    """Get current asset version information"""
+def get_asset_version_info(database_id: str, asset_id: str) -> Dict[str, Any]:
+    """Get current asset version information using the databaseIdAssetId GSI"""
     try:
-        # Get current version info
+        composite_key = f"{database_id}:{asset_id}"
         response = asset_versions_table.query(
-            KeyConditionExpression=Key('assetId').eq(asset_id),
+            IndexName='databaseIdAssetIdIndex',
+            KeyConditionExpression=Key('databaseId:assetId').eq(composite_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('isCurrentVersion').eq(True)
         )
-        
+
         items = response.get('Items', [])
         if items:
             # Should only be one current version, but take the first if multiple exist
             version_info = items[0]
+            version_alias = version_info.get('versionAlias', '') or ''
             return {
                 'versionId': version_info.get('assetVersionId'),
                 'createdAt': version_info.get('dateCreated'),
-                'comment': version_info.get('comment', '')
+                'comment': version_info.get('comment', ''),
+                'versionAlias': version_alias
             }
-        
+
         return {}
     except Exception as e:
-        logger.exception(f"Error getting asset version info for {asset_id}: {e}")
+        logger.exception(f"Error getting asset version info for {database_id}:{asset_id}: {e}")
         return {}
 
 def get_asset_relationship_flags(database_id: str, asset_id: str) -> Dict[str, bool]:
@@ -914,7 +917,7 @@ def handle_asset_stream(event_record: Dict[str, Any]) -> bool:
         asset_metadata = get_asset_metadata(database_id, asset_id)
         
         # Get version information
-        version_info = get_asset_version_info(asset_id)
+        version_info = get_asset_version_info(database_id, asset_id)
         
         # Get relationship flags
         relationship_flags = get_asset_relationship_flags(database_id, asset_id)
@@ -1025,7 +1028,7 @@ def handle_asset_metadata_stream(event_record: Dict[str, Any]) -> bool:
         asset_metadata = get_asset_metadata(database_id, asset_id)
         
         # Get version information
-        version_info = get_asset_version_info(asset_id)
+        version_info = get_asset_version_info(database_id, asset_id)
         
         # Get relationship flags
         relationship_flags = get_asset_relationship_flags(database_id, asset_id)
@@ -1126,7 +1129,7 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[bool]:
                     bucket_details = get_bucket_details(bucket_id)
                 
                 asset_metadata = get_asset_metadata(database_id, asset_id)
-                version_info = get_asset_version_info(asset_id)
+                version_info = get_asset_version_info(database_id, asset_id)
                 relationship_flags = get_asset_relationship_flags(database_id, asset_id)
                 
                 ngsi_ld_entity = convert_asset_to_ngsi_ld(

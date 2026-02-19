@@ -293,6 +293,7 @@ Create a new asset version.
 
 **Options:**
 
+-   `--alias`: Optional alias for the version (e.g., RC1, GA, Beta). Max 64 characters.
 -   `--use-latest-files`: Use latest files in S3 (default: true)
 -   `--files`: JSON string or file path with specific files to version
 -   `--json-input`: JSON input file path or JSON string with complete request data
@@ -303,6 +304,9 @@ Create a new asset version.
 ```bash
 # Create version with latest files (default behavior)
 vamscli asset-version create -d my-db -a my-asset --comment "New version with latest files"
+
+# Create version with an alias
+vamscli asset-version create -d my-db -a my-asset --comment "Release candidate" --alias "RC1"
 
 # Create version with specific files
 vamscli asset-version create -d my-db -a my-asset --comment "Specific files version" --files '[{"relativeKey":"model.obj","versionId":"abc123","isArchived":false}]'
@@ -319,7 +323,8 @@ vamscli asset-version create -d my-db -a my-asset --comment "Automated version" 
 ```json
 {
     "useLatestFiles": true,
-    "comment": "Version comment describing the changes"
+    "comment": "Version comment describing the changes",
+    "versionAlias": "RC1"
 }
 ```
 
@@ -329,6 +334,7 @@ vamscli asset-version create -d my-db -a my-asset --comment "Automated version" 
 {
     "useLatestFiles": false,
     "comment": "Version with specific files",
+    "versionAlias": "Beta",
     "files": [
         {
             "relativeKey": "model.obj",
@@ -349,6 +355,7 @@ vamscli asset-version create -d my-db -a my-asset --comment "Automated version" 
 -   Creates snapshot of current asset state
 -   Preserves file version history
 -   Supports both latest files and specific file versions
+-   Optional version alias for human-readable labeling
 -   Automatic version numbering
 -   Email notifications to subscribers
 
@@ -427,7 +434,7 @@ When `--revert-metadata` is enabled, the following are reverted:
 
 ### `vamscli asset-version list`
 
-List all versions for an asset.
+List all versions for an asset. Archived versions are hidden by default.
 
 **Required Options:**
 
@@ -440,16 +447,23 @@ List all versions for an asset.
 -   `--max-items`: Maximum total items to fetch (only with --auto-paginate, default: 10000)
 -   `--starting-token`: Token for pagination (manual pagination)
 -   `--auto-paginate`: Automatically fetch all items
+-   `--show-archived`: Include archived versions in results (hidden by default)
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
-# Basic listing (uses API defaults)
+# Basic listing (uses API defaults, archived versions hidden)
 vamscli asset-version list -d my-db -a my-asset
+
+# Include archived versions
+vamscli asset-version list -d my-db -a my-asset --show-archived
 
 # Auto-pagination to fetch all versions (default: up to 10,000)
 vamscli asset-version list -d my-db -a my-asset --auto-paginate
+
+# Auto-pagination including archived versions
+vamscli asset-version list -d my-db -a my-asset --auto-paginate --show-archived
 
 # Auto-pagination with custom limit
 vamscli asset-version list -d my-db -a my-asset --auto-paginate --max-items 5000
@@ -483,6 +497,8 @@ vamscli asset-version list -d my-db -a my-asset --json-output
 **Output Features:**
 
 -   Shows version ID with current version indicator
+-   Version alias (if set) displayed alongside version ID
+-   Archived status indicator for archived versions
 -   Creation date and creator information
 -   Version comments and descriptions
 -   File count for each version
@@ -574,6 +590,108 @@ Versioned Metadata & Attributes (4 total):
 
 -   **Metadata**: Supports multiple value types (string, number, date, json, xyz, geopoint, etc.)
 -   **Attributes**: Only supports STRING type values
+
+### `vamscli asset-version update`
+
+Update the comment and/or version alias for an existing asset version.
+
+**Required Options:**
+
+-   `-d, --database`: Database ID containing the asset (required)
+-   `-a, --asset`: Asset ID containing the version (required)
+-   `-v, --version`: Version ID to update (required)
+
+**Options:**
+
+-   `--comment`: New comment for the version (cannot be empty)
+-   `--alias`: Version alias name (max 64 chars, pass empty string to clear)
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# Update version comment
+vamscli asset-version update -d my-db -a my-asset -v 1 --comment "Updated comment"
+
+# Set version alias
+vamscli asset-version update -d my-db -a my-asset -v 2 --alias "stable-release"
+
+# Update both comment and alias
+vamscli asset-version update -d my-db -a my-asset -v 1 --comment "Production version" --alias "production"
+
+# Clear version alias (pass empty string)
+vamscli asset-version update -d my-db -a my-asset -v 2 --alias ""
+
+# Edit with JSON output for automation
+vamscli asset-version update -d my-db -a my-asset -v 1 --comment "Automated update" --json-output
+```
+
+**Notes:**
+
+-   At least one of `--comment` or `--alias` must be provided
+-   Comment cannot be empty when provided
+-   Alias can be empty string to clear an existing alias
+-   Version alias provides a human-readable name for the version (e.g., "stable", "release-v1")
+
+### `vamscli asset-version archive`
+
+Archive a specific asset version. Archived versions are hidden from default listings.
+
+**Required Options:**
+
+-   `-d, --database`: Database ID containing the asset (required)
+-   `-a, --asset`: Asset ID containing the version (required)
+-   `-v, --version`: Version ID to archive (required)
+
+**Options:**
+
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# Archive a version
+vamscli asset-version archive -d my-db -a my-asset -v 2
+
+# Archive with JSON output for automation
+vamscli asset-version archive -d my-db -a my-asset -v 3 --json-output
+```
+
+**Notes:**
+
+-   The current (latest) version cannot be archived
+-   Archived versions are hidden from default `asset-version list` output
+-   Use `--show-archived` with `asset-version list` to see archived versions
+-   Archived versions can be restored with `asset-version unarchive`
+
+### `vamscli asset-version unarchive`
+
+Unarchive a previously archived asset version, making it visible in default listings again.
+
+**Required Options:**
+
+-   `-d, --database`: Database ID containing the asset (required)
+-   `-a, --asset`: Asset ID containing the version (required)
+-   `-v, --version`: Version ID to unarchive (required)
+
+**Options:**
+
+-   `--json-output`: Output raw JSON response
+
+**Examples:**
+
+```bash
+# Unarchive a version
+vamscli asset-version unarchive -d my-db -a my-asset -v 2
+
+# Unarchive with JSON output for automation
+vamscli asset-version unarchive -d my-db -a my-asset -v 3 --json-output
+```
+
+**Notes:**
+
+-   Only archived versions can be unarchived
+-   The version becomes visible in default `asset-version list` output again
 
 ## Asset Links Management Commands
 
@@ -1047,6 +1165,24 @@ vamscli asset-version create -d my-db -a my-asset --comment "Added new textures 
 
 # Get details for specific version (includes versioned metadata)
 vamscli asset-version get -d my-db -a my-asset -v 2
+
+# Set a version alias for easy identification
+vamscli asset-version update -d my-db -a my-asset -v 2 --alias "stable-release"
+
+# Update version comment
+vamscli asset-version update -d my-db -a my-asset -v 2 --comment "Production-ready textures and materials"
+
+# Archive old versions no longer actively needed
+vamscli asset-version archive -d my-db -a my-asset -v 1
+
+# List versions (archived are hidden by default)
+vamscli asset-version list -d my-db -a my-asset
+
+# List all versions including archived
+vamscli asset-version list -d my-db -a my-asset --show-archived
+
+# Restore an archived version when needed
+vamscli asset-version unarchive -d my-db -a my-asset -v 1
 
 # Revert to previous stable version (files only)
 vamscli asset-version revert -d my-db -a my-asset -v 1 --comment "Reverting to last stable version"

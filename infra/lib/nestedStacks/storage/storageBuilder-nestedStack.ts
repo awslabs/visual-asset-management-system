@@ -1239,6 +1239,20 @@ export function storageResourcesBuilder(
         },
     });
 
+    // GSI for querying asset versions by databaseId:assetId composite key
+    assetVersionsStorageTable.addGlobalSecondaryIndex({
+        indexName: "databaseIdAssetIdIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetVersionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const assetUploadsStorageTable = new dynamodb.Table(scope, "AssetUploadsStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {

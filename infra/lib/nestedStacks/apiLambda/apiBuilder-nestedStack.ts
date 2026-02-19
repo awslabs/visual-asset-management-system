@@ -846,6 +846,26 @@ export class ApiBuilderNestedStack extends NestedStack {
             method: apigateway.HttpMethod.GET,
             api: api,
         });
+        // Attach to updateVersion endpoint (edit comment, alias)
+        attachFunctionToApi(this, assetVersionsFunction, {
+            routePath: "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}",
+            method: apigateway.HttpMethod.PUT,
+            api: api,
+        });
+        // Attach to archiveVersion endpoint
+        attachFunctionToApi(this, assetVersionsFunction, {
+            routePath:
+                "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
+        // Attach to unarchiveVersion endpoint
+        attachFunctionToApi(this, assetVersionsFunction, {
+            routePath:
+                "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
 
         // Asset Export Service Function
         const assetExportServiceFunction = buildAssetExportService(

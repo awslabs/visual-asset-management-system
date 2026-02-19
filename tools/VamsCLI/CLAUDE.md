@@ -34,7 +34,7 @@ tools/VamsCLI/
       setup.py               # Initial CLI configuration
       auth.py                # Login, logout, status, set-override
       assets.py              # Asset CRUD operations
-      asset_version.py       # Asset version management
+      asset_version.py       # Asset version management (list, get, edit, archive, unarchive)
       asset_links.py         # Asset relationship/link management
       file.py                # File management (upload, download, move, copy)
       profile.py             # Multi-profile management
@@ -72,7 +72,7 @@ tools/VamsCLI/
       glb_combiner.py        # GLB binary file combination
   tests/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
-    test_*.py                # ~24 test files
+    test_*.py                # ~25 test files (includes test_asset_version_new_commands.py)
 ```
 
 ### Command Groups (18 top-level)
@@ -120,7 +120,7 @@ VamsCLIError (base)
     DatabaseError (+ 5 subclasses)
     FileError (+ 14 subclasses)
     TagError (+ 7 subclasses)
-    AssetVersionError (+ 4 subclasses)
+    AssetVersionError (+ 5 subclasses, includes AssetVersionArchiveError)
     AssetLinkError (+ 7 subclasses)
     SearchError (+ 5 subclasses)
     WorkflowError (+ 4 subclasses)
@@ -314,6 +314,9 @@ All API endpoints live in `constants.py` as format strings:
 ```python
 API_DATABASE_ASSETS = "/database/{databaseId}/assets"
 API_DOWNLOAD_ASSET = "/database/{databaseId}/assets/{assetId}/download"
+API_ASSET_VERSION_BY_ID = "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}"
+API_ASSET_VERSION_ARCHIVE = "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive"
+API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive"
 ```
 
 **Rules**:
@@ -520,7 +523,13 @@ Follow this checklist:
 
 6. **Write tests** in `tests/test_my_resource.py` following the test class pattern above
 
-7. **Update CHANGELOG.md** with the new command under the appropriate version section
+7. **Update user-facing documentation**:
+    - Add command documentation to the relevant `docs/commands/*.md` file (e.g., `asset-management.md` for asset/version commands)
+    - Update `README.md` Quick Start examples if the command is commonly used
+    - Update `documentation/VAMS_API.yaml` with new/modified API endpoints and schemas
+    - Update `documentation/PermissionsGuide.md` with new API route permissions
+
+8. **Update CHANGELOG.md** with the new command under the appropriate version section
 
 ### Adding a New Exception Class
 

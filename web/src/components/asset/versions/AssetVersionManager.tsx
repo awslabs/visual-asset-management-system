@@ -4,28 +4,28 @@
  */
 
 import React, { useState, useEffect, createContext, useContext, useMemo } from "react";
-import {
-    Box,
-    Button,
-    Container,
-    Header,
-    Pagination,
-    SpaceBetween,
-    Alert,
-    Spinner,
-    Table,
-    Modal,
-    Link,
-    SegmentedControl,
-    Toggle,
-    ColumnLayout,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
+import Pagination from "@cloudscape-design/components/pagination";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Alert from "@cloudscape-design/components/alert";
+import Spinner from "@cloudscape-design/components/spinner";
+import Table from "@cloudscape-design/components/table";
+import Modal from "@cloudscape-design/components/modal";
+import Link from "@cloudscape-design/components/link";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
+import Toggle from "@cloudscape-design/components/toggle";
+import ColumnLayout from "@cloudscape-design/components/column-layout";
 import { useParams } from "react-router";
 import { fetchAssetS3Files } from "../../../services/APIService";
 import { AssetVersionList } from "./components/AssetVersionList";
 import { FileVersionsList } from "./components/FileVersionsList";
 import { CreateAssetVersionModal } from "./components/CreateAssetVersionModal";
 import { RevertVersionModal } from "./components/RevertVersionModal";
+import { EditVersionModal } from "./components/EditVersionModal";
+import { ArchiveVersionModal } from "./components/ArchiveVersionModal";
 import { useAssetVersions } from "./hooks/useAssetVersions";
 import AssetVersionComparison, { EnhancedAssetVersionComparison } from "./AssetVersionComparison";
 
@@ -39,6 +39,8 @@ export interface AssetVersion {
     isCurrent: boolean;
     fileCount: number;
     hasMetadata?: boolean; // Visual indicator for versions with metadata
+    versionAlias?: string;
+    isArchived?: boolean;
 }
 
 export interface FileVersion {
@@ -130,6 +132,9 @@ interface AssetVersionContextType {
     setFilePageSize: (size: number) => void;
     filteredFiles: FileVersion[];
     totalFiles: number;
+    // Show/hide archived versions toggle
+    showArchivedVersions: boolean;
+    setShowArchivedVersions: (show: boolean) => void;
 }
 
 export const AssetVersionContext = createContext<AssetVersionContextType | undefined>(undefined);
@@ -141,6 +146,10 @@ export const AssetVersionManager: React.FC = () => {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showRevertModal, setShowRevertModal] = useState(false);
     const [versionToRevert, setVersionToRevert] = useState<AssetVersion | null>(null);
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [versionToEdit, setVersionToEdit] = useState<AssetVersion | null>(null);
+    const [showArchiveModal, setShowArchiveModal] = useState(false);
+    const [versionToArchive, setVersionToArchive] = useState<AssetVersion | null>(null);
 
     // State for comparison mode
     const [compareMode, setCompareMode] = useState(false);
@@ -182,6 +191,8 @@ export const AssetVersionManager: React.FC = () => {
         setFilterText,
         sortingColumn,
         setSortingColumn,
+        showArchivedVersions,
+        setShowArchivedVersions,
     } = useAssetVersions(databaseId!, assetId!);
 
     // Debug effect to track re-renders
@@ -208,6 +219,18 @@ export const AssetVersionManager: React.FC = () => {
     const handleRevertVersion = (version: AssetVersion) => {
         setVersionToRevert(version);
         setShowRevertModal(true);
+    };
+
+    // Handle edit version
+    const handleEditVersion = (version: AssetVersion) => {
+        setVersionToEdit(version);
+        setShowEditModal(true);
+    };
+
+    // Handle archive version
+    const handleArchiveVersion = (version: AssetVersion) => {
+        setVersionToArchive(version);
+        setShowArchiveModal(true);
     };
 
     // Handle version selection for comparison
@@ -538,6 +561,9 @@ export const AssetVersionManager: React.FC = () => {
         setFilePageSize,
         filteredFiles: paginatedFiles,
         totalFiles,
+        // Show/hide archived versions toggle
+        showArchivedVersions,
+        setShowArchivedVersions,
     };
 
     return (
@@ -658,6 +684,18 @@ export const AssetVersionManager: React.FC = () => {
                                                                         ? `${index + 1}.`
                                                                         : ""}{" "}
                                                                     Version {version.Version}
+                                                                    {version.versionAlias && (
+                                                                        <span
+                                                                            style={{
+                                                                                fontWeight:
+                                                                                    "normal",
+                                                                                color: "#5f6b7a",
+                                                                            }}
+                                                                        >
+                                                                            {" "}
+                                                                            ({version.versionAlias})
+                                                                        </span>
+                                                                    )}
                                                                 </span>
                                                                 <span>
                                                                     (
@@ -802,6 +840,8 @@ export const AssetVersionManager: React.FC = () => {
                     <AssetVersionList
                         onRevertVersion={handleRevertVersion}
                         onVersionSelect={handleCompareSelect}
+                        onEditVersion={handleEditVersion}
+                        onArchiveVersion={handleArchiveVersion}
                     />
 
                     {/* File Versions List - only show when a version is selected and not in compare mode */}
@@ -855,6 +895,34 @@ export const AssetVersionManager: React.FC = () => {
                         version={versionToRevert}
                         onSuccess={() => {
                             setShowRevertModal(false);
+                            refreshVersions();
+                        }}
+                    />
+                )}
+
+                {versionToEdit && (
+                    <EditVersionModal
+                        visible={showEditModal}
+                        onDismiss={() => setShowEditModal(false)}
+                        version={versionToEdit}
+                        databaseId={databaseId!}
+                        assetId={assetId!}
+                        onSuccess={() => {
+                            setShowEditModal(false);
+                            refreshVersions();
+                        }}
+                    />
+                )}
+
+                {versionToArchive && (
+                    <ArchiveVersionModal
+                        visible={showArchiveModal}
+                        onDismiss={() => setShowArchiveModal(false)}
+                        version={versionToArchive}
+                        databaseId={databaseId!}
+                        assetId={assetId!}
+                        onSuccess={() => {
+                            setShowArchiveModal(false);
                             refreshVersions();
                         }}
                     />

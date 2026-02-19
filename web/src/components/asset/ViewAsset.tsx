@@ -282,7 +282,20 @@ export default function ViewAsset() {
                                         selectedOption={
                                             selectedVersionId
                                                 ? {
-                                                      label: `v${selectedVersionId}`,
+                                                      label: `v${selectedVersionId}${
+                                                          versions.find(
+                                                              (v: any) =>
+                                                                  v.Version === selectedVersionId
+                                                          )?.versionAlias
+                                                              ? ` (${
+                                                                    versions.find(
+                                                                        (v: any) =>
+                                                                            v.Version ===
+                                                                            selectedVersionId
+                                                                    )?.versionAlias
+                                                                })`
+                                                              : ""
+                                                      }`,
                                                       value: selectedVersionId,
                                                   }
                                                 : {
@@ -302,9 +315,9 @@ export default function ViewAsset() {
                                                 value: "__LATEST__",
                                             },
                                             ...versions.map((v: any) => ({
-                                                label: `v${v.Version} - ${
-                                                    v.Comment || "No comment"
-                                                } (${new Date(
+                                                label: `v${v.Version}${
+                                                    v.versionAlias ? ` (${v.versionAlias})` : ""
+                                                } - ${v.Comment || "No comment"} (${new Date(
                                                     v.DateModified
                                                 ).toLocaleDateString()})`,
                                                 value: v.Version,

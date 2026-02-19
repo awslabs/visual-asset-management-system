@@ -1,23 +1,21 @@
 import React, { useState, useEffect, useContext, useMemo } from "react";
-import {
-    Box,
-    Button,
-    Container,
-    Header,
-    SpaceBetween,
-    Alert,
-    Spinner,
-    Badge,
-    Grid,
-    ColumnLayout,
-    Link,
-    Toggle,
-    Table,
-    TextFilter,
-    Pagination,
-    CollectionPreferences,
-    Tabs,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Alert from "@cloudscape-design/components/alert";
+import Spinner from "@cloudscape-design/components/spinner";
+import Badge from "@cloudscape-design/components/badge";
+import Grid from "@cloudscape-design/components/grid";
+import ColumnLayout from "@cloudscape-design/components/column-layout";
+import Link from "@cloudscape-design/components/link";
+import Toggle from "@cloudscape-design/components/toggle";
+import Table from "@cloudscape-design/components/table";
+import TextFilter from "@cloudscape-design/components/text-filter";
+import Pagination from "@cloudscape-design/components/pagination";
+import CollectionPreferences from "@cloudscape-design/components/collection-preferences";
+import Tabs from "@cloudscape-design/components/tabs";
 import { useNavigate, useParams } from "react-router";
 import { fetchAssetVersion, compareAssetVersions } from "../../../services/AssetVersionService";
 import { fetchAssetS3Files } from "../../../services/APIService";
@@ -130,6 +128,11 @@ const formatDate = (dateString?: string): string => {
     } catch (e) {
         return dateString;
     }
+};
+
+// Format version display with optional alias
+const formatVersionLabel = (version: AssetVersion): string => {
+    return version.versionAlias ? `${version.Version} (${version.versionAlias})` : version.Version;
 };
 
 // Original standalone component for comparing with current files
@@ -500,7 +503,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
         },
         {
             id: "size1",
-            header: `Size (v${version1.Version})`,
+            header: `Size (v${formatVersionLabel(version1)})`,
             cell: (item: FileComparison) => (
                 <Box>{item.version1File ? formatFileSize(item.version1File.size) : "N/A"}</Box>
             ),
@@ -508,7 +511,9 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
         },
         {
             id: "size2",
-            header: compareWithCurrent ? "Size (Current)" : `Size (v${version2?.Version})`,
+            header: compareWithCurrent
+                ? "Size (Current)"
+                : `Size (v${version2 ? formatVersionLabel(version2) : ""})`,
             cell: (item: FileComparison) => (
                 <Box>{item.version2File ? formatFileSize(item.version2File.size) : "N/A"}</Box>
             ),
@@ -516,7 +521,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
         },
         {
             id: "lastModified1",
-            header: `Last Modified (v${version1.Version})`,
+            header: `Last Modified (v${formatVersionLabel(version1)})`,
             cell: (item: FileComparison) => (
                 <Box>
                     {item.version1File ? formatDate(item.version1File.lastModified) : "N/A"}
@@ -529,7 +534,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
             id: "lastModified2",
             header: compareWithCurrent
                 ? "Last Modified (Current)"
-                : `Last Modified (v${version2?.Version})`,
+                : `Last Modified (v${version2 ? formatVersionLabel(version2) : ""})`,
             cell: (item: FileComparison) => (
                 <Box>
                     {item.version2File ? formatDate(item.version2File.lastModified) : "N/A"}
@@ -556,7 +561,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                                 disabled={item.version1File.isPermanentlyDeleted}
                                 onClick={() => handleViewFile(item.version1File)}
                             >
-                                View v{version1.Version}
+                                View v{formatVersionLabel(version1)}
                             </Button>
                         )}
                         {item.version2File && (
@@ -566,7 +571,9 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                                 disabled={item.version2File.isPermanentlyDeleted}
                                 onClick={() => handleViewFile(item.version2File)}
                             >
-                                {compareWithCurrent ? "View Current" : `View v${version2?.Version}`}
+                                {compareWithCurrent
+                                    ? "View Current"
+                                    : `View v${version2 ? formatVersionLabel(version2) : ""}`}
                             </Button>
                         )}
                         {item.version1File && item.version2File && item.status === "modified" && (
@@ -595,8 +602,10 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                     }
                 >
                     {compareWithCurrent
-                        ? `Comparing Version ${version1.Version} with Current Files`
-                        : `Comparing Version ${version1.Version} with Version ${version2?.Version}`}
+                        ? `Comparing Version ${formatVersionLabel(version1)} with Current Files`
+                        : `Comparing Version ${formatVersionLabel(version1)} with Version ${
+                              version2 ? formatVersionLabel(version2) : ""
+                          }`}
                 </Header>
             }
         >
@@ -608,14 +617,16 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                             <SpaceBetween direction="vertical" size="s">
                                 <Box variant="h4">Version Information</Box>
                                 <div>
-                                    <strong>First Version:</strong> v{version1.Version} (
-                                    {new Date(version1.DateModified || "").toLocaleDateString()})
+                                    <strong>First Version:</strong> v{formatVersionLabel(version1)}{" "}
+                                    ({new Date(version1.DateModified || "").toLocaleDateString()})
                                 </div>
                                 <div>
                                     <strong>Second Version:</strong>{" "}
                                     {compareWithCurrent
                                         ? "Current Files"
-                                        : `v${version2?.Version} (${new Date(
+                                        : `v${
+                                              version2 ? formatVersionLabel(version2) : ""
+                                          } (${new Date(
                                               version2?.DateModified || ""
                                           ).toLocaleDateString()})`}
                                 </div>
@@ -768,22 +779,35 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                                             { id: "status", label: "Status" },
                                             { id: "fileName", label: "File Name" },
                                             { id: "path", label: "Path" },
-                                            { id: "size1", label: `Size (v${version1.Version})` },
+                                            {
+                                                id: "size1",
+                                                label: `Size (v${formatVersionLabel(version1)})`,
+                                            },
                                             {
                                                 id: "size2",
                                                 label: compareWithCurrent
                                                     ? "Size (Current)"
-                                                    : `Size (v${version2?.Version})`,
+                                                    : `Size (v${
+                                                          version2
+                                                              ? formatVersionLabel(version2)
+                                                              : ""
+                                                      })`,
                                             },
                                             {
                                                 id: "lastModified1",
-                                                label: `Last Modified (v${version1.Version})`,
+                                                label: `Last Modified (v${formatVersionLabel(
+                                                    version1
+                                                )})`,
                                             },
                                             {
                                                 id: "lastModified2",
                                                 label: compareWithCurrent
                                                     ? "Last Modified (Current)"
-                                                    : `Last Modified (v${version2?.Version})`,
+                                                    : `Last Modified (v${
+                                                          version2
+                                                              ? formatVersionLabel(version2)
+                                                              : ""
+                                                      })`,
                                             },
                                         ],
                                     },
@@ -1097,14 +1121,14 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
         },
         {
             id: "value1",
-            header: `Value (v${versionToCompare?.Version})`,
+            header: `Value (v${versionToCompare ? formatVersionLabel(versionToCompare) : ""})`,
             cell: (item: MetadataComparison) => (
                 <div style={{ wordBreak: "break-word" }}>{item.version1Value || "N/A"}</div>
             ),
         },
         {
             id: "value2",
-            header: `Value (v${selectedVersion?.Version})`,
+            header: `Value (v${selectedVersion ? formatVersionLabel(selectedVersion) : ""})`,
             cell: (item: MetadataComparison) => (
                 <div style={{ wordBreak: "break-word" }}>{item.version2Value || "N/A"}</div>
             ),
@@ -1267,7 +1291,7 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
         },
         {
             id: "size1",
-            header: `Size (v${versionToCompare?.Version})`,
+            header: `Size (v${versionToCompare ? formatVersionLabel(versionToCompare) : ""})`,
             cell: (item: FileComparison) => (
                 <Box>{item.version1File ? formatFileSize(item.version1File.size) : "N/A"}</Box>
             ),
@@ -1275,7 +1299,7 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
         },
         {
             id: "size2",
-            header: `Size (v${selectedVersion?.Version})`,
+            header: `Size (v${selectedVersion ? formatVersionLabel(selectedVersion) : ""})`,
             cell: (item: FileComparison) => (
                 <Box>{item.version2File ? formatFileSize(item.version2File.size) : "N/A"}</Box>
             ),
@@ -1283,7 +1307,9 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
         },
         {
             id: "lastModified1",
-            header: `Last Modified (v${versionToCompare?.Version})`,
+            header: `Last Modified (v${
+                versionToCompare ? formatVersionLabel(versionToCompare) : ""
+            })`,
             cell: (item: FileComparison) => (
                 <Box>
                     {item.version1File ? formatDate(item.version1File.lastModified) : "N/A"}
@@ -1294,7 +1320,9 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
         },
         {
             id: "lastModified2",
-            header: `Last Modified (v${selectedVersion?.Version})`,
+            header: `Last Modified (v${
+                selectedVersion ? formatVersionLabel(selectedVersion) : ""
+            })`,
             cell: (item: FileComparison) => (
                 <Box>
                     {item.version2File ? formatDate(item.version2File.lastModified) : "N/A"}
@@ -1450,19 +1478,35 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                                         { id: "path", label: "Path" },
                                         {
                                             id: "size1",
-                                            label: `Size (v${versionToCompare?.Version})`,
+                                            label: `Size (v${
+                                                versionToCompare
+                                                    ? formatVersionLabel(versionToCompare)
+                                                    : ""
+                                            })`,
                                         },
                                         {
                                             id: "size2",
-                                            label: `Size (v${selectedVersion?.Version})`,
+                                            label: `Size (v${
+                                                selectedVersion
+                                                    ? formatVersionLabel(selectedVersion)
+                                                    : ""
+                                            })`,
                                         },
                                         {
                                             id: "lastModified1",
-                                            label: `Last Modified (v${versionToCompare?.Version})`,
+                                            label: `Last Modified (v${
+                                                versionToCompare
+                                                    ? formatVersionLabel(versionToCompare)
+                                                    : ""
+                                            })`,
                                         },
                                         {
                                             id: "lastModified2",
-                                            label: `Last Modified (v${selectedVersion?.Version})`,
+                                            label: `Last Modified (v${
+                                                selectedVersion
+                                                    ? formatVersionLabel(selectedVersion)
+                                                    : ""
+                                            })`,
                                         },
                                     ],
                                 },
@@ -1591,8 +1635,8 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                         </SpaceBetween>
                     }
                 >
-                    Comparing Version {versionToCompare?.Version} with Version{" "}
-                    {selectedVersion?.Version}
+                    Comparing Version {versionToCompare ? formatVersionLabel(versionToCompare) : ""}{" "}
+                    with Version {selectedVersion ? formatVersionLabel(selectedVersion) : ""}
                 </Header>
             }
         >
@@ -1604,14 +1648,16 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                             <SpaceBetween direction="vertical" size="s">
                                 <Box variant="h4">Version Information</Box>
                                 <div>
-                                    <strong>First Version:</strong> v{versionToCompare?.Version} (
+                                    <strong>First Version:</strong> v
+                                    {versionToCompare ? formatVersionLabel(versionToCompare) : ""} (
                                     {new Date(
                                         versionToCompare?.DateModified || ""
                                     ).toLocaleDateString()}
                                     )
                                 </div>
                                 <div>
-                                    <strong>Second Version:</strong> v{selectedVersion?.Version} (
+                                    <strong>Second Version:</strong> v
+                                    {selectedVersion ? formatVersionLabel(selectedVersion) : ""} (
                                     {new Date(
                                         selectedVersion?.DateModified || ""
                                     ).toLocaleDateString()}

@@ -25,6 +25,19 @@ pip install .
 
 For detailed installation options, see the [Installation Guide](docs/INSTALLATION.md).
 
+**Note:** VamsCLI uses Unicode characters in its output. On Windows, set the `PYTHONIOENCODING` environment variable to `utf-8` or use a UTF-8 capable terminal (e.g., Windows Terminal) to avoid encoding errors:
+
+```bash
+# Windows (PowerShell)
+$Env:PYTHONIOENCODING = "utf-8"
+
+# Windows (Command Prompt)
+set PYTHONIOENCODING=utf-8
+
+# Linux/macOS (usually not needed, but if needed)
+export PYTHONIOENCODING=utf-8
+```
+
 ## Quick Start
 
 ### 1. Setup
@@ -146,18 +159,29 @@ vamscli assets export -d my-database -a my-asset --no-auto-paginate --max-assets
 
 # Create asset versions for tracking changes
 vamscli asset-version create -d my-database -a my-asset --comment "Initial version"
+vamscli asset-version create -d my-database -a my-asset --comment "Release candidate" --alias "RC1"
 
 # Upload updated files and create new version
 vamscli file upload -d my-database -a my-asset /path/to/updated-file.gltf
 vamscli asset-version create -d my-database -a my-asset --comment "Updated model with fixes"
 
-# List all versions with pagination support
+# List all versions with pagination support (archived hidden by default)
 vamscli asset-version list -d my-database -a my-asset
 vamscli asset-version list -d my-database -a my-asset --auto-paginate  # Fetch all versions
+vamscli asset-version list -d my-database -a my-asset --show-archived  # Include archived versions
 vamscli asset-version list -d my-database -a my-asset --page-size 200  # Manual pagination
 
 # Get version details
 vamscli asset-version get -d my-database -a my-asset -v 1
+
+# Edit version comment or alias
+vamscli asset-version update -d my-database -a my-asset -v 1 --comment "Updated comment"
+vamscli asset-version update -d my-database -a my-asset -v 1 --alias "stable-release"
+vamscli asset-version update -d my-database -a my-asset -v 1 --alias ""  # Clear alias
+
+# Archive/unarchive versions
+vamscli asset-version archive -d my-database -a my-asset -v 2
+vamscli asset-version unarchive -d my-database -a my-asset -v 2
 
 # Revert to previous version if needed
 vamscli asset-version revert -d my-database -a my-asset -v 1 --comment "Reverting to stable version"
@@ -257,7 +281,7 @@ VamsCLI provides eighteen main command groups:
 -   **`vamscli features`** - Feature switches management and checking
 -   **`vamscli search`** - Search assets and files using OpenSearch (requires OpenSearch enabled)
 -   **`vamscli assets`** - Asset creation, updates, management, and comprehensive data export
--   **`vamscli asset-version`** - Asset version management and tracking
+-   **`vamscli asset-version`** - Asset version management (list, get, create, update, archive, unarchive, revert)
 -   **`vamscli asset-links`** - Asset relationship management and linking
 -   **`vamscli file`** - File upload and management operations
 -   **`vamscli workflow`** - Workflow execution and monitoring

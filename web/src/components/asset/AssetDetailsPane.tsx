@@ -215,13 +215,13 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     {/* Column 3 */}
                     <div>
                         <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Version
+                            Current Version
                         </div>
                         <div style={{ marginBottom: "16px" }}>
                             v{asset?.currentVersion?.Version}
                         </div>
                         <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Version Date
+                            Current Version Date
                         </div>
                         <div style={{ marginBottom: "16px" }}>
                             {asset?.currentVersion?.DateModified

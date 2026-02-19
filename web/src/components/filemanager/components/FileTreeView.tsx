@@ -107,7 +107,7 @@ function TreeItem({ item }: TreeItemProps) {
                         item.level > 0 && (
                             <span
                                 className="not-included-icon"
-                                title="Not included in Asset Version"
+                                title="Not included in Current Asset Version"
                             >
                                 <Icon name="status-warning" />
                             </span>
@@ -201,7 +201,7 @@ function SearchResults({}: SearchResultsProps) {
                                 item.level > 0 && (
                                     <span
                                         className="not-included-icon"
-                                        title="Not included in Asset Version"
+                                        title="Not included in Current Asset Version"
                                     >
                                         <Icon name="status-warning" />
                                     </span>
