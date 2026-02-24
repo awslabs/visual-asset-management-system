@@ -347,27 +347,37 @@ def create_prefix_folder(bucket, prefix):
         logger.exception(f"Error creating prefix folder: {e}")
         return False
 
-def create_initial_version_record(asset_id, version_id, description, created_by='SYSTEM_USER'):
-    """Create initial version record in the asset versions table"""
+def create_initial_version_record(database_id, asset_id, version_id, description, created_by='SYSTEM_USER'):
+    """Create initial version record in the asset versions table
+
+    Args:
+        database_id: The database ID (needed for the V2 composite PK)
+        asset_id: The asset ID
+        version_id: The version ID
+        description: Version description
+        created_by: Username of the creator
+    """
     try:
         versions_table = dynamodb.Table(asset_versions_table_name)
         version_id = f"{version_id}"
         now = datetime.utcnow().isoformat()
-        
+
         version_record = {
-            'assetId': asset_id,
+            'databaseId:assetId': f"{database_id}:{asset_id}",
             'assetVersionId': version_id,
+            'databaseId': database_id,
+            'assetId': asset_id,
             'dateCreated': now,
             'comment': f'Initial asset creation - Version {version_id} (No Files, No Metadata)',
             'description': description,
             'createdBy': created_by,
             'isCurrentVersion': True
         }
-        
+
         versions_table.put_item(Item=version_record)
         logger.info(f"Created initial version record {version_id} for asset {asset_id}")
         return version_id
-        
+
     except Exception as e:
         logger.exception(f"Error creating initial version record: {e}")
         raise VAMSGeneralErrorResponse(f"Error creating initial version record.")
@@ -488,9 +498,10 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     
     # Create initial version record in versions table
     initial_version_id = create_initial_version_record(
-        assetId, 
-        '0', 
-        request_model.description, 
+        databaseId,
+        assetId,
+        '0',
+        request_model.description,
         username
     )
     

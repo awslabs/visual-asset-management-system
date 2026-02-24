@@ -14,6 +14,7 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<VntanaViewerElement | null>(null);
@@ -43,7 +44,7 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
                     assetId,
                     databaseId,
                     key: assetKey,
-                    versionId: versionId || "",
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 

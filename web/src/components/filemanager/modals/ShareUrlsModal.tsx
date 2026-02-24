@@ -28,6 +28,7 @@ interface ShareUrlsModalProps {
     selectedFiles: FileTree[];
     databaseId: string;
     assetId: string;
+    assetVersionId?: string;
 }
 
 interface UrlItem {
@@ -44,6 +45,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
     selectedFiles,
     databaseId,
     assetId,
+    assetVersionId,
 }) => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -182,10 +184,15 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
                 .map((segment) => encodeURIComponent(segment))
                 .join("/");
 
+            let streamUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+            if (assetVersionId) {
+                streamUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+            }
+
             return {
                 fileName: file.name,
                 filePath: file.relativePath,
-                url: `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`,
+                url: streamUrl,
                 copied: false,
             };
         });
@@ -223,6 +230,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
             const [success, response] = await generatePresignedUrls({
                 databaseId,
                 assetId,
+                assetVersionId,
                 files: filesToShare,
             });
 

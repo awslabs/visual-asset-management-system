@@ -373,6 +373,7 @@ class FileVersionModel(BaseModel, extra='ignore'):
     etag: Optional[str] = None
     isArchived: bool = False
     currentAssetVersionFileVersionMismatch: Optional[bool] = None  # Indicates if file version doesn't match asset version
+    assetVersionIds: Optional[List[Dict]] = None  # Asset versions containing this file version, each with 'id' and 'label'
 
 class FileInfoResponseModel(BaseModel, extra='ignore'):
     """Response model for detailed file information"""
@@ -838,17 +839,26 @@ class DownloadAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for downloading asset files or previews"""
     downloadType: Literal["assetFile", "assetPreview"]
     key: Optional[str] = Field(None, min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
-    versionId: Optional[str] = None  # For assetFile only, get specific version
-    
+    versionId: Optional[str] = None  # For assetFile only, get specific S3 version
+    assetVersionId: Optional[str] = None  # Resolve S3 versionId from asset version snapshot
+    assetVersionIdAlias: Optional[str] = None  # Resolve via version alias
+
     @root_validator
     def validate_fields(cls, values):
         download_type = values.get('downloadType')
         version_id = values.get('versionId')
-        
-        # Version ID only allowed for assetFile downloads
-        if download_type == "assetPreview" and version_id:
-            raise ValueError("versionId is not allowed for assetPreview downloads")
-            
+        asset_version_id = values.get('assetVersionId')
+        asset_version_id_alias = values.get('assetVersionIdAlias')
+
+        # Count how many version params are set
+        version_params = [p for p in [version_id, asset_version_id, asset_version_id_alias] if p]
+        if len(version_params) > 1:
+            raise ValueError("Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified")
+
+        # Version parameters not allowed for assetPreview downloads
+        if download_type == "assetPreview" and version_params:
+            raise ValueError("Version parameters are not allowed for assetPreview downloads")
+
         return values
 
 class DownloadAssetResponseModel(BaseModel, extra='ignore'):

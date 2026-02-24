@@ -871,9 +871,11 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
 @click.option('--flatten-download-tree', is_flag=True, help='Ignore asset file tree, download files flat')
 @click.option('--asset-preview', is_flag=True, help='Download only the asset preview file')
 @click.option('--file-previews', is_flag=True, help='Additionally download file preview files')
+@click.option('--asset-version-id', type=str, default=None, help='Asset version ID to download files from')
+@click.option('--asset-version-alias', type=str, default=None, help='Asset version alias to download files from')
 @click.option('--asset-link-children-tree-depth', type=int, help='Traverse asset link children tree to specified depth')
 @click.option('--shareable-links-only', is_flag=True, help='Return presigned URLs without downloading')
-@click.option('--parallel-downloads', type=int, default=DEFAULT_PARALLEL_DOWNLOADS, 
+@click.option('--parallel-downloads', type=int, default=DEFAULT_PARALLEL_DOWNLOADS,
               help=f'Max parallel downloads (default: {DEFAULT_PARALLEL_DOWNLOADS})')
 @click.option('--retry-attempts', type=int, default=DEFAULT_DOWNLOAD_RETRY_ATTEMPTS,
               help=f'Retry attempts per file (default: {DEFAULT_DOWNLOAD_RETRY_ATTEMPTS})')
@@ -884,40 +886,55 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
 @click.option('--hide-progress', is_flag=True, help='Hide download progress display')
 @click.pass_context
 @requires_setup_and_auth
-def download(ctx: click.Context, local_path: Optional[str], database: str, asset: str, 
+def download(ctx: click.Context, local_path: Optional[str], database: str, asset: str,
             file_key: Optional[str], recursive: bool, flatten_download_tree: bool,
-            asset_preview: bool, file_previews: bool, asset_link_children_tree_depth: Optional[int],
+            asset_preview: bool, file_previews: bool,
+            asset_version_id: Optional[str], asset_version_alias: Optional[str],
+            asset_link_children_tree_depth: Optional[int],
             shareable_links_only: bool, parallel_downloads: int, retry_attempts: int, timeout: int,
             json_input: Optional[str], json_output: bool, hide_progress: bool):
     """
     Download files from an asset.
-    
+
     This command downloads files from a VAMS asset to a local directory. It supports
     various download scenarios including individual files, folders, whole assets,
     asset previews, and traversing asset link trees.
-    
+
+    You can download files from a specific asset version using --asset-version-id or
+    --asset-version-alias. These options are mutually exclusive and cannot be combined
+    with --asset-preview.
+
     Examples:
         # Download whole asset
         vamscli assets download /local/path -d my-db -a my-asset
-        
+
         # Download specific file
         vamscli assets download /local/path -d my-db -a my-asset --file-key "/model.gltf"
-        
+
         # Download folder recursively
         vamscli assets download /local/path -d my-db -a my-asset --file-key "/models/" --recursive
-        
+
         # Download asset preview only
         vamscli assets download /local/path -d my-db -a my-asset --asset-preview
-        
+
         # Download with file previews
         vamscli assets download /local/path -d my-db -a my-asset --file-key "/model.gltf" --file-previews
-        
+
+        # Download files from a specific asset version
+        vamscli assets download /local/path -d my-db -a my-asset --asset-version-id 2
+
+        # Download files from an asset version by alias
+        vamscli assets download /local/path -d my-db -a my-asset --asset-version-alias "stable-release"
+
+        # Download specific file from a version
+        vamscli assets download /local/path -d my-db -a my-asset --file-key "/model.gltf" --asset-version-id 2
+
         # Download asset tree (2 levels deep)
         vamscli assets download /local/path -d my-db -a my-asset --asset-link-children-tree-depth 2
-        
+
         # Get shareable links only (no download)
         vamscli assets download -d my-db -a my-asset --shareable-links-only
-        
+
         # Flatten download (ignore folder structure)
         vamscli assets download /local/path -d my-db -a my-asset --flatten-download-tree
     """
@@ -939,6 +956,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
         flatten_download_tree = json_data.get('flatten_download_tree', flatten_download_tree)
         asset_preview = json_data.get('asset_preview', asset_preview)
         file_previews = json_data.get('file_previews', file_previews)
+        asset_version_id = json_data.get('asset_version_id', asset_version_id)
+        asset_version_alias = json_data.get('asset_version_alias', asset_version_alias)
         asset_link_children_tree_depth = json_data.get('asset_link_children_tree_depth', asset_link_children_tree_depth)
         shareable_links_only = json_data.get('shareable_links_only', shareable_links_only)
         parallel_downloads = json_data.get('parallel_downloads', parallel_downloads)
@@ -970,6 +989,12 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
             raise click.ClickException("--flatten-download-tree requires --file-key to be specified")
         if recursive and not file_key:
             raise click.ClickException("--recursive requires --file-key to be specified")
+
+        # Validate asset version options
+        if asset_version_id and asset_version_alias:
+            raise click.ClickException("Cannot specify both --asset-version-id and --asset-version-alias. Use one or the other.")
+        if asset_preview and (asset_version_id or asset_version_alias):
+            raise click.ClickException("Cannot specify --asset-preview with --asset-version-id or --asset-version-alias")
         
         # Handle shareable links only mode
         if shareable_links_only:
@@ -993,7 +1018,11 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                 # Get file links
                 try:
                     if file_key:
-                        download_response = api_client.download_asset_file(database, asset, file_key)
+                        download_response = api_client.download_asset_file(
+                            database, asset, file_key,
+                            asset_version_id=asset_version_id,
+                            asset_version_alias=asset_version_alias
+                        )
                         result = {
                             "shareableLinks": [{
                                 "filePath": file_key,
@@ -1010,18 +1039,22 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                             'includeArchived': 'false',
                             'maxItems': 1000
                         })
-                        
+
                         all_files = files_response.get('items', [])
                         target_files = [f for f in all_files if not f.get('isFolder')]
-                        
+
                         if not target_files:
                             raise FileDownloadError(f"Asset '{asset}' currently has no files to download")
-                        
+
                         shareable_links = []
                         for file_item in target_files:
                             relative_path = file_item.get('relativePath', '')
                             try:
-                                download_response = api_client.download_asset_file(database, asset, relative_path)
+                                download_response = api_client.download_asset_file(
+                                    database, asset, relative_path,
+                                    asset_version_id=asset_version_id,
+                                    asset_version_alias=asset_version_alias
+                                )
                                 shareable_links.append({
                                     "filePath": relative_path,
                                     "downloadUrl": download_response.get('downloadUrl'),
@@ -1137,16 +1170,20 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         # Generate download info for each file
                         for file_item in target_files:
                             relative_path = file_item.get('relativePath', '')
-                            
+
                             if flatten_download_tree:
                                 # Save to root of local path
                                 file_local_path = Path(local_path) / Path(relative_path).name
                             else:
                                 # Preserve directory structure
                                 file_local_path = Path(local_path) / relative_path.lstrip('/')
-                            
+
                             try:
-                                download_response = api_client.download_asset_file(database, asset, relative_path)
+                                download_response = api_client.download_asset_file(
+                                    database, asset, relative_path,
+                                    asset_version_id=asset_version_id,
+                                    asset_version_alias=asset_version_alias
+                                )
                                 files_to_download.append(DownloadFileInfo(
                                     relative_key=relative_path,
                                     local_path=file_local_path,
@@ -1155,7 +1192,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                 ))
                             except Exception as e:
                                 output_warning(f"Skipping file {relative_path}: {e}", json_output)
-                        
+
                         # Download file previews if requested
                         if file_previews:
                             for file_item in target_files:
@@ -1163,7 +1200,9 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                 # Try to get preview for this file
                                 try:
                                     preview_response = api_client.download_asset_file(
-                                        database, asset, f"{relative_path}_preview"
+                                        database, asset, f"{relative_path}_preview",
+                                        asset_version_id=asset_version_id,
+                                        asset_version_alias=asset_version_alias
                                     )
                                     
                                     if flatten_download_tree:
@@ -1182,25 +1221,31 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                     pass
                     else:
                         # Download single file
-                        download_response = api_client.download_asset_file(database, asset, file_key)
-                        
+                        download_response = api_client.download_asset_file(
+                            database, asset, file_key,
+                            asset_version_id=asset_version_id,
+                            asset_version_alias=asset_version_alias
+                        )
+
                         if flatten_download_tree:
                             file_local_path = Path(local_path) / Path(file_key).name
                         else:
                             file_local_path = Path(local_path) / file_key.lstrip('/')
-                        
+
                         files_to_download.append(DownloadFileInfo(
                             relative_key=file_key,
                             local_path=file_local_path,
                             download_url=download_response.get('downloadUrl'),
                             file_size=None
                         ))
-                        
+
                         # Download file preview if requested
                         if file_previews:
                             try:
                                 preview_response = api_client.download_asset_file(
-                                    database, asset, f"{file_key}_preview"
+                                    database, asset, f"{file_key}_preview",
+                                    asset_version_id=asset_version_id,
+                                    asset_version_alias=asset_version_alias
                                 )
                                 
                                 files_to_download.append(DownloadFileInfo(
@@ -1231,9 +1276,13 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     for file_item in target_files:
                         relative_path = file_item.get('relativePath', '')
                         file_local_path = Path(local_path) / relative_path.lstrip('/')
-                        
+
                         try:
-                            download_response = api_client.download_asset_file(database, asset, relative_path)
+                            download_response = api_client.download_asset_file(
+                                database, asset, relative_path,
+                                asset_version_id=asset_version_id,
+                                asset_version_alias=asset_version_alias
+                            )
                             files_to_download.append(DownloadFileInfo(
                                 relative_key=relative_path,
                                 local_path=file_local_path,

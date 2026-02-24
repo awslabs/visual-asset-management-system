@@ -3090,19 +3090,22 @@ class APIClient:
 
     # Asset Download API Methods
 
-    def download_asset_file(self, database_id: str, asset_id: str, file_key: Optional[str] = None, version_id: Optional[str] = None) -> Dict[str, Any]:
+    def download_asset_file(self, database_id: str, asset_id: str, file_key: Optional[str] = None, version_id: Optional[str] = None,
+                            asset_version_id: Optional[str] = None, asset_version_alias: Optional[str] = None) -> Dict[str, Any]:
         """
         Generate presigned URL for downloading asset files using the /database/{databaseId}/assets/{assetId}/download POST endpoint.
-        
+
         Args:
             database_id: Database ID
             asset_id: Asset ID
             file_key: Optional specific file key to download
             version_id: Optional version ID for specific version
-        
+            asset_version_id: Optional asset version ID to download files from a specific asset version
+            asset_version_alias: Optional asset version alias to download files from a specific asset version by alias
+
         Returns:
             API response data with download URL and metadata
-        
+
         Raises:
             AssetNotFoundError: When asset is not found
             DatabaseNotFoundError: When database doesn't exist
@@ -3117,6 +3120,10 @@ class APIClient:
                 data["key"] = file_key
             if version_id:
                 data["versionId"] = version_id
+            if asset_version_id:
+                data["assetVersionId"] = asset_version_id
+            if asset_version_alias:
+                data["assetVersionIdAlias"] = asset_version_alias
                 
             response = self.post(endpoint, data=data, include_auth=True)
             return response.json()

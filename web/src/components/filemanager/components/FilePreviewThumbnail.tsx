@@ -15,6 +15,7 @@ interface FilePreviewThumbnailProps {
     onOpenFullPreview: (previewUrl: string) => void;
     isPreviewFile?: boolean;
     onDeletePreview?: () => void;
+    assetVersionId?: string;
 }
 
 /**
@@ -28,6 +29,7 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
     onOpenFullPreview,
     isPreviewFile = false,
     onDeletePreview,
+    assetVersionId,
 }) => {
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -55,6 +57,7 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
                     assetId,
                     key: fileKey,
                     versionId: "",
+                    assetVersionId: assetVersionId,
                     downloadType: isPreviewFile ? "assetFile" : "assetFile", // Using "assetFile" for both regular files and preview files
                 });
 
@@ -77,7 +80,7 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
         };
 
         loadPreviewImage();
-    }, [assetId, databaseId, fileKey]);
+    }, [assetId, databaseId, fileKey, assetVersionId]);
 
     // Handle image load error
     const handleImageError = () => {

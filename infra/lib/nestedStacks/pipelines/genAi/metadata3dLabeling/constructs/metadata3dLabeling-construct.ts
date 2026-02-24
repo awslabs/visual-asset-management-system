@@ -81,7 +81,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             {
                 layerVersionName: "vams_layer_genaimetadatalabeling",
                 code: lambda.Code.fromAsset(
-                    "../backendPipelines/genAi/Metadata3dLabeling/lambdaLayer",
+                    "../backendPipelines/genAi/metadata3dLabeling/lambdaLayer",
                     {
                         bundling: {
                             image: cdk.DockerImage.fromBuild("./config/docker", {

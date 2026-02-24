@@ -547,6 +547,115 @@ Infrastructure Note (Hash Router): The hash router was chosen in order so suppor
 
 The front end when loading the page receives a configuration from the AWS backend to include amplify storage bucket, API Gateway/Cloudfront endpoints, authentication endpoints, and features enabled. Some of these are retrieved on load pre-authentication while others are received post-authentication. Features enabled is a comma-deliminated list of infrastructure features that were enabled/disabled on CDK deployment through the `config.json` file and toggle different front-end features to view.
 
+#### Download and Stream APIs — File Version Resolution
+
+VAMS provides two APIs for accessing asset files: a **Download API** (returns a presigned S3 URL) and a **Stream API** (proxies the file content directly). Both support version-aware file access.
+
+##### API Endpoints
+
+| API           | Method | Path                                                                | Purpose                        |
+| ------------- | ------ | ------------------------------------------------------------------- | ------------------------------ |
+| Download      | POST   | `/database/{databaseId}/assets/{assetId}/download`                  | Returns a presigned S3 URL     |
+| Stream        | GET    | `/database/{databaseId}/assets/{assetId}/download/stream/{fileKey}` | Proxies file content with auth |
+| Stream (HEAD) | HEAD   | `/database/{databaseId}/assets/{assetId}/download/stream/{fileKey}` | Returns file metadata headers  |
+
+##### Version Parameters
+
+Both APIs accept **one** version parameter (mutually exclusive):
+
+| Parameter             | Download API | Stream API  | Description                                                          |
+| --------------------- | ------------ | ----------- | -------------------------------------------------------------------- |
+| `assetVersionId`      | Request body | Query param | Resolves the file's S3 version from the asset version snapshot       |
+| `assetVersionIdAlias` | Request body | Query param | Resolves via a version alias (e.g., "RC1") to an asset version ID    |
+| `versionId`           | Request body | Query param | Direct S3 version ID (low-level, not recommended for most use cases) |
+| _(none)_              | —            | —           | Returns the latest version of the file                               |
+
+##### Recommended Usage
+
+**Use `assetVersionId` or no version parameter.** These are the recommended approaches for all consumers (frontend viewers, CLI, external integrations):
+
+```
+# Download the LATEST version of a file (no version parameter)
+POST /database/{db}/assets/{asset}/download
+{ "downloadType": "assetFile", "key": "/model.glb" }
+
+# Download a file as it existed in asset version 3
+POST /database/{db}/assets/{asset}/download
+{ "downloadType": "assetFile", "key": "/model.glb", "assetVersionId": "3" }
+
+# Stream the LATEST version of a file
+GET /database/{db}/assets/{asset}/download/stream/model.glb
+
+# Stream a file as it existed in asset version 3
+GET /database/{db}/assets/{asset}/download/stream/model.glb?assetVersionId=3
+```
+
+**Why `assetVersionId` is preferred over `versionId`:**
+
+-   `assetVersionId` lets the backend resolve the correct S3 file version from the asset version's file snapshot — the caller doesn't need to know the raw S3 version ID
+-   It works for **dependency resolution** — when a 3D viewer needs to load a main file plus its dependencies (textures, materials, etc.), passing `assetVersionId` ensures all files are resolved from the same version snapshot, maintaining consistency
+-   The raw S3 `versionId` is an opaque string that only makes sense if the caller has already looked up the specific file version — this couples the caller to the S3 version history
+
+##### Dependency File Resolution
+
+Multi-file 3D assets (e.g., GLTF with separate `.bin` and texture files) require loading dependency files alongside the main file. When using `assetVersionId`, dependency files are automatically resolved from the same version snapshot:
+
+```
+# Main file — loads from asset version 3
+GET /stream/model.gltf?assetVersionId=3
+
+# Dependency file — also resolved from asset version 3's snapshot
+GET /stream/textures/diffuse.png?assetVersionId=3
+
+# Without any version parameter — both load the latest version
+GET /stream/model.gltf
+GET /stream/textures/diffuse.png
+```
+
+This ensures that the main file and its dependencies are always from the same version, avoiding mismatches where a texture from a newer version is paired with a model from an older version.
+
+##### Error Responses
+
+| Scenario                         | Status | Message                                                                          |
+| -------------------------------- | ------ | -------------------------------------------------------------------------------- |
+| Multiple version params provided | 400    | "Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified" |
+| Asset version not found          | 404    | "Asset version 'X' not found for asset"                                          |
+| File not in version snapshot     | 404    | "File not found in asset version 'X'"                                            |
+| Alias not found                  | 404    | "No asset version found with alias 'X'"                                          |
+| Ambiguous alias                  | 400    | "Ambiguous alias 'X': multiple versions share this alias"                        |
+
+##### File Version History API
+
+The file info endpoint returns S3 version history enriched with asset version mapping:
+
+```
+GET /database/{db}/assets/{asset}/fileInfo?filePath=/model.glb&includeVersions=true
+```
+
+Each version in the response includes an `assetVersionIds` array showing which asset versions contain that specific S3 file version:
+
+```json
+{
+    "versions": [
+        {
+            "versionId": "abc123",
+            "isLatest": true,
+            "assetVersionIds": [{ "id": "3", "label": "v3 (RC1)" }]
+        },
+        {
+            "versionId": "def456",
+            "isLatest": false,
+            "assetVersionIds": [
+                { "id": "1", "label": "v1" },
+                { "id": "2", "label": "v2" }
+            ]
+        }
+    ]
+}
+```
+
+Archived asset versions are excluded from the `assetVersionIds` list. Each entry includes an `id` (the raw asset version ID) and a `label` (display string with version prefix and optional alias).
+
 #### 3D Asset Types Supported for In-Browser Viewing
 
 VAMS currently integrates with several different asset viewers and supports the following formats for viewing 3D assets interactively.

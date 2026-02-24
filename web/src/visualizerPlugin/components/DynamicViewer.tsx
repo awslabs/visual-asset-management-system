@@ -19,6 +19,7 @@ export interface DynamicViewerProps {
     files: FileInfo[];
     assetId: string;
     databaseId: string;
+    assetVersionId?: string;
     viewerMode: string;
     onViewerModeChange: (mode: string) => void;
     showViewerSelector?: boolean;
@@ -31,6 +32,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     files,
     assetId,
     databaseId,
+    assetVersionId,
     viewerMode,
     onViewerModeChange,
     showViewerSelector = true,
@@ -290,6 +292,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                         files.length > 1 ? files.map((f) => f.key) : undefined
                                     }
                                     versionId={files.length === 1 ? files[0].versionId : undefined}
+                                    assetVersionId={assetVersionId}
                                     viewerMode={viewerMode}
                                     onViewerModeChange={onViewerModeChange}
                                     onDeletePreview={onDeletePreview}

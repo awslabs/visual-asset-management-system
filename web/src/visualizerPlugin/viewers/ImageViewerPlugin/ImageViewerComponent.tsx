@@ -13,6 +13,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
     onDeletePreview,
     isPreviewFile = false,
 }) => {
@@ -30,7 +31,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                 assetId,
                 databaseId,
                 key: assetKey,
-                versionId: isPreviewFile ? "" : versionId || "",
+                assetVersionId: assetVersionId,
                 downloadType: "assetFile",
                 isPreviewFile,
             });
@@ -40,7 +41,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey || "",
-                    versionId: isPreviewFile ? "" : versionId || "", // Don't use versionId for preview files
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 

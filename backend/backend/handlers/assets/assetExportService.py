@@ -465,11 +465,10 @@ def get_file_attributes(databaseId: str, assetId: str, relative_path: str) -> Di
         return {}
 
 def get_asset_version_info(databaseId: str, assetId: str, versionId: str) -> Optional[Dict]:
-    """Get asset version information using the databaseIdAssetId GSI"""
+    """Get asset version information using the table PK (databaseId:assetId is now the table PK)"""
     try:
         composite_key = f"{databaseId}:{assetId}"
         response = asset_versions_table.query(
-            IndexName='databaseIdAssetIdIndex',
             KeyConditionExpression=Key('databaseId:assetId').eq(composite_key) & Key('assetVersionId').eq(versionId),
             Limit=1
         )
@@ -480,13 +479,23 @@ def get_asset_version_info(databaseId: str, assetId: str, versionId: str) -> Opt
         logger.warning(f"Error getting version info for {databaseId}:{assetId} version {versionId}: {e}")
         return None
 
-def get_asset_file_versions(assetId: str, assetVersionId: str) -> Optional[Dict]:
-    """Get file versions for a specific asset version"""
+def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
+    """Get file versions for a specific asset version using the table PK (databaseId:assetId:assetVersionId is now the table PK)
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        assetVersionId: The asset version ID
+
+    Returns:
+        Dictionary with file versions or None if not found
+    """
     try:
-        partition_key = f"{assetId}:{assetVersionId}"
-        
+        # Create composite key for the table PK query (no IndexName needed)
+        version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
+
         response = asset_file_versions_table.query(
-            KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key)
+            KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
         )
         
         items = response.get('Items', [])
@@ -752,7 +761,7 @@ def process_asset_batch(
             filtered_files = apply_file_filters(files, request_model)
 
             # Get file versions for version mismatch check
-            file_versions = get_asset_file_versions(asset['assetId'], current_version_id)
+            file_versions = get_asset_file_versions(asset_info['databaseId'], asset['assetId'], current_version_id)
             file_version_lookup = {}
             if file_versions and file_versions.get('files'):
                 for fv in file_versions['files']:

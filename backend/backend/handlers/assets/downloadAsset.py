@@ -20,6 +20,10 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.assetsV3 import (
     DownloadAssetRequestModel, DownloadAssetResponseModel
 )
+from handlers.assets.assetVersions import (
+    resolve_file_version_from_asset_version,
+    resolve_asset_version_id_from_alias
+)
 
 #Set environment variable for S3 client configuration
 #'regional' set to add region decriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
@@ -261,9 +265,24 @@ def download_asset_file(databaseId, assetId, request_model):
     if not check_s3_object_exists(asset_bucket, final_key):
         raise VAMSGeneralErrorResponse("File not found in S3")
     
-    # Handle version ID
+    # Handle version ID -- resolve from assetVersionId or alias if provided
     version_id = request_model.versionId
-    
+
+    if request_model.assetVersionIdAlias or request_model.assetVersionId:
+        # Compute relative key by stripping asset_base_key from final_key
+        # This matches how fileKey is stored in version records (relative to asset prefix)
+        relative_file_key = final_key
+        normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
+        if relative_file_key.startswith(normalized_base):
+            relative_file_key = relative_file_key[len(normalized_base):]
+        relative_file_key = relative_file_key.lstrip('/')
+
+        if request_model.assetVersionIdAlias:
+            resolved_asset_version_id = resolve_asset_version_id_from_alias(databaseId, assetId, request_model.assetVersionIdAlias)
+            version_id = resolve_file_version_from_asset_version(databaseId, assetId, resolved_asset_version_id, relative_file_key)
+        else:
+            version_id = resolve_file_version_from_asset_version(databaseId, assetId, request_model.assetVersionId, relative_file_key)
+
     # Check if version is a delete marker
     if version_id and is_delete_marker(asset_bucket, final_key, version_id):
         # Use 410 Gone for archived/deleted versions

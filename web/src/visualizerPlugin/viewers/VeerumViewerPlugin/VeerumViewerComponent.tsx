@@ -19,6 +19,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
     assetKey,
     multiFileKeys,
     versionId,
+    assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerControllerRef = useRef<any>(null);
@@ -27,6 +28,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
     const [initError, setInitError] = useState<string | null>(null);
+    const [dismissedVersionWarning, setDismissedVersionWarning] = useState(false);
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     const [loadedModels, setLoadedModels] = useState<any[]>([]);
     const [showPanel, setShowPanel] = useState(true);
@@ -177,10 +179,10 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             const encodedFileKey = encodedSegments.join("/");
                             let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                            // Add versionId query parameter for single file mode
-                            const isSingleFile = filesToLoad.length === 1;
-                            if (isSingleFile && versionId) {
-                                assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
+                            // Only pass assetVersionId if provided — don't pass versionId to avoid
+                            // interfering with internal dependency resolution for multi-file assets
+                            if (assetVersionId) {
+                                assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
                             }
 
                             console.log(`VEERUM Viewer: Loading 3D tileset from ${assetUrl}`);
@@ -485,6 +487,51 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         title="Dismiss warnings"
                     >
                         ×
+                    </button>
+                </div>
+            )}
+
+            {/* Asset version warning */}
+            {assetVersionId && !dismissedVersionWarning && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: "0",
+                        left: "0",
+                        right: "0",
+                        backgroundColor: "#e8f4fd",
+                        border: "1px solid #0972d3",
+                        borderRadius: "4px",
+                        padding: "8px 12px",
+                        margin: "8px",
+                        zIndex: 1001,
+                        fontSize: "0.85em",
+                        color: "#0972d3",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                    }}
+                >
+                    <span style={{ textAlign: "center", flex: 1 }}>
+                        This viewer does not support loading files from specific asset versions.
+                        What is displayed may be the latest file and not the asset version selected.
+                    </span>
+                    <button
+                        onClick={() => setDismissedVersionWarning(true)}
+                        style={{
+                            background: "none",
+                            border: "none",
+                            color: "#0972d3",
+                            cursor: "pointer",
+                            fontSize: "1.1em",
+                            fontWeight: "bold",
+                            padding: "0 0 0 12px",
+                            lineHeight: "1",
+                            flexShrink: 0,
+                        }}
+                        title="Dismiss"
+                    >
+                        &times;
                     </button>
                 </div>
             )}

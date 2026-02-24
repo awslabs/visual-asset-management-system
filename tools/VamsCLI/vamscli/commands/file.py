@@ -1178,7 +1178,10 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
                     lines.append(f"    Modified: {version.get('lastModified', 'N/A')}")
                     if not data.get('isFolder'):
                         lines.append(f"    Size: {version.get('size', 0)} bytes")
-            
+                    if version.get('assetVersionIds'):
+                        labels = [av.get('label', av.get('id', '')) if isinstance(av, dict) else f"v{av}" for av in version['assetVersionIds']]
+                        lines.append(f"    Asset Versions: {', '.join(labels)}")
+
             return '\n'.join(lines)
         
         output_result(

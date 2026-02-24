@@ -16,9 +16,12 @@ interface DependencyLoaderConfig {
     databaseId: string;
     baseFileKey: string;
     apiEndpoint: string;
+    assetVersionId?: string;
     // Note: versionId is intentionally NOT included here.
     // Dependencies are always loaded without versionId because they are
     // part of the same asset version as the main file.
+    // However, assetVersionId IS included so the server resolves
+    // dependencies from the correct logical asset version.
 }
 
 /**
@@ -92,6 +95,10 @@ async function downloadDependency(
     // Note: versionId is intentionally NOT passed for dependencies.
     // Dependencies are always loaded without versionId because they are
     // part of the same asset version as the main file.
+    // However, assetVersionId IS appended so the server resolves from the correct asset version.
+    if (config.assetVersionId) {
+        url += `?assetVersionId=${encodeURIComponent(config.assetVersionId)}`;
+    }
 
     console.log(`Downloading dependency: ${relativePath} -> ${url}`);
 

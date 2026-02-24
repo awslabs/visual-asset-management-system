@@ -29,6 +29,7 @@ interface FileVersion {
     etag?: string;
     isArchived: boolean;
     currentAssetVersionFileVersionMismatch?: boolean;
+    assetVersionIds?: { id: string; label: string }[];
 }
 
 interface FileVersionsTableProps {
@@ -40,6 +41,7 @@ interface FileVersionsTableProps {
     onVersionRevert?: () => void; // Refresh callback
     displayMode?: "modal" | "container"; // Display context
     visible?: boolean; // For modal context
+    assetVersionId?: string; // Current asset version context for highlighting
 }
 
 interface RevertConfirmationModalProps {
@@ -125,6 +127,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     onVersionRevert,
     displayMode = "container",
     visible = true,
+    assetVersionId,
 }) => {
     const navigate = useNavigate();
 
@@ -309,6 +312,38 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 </div>
             ),
             sortingField: "versionId",
+        },
+        {
+            id: "assetVersions",
+            header: "Asset Versions",
+            cell: (item: FileVersion) => {
+                if (!item.assetVersionIds || item.assetVersionIds.length === 0) {
+                    return <Box color="text-status-inactive">--</Box>;
+                }
+                return (
+                    <SpaceBetween direction="horizontal" size="xxs">
+                        {item.assetVersionIds.map((av) => (
+                            <span
+                                key={av.id}
+                                title={av.label}
+                                style={{
+                                    display: "inline-block",
+                                    padding: "1px 6px",
+                                    fontSize: "12px",
+                                    borderRadius: "3px",
+                                    backgroundColor:
+                                        av.id === assetVersionId ? "#0972d3" : "#e9ebed",
+                                    color: av.id === assetVersionId ? "#fff" : "#414d5c",
+                                    cursor: "default",
+                                }}
+                            >
+                                {av.label}
+                            </span>
+                        ))}
+                    </SpaceBetween>
+                );
+            },
+            width: 150,
         },
         {
             id: "date",

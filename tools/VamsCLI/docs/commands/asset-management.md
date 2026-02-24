@@ -1556,6 +1556,8 @@ Download files from an asset.
 -   `--flatten-download-tree`: Ignore asset file tree, download files flat
 -   `--asset-preview`: Download only the asset preview file
 -   `--file-previews`: Additionally download file preview files
+-   `--asset-version-id TEXT`: Asset version ID to download files from (mutually exclusive with --asset-version-alias)
+-   `--asset-version-alias TEXT`: Asset version alias to download files from (mutually exclusive with --asset-version-id)
 -   `--asset-link-children-tree-depth INTEGER`: Traverse asset link children tree to specified depth
 -   `--shareable-links-only`: Return presigned URLs without downloading
 
@@ -1605,6 +1607,25 @@ vamscli assets download /local/path -d my-db -a my-asset --file-key "/models/" -
 vamscli assets download /local/path -d my-db -a my-asset --parallel-downloads 10 --retry-attempts 5
 ```
 
+**Version-Aware Downloads:**
+
+```bash
+# Download files from a specific asset version by ID
+vamscli assets download /local/path -d my-db -a my-asset --asset-version-id 2
+
+# Download files from an asset version by alias
+vamscli assets download /local/path -d my-db -a my-asset --asset-version-alias "stable-release"
+
+# Download a specific file from a version
+vamscli assets download /local/path -d my-db -a my-asset --file-key "/model.gltf" --asset-version-id 2
+
+# Get shareable link for a file from a specific version
+vamscli assets download -d my-db -a my-asset --file-key "/model.gltf" --asset-version-id 2 --shareable-links-only
+
+# Download all files from a version by alias with JSON output
+vamscli assets download /local/path -d my-db -a my-asset --asset-version-alias "RC1" --json-output
+```
+
 **Shareable Links:**
 
 ```bash
@@ -1640,6 +1661,8 @@ vamscli assets download /local/path -d my-db -a my-asset --json-output
     "flatten_download_tree": false,
     "asset_preview": false,
     "file_previews": true,
+    "asset_version_id": "2",
+    "asset_version_alias": null,
     "asset_link_children_tree_depth": 2,
     "shareable_links_only": false,
     "parallel_downloads": 5,
@@ -1648,6 +1671,8 @@ vamscli assets download /local/path -d my-db -a my-asset --json-output
     "hide_progress": false
 }
 ```
+
+**Note:** `asset_version_id` and `asset_version_alias` are mutually exclusive. Provide only one or neither. When provided, downloads will retrieve files as they existed in the specified asset version rather than the current (latest) version.
 
 **Folder Filtering Behavior:**
 

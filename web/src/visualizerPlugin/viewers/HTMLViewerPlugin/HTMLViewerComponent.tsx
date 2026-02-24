@@ -12,6 +12,7 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
 }) => {
     const [htmlUrl, setHtmlUrl] = useState<string>("");
     const [loading, setLoading] = useState(true);
@@ -29,7 +30,7 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId,
                     databaseId,
                     key: assetKey,
-                    versionId: versionId || "",
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 
@@ -37,7 +38,7 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey,
-                    versionId: versionId || "",
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 

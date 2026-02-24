@@ -1113,8 +1113,8 @@ class TestAssetDownloadCommand:
             assert 'Total files: 1' in result.output
             
             # Verify API call
-            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf')
-    
+            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf', asset_version_id=None, asset_version_alias=None)
+
     @patch('vamscli.commands.assets.asyncio.run')
     def test_download_root_folder_filters_folders(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test downloading from root folder filters out folder objects."""
@@ -1627,8 +1627,8 @@ class TestAssetDownloadCommand:
             assert 'Expires: in 24 hours' in result.output
             
             # Verify API call
-            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf')
-    
+            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf', asset_version_id=None, asset_version_alias=None)
+
     def test_download_shareable_links_whole_asset(self, cli_runner, assets_command_mocks):
         """Test download command with shareable links for whole asset."""
         with assets_command_mocks as mocks:
@@ -1749,7 +1749,7 @@ class TestAssetDownloadCommand:
             assert '✓ Shareable links generated successfully!' in result.output
             
             # Verify API call uses JSON data
-            mocks['api_client'].download_asset_file.assert_called_once_with('json-database', 'json-asset', '/json-model.gltf')
+            mocks['api_client'].download_asset_file.assert_called_once_with('json-database', 'json-asset', '/json-model.gltf', asset_version_id=None, asset_version_alias=None)
     
     def test_download_json_output(self, cli_runner, assets_command_mocks):
         """Test download command with JSON output."""

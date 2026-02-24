@@ -20,6 +20,7 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
     onDeletePreview,
     isPreviewFile = false,
 }) => {
@@ -45,7 +46,7 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                 assetId,
                 databaseId,
                 key: assetKey,
-                versionId: isPreviewFile ? "" : versionId || "",
+                assetVersionId: assetVersionId,
                 downloadType: "assetFile",
                 isPreviewFile,
             });
@@ -58,7 +59,7 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey || "",
-                    versionId: isPreviewFile ? "" : versionId || "",
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 

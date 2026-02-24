@@ -17,6 +17,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const initializationRef = useRef(false);
@@ -174,7 +175,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     assetId,
                     databaseId,
                     key: assetKey,
-                    versionId: versionId || "",
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 

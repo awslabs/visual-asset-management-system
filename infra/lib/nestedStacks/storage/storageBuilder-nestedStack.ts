@@ -1195,7 +1195,8 @@ export function storageResourcesBuilder(
         }
     );
 
-    const assetFileVersionsStorageTable = new dynamodb.Table(
+    // Legacy tables (V1) — kept for data migration, not used by Lambda handlers
+    const assetFileVersionsStorageTableV1 = new dynamodb.Table(
         scope,
         "AssetFileVersionsStorageTable",
         {
@@ -1210,6 +1211,57 @@ export function storageResourcesBuilder(
             },
         }
     );
+
+    const assetVersionsStorageTableV1 = new dynamodb.Table(scope, "AssetVersionsStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetVersionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // V2 tables — new key schemas with databaseId scoping
+    const assetVersionsStorageTable = new dynamodb.Table(scope, "AssetVersionsStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetVersionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    const assetFileVersionsStorageTable = new dynamodb.Table(
+        scope,
+        "AssetFileVersionsStorageTableV2",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "databaseId:assetId:assetVersionId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "fileKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    // GSI for querying all file versions across asset versions within a database+asset
+    assetFileVersionsStorageTable.addGlobalSecondaryIndex({
+        indexName: "databaseIdAssetIdIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
 
     const assetFileMetadataVersionsStorageTable = new dynamodb.Table(
         scope,
@@ -1227,27 +1279,11 @@ export function storageResourcesBuilder(
         }
     );
 
-    const assetVersionsStorageTable = new dynamodb.Table(scope, "AssetVersionsStorageTable", {
-        ...dynamodbDefaultProps,
-        partitionKey: {
-            name: "assetId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "assetVersionId",
-            type: dynamodb.AttributeType.STRING,
-        },
-    });
-
-    // GSI for querying asset versions by databaseId:assetId composite key
-    assetVersionsStorageTable.addGlobalSecondaryIndex({
+    // GSI for querying all metadata versions across asset versions within a database+asset
+    assetFileMetadataVersionsStorageTable.addGlobalSecondaryIndex({
         indexName: "databaseIdAssetIdIndex",
         partitionKey: {
             name: "databaseId:assetId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "assetVersionId",
             type: dynamodb.AttributeType.STRING,
         },
         projectionType: dynamodb.ProjectionType.ALL,

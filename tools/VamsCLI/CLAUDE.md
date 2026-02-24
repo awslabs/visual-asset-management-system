@@ -34,7 +34,7 @@ tools/VamsCLI/
       setup.py               # Initial CLI configuration
       auth.py                # Login, logout, status, set-override
       assets.py              # Asset CRUD operations
-      asset_version.py       # Asset version management (list, get, edit, archive, unarchive)
+      asset_version.py       # Asset version management (list, get, create, update, archive, unarchive, revert)
       asset_links.py         # Asset relationship/link management
       file.py                # File management (upload, download, move, copy)
       profile.py             # Multi-profile management
@@ -347,6 +347,22 @@ Override tokens (external auth):
 -   Pre-flight expiry check before each API request
 -   No auto-refresh -- fails immediately on 401
 
+### 9. Unicode and Terminal Encoding
+
+VamsCLI uses Unicode characters (e.g., `✓`, `✗`) in CLI output for status indicators. On Windows, the default console encoding (`charmap`/`cp1252`) cannot render these characters and will raise encoding errors.
+
+**Requirements**:
+
+-   Use a UTF-8 capable terminal (Windows Terminal, VS Code terminal, etc.)
+-   Or set `PYTHONIOENCODING=utf-8` environment variable before running the CLI
+-   Linux/macOS terminals are typically UTF-8 by default and do not require additional configuration
+
+**Rules**:
+
+1. Unicode characters in CLI output are intentional and should not be replaced with ASCII
+2. When testing CLI commands in bash/shell scripts, set `export PYTHONIOENCODING=utf-8`
+3. Document the UTF-8 requirement in user-facing README and installation guides
+
 ---
 
 ## Testing
@@ -524,6 +540,7 @@ Follow this checklist:
 6. **Write tests** in `tests/test_my_resource.py` following the test class pattern above
 
 7. **Update user-facing documentation**:
+
     - Add command documentation to the relevant `docs/commands/*.md` file (e.g., `asset-management.md` for asset/version commands)
     - Update `README.md` Quick Start examples if the command is commonly used
     - Update `documentation/VAMS_API.yaml` with new/modified API endpoints and schemas

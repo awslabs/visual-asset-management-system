@@ -303,6 +303,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     files={modalFiles}
                     databaseId={databaseId!}
                     assetId={assetId!}
+                    assetVersionId={state.assetVersionId}
                 />
                 <Box textAlign="center" padding="xl">
                     <div>Select a file or folder to view details</div>
@@ -324,11 +325,13 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
 
         navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
             state: {
+                assetVersionId: state.assetVersionId,
                 files: viewableFiles.map((file) => ({
                     filename: file.name,
                     key: file.keyPrefix,
                     isDirectory: false,
-                    versionId: file.versionId,
+                    versionId: state.assetVersionId ? undefined : file.versionId,
+                    assetVersionId: state.assetVersionId,
                     size: file.size,
                     dateCreatedCurrentVersion: file.dateCreatedCurrentVersion,
                     isArchived: file.isArchived,
@@ -362,6 +365,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     expanded: true,
                     subTree: downloadableFiles,
                 },
+                assetVersionId: state.assetVersionId,
             },
         });
     };
@@ -392,6 +396,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     files={modalFiles}
                     databaseId={databaseId!}
                     assetId={assetId!}
+                    assetVersionId={state.assetVersionId}
                 />
 
                 <div className="file-info-panel">
@@ -466,6 +471,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         selectedFiles={selectedItems.filter((item) => !item.isFolder)}
                         databaseId={databaseId!}
                         assetId={assetId!}
+                        assetVersionId={state.assetVersionId}
                     />
 
                     <div
@@ -649,7 +655,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const handleDownload = () => {
         dispatch({
             type: "DOWNLOAD_FILE",
-            payload: { key: selectedItem.keyPrefix, versionId: selectedItem.versionId || "" },
+            payload: {
+                key: selectedItem.keyPrefix,
+                versionId: selectedItem.versionId || "",
+                assetVersionId: state.assetVersionId,
+            },
         });
     };
 
@@ -674,9 +684,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             : selectedItem.relativePath;
         const encodedPath = encodeURIComponent(pathForUrl);
 
-        // Build URL with optional version query parameter
+        // Build URL with version query parameter — assetVersionId takes priority
         let url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}`;
-        if (selectedItem.versionId) {
+        if (state.assetVersionId) {
+            url += `?assetVersion=${encodeURIComponent(state.assetVersionId)}`;
+        } else if (selectedItem.versionId) {
             url += `?version=${encodeURIComponent(selectedItem.versionId)}`;
         }
 
@@ -687,7 +699,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 isDirectory: isFolder,
                 size: selectedItem.size,
                 dateCreatedCurrentVersion: selectedItem.dateCreatedCurrentVersion,
-                versionId: selectedItem.versionId,
+                versionId: state.assetVersionId ? undefined : selectedItem.versionId,
+                assetVersionId: state.assetVersionId,
                 isArchived: selectedItem.isArchived,
                 primaryType: selectedItem.primaryType,
                 previewFile: selectedItem.previewFile,
@@ -756,6 +769,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 files={modalFiles}
                 databaseId={databaseId!}
                 assetId={assetId!}
+                assetVersionId={state.assetVersionId}
             />
 
             <div className="file-info-panel">
@@ -832,6 +846,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     selectedFiles={selectedItem ? [selectedItem] : []}
                     databaseId={databaseId!}
                     assetId={assetId!}
+                    assetVersionId={state.assetVersionId}
                 />
 
                 {/* Delete Preview Modal */}
@@ -928,6 +943,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                             // Refresh file list after successful revert
                             dispatch({ type: "REFRESH_FILES", payload: null });
                         }}
+                        assetVersionId={state.assetVersionId}
                     />
                 )}
 
@@ -1051,6 +1067,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 {
                                                     state: {
                                                         fileTree: selectedItem,
+                                                        assetVersionId: state.assetVersionId,
                                                     },
                                                 }
                                             );
@@ -1262,12 +1279,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     setShowPreviewModal(true);
                                 }}
                                 onDeletePreview={
-                                    asset?.previewLocation?.Key ||
-                                    (asset?.previewLocation as any)?.key ||
-                                    assetDetailState?.previewLocation?.Key ||
-                                    (assetDetailState?.previewLocation as any)?.key ||
-                                    (typeof assetDetailState?.previewLocation === "string" &&
-                                        assetDetailState?.previewLocation)
+                                    state.assetVersionId
+                                        ? undefined
+                                        : asset?.previewLocation?.Key ||
+                                          (asset?.previewLocation as any)?.key ||
+                                          assetDetailState?.previewLocation?.Key ||
+                                          (assetDetailState?.previewLocation as any)?.key ||
+                                          (typeof assetDetailState?.previewLocation === "string" &&
+                                              assetDetailState?.previewLocation)
                                         ? () => setShowDeletePreviewModal(true)
                                         : undefined
                                 }
@@ -1355,12 +1374,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 assetId={assetId || ""}
                                                 databaseId={databaseId || ""}
                                                 fileKey={selectedItem.previewFile}
+                                                assetVersionId={state.assetVersionId}
                                                 onOpenFullPreview={(url) => {
                                                     setPreloadedFileUrl(url);
                                                     setShowFilePreviewModal(true);
                                                 }}
-                                                onDeletePreview={() =>
-                                                    setShowDeletePreviewModal(true)
+                                                onDeletePreview={
+                                                    state.assetVersionId
+                                                        ? undefined
+                                                        : () => setShowDeletePreviewModal(true)
                                                 }
                                             />
                                         </div>
@@ -1392,6 +1414,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     assetId={assetId || ""}
                                                     databaseId={databaseId || ""}
                                                     fileKey={selectedItem.keyPrefix}
+                                                    assetVersionId={state.assetVersionId}
                                                     onOpenFullPreview={(url) => {
                                                         setPreloadedFileUrl(url);
                                                         setShowFilePreviewModal(true);

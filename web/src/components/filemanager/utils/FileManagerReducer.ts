@@ -233,7 +233,8 @@ export function fileManagerReducer(
                     state.assetId,
                     state.databaseId,
                     action.payload.key,
-                    action.payload.versionId || ""
+                    action.payload.versionId || "",
+                    action.payload.assetVersionId || state.assetVersionId
                 );
             };
             handleDownloadFile();

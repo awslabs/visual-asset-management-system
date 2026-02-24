@@ -1567,7 +1567,7 @@ def get_asset_metadata_from_version(database_id: str, asset_id: str, asset_versi
             raise PermissionError("Not authorized to view metadata for this asset")
 
         # Validate asset version exists before querying metadata
-        validate_asset_version_exists(asset_id, asset_version_id)
+        validate_asset_version_exists(database_id, asset_id, asset_version_id)
 
         # Get metadata snapshot for this version
         metadata_items_raw = get_asset_metadata_version(database_id, asset_id, asset_version_id)
@@ -2749,7 +2749,7 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
             raise PermissionError("Not authorized to view metadata for this file")
 
         # Validate asset version exists before querying metadata
-        validate_asset_version_exists(asset_id, asset_version_id)
+        validate_asset_version_exists(database_id, asset_id, asset_version_id)
 
         metadata_items_raw = get_asset_metadata_version(database_id, asset_id, asset_version_id)
 

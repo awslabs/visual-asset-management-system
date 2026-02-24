@@ -40,7 +40,9 @@ Asset versions have database table changes that require the running of migration
 -   **Web** Added a toggle ability to get both embedded auth presigned URLs for asset files as well as long-lasting URI's that require users to embed their VAMS authorization token into the Share URLs component
 -   **Web** Added functionality to the view asset page to allow selection of a particular asset version. This filters the file manager and metadata components to only showing a read-only version of what is in that asset version
 -   Added functionality for asset versions to be archived/unarchived, be able to specify a version alias name, and be able to edit an existing asset version to change the alias name and/or associated comment. Asset versions in dynamoDB now properly store the asset's database id to prevent future system conflicts. This feature added new API routes, web UI, and CLI commands.
-    -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions
+    -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions (and asset sub-tables)
+-   **Web** Added functionality to download APIs and viewers (all viewers updated) to include asset version ID (if an asset version ID selected) to automatically find the right file version through the API to pull based on the provided/saved asset version.
+    -   Updated documentation to show how to use the download API and download stream API can work for downstream applications that want to pull versions from a specific asset version id.
 
 ### Bug Fixes
 
@@ -54,6 +56,7 @@ Asset versions have database table changes that require the running of migration
 -   Added additional createWorkflow API input validation checks for edge input scenarios and cases where a user creating a workflow does not have authorization access to an underlying pipeline being specified
 -   Fixed typo in reserved S3 prefix list (`piplines`->`pipelines`) which auto-created assets in some cases for reserved prefix folders
 -   Attempted to fix edge cases where local web debugging was causing CSP policy errors for some development users
+-   Fixed bug in GenAI MetataLabelinng use-case pipeline where the CDK pathing has a case sensitivity for non-windows builds (caused CDK errors)
 
 ### Chores
 

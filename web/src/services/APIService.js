@@ -68,22 +68,28 @@ export const webRoutes = async (body) => {
  * @param {Object} params - Parameters object
  * @param {string} params.databaseId - Database ID
  * @param {string} params.assetId - Asset ID
- * @param {string} params.key - Optional key path for the file
- * @param {string} params.versionId - Optional version ID
- * @param {string} params.downloadType - Download type: "assetFile" (default) or "assetPreview"
+ * @param {string} [params.key] - Optional key path for the file
+ * @param {string} [params.versionId] - Optional version ID
+ * @param {string} [params.assetVersionId] - Optional asset version ID
+ * @param {string} [params.downloadType="assetFile"] - Download type: "assetFile" (default) or "assetPreview"
  * @returns {Promise<boolean|{message}|any>}
  */
 export const downloadAsset = async (
-    { databaseId, assetId, key, versionId, downloadType = "assetFile" },
+    { databaseId, assetId, key, versionId, assetVersionId = undefined, downloadType = "assetFile" },
     api = API
 ) => {
     try {
         // Build request body with new model structure
+        // Only include one version parameter — assetVersionId takes priority over versionId
         const body = {
             downloadType: downloadType,
             key: key,
-            versionId: versionId,
         };
+        if (assetVersionId) {
+            body.assetVersionId = assetVersionId;
+        } else if (versionId) {
+            body.versionId = versionId;
+        }
 
         const response = await api.post(
             "api",

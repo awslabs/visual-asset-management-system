@@ -21,6 +21,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     assetKey,
     multiFileKeys,
     versionId,
+    assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [config] = useState(Cache.getItem("config"));
@@ -283,10 +284,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         const encodedFileKey = encodedSegments.join("/");
                         let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                        // Add versionId query parameter for single file mode
-                        const isSingleFile = filesToLoad.length === 1;
-                        if (isSingleFile && versionId) {
-                            assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
+                        // Only pass assetVersionId if provided — don't pass versionId to avoid
+                        // interfering with internal dependency resolution for multi-file assets
+                        if (assetVersionId) {
+                            assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
                         }
 
                         const response = await fetch(assetUrl, {
@@ -311,6 +312,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                                     databaseId,
                                     baseFileKey: fileKey,
                                     apiEndpoint: config.api,
+                                    assetVersionId: assetVersionId,
                                 },
                                 (current, total) => {
                                     setLoadingMessage(

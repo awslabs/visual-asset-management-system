@@ -19,6 +19,10 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_streamed
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from handlers.assets.assetVersions import (
+    resolve_file_version_from_asset_version,
+    resolve_asset_version_id_from_alias
+)
 
 # Set environment variable for S3 client configuration
 # 'regional' set to add region descriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
@@ -140,23 +144,32 @@ def handle_head_request(event, claims_and_roles):
     """
     path_parameters = event.get('pathParameters', {})
     query_parameters = event.get('queryStringParameters', {}) or {}
-    
+
     # Get the object key which comes after the base path of the API Call
-    assetId = path_parameters.get('assetId', "") 
-    databaseId = path_parameters.get('databaseId', "") 
+    assetId = path_parameters.get('assetId', "")
+    databaseId = path_parameters.get('databaseId', "")
     object_key = path_parameters.get('proxy', "")
     version_id = query_parameters.get('versionId')
-    
+    asset_version_id = query_parameters.get('assetVersionId')
+    asset_version_id_alias = query_parameters.get('assetVersionIdAlias')
+
+    # Validate mutual exclusion of version parameters
+    version_params = [p for p in [version_id, asset_version_id, asset_version_id_alias] if p]
+    if len(version_params) > 1:
+        message = "Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified"
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
+
     # Error if no object key in path
     if not object_key or object_key == None or object_key == "":
         message = "No Asset File Object Key Provided in Path"
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
-    
+
     # If object_key doesn't start with a /, add it
     if not object_key.startswith('/'):
         object_key = '/' + object_key
-    
+
     logger.info("Validating parameters for HEAD request")
     validation_params = {
         'databaseId': {
@@ -172,7 +185,7 @@ def handle_head_request(event, claims_and_roles):
             'validator': 'RELATIVE_FILE_PATH'
         },
     }
-    
+
     # Validate versionId if provided
     if version_id:
         validation_params['versionId'] = {
@@ -180,7 +193,7 @@ def handle_head_request(event, claims_and_roles):
             'validator': 'STRING_256',
             'optional': True
         }
-    
+
     (valid, message) = validate(validation_params)
     if not valid:
         logger.error(message)
@@ -226,14 +239,29 @@ def handle_head_request(event, claims_and_roles):
     
     # Resolve the full S3 key
     object_key = resolve_asset_file_path(asset_base_key, object_key)
-    
+
+    # Resolve assetVersionId/alias to S3 versionId
+    if asset_version_id_alias or asset_version_id:
+        # Compute relative key by stripping asset_base_key from resolved object_key
+        relative_file_key = object_key
+        normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
+        if relative_file_key.startswith(normalized_base):
+            relative_file_key = relative_file_key[len(normalized_base):]
+        relative_file_key = relative_file_key.lstrip('/')
+
+        if asset_version_id_alias:
+            resolved_asset_version_id = resolve_asset_version_id_from_alias(databaseId, assetId, asset_version_id_alias)
+            version_id = resolve_file_version_from_asset_version(databaseId, assetId, resolved_asset_version_id, relative_file_key)
+        elif asset_version_id:
+            version_id = resolve_file_version_from_asset_version(databaseId, assetId, asset_version_id, relative_file_key)
+
     try:
         # Build head_object parameters
         head_params = {
             'Bucket': asset_bucket,
             'Key': object_key
         }
-        
+
         # Add versionId if provided to fetch specific version
         if version_id:
             head_params['VersionId'] = version_id
@@ -320,10 +348,26 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         query_parameters = event.get('queryStringParameters', {}) or {}
 
         # Get the object key which comes after the base path of the API Call
-        assetId = path_parameters.get('assetId', "") 
-        databaseId = path_parameters.get('databaseId', "") 
+        assetId = path_parameters.get('assetId', "")
+        databaseId = path_parameters.get('databaseId', "")
         object_key = path_parameters.get('proxy', "")
         version_id = query_parameters.get('versionId')
+        asset_version_id = query_parameters.get('assetVersionId')
+        asset_version_id_alias = query_parameters.get('assetVersionIdAlias')
+
+        # Validate mutual exclusion of version parameters
+        version_params = [p for p in [version_id, asset_version_id, asset_version_id_alias] if p]
+        if len(version_params) > 1:
+            message = "Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified"
+            logger.error(message)
+            streaming_headers = {
+                'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Origin': '*',
+                'Cache-Control': 'no-cache, no-store',
+            }
+            error_response = validation_error(body={'message': message}, event=event)
+            error_response['headers'].update(streaming_headers)
+            return error_response
 
         # Error if no object key in path
         if not object_key or object_key == None or object_key == "":
@@ -436,6 +480,21 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
             # Resolve the full S3 key
             object_key = resolve_asset_file_path(asset_base_key, object_key)
+
+            # Resolve assetVersionId/alias to S3 versionId
+            if asset_version_id_alias or asset_version_id:
+                # Compute relative key by stripping asset_base_key from resolved object_key
+                relative_file_key = object_key
+                normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
+                if relative_file_key.startswith(normalized_base):
+                    relative_file_key = relative_file_key[len(normalized_base):]
+                relative_file_key = relative_file_key.lstrip('/')
+
+                if asset_version_id_alias:
+                    resolved_asset_version_id = resolve_asset_version_id_from_alias(databaseId, assetId, asset_version_id_alias)
+                    version_id = resolve_file_version_from_asset_version(databaseId, assetId, resolved_asset_version_id, relative_file_key)
+                elif asset_version_id:
+                    version_id = resolve_file_version_from_asset_version(databaseId, assetId, asset_version_id, relative_file_key)
 
             # Prepare the S3 GetObject request parameters
             s3_params = {

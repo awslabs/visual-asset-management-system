@@ -721,11 +721,10 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
         return {}
 
 def get_asset_version_info(database_id: str, asset_id: str) -> Dict[str, Any]:
-    """Get current asset version information using the databaseIdAssetId GSI"""
+    """Get current asset version information using the table PK (databaseId:assetId is now the table PK)"""
     try:
         composite_key = f"{database_id}:{asset_id}"
         response = asset_versions_table.query(
-            IndexName='databaseIdAssetIdIndex',
             KeyConditionExpression=Key('databaseId:assetId').eq(composite_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('isCurrentVersion').eq(True)
         )

@@ -22,6 +22,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
     assetKey,
     multiFileKeys,
     versionId,
+    assetVersionId,
 }) => {
     const { state, settings, updateState, loadModel, clearModel } = useViewerContext();
 
@@ -59,7 +60,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                                 assetId: assetId,
                                 databaseId: databaseId,
                                 key: key,
-                                versionId: versionId || "",
+                                assetVersionId: assetVersionId,
                                 downloadType: "assetFile",
                             });
 
@@ -84,7 +85,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                         assetId: assetId,
                         databaseId: databaseId,
                         key: assetKey || "",
-                        versionId: versionId || "",
+                        assetVersionId: assetVersionId,
                         downloadType: "assetFile",
                     });
 

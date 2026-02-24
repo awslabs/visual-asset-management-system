@@ -1688,7 +1688,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download:
         post:
             summary: "Generate presigned url for downloading the given or latest version of an asset"
-            description: "Generate presigned url for downloading the given or latest version of an asset. Provide an optional key to specify the version of the asset."
+            description: "Generate presigned url for downloading the given or latest version of an asset. Provide an optional key to specify the file within the asset. Optionally specify a version using one of versionId (S3 version), assetVersionId (VAMS asset version snapshot), or assetVersionIdAlias (named version alias). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified. Version parameters are not allowed for assetPreview downloads."
             requestBody:
                 required: true
                 content:
@@ -1701,6 +1701,15 @@ paths:
                             properties:
                                 key:
                                     $ref: "#/components/schemas/asset_path_pattern_regex"
+                                versionId:
+                                    type: string
+                                    description: "Optional S3 version ID to download a specific version of the file."
+                                assetVersionId:
+                                    type: string
+                                    description: "Optional VAMS asset version ID. Resolves the S3 versionId from the asset version snapshot for the specified file. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
+                                assetVersionIdAlias:
+                                    type: string
+                                    description: "Optional asset version alias name. Resolves the alias to an asset version ID, then resolves the S3 versionId from the asset version snapshot. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
             responses:
                 "200":
                     description: Presigned url for asset download is generated.
@@ -1713,7 +1722,12 @@ paths:
                                         type: string
                                         example: url
                 "400":
-                    description: DatabaseId OR AssetId invalid.
+                    description: |
+                        Bad request. Possible reasons:
+                        - DatabaseId OR AssetId invalid.
+                        - Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified.
+                        - Version parameters are not allowed for assetPreview downloads.
+                        - Ambiguous alias: multiple versions share this alias.
                     content:
                         application/json:
                             schema:
@@ -1725,7 +1739,12 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Asset OR Version not found.
+                    description: |
+                        Not found. Possible reasons:
+                        - Database OR Asset not found.
+                        - Asset version not found for asset.
+                        - File not found in asset version.
+                        - No asset version found with the specified alias.
                     content:
                         application/json:
                             schema:
@@ -1960,7 +1979,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}:
         get:
             summary: "Stream asset files with HTTP range support."
-            description: "Stream asset files directly with HTTP range support for large files. Requires asset to be distributable. Supports partial content requests via Range headers for efficient streaming of large files."
+            description: "Stream asset files directly with HTTP range support for large files. Requires asset to be distributable. Supports partial content requests via Range headers for efficient streaming of large files. Optionally specify a version using one of versionId (S3 version), assetVersionId (VAMS asset version snapshot), or assetVersionIdAlias (named version alias). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified. Version parameters are not allowed for assetPreview downloads."
             responses:
                 "200":
                     description: Asset file content streamed successfully.
@@ -2029,7 +2048,12 @@ paths:
                             schema:
                                 type: string
                 "400":
-                    description: Invalid parameters, file too large for streaming, or unallowed file type.
+                    description: |
+                        Bad request. Possible reasons:
+                        - Invalid parameters, file too large for streaming, or unallowed file type.
+                        - Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified.
+                        - Version parameters are not allowed for assetPreview downloads.
+                        - Ambiguous alias: multiple versions share this alias.
                     content:
                         application/json:
                             schema:
@@ -2041,7 +2065,12 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, asset, or file not found.
+                    description: |
+                        Not found. Possible reasons:
+                        - Database, asset, or file not found.
+                        - Asset version not found for asset.
+                        - File not found in asset version.
+                        - No asset version found with the specified alias.
                     content:
                         application/json:
                             schema:
@@ -2081,16 +2110,28 @@ paths:
                       example: "bytes=200-1023"
                 - name: "versionId"
                   in: "query"
-                  description: "Optional S3 version ID to stream a specific version of the file."
+                  description: "Optional S3 version ID to stream a specific version of the file. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
                   required: false
                   schema:
                       type: string
                       maxLength: 256
+                - name: "assetVersionId"
+                  in: "query"
+                  description: "Asset version ID to resolve file version from. Resolves the S3 versionId from the asset version snapshot for the specified file. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
+                  required: false
+                  schema:
+                      type: string
+                - name: "assetVersionIdAlias"
+                  in: "query"
+                  description: "Asset version alias to resolve file version from. Resolves the alias to an asset version ID, then resolves the S3 versionId from the asset version snapshot. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
+                  required: false
+                  schema:
+                      type: string
             security:
                 - DefaultCognitoAuthorizer: []
         head:
             summary: "Check asset file availability and permissions without downloading content."
-            description: "Check if an asset file exists and retrieve metadata headers without downloading file content. Uses S3 head_object for efficient metadata retrieval. Returns the same headers as GET but with empty body. Does not check file size thresholds or generate redirects. Requires asset to be distributable. Supports optional versionId query parameter to check a specific S3 version."
+            description: "Check if an asset file exists and retrieve metadata headers without downloading file content. Uses S3 head_object for efficient metadata retrieval. Returns the same headers as GET but with empty body. Does not check file size thresholds or generate redirects. Requires asset to be distributable. Supports optional version parameters: versionId (S3 version), assetVersionId (VAMS asset version snapshot), or assetVersionIdAlias (named version alias). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
             responses:
                 "200":
                     description: File exists and user has permission to access it.
@@ -2131,7 +2172,11 @@ paths:
                                 type: string
                                 example: "no-cache, no-store"
                 "400":
-                    description: Invalid parameters or unallowed file type.
+                    description: |
+                        Bad request. Possible reasons:
+                        - Invalid parameters or unallowed file type.
+                        - Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified.
+                        - Ambiguous alias: multiple versions share this alias.
                     content:
                         application/json:
                             schema:
@@ -2143,7 +2188,12 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, asset, or file not found.
+                    description: |
+                        Not found. Possible reasons:
+                        - Database, asset, or file not found.
+                        - Asset version not found for asset.
+                        - File not found in asset version.
+                        - No asset version found with the specified alias.
                     content:
                         application/json:
                             schema:
@@ -2175,11 +2225,23 @@ paths:
                     type: "string"
                 - name: "versionId"
                   in: "query"
-                  description: "Optional S3 version ID to check a specific version of the file."
+                  description: "Optional S3 version ID to check a specific version of the file. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
                   required: false
                   schema:
                       type: string
                       maxLength: 256
+                - name: "assetVersionId"
+                  in: "query"
+                  description: "Asset version ID to resolve file version from. Resolves the S3 versionId from the asset version snapshot for the specified file. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
+                  required: false
+                  schema:
+                      type: string
+                - name: "assetVersionIdAlias"
+                  in: "query"
+                  description: "Asset version alias to resolve file version from. Resolves the alias to an asset version ID, then resolves the S3 versionId from the asset version snapshot. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
+                  required: false
+                  schema:
+                      type: string
             security:
                 - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}:
@@ -7903,6 +7965,12 @@ components:
                             currentAssetVersionFileVersionMismatch:
                                 type: boolean
                                 description: "Whether this version doesn't match the current asset version"
+                            assetVersionIds:
+                                type: array
+                                items:
+                                    type: string
+                                description: "List of asset version IDs that contain this specific file version"
+                                nullable: true
             required:
                 - fileName
                 - key

@@ -645,14 +645,16 @@ export async function downloadFile(
     assetId: string,
     databaseId: string,
     keyPrefix: string,
-    versionId: string = ""
+    versionId: string = "",
+    assetVersionId?: string
 ) {
     try {
         const response = await downloadAsset({
             assetId: assetId,
             databaseId: databaseId,
             key: keyPrefix,
-            versionId: versionId,
+            versionId: assetVersionId ? "" : versionId,
+            assetVersionId: assetVersionId,
             downloadType: "assetFile",
         });
 

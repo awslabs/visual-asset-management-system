@@ -75,10 +75,11 @@ file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribu
 # Utility Functions
 #######################
 
-def validate_asset_version_exists(assetId: str, assetVersionId: str) -> bool:
+def validate_asset_version_exists(databaseId: str, assetId: str, assetVersionId: str) -> bool:
     """Validate that an asset version exists by checking the asset versions table.
 
     Args:
+        databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
 
@@ -91,7 +92,7 @@ def validate_asset_version_exists(assetId: str, assetVersionId: str) -> bool:
     try:
         response = asset_versions_table.get_item(
             Key={
-                'assetId': assetId,
+                'databaseId:assetId': f"{databaseId}:{assetId}",
                 'assetVersionId': assetVersionId
             }
         )
@@ -468,67 +469,69 @@ def copy_s3_object_version(source_bucket: str, source_key: str, source_version_i
         return None
 
 
-def save_asset_file_versions(assetId: str, assetVersionId: str, files: List[Dict]) -> bool:
+def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, files: List[Dict]) -> bool:
     """Save file version mappings to DynamoDB
-    
+
     Args:
+        databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
         files: List of file dictionaries with version information
-        
+
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Create partition key in the format {assetId}:{assetVersionId}
-        partition_key = f"{assetId}:{assetVersionId}"
+        # Create partition key in the format {databaseId}:{assetId}:{assetVersionId}
+        partition_key = f"{databaseId}:{assetId}:{assetVersionId}"
         created_at = datetime.utcnow().isoformat()
-        
+
         # Create individual records for each file
         with asset_file_versions_table.batch_writer() as batch:
             for file in files:
                 # Use the file's relativeKey as the sort key
                 file_key = file['relativeKey']
-                
+
                 # Create item for DynamoDB
                 item = {
-                    'assetId:assetVersionId': partition_key,
+                    'databaseId:assetId:assetVersionId': partition_key,
                     'fileKey': file_key,
+                    'databaseId:assetId': f"{databaseId}:{assetId}",
                     'versionId': file.get('versionId'),
                     'size': file.get('size'),
                     'lastModified': file.get('lastModified'),
                     'etag': file.get('etag'),
                     'createdAt': created_at
                 }
-                
+
                 # Save to DynamoDB
                 batch.put_item(Item=item)
-                
+
         return True
-        
+
     except Exception as e:
         logger.exception(f"Error saving asset file versions: {e}")
         return False
 
-def get_asset_file_versions(assetId: str, assetVersionId: str) -> Optional[Dict]:
+def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
     """Get file versions for a specific asset version
-    
+
     Args:
+        databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
-        
+
     Returns:
         Dictionary with file versions or None if not found
     """
     try:
-        # Create partition key in the format {assetId}:{assetVersionId}
-        partition_key = f"{assetId}:{assetVersionId}"
-        
-        # Query all records with the same partition key
+        # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
+        version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
+
         response = asset_file_versions_table.query(
-            KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key)
+            KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
         )
-        
+
         items = response.get('Items', [])
         
         # If no items found, return None
@@ -560,23 +563,94 @@ def get_asset_file_versions(assetId: str, assetVersionId: str) -> Optional[Dict]
         logger.exception(f"Error getting asset file versions: {e}")
         return None
 
-def get_asset_version_file_count(assetId: str, assetVersionId: str) -> int:
-    """Get count of available files for a specific asset version
-    
+def resolve_file_version_from_asset_version(databaseId: str, assetId: str, assetVersionId: str, fileKey: str) -> str:
+    """Resolve the S3 versionId for a specific file within an asset version's snapshot.
+
     Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        assetVersionId: The asset version ID (e.g., "1", "2")
+        fileKey: The file's relative key (e.g., "/model.glb" or "subfolder/model.glb")
+
+    Returns:
+        The S3 versionId string for the matching file
+
+    Raises:
+        VAMSGeneralErrorResponse: If asset version not found or file not in version snapshot
+    """
+    # Validate the asset version exists
+    validate_asset_version_exists(databaseId, assetId, assetVersionId)
+
+    # Get the file versions for this asset version
+    file_versions = get_asset_file_versions(databaseId, assetId, assetVersionId)
+    if not file_versions or not file_versions.get('files'):
+        raise VAMSGeneralErrorResponse(f"No files found in asset version '{assetVersionId}'")
+
+    # Build a lookup map with normalized keys (strip leading /)
+    file_map = {f['relativeKey'].lstrip('/'): f for f in file_versions['files']}
+
+    # Normalize the requested file key — strip leading /
+    normalized_key = fileKey.lstrip('/')
+
+    # Look up the file
+    file_entry = file_map.get(normalized_key)
+
+    if not file_entry:
+        raise VAMSGeneralErrorResponse(f"File not found in asset version '{assetVersionId}'")
+
+    version_id = file_entry.get('versionId')
+    if not version_id:
+        raise VAMSGeneralErrorResponse(f"No version ID recorded for file in asset version '{assetVersionId}'")
+
+    return version_id
+
+
+def resolve_asset_version_id_from_alias(databaseId: str, assetId: str, alias: str) -> str:
+    """Resolve an assetVersionId from a version alias.
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        alias: The version alias to look up (exact match)
+
+    Returns:
+        The matching assetVersionId
+
+    Raises:
+        VAMSGeneralErrorResponse: If no match found or multiple matches (ambiguous)
+    """
+    all_versions = get_all_asset_versions(databaseId, assetId)
+    if not all_versions:
+        raise VAMSGeneralErrorResponse(f"No asset versions found for asset")
+
+    # Filter for versions matching the alias (exact match)
+    matches = [v for v in all_versions if v.get('versionAlias') == alias]
+
+    if len(matches) == 0:
+        raise VAMSGeneralErrorResponse(f"No asset version found with alias '{alias}'")
+    elif len(matches) > 1:
+        raise VAMSGeneralErrorResponse(f"Ambiguous alias '{alias}': multiple versions share this alias")
+
+    return matches[0]['assetVersionId']
+
+
+def get_asset_version_file_count(databaseId: str, assetId: str, assetVersionId: str) -> int:
+    """Get count of available files for a specific asset version
+
+    Args:
+        databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
-        
+
     Returns:
         Number of files that are not permanently deleted
     """
     try:
-        # Create partition key in the format {assetId}:{assetVersionId}
-        partition_key = f"{assetId}:{assetVersionId}"
-        
-        # Query to count records with the same partition key
+        # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
+        version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
+
         response = asset_file_versions_table.query(
-            KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key),
+            KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(version_composite_key),
             Select='COUNT'
         )
         
@@ -629,20 +703,21 @@ def save_asset_version_metadata(assetId: str, assetVersionId: str,
         logger.exception(f"Error saving asset version metadata: {e}")
         return False
 
-def get_asset_version_metadata(assetId: str, assetVersionId: str) -> Optional[Dict]:
+def get_asset_version_metadata(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
     """Get asset version metadata from the asset versions table
-    
+
     Args:
+        databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
-        
+
     Returns:
         Dictionary with version metadata or None if not found
     """
     try:
         response = asset_versions_table.get_item(
             Key={
-                'assetId': assetId,
+                'databaseId:assetId': f"{databaseId}:{assetId}",
                 'assetVersionId': assetVersionId
             }
         )
@@ -653,18 +728,20 @@ def get_asset_version_metadata(assetId: str, assetVersionId: str) -> Optional[Di
         logger.exception(f"Error getting asset version metadata: {e}")
         return None
 
-def get_all_asset_versions(assetId: str) -> List[Dict]:
+def get_all_asset_versions(databaseId: str, assetId: str) -> List[Dict]:
     """Get all versions for an asset from the asset versions table
-    
+
     Args:
+        databaseId: The database ID
         assetId: The asset ID
-        
+
     Returns:
         List of version dictionaries, sorted by version number descending
     """
     try:
+        composite_key = f"{databaseId}:{assetId}"
         response = asset_versions_table.query(
-            KeyConditionExpression=Key('assetId').eq(assetId),
+            KeyConditionExpression=Key('databaseId:assetId').eq(composite_key),
             ScanIndexForward=False  # Get newest first
         )
         
@@ -707,7 +784,7 @@ def update_asset_current_version_reference(asset: Dict, new_assetVersionId: str)
         logger.exception(f"Error updating current version reference: {e}")
         return False
 
-def mark_assetVersion_as_current(assetId: str, new_assetVersionId: str) -> bool:
+def mark_assetVersion_as_current(databaseId: str, assetId: str, new_assetVersionId: str) -> bool:
     """Mark a version as current and unmark previous current version
     
     Args:
@@ -719,7 +796,7 @@ def mark_assetVersion_as_current(assetId: str, new_assetVersionId: str) -> bool:
     """
     try:
         # Get all versions for the asset
-        versions = get_all_asset_versions(assetId)
+        versions = get_all_asset_versions(databaseId, assetId)
         
         # Update isCurrentVersion flag for all versions
         for version in versions:
@@ -732,7 +809,7 @@ def mark_assetVersion_as_current(assetId: str, new_assetVersionId: str) -> bool:
                 # Update the version record
                 asset_versions_table.update_item(
                     Key={
-                        'assetId': assetId,
+                        'databaseId:assetId': f"{databaseId}:{assetId}",
                         'assetVersionId': version_id
                     },
                     UpdateExpression='SET isCurrentVersion = :is_current',
@@ -779,7 +856,7 @@ def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment:
     )
 
     # Mark previous current version as not current in asset versions table
-    mark_assetVersion_as_current(asset_id, new_assetVersionId)
+    mark_assetVersion_as_current(db_id, asset_id, new_assetVersionId)
     
     # Update asset's tables current version reference
     update_asset_current_version_reference(asset, new_assetVersionId)
@@ -1371,7 +1448,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     
     
     # Save file versions to DynamoDB
-    if not save_asset_file_versions(assetId, new_assetVersionId, files_to_version):
+    if not save_asset_file_versions(databaseId, assetId, new_assetVersionId, files_to_version):
         raise VAMSGeneralErrorResponse("Failed to save file versions")
 
     # Save metadata snapshot for this version (only for versioned files)
@@ -1420,12 +1497,12 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     bucket, prefix = get_asset_s3_location(asset)
     
     # First check if the version metadata exists
-    version_metadata = get_asset_version_metadata(assetId, request_model.assetVersionId)
+    version_metadata = get_asset_version_metadata(databaseId, assetId, request_model.assetVersionId)
     if not version_metadata:
         raise VAMSGeneralErrorResponse("Version not found")
     
     # Get target version files - but don't error if no files exist
-    target_version = get_asset_file_versions(assetId, request_model.assetVersionId)
+    target_version = get_asset_file_versions(databaseId, assetId, request_model.assetVersionId)
     if not target_version:
         # Create an empty target_version structure if none exists
         target_version = {'files': []}
@@ -1487,9 +1564,9 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     # Don't error if no files could be reverted - empty file list is valid
     
     # Save file versions to DynamoDB
-    if not save_asset_file_versions(assetId, new_assetVersionId, files_to_version):
+    if not save_asset_file_versions(databaseId, assetId, new_assetVersionId, files_to_version):
         raise VAMSGeneralErrorResponse("Failed to save file versions")
-    
+
     # Revert metadata if requested (only for successfully reverted files)
     logger.info(f"Metadata revert requested: {request_model.revertMetadata}")
     if request_model.revertMetadata:
@@ -1554,11 +1631,10 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
     # Get asset and verify permissions
     asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
     
-    # Build query parameters for DynamoDB using the databaseIdAssetId GSI
+    # Build query parameters for DynamoDB using the table PK (databaseId:assetId is now the table PK)
     composite_key = f"{databaseId}:{assetId}"
     query_params_dict = {
         'TableName': asset_versions_table_name,
-        'IndexName': 'databaseIdAssetIdIndex',
         'KeyConditionExpression': '#pk = :pk',
         'ExpressionAttributeNames': {
             '#pk': 'databaseId:assetId'
@@ -1597,7 +1673,7 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
 
         try:
             # Get file count for this version
-            file_count = get_asset_version_file_count(assetId, deserialized_item.get('assetVersionId'))
+            file_count = get_asset_version_file_count(databaseId, assetId, deserialized_item.get('assetVersionId'))
             
             # Build version display comment with alias if present
             version_alias = deserialized_item.get('versionAlias', '') or ''
@@ -1656,7 +1732,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     version_id = request_model.assetVersionId
     
     # Try to get from new asset versions table
-    version_metadata = get_asset_version_metadata(assetId, version_id)
+    version_metadata = get_asset_version_metadata(databaseId, assetId, version_id)
     if version_metadata:
         version_info = {
             'Version': version_metadata.get('assetVersionId', version_id),
@@ -1670,7 +1746,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
         raise VAMSGeneralErrorResponse("Version not found")
     
     # Get file versions from DynamoDB
-    file_versions = get_asset_file_versions(assetId, version_id)
+    file_versions = get_asset_file_versions(databaseId, assetId, version_id)
     
     if not file_versions:
         # For asset versions that might not have entries in the file versions table
@@ -2101,7 +2177,7 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
         asset = get_asset_with_permissions(databaseId, assetId, "PUT", claims_and_roles)
 
         # Verify version exists
-        validate_asset_version_exists(assetId, assetVersionId)
+        validate_asset_version_exists(databaseId, assetId, assetVersionId)
 
         # Parse request body
         body = event.get('body')
@@ -2133,7 +2209,7 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
         keys_map, values_map, expr = to_update_expr(update_fields)
         asset_versions_table.update_item(
             Key={
-                'assetId': assetId,
+                'databaseId:assetId': f"{databaseId}:{assetId}",
                 'assetVersionId': assetVersionId
             },
             UpdateExpression=expr,
@@ -2220,7 +2296,7 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
         asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
 
         # Verify version exists
-        validate_asset_version_exists(assetId, assetVersionId)
+        validate_asset_version_exists(databaseId, assetId, assetVersionId)
 
         # Check that the version is NOT the current version
         current_version_id = asset.get('currentVersionId')
@@ -2233,7 +2309,7 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
         # Set isArchived to True in DynamoDB
         asset_versions_table.update_item(
             Key={
-                'assetId': assetId,
+                'databaseId:assetId': f"{databaseId}:{assetId}",
                 'assetVersionId': assetVersionId
             },
             UpdateExpression='SET isArchived = :archived',
@@ -2321,12 +2397,12 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
         asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
 
         # Verify version exists
-        validate_asset_version_exists(assetId, assetVersionId)
+        validate_asset_version_exists(databaseId, assetId, assetVersionId)
 
         # Set isArchived to False in DynamoDB
         asset_versions_table.update_item(
             Key={
-                'assetId': assetId,
+                'databaseId:assetId': f"{databaseId}:{assetId}",
                 'assetVersionId': assetVersionId
             },
             UpdateExpression='SET isArchived = :archived',

@@ -213,12 +213,22 @@ export const FileVersionsList: React.FC = () => {
             return;
         }
 
-        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
+        const encodedPath = encodeURIComponent(file.relativeKey);
+        const assetVersionId = selectedVersion?.Version;
+        let url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}`;
+        if (assetVersionId) {
+            url += `?assetVersion=${encodeURIComponent(assetVersionId)}`;
+        } else if (file.versionId) {
+            url += `?version=${encodeURIComponent(file.versionId)}`;
+        }
+
+        navigate(url, {
             state: {
                 filename: file.relativeKey.split("/").pop() || file.relativeKey,
                 key: file.relativeKey,
                 isDirectory: false,
-                versionId: file.versionId,
+                versionId: assetVersionId ? undefined : file.versionId,
+                assetVersionId: assetVersionId,
                 size: file.size,
                 dateCreatedCurrentVersion: file.lastModified,
                 isArchived: file.isArchived,
@@ -244,6 +254,7 @@ export const FileVersionsList: React.FC = () => {
                 databaseId: databaseId!,
                 key: file.relativeKey,
                 versionId: file.versionId,
+                assetVersionId: selectedVersion?.Version || undefined,
                 downloadType: "assetFile",
             });
 

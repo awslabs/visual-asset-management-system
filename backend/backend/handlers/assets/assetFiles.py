@@ -28,7 +28,7 @@ from models.assetsV3 import (
     SetPrimaryFileRequestModel, SetPrimaryFileResponseModel, CreateFolderRequestModel, CreateFolderResponseModel,
     DeleteAssetPreviewResponseModel, DeleteAuxiliaryPreviewAssetFilesRequestModel, DeleteAuxiliaryPreviewAssetFilesResponseModel
 )
-from handlers.assets.assetVersions import validate_asset_version_exists
+from handlers.assets.assetVersions import validate_asset_version_exists, get_all_asset_versions
 
 # Configure AWS clients with retry configuration
 region = os.environ.get('AWS_REGION', 'us-east-1')
@@ -1447,29 +1447,34 @@ def get_top_preview_file(preview_files: List[str], filter_extensions: bool = Tru
         # Return the first file without filtering
         return preview_files[0]
 
-def get_asset_file_versions(assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
-    """Get file versions for a specific asset version
-    
+def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
+    """Get file versions for a specific asset version using the databaseIdAssetIdVersionIdIndex GSI
+
     Args:
+        databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
-        
+        relativeFileKey: Optional relative file key to filter by
+
     Returns:
         Dictionary with file versions or None if not found
     """
     try:
-        # Create partition key in the format {assetId}:{assetversionId}
-        partition_key = f"{assetId}:{assetVersionId}"
-        
-        # Query all records with the same partition key
+        # Create composite key for the table PK query
+        # databaseId:assetId:assetVersionId is now the table PK (was previously a GSI)
+        version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
+
+        # Build query kwargs using the table PK directly (no IndexName needed)
+        # fileKey is the table sort key, so we can use it directly in the KeyConditionExpression
+        query_kwargs = {
+            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
+        }
+
+        # Add fileKey to key condition if provided (fileKey is the table sort key)
         if relativeFileKey:
-            response = asset_version_files_table.query(
-                KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key) & Key('fileKey').eq(relativeFileKey)
-            )
-        else:
-            response = asset_version_files_table.query(
-                KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key)
-            )
+            query_kwargs['KeyConditionExpression'] = Key('databaseId:assetId:assetVersionId').eq(version_composite_key) & Key('fileKey').eq(relativeFileKey)
+
+        response = asset_version_files_table.query(**query_kwargs)
         
         items = response.get('Items', [])
         
@@ -2355,7 +2360,7 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             relative_path = file_path.lstrip('/')
             
             # Get file version for the current asset version
-            asset_file_versions = get_asset_file_versions(assetId, current_version_id, relative_path)
+            asset_file_versions = get_asset_file_versions(databaseId, assetId, current_version_id, relative_path)
             
             # Find the matching version record
             matching_version = None
@@ -2375,7 +2380,114 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
                         version['currentAssetVersionFileVersionMismatch'] = False
                     else:
                         version['currentAssetVersionFileVersionMismatch'] = True
-    
+
+    # Enrich versions with assetVersionIds — which asset versions reference each file version
+    if include_versions and 'versions' in metadata and not metadata.get("isFolder", False):
+        try:
+            # Build composite key for the databaseIdAssetIdIndex GSI
+            db_asset_composite_key = f"{databaseId}:{assetId}"
+
+            # Get the relative path for comparison with fileKey in version records.
+            # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
+            # or "subfolder/model.glb"), while file_path may include the assetId prefix.
+            # Strip the base_key prefix to get the same relative path format.
+            relative_path_for_lookup = full_key
+            if base_key and relative_path_for_lookup.startswith(base_key):
+                relative_path_for_lookup = relative_path_for_lookup[len(base_key):]
+            relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
+            #logger.info(f"Enriching file versions: file_path='{file_path}', full_key='{full_key}', base_key='{base_key}', relative_path_for_lookup='{relative_path_for_lookup}'")
+
+            # Query the GSI to get all version file records for this database+asset
+            all_version_file_records = []
+            query_kwargs = {
+                'IndexName': 'databaseIdAssetIdIndex',
+                'KeyConditionExpression': Key('databaseId:assetId').eq(db_asset_composite_key)
+            }
+
+            while True:
+                response = asset_version_files_table.query(**query_kwargs)
+                all_version_file_records.extend(response.get('Items', []))
+
+                # Check for pagination
+                if 'LastEvaluatedKey' in response:
+                    query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                else:
+                    break
+
+            # Get asset version metadata for archive filtering and alias labels
+            archived_version_ids = set()
+            version_alias_map = {}  # assetVersionId -> versionAlias
+            try:
+                all_asset_versions = get_all_asset_versions(databaseId, assetId)
+                for v in all_asset_versions:
+                    vid = v.get('assetVersionId', '')
+                    if v.get('isArchived', False):
+                        archived_version_ids.add(vid)
+                    alias = v.get('versionAlias', '')
+                    if alias:
+                        version_alias_map[vid] = alias
+            except Exception as e:
+                logger.warning(f"Could not fetch asset version metadata: {e}")
+
+            # Build a lookup map: S3 versionId -> list of assetVersionIds
+            # Only include records where fileKey matches our file's relative path
+            # Exclude archived asset versions
+            version_id_to_asset_versions = {}
+            pk_prefix = f"{databaseId}:{assetId}:"
+
+            for record in all_version_file_records:
+                record_file_key = record.get('fileKey', '')
+
+                # Only include records that match this file's relative path
+                if record_file_key != relative_path_for_lookup:
+                    continue
+
+                s3_version_id = record.get('versionId')
+                if not s3_version_id:
+                    continue
+
+                # Extract assetVersionId from the PK field: "databaseId:assetId:assetVersionId"
+                pk_value = record.get('databaseId:assetId:assetVersionId', '')
+                if pk_value.startswith(pk_prefix):
+                    asset_version_id = pk_value[len(pk_prefix):]
+                else:
+                    continue
+
+                # Skip archived asset versions
+                if asset_version_id in archived_version_ids:
+                    continue
+
+                if s3_version_id not in version_id_to_asset_versions:
+                    version_id_to_asset_versions[s3_version_id] = []
+                version_id_to_asset_versions[s3_version_id].append(asset_version_id)
+
+            # Build display objects with id and label (e.g., {"id": "3", "label": "v3 (RC1)"})
+            def build_version_entries(version_ids):
+                # Sort numerically when possible
+                try:
+                    sorted_ids = sorted(version_ids, key=lambda x: int(x))
+                except (ValueError, TypeError):
+                    sorted_ids = sorted(version_ids)
+
+                entries = []
+                for vid in sorted_ids:
+                    alias = version_alias_map.get(vid, '')
+                    label = f"v{vid} ({alias})" if alias else f"v{vid}"
+                    entries.append({'id': vid, 'label': label})
+                return entries
+
+            # Populate assetVersionIds on each version entry
+            for version in metadata['versions']:
+                s3_vid = version.get('versionId')
+                if s3_vid and s3_vid in version_id_to_asset_versions:
+                    version['assetVersionIds'] = build_version_entries(version_id_to_asset_versions[s3_vid])
+                else:
+                    version['assetVersionIds'] = []
+
+        except Exception as e:
+            logger.warning(f"Failed to enrich file versions with assetVersionIds: {e}")
+            # Non-fatal: continue without assetVersionIds enrichment
+
     # Add preview file information if this is not a preview file itself
     if not is_preview_file(file_path) and not metadata.get('isFolder', False):
         # Find preview files for this base file
@@ -2657,7 +2769,7 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
         # If we have a current version, check file versions against asset version files
         if current_version_id:
             # Get all file versions for the current asset version
-            asset_file_versions = get_asset_file_versions(assetId, current_version_id, None)
+            asset_file_versions = get_asset_file_versions(databaseId, assetId, current_version_id, None)
 
             # Create a lookup dictionary for faster matching
             file_version_lookup = {}
@@ -2707,10 +2819,10 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
     logger.info(f"Listing files from asset version {asset_version_id} (basic_mode={request_model.basic})")
 
     # Validate version exists
-    validate_asset_version_exists(assetId, asset_version_id)
+    validate_asset_version_exists(databaseId, assetId, asset_version_id)
 
     # Get versioned file list from DynamoDB
-    asset_file_versions = get_asset_file_versions(assetId, asset_version_id, None)
+    asset_file_versions = get_asset_file_versions(databaseId, assetId, asset_version_id, None)
 
     if not asset_file_versions or not asset_file_versions.get('files'):
         logger.info(f"No files found in version {asset_version_id}")
@@ -2721,16 +2833,31 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
     if request_model.basic:
         # BASIC MODE: Construct file list directly from DynamoDB snapshot - NO S3 calls
-        file_items = []
+        # First pass: separate base files from preview files
+        base_file_items = []
+        preview_file_map = {}  # base_relative_key -> preview relative path
+
         for file_info in versioned_files:
             relative_key = file_info.get('relativeKey', '')
+            full_file_key = key + relative_key.lstrip('/')
+
+            # Skip preview files — group them under their base file
+            if is_preview_file(full_file_key):
+                base_file_key = get_base_file_for_preview(full_file_key)
+                if base_file_key.startswith(key):
+                    base_relative = base_file_key[len(key):].lstrip('/')
+                else:
+                    base_relative = base_file_key
+                if is_allowed_preview_extension(full_file_key):
+                    preview_file_map[base_relative] = '/' + relative_key.lstrip('/')
+                continue
+
             file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
             relative_path = '/' + relative_key.lstrip('/')
-            full_key = key + relative_key.lstrip('/')
 
             item = {
                 'fileName': file_name,
-                'key': full_key,
+                'key': full_file_key,
                 'relativePath': relative_path,
                 'isFolder': False,
                 'size': file_info.get('size', 0),
@@ -2742,9 +2869,15 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                 'previewFile': "",
                 'currentAssetVersionFileVersionMismatch': None
             }
-            file_items.append(AssetFileItemModel(**item))
+            base_file_items.append(AssetFileItemModel(**item))
 
-        return ListAssetFilesResponseModel(items=file_items, NextToken=None)
+        # Second pass: attach preview files to their base files
+        for file_item in base_file_items:
+            item_relative_key = file_item.key[len(key):].lstrip('/') if file_item.key.startswith(key) else file_item.key
+            if item_relative_key in preview_file_map:
+                file_item.previewFile = preview_file_map[item_relative_key]
+
+        return ListAssetFilesResponseModel(items=base_file_items, NextToken=None)
 
     else:
         # DETAILED MODE: List S3, filter to versioned files, overlay saved versionId
@@ -2771,9 +2904,9 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
             basic_mode=False
         )
 
-        # Filter and process
+        # Filter and process — only include files from the version snapshot
+        # Preview files from S3 are ignored; preview grouping is derived from the snapshot itself
         file_items = []
-        preview_files = []
         base_files = {}
         found_relative_keys = set()
 
@@ -2784,16 +2917,8 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
             else:
                 relative_key = s3_item['key']
 
-            # Check if it's a preview file for a versioned file
+            # Skip all preview files — they'll be grouped from the version snapshot below
             if is_preview_file(s3_item['key']):
-                # Check if its base file is in the version
-                base_file_key = get_base_file_for_preview(s3_item['key'])
-                if base_file_key.startswith(key):
-                    base_relative = base_file_key[len(key):].lstrip('/')
-                else:
-                    base_relative = base_file_key
-                if base_relative in versioned_file_lookup:
-                    preview_files.append(s3_item)
                 continue
 
             # Check if this file is in the version snapshot
@@ -2866,18 +2991,16 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                         file_items.append(AssetFileItemModel(**item))
                         logger.info(f"File permanently deleted from S3: {relative_key}")
 
-        # Process preview files for versioned base files
-        for preview_item in preview_files:
-            base_key_for_preview = get_base_file_for_preview(preview_item['key'])
-            if base_key_for_preview in base_files:
-                if is_allowed_preview_extension(preview_item['key']):
+        # Group preview files from the version snapshot under their base files
+        # Only preview files that are part of this version snapshot are considered
+        for relative_key in versioned_file_lookup:
+            full_file_key = key + relative_key.lstrip('/')
+            if is_preview_file(full_file_key) and is_allowed_preview_extension(full_file_key):
+                base_key_for_preview = get_base_file_for_preview(full_file_key)
+                if base_key_for_preview in base_files:
                     base_file_index = base_files[base_key_for_preview]
                     if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
-                        if preview_item['key'].startswith(key):
-                            relative_preview_path = '/' + preview_item['key'][len(key):]
-                        else:
-                            relative_preview_path = '/' + preview_item['key']
-                        file_items[base_file_index].previewFile = relative_preview_path
+                        file_items[base_file_index].previewFile = '/' + relative_key.lstrip('/')
 
         # Initialize previewFile field for files that don't have one
         for file_item in file_items:

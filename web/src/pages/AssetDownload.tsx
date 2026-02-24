@@ -100,6 +100,7 @@ const downloadSingleFile = async (
     directoryHandle: any,
     dispatch: any,
     flattenHierarchy: boolean = false,
+    assetVersionId?: string,
     maxRetries = 3
 ): Promise<boolean> => {
     let retries = 0;
@@ -136,12 +137,13 @@ const downloadSingleFile = async (
             const fileHandle = await fileDirectoryHandle.getFileHandle(fileName, { create: true });
             const writable = await fileHandle.createWritable();
 
-            // Get download URL with new downloadType parameter and pass the versionId if available
+            // Get download URL — use assetVersionId if provided, otherwise fall back to versionId
             const response = await downloadAsset({
                 databaseId,
                 assetId,
                 key: file.keyPrefix,
                 versionId: file.versionId || "",
+                assetVersionId: assetVersionId,
                 downloadType: "assetFile",
             });
 
@@ -228,6 +230,7 @@ const downloadFilesInParallel = async (
     directoryHandle: any,
     dispatch: any,
     flattenHierarchy: boolean = false,
+    assetVersionId?: string,
     concurrencyLimit = 5
 ): Promise<void> => {
     const downloadQueue = new DownloadQueue(concurrencyLimit);
@@ -241,7 +244,8 @@ const downloadFilesInParallel = async (
                 file,
                 directoryHandle,
                 dispatch,
-                flattenHierarchy
+                flattenHierarchy,
+                assetVersionId
             )
         )
     );
@@ -285,6 +289,7 @@ async function downloadFolder(
     tree: FileTree,
     dispatch: any,
     flattenHierarchy: boolean = false,
+    assetVersionId?: string,
     setSelectedFolderName?: (name: string) => void
 ): Promise<void> {
     try {
@@ -320,7 +325,8 @@ async function downloadFolder(
             files,
             directoryHandle,
             dispatch,
-            flattenHierarchy
+            flattenHierarchy,
+            assetVersionId
         );
 
         console.log("All downloads have been processed");
@@ -606,6 +612,7 @@ export default function AssetDownloadsPage() {
                 fileTree,
                 dispatch,
                 flattenHierarchy,
+                state?.assetVersionId,
                 setSelectedFolderName
             );
 

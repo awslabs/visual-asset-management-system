@@ -20,6 +20,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetKey,
     multiFileKeys,
     versionId,
+    assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [config] = useState(Cache.getItem("config"));
@@ -744,9 +745,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 const encodedFileKey = encodedSegments.join("/");
                 let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                // Add versionId query parameter for single file mode
-                if (isSingleFile && versionId) {
-                    assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
+                // Only pass assetVersionId if provided — don't pass versionId to avoid
+                // interfering with internal dependency resolution for multi-file assets
+                if (assetVersionId) {
+                    assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
                 }
 
                 const response = await fetch(assetUrl, {
@@ -1792,7 +1794,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             NeedleUSDDependencyManager.cleanup();
             console.log("NeedleUSD Viewer: Cleanup complete");
         };
-    }, [assetKey, multiFileKeys, assetId, databaseId, versionId, config]);
+    }, [assetKey, multiFileKeys, assetId, databaseId, versionId, assetVersionId, config]);
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {

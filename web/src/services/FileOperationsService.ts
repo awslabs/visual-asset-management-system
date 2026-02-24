@@ -46,6 +46,7 @@ export interface FileOperationResult {
 export interface GeneratePresignedUrlsRequest {
     databaseId: string;
     assetId: string;
+    assetVersionId?: string;
     files: {
         key: string;
         name: string;
@@ -215,7 +216,7 @@ export const generatePresignedUrls = async (
     api = API
 ): Promise<[boolean, PresignedUrlResult[] | string]> => {
     try {
-        const { databaseId, assetId, files } = request;
+        const { databaseId, assetId, assetVersionId, files } = request;
 
         if (!files || files.length === 0) {
             return [false, "No files specified"];
@@ -227,15 +228,22 @@ export const generatePresignedUrls = async (
         for (const file of files) {
             try {
                 // Use the downloadAsset API to get the presigned URL
+                // Build body — only include one version parameter
+                const downloadBody: any = {
+                    downloadType: "assetFile",
+                    key: file.key,
+                };
+                if (assetVersionId) {
+                    downloadBody.assetVersionId = assetVersionId;
+                } else if (file.versionId) {
+                    downloadBody.versionId = file.versionId;
+                }
+
                 const response = await api.post(
                     "api",
                     `/database/${databaseId}/assets/${assetId}/download`,
                     {
-                        body: {
-                            downloadType: "assetFile",
-                            key: file.key,
-                            versionId: file.versionId || "",
-                        },
+                        body: downloadBody,
                     }
                 );
 

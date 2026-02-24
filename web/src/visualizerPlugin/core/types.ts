@@ -34,6 +34,7 @@ export interface ViewerPluginProps {
     assetKey?: string;
     multiFileKeys?: string[];
     versionId?: string;
+    assetVersionId?: string;
     viewerMode: string;
     onViewerModeChange: (mode: string) => void;
     onDeletePreview?: () => void;

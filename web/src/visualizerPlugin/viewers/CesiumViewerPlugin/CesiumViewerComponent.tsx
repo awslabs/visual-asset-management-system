@@ -20,6 +20,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     assetKey,
     multiFileKeys,
     versionId,
+    assetVersionId,
     viewerMode,
     onViewerModeChange,
     onDeletePreview,
@@ -104,9 +105,13 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
             const encodedFileKey = encodedSegments.join("/");
 
-            return `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+            let url = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+            if (assetVersionId) {
+                url += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+            }
+            return url;
         },
-        [config, databaseId, assetId]
+        [config, databaseId, assetId, assetVersionId]
     );
 
     // Global error handler for uncaught promise rejections
