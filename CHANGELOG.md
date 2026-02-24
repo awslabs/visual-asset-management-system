@@ -24,7 +24,9 @@ Asset versions have database table changes that require the running of migration
 -   **Web** Added new open-source ThreeJS 3D Web Viewer to the viewer plugin system for `.gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep` files. Supports full dependency chain loading of files and scene graph support. ThreeJS will now be the first primary viewer of choice for most common mesh file types. Additional libraries need to be installed to support CAD file types that are LGPL licensed and requires WASM support (see ./web/customInstalls/threejs/README.md for information).
     -   Note: The CAD loading uses WASM which relies on either the Cloudfront deployment mode or using the newly implemented front-end service worker to set proper https headers to allow WASM to load. If these are not set due to additional organizational security restrictions, this viewer will simply not work for CAD extensions however will still work with the other mesh extensions viewed. Safari currently does not support the way we implemented the CAD WASM library.
 -   **Web** Online3DViewer web viewer configuration has been adjusted to only show up for the 3D files types of `.3dm, .amf, .bim, .off, .wrl`, these file types are currently not supported by the ThreeJS viewer.
--   Updated the `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` GET API endpoint to support an optional `?versionId =` query parameter to specify the version being retrieved
+-   Updated the `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` GET API endpoint to support an optional `?versionId =` and `?assetVersionid=` query parameter to specify the file version or asset file version being retrieved
+    -   Updated documentation to show how to use the download API and download stream API can work for downstream applications that want to pull versions from a specific asset version id.
+-   **Web** Added functionality to viewer download APIs and viewers (all viewers updated) to include asset version ID (if an asset version ID selected) to automatically find the right file version through the API to pull based on the provided/saved asset version.
 -   **Web** Updated Veerum Viewer to use the new streaming API endpoint query parameter for versionId, this will enable proper file version viewing.
 -   Added new API, web, and CLI functionality to manage cognito users to remove the requirement of needing to go into the AWS Console or CLI to add/update/remove/reset password for users. This is only enabled when Cognito authentication is enabled.
     -   **Web** Includes new navigation page for `Cognito User Management`
@@ -41,8 +43,6 @@ Asset versions have database table changes that require the running of migration
 -   **Web** Added functionality to the view asset page to allow selection of a particular asset version. This filters the file manager and metadata components to only showing a read-only version of what is in that asset version
 -   Added functionality for asset versions to be archived/unarchived, be able to specify a version alias name, and be able to edit an existing asset version to change the alias name and/or associated comment. Asset versions in dynamoDB now properly store the asset's database id to prevent future system conflicts. This feature added new API routes, web UI, and CLI commands.
     -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions (and asset sub-tables)
--   **Web** Added functionality to download APIs and viewers (all viewers updated) to include asset version ID (if an asset version ID selected) to automatically find the right file version through the API to pull based on the provided/saved asset version.
-    -   Updated documentation to show how to use the download API and download stream API can work for downstream applications that want to pull versions from a specific asset version id.
 
 ### Bug Fixes
 
@@ -68,6 +68,7 @@ Asset versions have database table changes that require the running of migration
 -   **Web** Changed some of the columns that show up on the new asset and existing asset file table to not show the progress bar or status. This will help alleviate confusion on the pre-upload screen for users who were expecting files to start uploading after immediate selection.
 -   Further API performance improvements in listing asset files and gathering asset export data
 -   Updated CLINE/KIRO workflows for clarifying CLI patterns for json-output
+-   Updated dependencies in web visualizers for npm audit fixes
 
 ### Known Outstanding Issues
 
@@ -77,9 +78,6 @@ Asset versions have database table changes that require the running of migration
 -   When dealing with hundreds to thousands of files per asset or very large files (TB-size), some API asset/file operations may time-out on the request (after 29 seconds) however the lambda may still be processing the request and successfully complete the operation (up to 15 minutes). This also goes for OpenSearch indexing when there are hundreds of thousands to millions of files to re-index. The re-index may actually not finish after the 15 minute lambda time-out with millions of files and require different re-indexing technique locally or in a container. Asynchronous methods and optional containerized processing are being evaluated for the future for all API requests to prevent this.
 
 ## [2.4.1] (2026-01-30)
-
--   **Web** Added new open-source Needle USD 3D WASM Web Viewer to the viewer plugin system for `.usd, .usda, .usdc, .usdz` files. Supports full dependency chain loading of files although Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
-    -   Note: This viewer requires web deployment with Cloudfront; ALB web deployment (with direct S3 serving) has restrictions for adding required headers and will not currently work. Creates `CLOUDFRONTDEPLOY` feature enablement flag to track this to properly enable/disable the viewer for availability. This means this viewer will also not curently work for GovCloud environments.
 
 ### Bug Fixes
 
@@ -94,7 +92,6 @@ Asset versions have database table changes that require the running of migration
 ### Chores
 
 -   **Web** Added service worker and proxy to manually set header flags for local debugging and/or attempt to set for CDN deployment. Currently verified to work for local debugging so web assembly (WASM) components can be viewed.
-
 -   Fix readme instructions for v2.3 to v2.4 migration scripts to remove steps that shouldn't have been added
 
 ## [2.4.0] (2026-01-16)
