@@ -110,7 +110,7 @@ OCCT (Open CASCADE Technology) support for CAD file formats (STEP, IGES, BREP) i
 {
     "optionalDependencies": {
         // Add this line to enable OCCT:
-        // "occt-import-js": "^0.0.12"
+        "occt-import-js": "^0.0.12"
     },
     "devDependencies": {
         "copy-webpack-plugin": "^11.0.0" // For copying WASM files
