@@ -53,6 +53,7 @@ Asset versions have database table changes that require the running of migration
 -   **Web** Fixed the file selector pop-up on the asset upload for existing assets to work in Firefox; folder selection on Firefox is still not yet supported
 -   **Web** Fixed bug in some table lists that prevented single row selects in certain scenarios (would select all rows)
 -   Fixed bug in workflow creation and executions where assetId and databaseId was not being passed through. This will only be fixed for existing workflows that are re-created or edited but should not affect existing pipelines that are currently working already.
+-   Fixed bug in assets and files search to show full result counts, have appropriate paging functionality, and correct the backend API for a paging logic bug
 -   Added additional createWorkflow API input validation checks for edge input scenarios and cases where a user creating a workflow does not have authorization access to an underlying pipeline being specified
 -   Fixed typo in reserved S3 prefix list (`piplines`->`pipelines`) which auto-created assets in some cases for reserved prefix folders
 -   Attempted to fix edge cases where local web debugging was causing CSP policy errors for some development users

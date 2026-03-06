@@ -26,7 +26,7 @@ import {
 import { Cache } from "aws-amplify";
 import { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
-import { SearchExplanation } from "./types";
+import { SearchExplanation, getTotalResultCount } from "./types";
 import { extractLocationData } from "./utils/locationUtils";
 
 interface LocationDataWithDetails {
@@ -228,7 +228,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     // Get pagination info from state
     const pageSize = state.tablePreferences?.pageSize || 50;
     const currentPage = 1 + Math.floor((state.pagination?.from || 0) / pageSize);
-    const totalResults = state.result?.hits?.total?.value || 0;
+    const totalResults = getTotalResultCount(state?.result);
     const pageCount = Math.ceil(totalResults / pageSize);
 
     // Extract location data from search results

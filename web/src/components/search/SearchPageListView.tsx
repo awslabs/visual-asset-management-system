@@ -13,10 +13,10 @@ import {
     Select,
     FormField,
     Modal,
-    Popover,
     Icon,
 } from "@cloudscape-design/components";
-import { SearchExplanation } from "./types";
+import Popover from "@cloudscape-design/components/popover";
+import { SearchExplanation, getTotalResultCount } from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
@@ -645,17 +645,18 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
         }
     }
 
+    const totalResults = getTotalResultCount(state?.result);
     const currentPage = 1 + Math.floor(state?.pagination?.from / state?.tablePreferences?.pageSize);
-    const pageCount = Math.ceil(
-        state?.result?.hits?.total?.value / state?.tablePreferences?.pageSize
-    );
+    const pageCount = Math.ceil(totalResults / state?.tablePreferences?.pageSize);
 
     console.log("[SearchPageListView] Pagination calculation:", {
         from: state?.pagination?.from,
         pageSize: state?.tablePreferences?.pageSize,
         currentPage,
         pageCount,
-        totalResults: state?.result?.hits?.total?.value,
+        totalResults,
+        hitsTotal: state?.result?.hits?.total?.value,
+        aggregationTotal: state?.result?.aggregationTotal,
     });
 
     if (!enhancedColumnDefinitions) {
@@ -785,10 +786,35 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                 state.filters._rectype.value === "file" ? "Files" : Synonyms.Assets
                             }
                             counter={
-                                state?.result?.hits?.total?.value
-                                    ? state?.result?.hits?.total?.value +
-                                      (state?.result?.hits?.total?.relation === "gte" ? "+" : "")
+                                totalResults
+                                    ? `${totalResults.toLocaleString()}${
+                                          state?.result?.hits?.total?.relation === "gte" ? "+" : ""
+                                      }`
                                     : ""
+                            }
+                            info={
+                                totalResults ? (
+                                    <Popover
+                                        header="About this count"
+                                        content="This total is based on records accessible with your current permissions. The actual number of records in the system may be higher."
+                                        triggerType="custom"
+                                    >
+                                        <Box
+                                            color="text-status-info"
+                                            fontSize="body-s"
+                                            display="inline"
+                                        >
+                                            <span
+                                                style={{
+                                                    cursor: "help",
+                                                    textDecoration: "underline dotted",
+                                                }}
+                                            >
+                                                &#9432;
+                                            </span>
+                                        </Box>
+                                    </Popover>
+                                ) : undefined
                             }
                             actions={
                                 state.filters._rectype.value === "asset" ? (
