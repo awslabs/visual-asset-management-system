@@ -70,7 +70,7 @@ export class SplatToolboxConstruct extends Construct {
 
         const splatGitHubRepoLink =
             "https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.git";
-        const splatGitHubRepoCommitHash = "0dddd883da3ccae5b6aacc5ce18911fb8f65766b";
+        const splatGitHubRepoCommitHash = "700407e1c1b91206967cbb3f691c73165d34f5f5";
 
         // Download and Sync splat toolbox repository container files
         this.syncSplatToolboxContainer(splatGitHubRepoLink, splatGitHubRepoCommitHash);
@@ -202,6 +202,21 @@ export class SplatToolboxConstruct extends Construct {
                 batchJobDefinitionName: `SplatToolboxGpuJob-${
                     props.config.name + "_" + props.config.app.baseStackName
                 }`,
+
+                // Enable GPU-optimized settings for Splat Toolbox
+                enableGpuDeviceMappings: true,
+                enableSharedMemory: true,
+                enableUlimits: true,
+                enableWorkspaceVolume: true,
+                enablePrivilegedMode: true,
+                vcpus: 16,
+                memory: 60000,
+                retryAttempts: 1,
+                timeoutSeconds: 259200, // 72 hours
+                // Environment variables that will be available in the container
+                // Note: Runtime variables (EXTERNAL_SFN_TASK_TOKEN, INPUT_PARAMETERS, INPUT_METADATA)
+                // are passed via Step Functions containerOverrides
+                additionalEnvironmentVariables: [],
             }
         );
 
@@ -723,16 +738,10 @@ export class SplatToolboxConstruct extends Construct {
                 "container"
             );
 
-            // Check if Dockerfile already exists - if so, skip the entire sync process
-            const dockerfilePath = path.join(targetDir, "Dockerfile");
-            if (fs.existsSync(dockerfilePath)) {
-                console.log(
-                    "Splat Toolbox already exists in target pipeline directory. Skipping repository sync."
-                );
-                return;
-            }
-
-            console.log("Downloading/Syncing Splat Toolbox repository...");
+            // Always re-download to ensure the container matches the target commit hash.
+            console.log(
+                `Downloading/Syncing Splat Toolbox repository (commit: ${gitHubCommitHash})...`
+            );
             const tempDir = path.join(os.tmpdir(), "splat-toolbox-repo");
 
             if (fs.existsSync(tempDir)) {
@@ -744,10 +753,13 @@ export class SplatToolboxConstruct extends Construct {
 
             const sourceDir = path.join(tempDir, "source", "container");
             if (fs.existsSync(sourceDir)) {
-                console.log(`Copying from ${sourceDir} to ${targetDir}`);
+                // Overwrite/sync files from downloaded source into target directory.
+                // Existing local files (e.g. __main__.py, .gitignore) are preserved;
+                // only files present in the source are written/overwritten.
                 if (!fs.existsSync(targetDir)) {
                     fs.mkdirSync(targetDir, { recursive: true });
                 }
+                console.log(`Syncing from ${sourceDir} to ${targetDir}`);
                 const copyRecursive = (src: string, dest: string) => {
                     const stats = fs.statSync(src);
                     if (stats.isDirectory()) {

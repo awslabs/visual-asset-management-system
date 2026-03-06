@@ -57,6 +57,9 @@ Asset versions have database table changes that require the running of migration
 -   Fixed typo in reserved S3 prefix list (`piplines`->`pipelines`) which auto-created assets in some cases for reserved prefix folders
 -   Attempted to fix edge cases where local web debugging was causing CSP policy errors for some development users
 -   Fixed bug in GenAI MetataLabelinng use-case pipeline where the CDK pathing has a case sensitivity for non-windows builds (caused CDK errors)
+-   Fixed Gaussian Splat use-case pipeline Docker build error with updating to newest version of 3D reconstruction toolkit
+-   Fixed Gaussian Splat use-case pipeline to re-pull latest changes from 3d Reconstruction toolkit github every time of deployment
+-   Fixed VPC endpoint logic for ECS service for use-case pipelines that need an endpoint for both private and isolated VPC subnets; previously this caused errors when enabling multiple use-case pipelines that had both isolated and private subnets using the VAMS generated VPC configuration.
 
 ### Chores
 
@@ -67,6 +70,7 @@ Asset versions have database table changes that require the running of migration
 -   Updated description of viewers that currently do not support showing non-current version files for the primary selected file (will always show the latest file).
 -   **Web** Changed some of the columns that show up on the new asset and existing asset file table to not show the progress bar or status. This will help alleviate confusion on the pre-upload screen for users who were expecting files to start uploading after immediate selection.
 -   Further API performance improvements in listing asset files and gathering asset export data
+-   Updated Gaussian Splat use-case pipeline to newest version of 3D reconstruction toolkit
 -   Updated CLINE/KIRO workflows for clarifying CLI patterns for json-output
 -   Updated dependencies in web visualizers for npm audit fixes
 

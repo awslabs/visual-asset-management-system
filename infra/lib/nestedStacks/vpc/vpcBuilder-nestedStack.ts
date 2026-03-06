@@ -599,34 +599,56 @@ export class VPCBuilderNestedStack extends NestedStack {
                 });
             }
 
-            // AWS Marketplace Pipeline Required Endpoint on Private Subnet (not isolated)
-            if (
+            // ECS VPC Endpoint - needed by marketplace/splat pipelines (private subnets)
+            // and IsaacLab (isolated subnets). Only one ECS endpoint per VPC is allowed
+            // when privateDnsEnabled is true, so we consolidate into a single endpoint
+            // and combine the subnets from both pipeline types as needed.
+            const needsEcsPrivate =
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
-                props.config.app.pipelines.useSplatToolbox.enabled
-            ) {
-                // Create VPC endpoint for ECS
+                props.config.app.pipelines.useSplatToolbox.enabled;
+            const needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining?.enabled;
+
+            if (needsEcsPrivate || needsEcsIsolated) {
+                // VPC endpoints allow only one subnet per AZ. When both private and
+                // isolated subnets are needed, we deduplicate by AZ — private subnets
+                // take priority (marketplace/splat pipelines need egress), and isolated
+                // subnets fill in any AZs not already covered.
+                const ecsEndpointSubnets: ec2.ISubnet[] = [];
+                const azUsed = new Set<string>();
+
+                if (needsEcsPrivate) {
+                    for (const subnet of this.privateSubnets) {
+                        if (!azUsed.has(subnet.availabilityZone)) {
+                            azUsed.add(subnet.availabilityZone);
+                            ecsEndpointSubnets.push(subnet);
+                        }
+                    }
+                }
+                if (needsEcsIsolated) {
+                    for (const subnet of this.isolatedSubnets) {
+                        if (!azUsed.has(subnet.availabilityZone)) {
+                            azUsed.add(subnet.availabilityZone);
+                            ecsEndpointSubnets.push(subnet);
+                        }
+                    }
+                }
+
+                // Create single VPC endpoint for ECS with one ENI per AZ
                 new ec2.InterfaceVpcEndpoint(this, "ECSEndpoint", {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.ECS,
-                    subnets: { subnets: this.privateSubnets },
+                    subnets: { subnets: ecsEndpointSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
             }
 
             // IsaacLab Pipeline Required Endpoints on Isolated Subnet
+            // Note: ECS Agent and ECS Telemetry are separate services from ECS,
+            // so they don't conflict with the ECS endpoint above.
             if (props.config.app.pipelines.useIsaacLabTraining?.enabled) {
-                // Create VPC endpoint for ECS
-                new ec2.InterfaceVpcEndpoint(this, "ECSEndpointIsolated", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.ECS,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-
                 // Create VPC endpoint for ECS Agent
                 new ec2.InterfaceVpcEndpoint(this, "ECSAgentEndpoint", {
                     vpc: this.vpc,
