@@ -95,6 +95,7 @@ export interface storageResources {
         userStorageTable: dynamodb.Table;
         workflowExecutionsStorageTable: dynamodb.Table;
         workflowStorageTable: dynamodb.Table;
+        apiKeyStorageTable: dynamodb.Table;
     };
 }
 
@@ -1337,6 +1338,36 @@ export function storageResourcesBuilder(
         },
     });
 
+    const apiKeyStorageTable = new dynamodb.Table(scope, "ApiKeyStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "apiKeyId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    apiKeyStorageTable.addGlobalSecondaryIndex({
+        indexName: "apiKeyHashIndex",
+        partitionKey: {
+            name: "apiKeyHash",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    apiKeyStorageTable.addGlobalSecondaryIndex({
+        indexName: "userIdIndex",
+        partitionKey: {
+            name: "userId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "apiKeyId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     ///DEPRECATED TABLES - KEPT FOR DATA MIGRATION PURPOSES
 
     const assetLinksStorageTableDeprecated = new dynamodb.Table(scope, "AssetLinksStorageTable", {
@@ -1416,6 +1447,7 @@ export function storageResourcesBuilder(
             rolesStorageTable: rolesStorageTable,
             userRolesStorageTable: userRolesStorageTable,
             userStorageTable: userStorageTable,
+            apiKeyStorageTable: apiKeyStorageTable,
         },
     };
 

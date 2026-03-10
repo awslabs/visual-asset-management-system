@@ -519,6 +519,32 @@ class TemplateImportError(ConstraintError):
     pass
 
 
+# API key-related business logic exceptions
+class ApiKeyError(BusinessLogicError):
+    """Base class for API key errors."""
+    pass
+
+
+class ApiKeyNotFoundError(ApiKeyError):
+    """Raised when an API key is not found."""
+    pass
+
+
+class ApiKeyCreationError(ApiKeyError):
+    """Raised when API key creation fails."""
+    pass
+
+
+class ApiKeyDeletionError(ApiKeyError):
+    """Raised when API key deletion fails."""
+    pass
+
+
+class ApiKeyUpdateError(ApiKeyError):
+    """Raised when API key update fails."""
+    pass
+
+
 # User role-related business logic exceptions
 class UserRoleError(BusinessLogicError):
     """Base class for user role-related errors."""

@@ -1258,6 +1258,37 @@ export class ApiBuilderNestedStack extends NestedStack {
             api: api,
         });
 
+        // API Key Management Routes
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/api-keys",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/api-keys",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/api-keys/{apiKeyId}",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/api-keys/{apiKeyId}",
+            method: apigateway.HttpMethod.PUT,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/api-keys/{apiKeyId}",
+            method: apigateway.HttpMethod.DELETE,
+            api: api,
+        });
+
         // Metadata Schema Defaults - Auto-load default schemas if configured
         if (
             config.app.metadataSchema.autoLoadDefaultAssetLinksSchema ||

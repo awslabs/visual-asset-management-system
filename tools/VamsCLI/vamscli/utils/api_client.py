@@ -19,7 +19,8 @@ from ..constants import (
     API_ASSET_LINKS_METADATA, API_ASSET_LINKS_METADATA_KEY, API_METADATA, API_METADATA_SCHEMA,
     API_METADATA_SCHEMA_LIST, API_METADATA_SCHEMA_BY_ID,
     API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING,
-    API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW
+    API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW,
+    API_AUTH_API_KEYS, API_AUTH_API_KEY
 )
 from ..version import get_version
 from .exceptions import (
@@ -4458,3 +4459,155 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to delete user roles: {e}")
+
+    # API Key Management API Methods
+
+    def list_api_keys(self) -> Dict[str, Any]:
+        """
+        List all API keys using the /auth/api-keys GET endpoint.
+
+        Returns:
+            API response data with API keys list
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import ApiKeyError
+
+        try:
+            response = self.get(API_AUTH_API_KEYS, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list API keys: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list API keys: {e}")
+
+    def create_api_key(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new API key using the /auth/api-keys POST endpoint.
+
+        Args:
+            data: API key creation data:
+                - apiKeyName: Name for the key (required)
+                - userId: VAMS user ID this key acts as (required)
+                - description: Optional description
+                - expiresAt: Optional expiration date in ISO 8601 format
+
+        Returns:
+            API response data including the generated API key (shown only once)
+
+        Raises:
+            ApiKeyCreationError: When API key creation fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import ApiKeyCreationError
+
+        try:
+            response = self.post(API_AUTH_API_KEYS, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyCreationError(f"API key creation failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key creation failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to create API key: {e}")
+
+    def update_api_key(self, api_key_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an API key using the /auth/api-keys/{apiKeyId} PUT endpoint.
+
+        Args:
+            api_key_id: ID of the API key to update
+            data: Update data:
+                - description: Optional new description
+                - expiresAt: Optional new expiration date
+
+        Returns:
+            API response data with updated API key details
+
+        Raises:
+            ApiKeyNotFoundError: When API key is not found
+            ApiKeyUpdateError: When API key update fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import ApiKeyNotFoundError, ApiKeyUpdateError
+
+        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.put(endpoint, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyUpdateError(f"API key update failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key update failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to update API key: {e}")
+
+    def delete_api_key(self, api_key_id: str) -> Dict[str, Any]:
+        """
+        Delete an API key using the /auth/api-keys/{apiKeyId} DELETE endpoint.
+
+        Args:
+            api_key_id: ID of the API key to delete
+
+        Returns:
+            API response data with deletion result
+
+        Raises:
+            ApiKeyNotFoundError: When API key is not found
+            ApiKeyDeletionError: When API key deletion fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import ApiKeyNotFoundError, ApiKeyDeletionError
+
+        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.delete(endpoint, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyDeletionError(f"API key deletion failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key deletion failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to delete API key: {e}")

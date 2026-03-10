@@ -416,6 +416,96 @@ Organizations can customize the authorizer behavior by modifying:
 -   Confirm JWKS endpoints are accessible from Lambda execution environment
 -   Validate JWT token structure and claims using online JWT decoders
 
+### API Key Management
+
+VAMS supports API keys as an alternative to JWT tokens for programmatic access. API keys are useful for CLI tools, scripts, and integrations that need to authenticate against VAMS APIs without going through the OAuth/Cognito flow.
+
+#### Overview
+
+-   API keys are prefixed with `vams_` and generated server-side using cryptographically secure random bytes
+-   Only the SHA-256 hash of the key is stored in DynamoDB (with KMS encryption at rest)
+-   The plaintext key is returned exactly once at creation time and cannot be retrieved again
+-   Each key is associated with a VAMS user ID and inherits that user's roles and permissions
+
+#### Creating API Keys
+
+**Via Web UI:**
+
+1. Navigate to the Admin section and select "API Keys" (route: `/#/auth/api-keys`)
+2. Click "Create API Key"
+3. Provide a name, user ID, description, and optionally an expiration date
+4. Copy the displayed API key immediately -- it will not be shown again
+
+**Via CLI:**
+
+```bash
+vamscli api-key create --name "my-script-key" --user-id "user@example.com" --description "Script access"
+vamscli api-key create --name "expiring-key" --user-id "user@example.com" --description "Temporary access" --expires-at "2027-01-01T00:00:00Z"
+```
+
+> **IMPORTANT:** The API key value is displayed only once at creation time. Save it immediately in a secure location (e.g., a secrets manager, password vault, or CI/CD secret). The key cannot be retrieved again after creation -- if lost, you must delete the old key and create a new one.
+
+#### Using API Keys
+
+Set the API key value as the `Authorization` header in HTTP requests. Both raw and Bearer-prefixed formats are supported:
+
+```bash
+# Raw API key (recommended)
+curl -H "Authorization: vams_<your-key-here>" https://<vams-api-url>/databases
+
+# With Bearer prefix (also works)
+curl -H "Authorization: Bearer vams_<your-key-here>" https://<vams-api-url>/databases
+```
+
+The Lambda authorizer detects the `vams_` prefix, hashes the key, looks it up in DynamoDB, validates expiration and active status, and resolves the associated user's roles for downstream authorization.
+
+**Using API Keys with the CLI:**
+
+API keys can be used with the VamsCLI token override feature. This allows scripts and CI/CD pipelines to authenticate using an API key instead of Cognito credentials:
+
+```bash
+# Authenticate the CLI using an API key via token override
+vamscli auth login --user-id "ci-bot@example.com" --token-override "vams_<your-key-here>"
+
+# With expiration (recommended for CI/CD)
+vamscli auth login --user-id "ci-bot@example.com" --token-override "vams_<your-key-here>" --expires-at "+3600"
+
+# Then use the CLI normally -- all commands authenticate with the API key
+vamscli assets list
+vamscli database list --json-output
+```
+
+See the [CLI API Key Management documentation](../tools/VamsCLI/docs/commands/api-key-management.md) for full command reference.
+
+#### Key Attributes
+
+| Attribute     | Description                              | Mutable |
+| ------------- | ---------------------------------------- | ------- |
+| `apiKeyName`  | User-assigned name                       | No      |
+| `userId`      | VAMS user ID the key acts as             | No      |
+| `description` | Description of the key's purpose         | Yes     |
+| `expiresAt`   | Optional ISO 8601 expiration date        | Yes     |
+| `isActive`    | Soft disable flag (`"true"` / `"false"`) | No      |
+
+#### CLI Commands
+
+```bash
+vamscli api-key list                                                        # List all API keys
+vamscli api-key create --name NAME --user-id USERID --description DESC      # Create a new key
+vamscli api-key update --api-key-id ID --description "New desc"             # Update key
+vamscli api-key delete --api-key-id ID                                      # Delete key permanently
+```
+
+All commands support `--json-output` for machine-readable output.
+
+#### Security Model
+
+-   Keys are SHA-256 hashed before storage; plaintext is never persisted
+-   The `apiKeyStorageTable` uses KMS encryption at rest
+-   A GSI on the key hash (`apiKeyHashIndex`) enables O(1) lookup in the authorizer
+-   Expired or inactive keys are rejected at the authorizer level before reaching any handler
+-   API key management endpoints are protected by API-level authorization
+
 ### Local Docker Builds - Custom Build Settings
 
 If you are needing to add custom settings to your local docker builds, such as adding custom SSL CA certificates to get through HTTPS proxies, modify the following docker build files:

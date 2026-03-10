@@ -6311,8 +6311,286 @@ paths:
                                 $ref: '#/components/schemas/error'
             security:
                 - DefaultCognitoAuthorizer: []
+    /auth/api-keys:
+        get:
+            summary: "List all API keys."
+            description: "Retrieve a list of all API keys. Returns metadata only; key hashes are never exposed."
+            responses:
+                "200":
+                    description: API keys retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    Items:
+                                        type: array
+                                        items:
+                                            $ref: "#/components/schemas/apiKeyMetadata"
+                "403":
+                    description: Not authorized to list API keys.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create a new API key."
+            description: "Create a new API key for programmatic access. The plaintext API key is returned exactly once in the response and cannot be retrieved again."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                apiKeyName:
+                                    type: string
+                                    description: "User-assigned name for the API key (immutable after creation)"
+                                userId:
+                                    type: string
+                                    description: "VAMS user ID this key acts as"
+                                description:
+                                    type: string
+                                    description: "Optional description of the API key"
+                                expiresAt:
+                                    type: string
+                                    format: date-time
+                                    description: "Optional ISO 8601 expiration date"
+                            required:
+                                - apiKeyName
+                                - userId
+            responses:
+                "200":
+                    description: API key created successfully. The apiKey field contains the plaintext key shown only once.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/apiKeyCreateResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create API keys.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /auth/api-keys/{apiKeyId}:
+        get:
+            summary: "Get a specific API key."
+            description: "Retrieve metadata for a specific API key by its ID."
+            parameters:
+                - name: apiKeyId
+                  in: path
+                  required: true
+                  schema:
+                      type: string
+                  description: "The unique identifier of the API key"
+            responses:
+                "200":
+                    description: API key metadata retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/apiKeyMetadata"
+                "403":
+                    description: Not authorized to view this API key.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: API key not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update an API key."
+            description: "Update the description, expiration date, and/or active status of an existing API key. The key name and userId cannot be changed. At least one field must be provided."
+            parameters:
+                - name: apiKeyId
+                  in: path
+                  required: true
+                  schema:
+                      type: string
+                  description: "The unique identifier of the API key"
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                description:
+                                    type: string
+                                    description: "Updated description"
+                                expiresAt:
+                                    type: string
+                                    format: date-time
+                                    description: "Updated expiration date (ISO 8601)"
+                                isActive:
+                                    type: string
+                                    enum: ["true", "false"]
+                                    description: "Enable or disable the API key"
+            responses:
+                "200":
+                    description: API key updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/apiKeyMetadata"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update this API key.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: API key not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete an API key."
+            description: "Permanently delete an API key. This action cannot be undone."
+            parameters:
+                - name: apiKeyId
+                  in: path
+                  required: true
+                  schema:
+                      type: string
+                  description: "The unique identifier of the API key"
+            responses:
+                "200":
+                    description: API key deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "API key deleted successfully"
+                "403":
+                    description: Not authorized to delete this API key.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: API key not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
 components:
     schemas:
+        apiKeyMetadata:
+            type: object
+            properties:
+                apiKeyId:
+                    type: string
+                    description: "UUID primary identifier"
+                apiKeyName:
+                    type: string
+                    description: "User-assigned name (immutable after creation)"
+                description:
+                    type: string
+                    description: "Editable description"
+                userId:
+                    type: string
+                    description: "VAMS user ID this key acts as"
+                createdBy:
+                    type: string
+                    description: "Who created the key"
+                createdAt:
+                    type: string
+                    format: date-time
+                    description: "ISO 8601 creation timestamp"
+                updatedAt:
+                    type: string
+                    format: date-time
+                    description: "ISO 8601 last update timestamp"
+                expiresAt:
+                    type: string
+                    format: date-time
+                    description: "ISO 8601 expiration date"
+                isActive:
+                    type: string
+                    enum: ["true", "false"]
+                    description: "Soft disable flag"
+            required:
+                - apiKeyId
+                - apiKeyName
+                - userId
+                - createdBy
+                - createdAt
+                - isActive
+
+        apiKeyCreateResponse:
+            type: object
+            description: "Response returned when creating an API key. The apiKey field contains the plaintext key and is only shown once."
+            allOf:
+                - $ref: "#/components/schemas/apiKeyMetadata"
+                - type: object
+                  properties:
+                      apiKey:
+                          type: string
+                          description: "The plaintext API key (shown only once at creation time). Store this securely."
+                  required:
+                      - apiKey
+
         asset:
             type: object
             properties:

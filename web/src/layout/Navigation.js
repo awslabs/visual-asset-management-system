@@ -82,7 +82,28 @@ export function Navigation({
         },
         {
             type: "section",
-            text: "Admin",
+            text: "Admin - Data",
+            items: [
+                {
+                    type: "link",
+                    text: "Metadata Schema",
+                    href: "#/metadataschema/",
+                },
+                {
+                    type: "link",
+                    text: "Tags Management",
+                    href: "#/auth/tags/",
+                },
+                {
+                    type: "link",
+                    text: "Subscription Management",
+                    href: "#/auth/subscriptions/",
+                },
+            ],
+        },
+        {
+            type: "section",
+            text: "Admin - Auth",
             items: [
                 { type: "link", text: "Access Control Contraints", href: "#/auth/constraints/" },
                 {
@@ -99,30 +120,15 @@ export function Navigation({
                     ? [
                           {
                               type: "link",
-                              text: "Cognito User Management",
+                              text: "User Management",
                               href: "#/auth/cognitousers/",
                           },
                       ]
                     : []),
                 {
                     type: "link",
-                    text: "Metadata Schema",
-                    href: "#/metadataschema/",
-                },
-                {
-                    type: "link",
-                    text: "Tags Management",
-                    href: "#/auth/tags/",
-                },
-                {
-                    type: "link",
-                    text: "Subscription Management",
-                    href: "#/auth/subscriptions/",
-                },
-                {
-                    type: "link",
-                    text: "Asset Ingestion",
-                    href: "#/assetIngestion",
+                    text: "API Key Management",
+                    href: "#/auth/api-keys/",
                 },
             ],
         },

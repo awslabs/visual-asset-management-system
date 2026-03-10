@@ -30,6 +30,7 @@ interface AuthFunctions {
     authLoginProfile: lambda.Function;
     routes: lambda.Function;
     cognitoUserService: lambda.Function;
+    apiKeyService: lambda.Function;
 }
 
 export function buildAuthFunctions(
@@ -81,6 +82,14 @@ export function buildAuthFunctions(
             lambdaCommonBaseLayer,
             storageResources,
             authResources,
+            config,
+            vpc,
+            subnets
+        ),
+        apiKeyService: buildApiKeyServiceFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
             config,
             vpc,
             subnets
@@ -303,6 +312,43 @@ export function buildCognitoUserService(
     return fun;
 }
 
+export function buildApiKeyServiceFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "apiKeyService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(1),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            API_KEY_STORAGE_TABLE_NAME: storageResources.dynamo.apiKeyStorageTable.tableName,
+            USER_ROLES_STORAGE_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+        },
+    });
+    storageResources.dynamo.apiKeyStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
+}
+
 export function buildApiGatewayAuthorizerHttpFunction(
     scope: Construct,
     lambdaAuthorizerLayer: LayerVersion,
@@ -344,6 +390,11 @@ export function buildApiGatewayAuthorizerHttpFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
     }
 
+    // Add API Key authentication environment variables
+    environment.API_KEY_STORAGE_TABLE_NAME = storageResources.dynamo.apiKeyStorageTable.tableName;
+    environment.USER_ROLES_STORAGE_TABLE_NAME =
+        storageResources.dynamo.userRolesStorageTable.tableName;
+
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
@@ -364,6 +415,13 @@ export function buildApiGatewayAuthorizerHttpFunction(
 
     // Grant API Gateway invoke permissions
     fun.grantInvoke(Service("APIGATEWAY").Principal);
+
+    // Grant API key table read access for authorizer lookups
+    storageResources.dynamo.apiKeyStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+
+    // Add KMS permissions for encrypted DynamoDB table access
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
     // Add global permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);

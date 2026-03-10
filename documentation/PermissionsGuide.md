@@ -145,6 +145,8 @@ Below are the web routes possible as part of a `GET` method type. Requests for t
 -   `/assetIngestion`
 -   `/assets`
 -   `/assets/:assetId`
+-   `/auth/api-keys`
+-   `/auth/cognitousers`
 -   `/auth/constraints`
 -   `/auth/roles`
 -   `/auth/subscriptions`
@@ -153,15 +155,16 @@ Below are the web routes possible as part of a `GET` method type. Requests for t
 -   `/databases`
 -   `/databases/:databaseId/assets`
 -   `/databases/:databaseId/assets/:assetId`
+-   `/databases/:databaseId/assets/:assetId/download`
 -   `/databases/:databaseId/assets/:assetId/file`
 -   `/databases/:databaseId/assets/:assetId/file/*`
 -   `/databases/:databaseId/assets/:assetId/uploads`
--   `/databases/:databaseId/assets/:assetId/download`
 -   `/databases/:databaseId/pipelines`
 -   `/databases/:databaseId/workflows`
 -   `/databases/:databaseId/workflows/:workflowId`
--   `/metadataschema/:databaseId/create`
--   `/metadataschema/`
+-   `/databases/:databaseId/workflows/create`
+-   `/metadataschema`
+-   `/metadataschema/:databaseId`
 -   `/pipelines`
 -   `/pipelines/:pipelineName`
 -   `/search`
@@ -202,6 +205,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - PUT (api: PUT)
 -   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
 -   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
+-   `/auth/api-keys` - GET/POST (No data authorization checks - API-level only)
+-   `/auth/api-keys/{apiKeyId}` - GET/PUT/DELETE (No data authorization checks - API-level only)
 -   `/auth/constraints` - GET
 -   `/auth/constraints/{constraintId}` - GET/PUT/POST/DELETE
 -   `/auth/constraintsTemplateImport` - POST

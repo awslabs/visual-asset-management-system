@@ -23,6 +23,7 @@ from .commands.workflow import workflow
 from .commands.industry import industry
 from .commands.user import user
 from .commands.roleUserConstraints import role
+from .commands.apiKey import api_key
 from .utils.profile import ProfileManager
 from .utils.exceptions import SetupRequiredError
 from .utils.global_exceptions import handle_global_exceptions
@@ -165,6 +166,7 @@ cli.add_command(workflow)
 cli.add_command(industry)
 cli.add_command(user)
 cli.add_command(role)
+cli.add_command(api_key)
 
 
 @cli.command()

@@ -2543,6 +2543,92 @@ export const deleteDatabaseMetadata = async ({ databaseId, metadataKeys }, api =
     }
 };
 
+export const fetchApiKeys = async (api = API) => {
+    try {
+        const response = await api.get("api", "auth/api-keys", {});
+        if (response !== false && response !== undefined) {
+            if (
+                response.message &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                return [false, response.message];
+            }
+            return response;
+        }
+        return [false, "Failed to fetch API keys"];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const createApiKey = async (body, api = API) => {
+    try {
+        const response = await api.post("api", "auth/api-keys", { body });
+        if (response !== false && response !== undefined) {
+            if (
+                response.message &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                return [false, response.message];
+            }
+            return [true, response];
+        }
+        return [false, "Failed to create API key"];
+    } catch (error) {
+        console.log(error);
+        const errorMsg =
+            error?.response?.data?.message || error?.message || "Failed to create API key";
+        return [false, errorMsg];
+    }
+};
+
+export const updateApiKey = async ({ apiKeyId, ...body }, api = API) => {
+    try {
+        const response = await api.put("api", `auth/api-keys/${apiKeyId}`, { body });
+        if (response !== false && response !== undefined) {
+            if (
+                response.message &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                return [false, response.message];
+            }
+            return [true, response];
+        }
+        return [false, "Failed to update API key"];
+    } catch (error) {
+        console.log(error);
+        const errorMsg =
+            error?.response?.data?.message || error?.message || "Failed to update API key";
+        return [false, errorMsg];
+    }
+};
+
+export const deleteApiKey = async ({ apiKeyId }, api = API) => {
+    try {
+        const response = await api.del("api", `auth/api-keys/${apiKeyId}`, {});
+        if (response !== false && response !== undefined) {
+            if (
+                response.message &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                return [false, response.message];
+            }
+            return [true, response];
+        }
+        return [false, "Failed to delete API key"];
+    } catch (error) {
+        console.log(error);
+        const errorMsg =
+            error?.response?.data?.message || error?.message || "Failed to delete API key";
+        return [false, errorMsg];
+    }
+};
+
 export const ACTIONS = {
     CREATE: {
         DATABASE: createDatabase,

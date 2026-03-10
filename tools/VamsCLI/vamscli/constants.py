@@ -84,6 +84,10 @@ API_CONSTRAINTS = "/auth/constraints"
 API_CONSTRAINT_BY_ID = "/auth/constraints/{constraintId}"
 API_CONSTRAINTS_TEMPLATE_IMPORT = "/auth/constraintsTemplateImport"
 
+# API Key Management API Endpoints
+API_AUTH_API_KEYS = "/auth/api-keys"
+API_AUTH_API_KEY = "/auth/api-keys/{apiKeyId}"
+
 # User Role Management API Endpoints
 API_USER_ROLES = "/user-roles"
 

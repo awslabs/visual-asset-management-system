@@ -125,6 +125,13 @@ vamscli role constraint delete -c old-constraint --confirm
 vamscli role constraint template import -j ./documentation/permissionsTemplates/database-admin.json
 vamscli role constraint template import -j ./my-template.json --json-output
 
+# Manage API keys for programmatic access
+vamscli api-key list
+vamscli api-key create --name "CI Pipeline" --user-id ci-bot@example.com --description "CI/CD access"
+vamscli api-key create --name "Script Key" --user-id bot@example.com --description "Automation" --expires-at 2027-12-31T23:59:59Z
+vamscli api-key update --api-key-id UUID --description "Updated description"
+vamscli api-key delete --api-key-id UUID
+
 # Manage Cognito users (requires Cognito enabled)
 vamscli user cognito list --auto-paginate
 vamscli user cognito create -u user@example.com -e user@example.com -p +12345678900
@@ -274,7 +281,7 @@ vamscli industry engineering plm --help
 
 ## Available Commands
 
-VamsCLI provides eighteen main command groups:
+VamsCLI provides nineteen main command groups:
 
 -   **`vamscli setup`** - Configure CLI with API Gateway URL
 -   **`vamscli auth`** - Authentication and session management
@@ -291,6 +298,7 @@ VamsCLI provides eighteen main command groups:
 -   **`vamscli tag`** - Tag creation and management for asset organization
 -   **`vamscli tag-type`** - Tag type creation and management
 -   **`vamscli role`** - Role creation and management for access control
+-   **`vamscli api-key`** - API key management for programmatic access
 -   **`vamscli user`** - User management for Cognito (requires Cognito enabled)
 -   **`vamscli industry`** - Industry-specific commands (spatial data processing, PLM import)
 -   **`vamscli profile`** - Profile management for multiple environments
@@ -341,6 +349,7 @@ VamsCLI provides comprehensive documentation organized by functional area:
 -   **[Database Administration](docs/commands/database-admin.md)** - Database and bucket management
 -   **[Tag Management](docs/commands/tag-management.md)** - Tag and tag type operations
 -   **[Role Management](docs/commands/role-management.md)** - Role creation and management for access control
+-   **[API Key Management](docs/commands/api-key-management.md)** - API key management for programmatic access
 -   **[User Management](docs/commands/user-management.md)** - Cognito user management (requires Cognito enabled)
 -   **[Industry Spatial](docs/commands/industry-spatial.md)** - Spatial data processing (GLB combining)
 -   **[PLM Commands](docs/commands/plm-commands.md)** - Product Lifecycle Management (PLM XML import)
@@ -353,6 +362,7 @@ VamsCLI provides comprehensive documentation organized by functional area:
 -   **[Asset and File Issues](docs/troubleshooting/asset-file-issues.md)** - Asset and file operation problems
 -   **[Database and Tag Issues](docs/troubleshooting/database-tag-issues.md)** - Database and tag management problems
 -   **[Role Management Issues](docs/troubleshooting/role-issues.md)** - Role management problems and solutions
+-   **[API Key Issues](docs/troubleshooting/api-key-issues.md)** - API key management and authentication problems
 -   **[User Management Issues](docs/troubleshooting/user-issues.md)** - Cognito user management problems
 -   **[Network and Configuration Issues](docs/troubleshooting/network-config-issues.md)** - Network, SSL, and proxy issues
 -   **[General Troubleshooting](docs/troubleshooting/general-troubleshooting.md)** - Debug mode, performance, and recovery

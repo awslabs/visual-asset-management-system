@@ -29,7 +29,7 @@ Asset versions have database table changes that require the running of migration
 -   **Web** Added functionality to viewer download APIs and viewers (all viewers updated) to include asset version ID (if an asset version ID selected) to automatically find the right file version through the API to pull based on the provided/saved asset version.
 -   **Web** Updated Veerum Viewer to use the new streaming API endpoint query parameter for versionId, this will enable proper file version viewing.
 -   Added new API, web, and CLI functionality to manage cognito users to remove the requirement of needing to go into the AWS Console or CLI to add/update/remove/reset password for users. This is only enabled when Cognito authentication is enabled.
-    -   **Web** Includes new navigation page for `Cognito User Management`
+    -   **Web** Includes new admin navigation page for `User Management`
     -   New API endpoints `/user/cognito` GET/POST, `/user/cognito/{userId}` PUT/DELETE, `/user/cognito/{userId}/resetPassword` POST
 -   **CLI** Added commands for admin functionality such as adding new cognito users (with new APIs), users in role management, role management, and constraint management.
 -   Added new `POST /auth/constraintsTemplateImport` API endpoint for bulk-importing permission constraints from JSON templates in a single API call. The API handles server-side variable substitution, UUID generation, groupId mapping, and constraint creation in DynamoDB, replacing the previous client-side XML parsing and one-by-one constraint creation approach.
@@ -43,6 +43,8 @@ Asset versions have database table changes that require the running of migration
 -   **Web** Added functionality to the view asset page to allow selection of a particular asset version. This filters the file manager and metadata components to only showing a read-only version of what is in that asset version
 -   Added functionality for asset versions to be archived/unarchived, be able to specify a version alias name, and be able to edit an existing asset version to change the alias name and/or associated comment. Asset versions in dynamoDB now properly store the asset's database id to prevent future system conflicts. This feature added new API routes, web UI, and CLI commands.
     -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions (and asset sub-tables)
+-   Added new API Key system to allow for the creation of API Keys through API, CLI, and the website (`API Key Management`). This will provide the ability to issue upstream or downstream API keys to applications to use VAMS. API Keys are assigned a user ID owner it will impersonate (both for user id used and roles applied). See the `DeveloeprGuide.md` for more information on how to generate these API keys and use them.
+-   **Web** updated the web navigation to split out `Admin - Auth` into its own admin navigation section and all others to `Admin - Data`. Removed "Asset Ingestion" from the admin menus as this web page is now deprecated although still exists for direct navigation, as permissions allow.
 
 ### Bug Fixes
 
