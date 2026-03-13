@@ -60,8 +60,8 @@
         "react-map-gl": "^8.1.0",
         "react-papaparse": "^3.18.1",
         "react-pdf": "^10.1.0",
-        "react-router": "^6.0.0",
-        "react-router-dom": "^6.0.0",
+        "react-router": "6.23.1",
+        "react-router-dom": "6.23.1",
         "react-scripts": "5.0.1",
         "react-syntax-highlighter": "^15.5.0",
         "sanitize-html": "^2.11.0",
@@ -81,7 +81,8 @@
         "postcss": "^8.4.31",
         "axios": "^1.6.0",
         "follow-redirects": "^1.15.4",
-        "@types/react": "^17.0.2"
+        "@types/react": "^17.0.2",
+        "react-router": "6.23.1"
     },
     "scripts": {
         "start": "react-scripts --max-old-space-size=8192 start",

@@ -19,7 +19,6 @@ import { useParams } from "react-router";
 import TableList from "../components/list/TableList";
 import PropTypes from "prop-types";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
-import RelatedTableList from "../components/list/RelatedTableList";
 import Synonyms from "../synonyms";
 
 export default function ListPage(props) {
@@ -33,7 +32,6 @@ export default function ListPage(props) {
         fetchElements,
         fetchAllElements,
         onCreateCallback,
-        isRelatedTable,
         editEnabled,
         hideDeleteButton = false,
     } = props;
@@ -131,15 +129,6 @@ export default function ListPage(props) {
                             {error}
                         </Alert>
                     )}
-                    {isRelatedTable && (
-                        <RelatedTableList
-                            allItems={allItems}
-                            loading={loading}
-                            listDefinition={listDefinition}
-                            databaseId={databaseId}
-                            setReload={setReload}
-                        />
-                    )}
                     <TableList
                         allItems={allItems}
                         loading={loading}
@@ -185,7 +174,6 @@ ListPage.propTypes = {
     fetchElements: PropTypes.func.isRequired,
     fetchAllElements: PropTypes.func,
     onCreateCallback: PropTypes.func,
-    isRelatedTable: PropTypes.bool,
     editEnabled: PropTypes.bool,
     hideDeleteButton: PropTypes.bool,
 };

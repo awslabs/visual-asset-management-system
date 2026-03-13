@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
+• New USD Web Viewer - Needle USD 3D WASM viewer with experimental dependency chain loading for .usd, .usda, .usdc, .usdz files integrated into plugin system
+• New 3D Mesh and CAD STP ThreeJs Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading and scene graph support, now primary viewer for common mesh types with optional LGPL-licensed CAD support
+• New 3D and PointCloud Preview Thumbnail (GIF) Generation Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
+• Enhanced Asset Versions Functionality - New asset version aliasing, archive/unarchive capabilities, asset version editing, metadata/attribute versioning, and revert functionality with metadata restoration
+• Enhanced File Selector and Download Functionality w/ Asset Versions - Version-aware download APIs with file and asset version query parameters, updated file viewers for file or asset version file retrieval, web asset version selector filtering for files and metadata
+• New Cognito User Management - Web UI, API, and CLI functionality for managing Cognito users without AWS Console access, includes add/update/remove/reset password operations, new admin navigation page, enabled only when Cognito authentication is active
+• New API Key Management - Complete API Key system with creation through API/CLI/web UI, user ID impersonation with role assignment, upstream/downstream application integration support, admin web interface for key management
+• New Permission Constraints Templating - Bulk-import permission constraints from JSON templates with server-side variable substitution via API endpoint, pre-built templates for common profiles (database-admin, database-user, database-readonly, global-readonly, deny-tagged-assets), CLI import command, automated deployment tool, comprehensive Permissions Guide documentation
+
 ### ⚠ BREAKING CHANGES
 
 Asset versions have database table changes that require the running of migration scripts to properly update the table to include newly needed column data to avoid future system-wide conflicts with assets that share a similar ID across databases
@@ -62,7 +71,7 @@ Asset versions have database table changes that require the running of migration
 -   Fixed bug in GenAI MetataLabelinng use-case pipeline where the CDK pathing has a case sensitivity for non-windows builds (caused CDK errors)
 -   Fixed Gaussian Splat use-case pipeline Docker build error with updating to newest version of 3D reconstruction toolkit
 -   Fixed Gaussian Splat use-case pipeline to re-pull latest changes from 3d Reconstruction toolkit github every time of deployment
--   Fixed VPC endpoint logic for ECS service for use-case pipelines that need an endpoint for both private and isolated VPC subnets; previously this caused errors when enabling multiple use-case pipelines that had both isolated and private subnets using the VAMS generated VPC configuration.
+-   Fixed VPC endpoint logic for ECS service for use-case pipelines that need an endpoint for both private and isolated VPC subnets; previously this caused errors when enabling multiple use-case pipelines that had both isolated and private subnets using the VAMS generated VPC configuration. See troubleshooting section if CDK ECS VPC endpoint errors occur during re-deployments.
 
 ### Chores
 
@@ -75,7 +84,9 @@ Asset versions have database table changes that require the running of migration
 -   Further API performance improvements in listing asset files and gathering asset export data
 -   Updated Gaussian Splat use-case pipeline to newest version of 3D reconstruction toolkit
 -   Updated CLINE/KIRO workflows for clarifying CLI patterns for json-output
--   Updated dependencies in web visualizers for npm audit fixes
+-   Updated NPM dependencies in web (yarn audit fixes) and refactored old components (RelatedTable) that are now solved by newer packages
+-   Updated NPM dependencies in web visualizers for npm audit fixes
+-   Updated NPM dependencies in infra for npm audit fixes
 
 ### Known Outstanding Issues
 
@@ -83,6 +94,11 @@ Asset versions have database table changes that require the running of migration
 -   Using the same pipeline ID in both GLOBAL and non-GLOBAL databases will cause overlap conflicts and issues.
 -   Pipeline metadata inputs have a limit when sending to ECS pipelines. Assets and/or files with extensive metadata may exceed the ECS limit for JSON metadata input (8k characters). Future pipeline overhauls will convert metadata input to a file to resolve this.
 -   When dealing with hundreds to thousands of files per asset or very large files (TB-size), some API asset/file operations may time-out on the request (after 29 seconds) however the lambda may still be processing the request and successfully complete the operation (up to 15 minutes). This also goes for OpenSearch indexing when there are hundreds of thousands to millions of files to re-index. The re-index may actually not finish after the 15 minute lambda time-out with millions of files and require different re-indexing technique locally or in a container. Asynchronous methods and optional containerized processing are being evaluated for the future for all API requests to prevent this.
+
+### Troubleshooting
+
+-   If receiving ECS VPC interface endpoint errors during CDK deployment, turn off IsaacSim and Guassian Splat use-case pipelines and re-deploy. Afterwards turn repsective pipelines back on and then re-deploy again. ECS endpoint changes along with AWS CloudFormation logic restrictions between stack changes can cause this issue.
+-   If receiving web build or infra CDK errors in existing upgraded projects, make sure to re-run yarn install (web) or npm install (infra) to receive the latest dependencies. Further build errors may additionally need node_modules cache to be reset if not properly reset during install.
 
 ## [2.4.1] (2026-01-30)
 

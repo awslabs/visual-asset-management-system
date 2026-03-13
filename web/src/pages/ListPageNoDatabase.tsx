@@ -12,7 +12,6 @@ import TextContent from "@cloudscape-design/components/text-content";
 import TableList from "../components/list/TableList";
 import PropTypes from "prop-types";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
-import RelatedTableList from "../components/list/RelatedTableList";
 
 export default function ListPageNoDatabase(props: any) {
     const {
@@ -23,7 +22,6 @@ export default function ListPageNoDatabase(props: any) {
         fetchElements,
         fetchAllElements,
         onCreateCallback,
-        isRelatedTable,
         editEnabled,
         onReload,
     } = props;
@@ -65,14 +63,6 @@ export default function ListPageNoDatabase(props: any) {
                     </div>
                 </Grid>
                 <Grid gridDefinition={[{ colspan: 12 }]}>
-                    {isRelatedTable && (
-                        <RelatedTableList
-                            allItems={allItems}
-                            loading={loading}
-                            listDefinition={listDefinition}
-                            setReload={setReload}
-                        />
-                    )}
                     <TableList
                         allItems={allItems}
                         loading={loading}
@@ -121,7 +111,6 @@ ListPageNoDatabase.propTypes = {
     fetchElements: PropTypes.func.isRequired,
     fetchAllElements: PropTypes.func,
     onCreateCallback: PropTypes.func,
-    isRelatedTable: PropTypes.bool,
     editEnabled: PropTypes.bool,
     onReload: PropTypes.func,
 };

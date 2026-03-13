@@ -3,14 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useRef } from "react";
-import { Button, Container, Header } from "@cloudscape-design/components";
+import React, { useEffect, useState, useRef, useMemo } from "react";
+import Button from "@cloudscape-design/components/button";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
+import Pagination from "@cloudscape-design/components/pagination";
+import Table from "@cloudscape-design/components/table";
+import TextFilter from "@cloudscape-design/components/text-filter";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import { WorkflowExecutionListDefinition } from "../../list/list-definitions/WorkflowExecutionListDefinition";
 import { fetchDatabaseWorkflows, fetchWorkflowExecutions } from "../../../services/APIService";
 import { useNavigate } from "react-router";
 import { useStatusMessage } from "../../common/StatusMessage";
-import RelatedTableList from "../../list/RelatedTableList";
+import { useCollection } from "@cloudscape-design/collection-hooks";
 
 interface WorkflowTabProps {
     databaseId: string;
@@ -36,32 +41,62 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [hasIncompleteJobs, setHasIncompleteJobs] = useState(false);
     const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+    const [expandedItems, setExpandedItems] = useState<any[]>([]);
     const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
     const initialLoadDoneRef = useRef<boolean>(false);
 
-    const WorkflowHeaderControls = () => {
-        return (
-            <div
-                style={{
-                    position: "absolute",
-                    right: "20px",
-                    top: "10px",
-                    zIndex: 1,
-                }}
-            >
-                <Button
-                    variant="primary"
-                    onClick={() => {
-                        // Call the parent's onExecuteWorkflow function to open the modal
-                        // The refresh will be triggered by the refreshTrigger prop when the workflow completes
-                        onExecuteWorkflow();
-                    }}
-                >
-                    Execute Workflow
-                </Button>
-            </div>
-        );
-    };
+    // Build parent items and children map from the flat allItems list
+    const { parentItems, childrenMap } = useMemo(() => {
+        const parents: any[] = [];
+        const children = new Map<string, any[]>();
+
+        for (const item of allItems) {
+            if (item.parentId) {
+                const existing = children.get(item.parentId) || [];
+                existing.push(item);
+                children.set(item.parentId, existing);
+            } else {
+                parents.push(item);
+            }
+        }
+
+        return { parentItems: parents, childrenMap: children };
+    }, [allItems]);
+
+    // Auto-expand all parents when data changes
+    useEffect(() => {
+        setExpandedItems(parentItems);
+    }, [parentItems]);
+
+    // Convert WorkflowExecutionListDefinition column definitions to Cloudscape format
+    const columnDefinitions = useMemo(() => {
+        const listDef = WorkflowExecutionListDefinition;
+        return listDef.columnDefinitions.map(({ id, header, CellWrapper, sortingField }: any) => ({
+            id,
+            header,
+            cell: (item: any) => <CellWrapper item={item}>{item[id]}</CellWrapper>,
+            sortingField,
+        }));
+    }, []);
+
+    const visibleColumns = WorkflowExecutionListDefinition.visibleColumns;
+
+    // Calculate execution count (exclude parent workflow rows)
+    const executionCount = allItems.filter((item) => item.parentId).length;
+
+    // Use Cloudscape collection hooks for sorting/pagination
+    const { items, collectionProps, paginationProps, filterProps, filteredItemsCount } =
+        useCollection(parentItems, {
+            sorting: {
+                defaultState: {
+                    sortingColumn: { sortingField: "startDate" },
+                    isDescending: true,
+                },
+            },
+            pagination: { pageSize: 15 },
+            filtering: {},
+            selection: {},
+        });
 
     // Trigger a refresh when refreshTrigger changes (after workflow execution)
     useEffect(() => {
@@ -112,7 +147,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                 }
 
                 if (workflows && Array.isArray(workflows)) {
-                    const newRows = [];
+                    const newRows: any[] = [];
 
                     // Create a map to organize executions by workflow
                     const workflowMap = new Map();
@@ -313,24 +348,80 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
         );
     }
 
-    // Calculate execution count (exclude parent workflow rows)
-    const executionCount = allItems.filter((item) => item.parentId).length;
+    // Remove ref from collectionProps to avoid React warning
+    const { ref, ...tableCollectionProps } = collectionProps as any;
 
     return (
         <ErrorBoundary componentName="Workflows">
-            <RelatedTableList
-                allItems={allItems}
+            <Table
+                {...tableCollectionProps}
+                items={items}
                 loading={refreshing}
-                listDefinition={WorkflowExecutionListDefinition}
-                databaseId={databaseId}
-                setReload={setReload}
-                parentId={"parentId"}
-                defaultSortingColumn="startDate"
-                defaultSortingDescending={true}
-                countOverride={executionCount}
-                hideSearch={true}
-                //@ts-ignore
-                HeaderControls={WorkflowHeaderControls}
+                trackBy="name"
+                columnDefinitions={columnDefinitions}
+                visibleColumns={visibleColumns}
+                expandableRows={{
+                    getItemChildren: (item: any) => childrenMap.get(item.name) || [],
+                    isItemExpandable: (item: any) => (childrenMap.get(item.name) || []).length > 0,
+                    expandedItems,
+                    onExpandableItemToggle: ({ detail: { item, expanded } }: any) => {
+                        setExpandedItems((prev) =>
+                            expanded
+                                ? [...prev, item]
+                                : prev.filter((i: any) => i.name !== item.name)
+                        );
+                    },
+                }}
+                header={
+                    <>
+                        <div
+                            style={{
+                                position: "absolute",
+                                right: "20px",
+                                top: "10px",
+                                zIndex: 1,
+                            }}
+                        >
+                            <Button
+                                variant="primary"
+                                onClick={() => {
+                                    onExecuteWorkflow();
+                                }}
+                            >
+                                Execute Workflow
+                            </Button>
+                        </div>
+                        <Header
+                            counter={
+                                items.length !== executionCount
+                                    ? `(${
+                                          allItems.filter((item) => item.parentId).length
+                                      }/${executionCount})`
+                                    : `(${executionCount})`
+                            }
+                        >
+                            Workflow Executions
+                        </Header>
+                    </>
+                }
+                pagination={<Pagination {...paginationProps} />}
+                filter={
+                    <div style={{ padding: "0 0 16px 0" }}>
+                        <Button
+                            iconName="refresh"
+                            variant="icon"
+                            onClick={() => setReload(true)}
+                            loading={refreshing}
+                            ariaLabel="Refresh data"
+                        />
+                    </div>
+                }
+                empty={
+                    <div style={{ textAlign: "center", padding: "20px" }}>
+                        <b>No workflow executions</b>
+                        <p>No workflow executions to display.</p>
+                    </div>
+                }
             />
         </ErrorBoundary>
     );
