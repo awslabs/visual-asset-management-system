@@ -90,28 +90,19 @@ export default function ViewPipeline() {
                     {resourceDisplay && resourceDisplay.resourceType === "Lambda" && (
                         <>
                             <TextContent>Lambda Function</TextContent>
-                            <Input
-                                value={resourceDisplay.resourceId || ""}
-                                disabled
-                            />
+                            <Input value={resourceDisplay.resourceId || ""} disabled />
                         </>
                     )}
                     {resourceDisplay && resourceDisplay.resourceType === "SQS" && (
                         <>
                             <TextContent>SQS Queue URL</TextContent>
-                            <Input
-                                value={resourceDisplay.resourceId || ""}
-                                disabled
-                            />
+                            <Input value={resourceDisplay.resourceId || ""} disabled />
                         </>
                     )}
                     {resourceDisplay && resourceDisplay.resourceType === "EventBridge" && (
                         <>
                             <TextContent>EventBridge Bus</TextContent>
-                            <Input
-                                value={resourceDisplay.resourceId || "default"}
-                                disabled
-                            />
+                            <Input value={resourceDisplay.resourceId || "default"} disabled />
                             <TextContent>EventBridge Source</TextContent>
                             <Input
                                 value={resourceDisplay.eventSource || "vams.pipeline"}

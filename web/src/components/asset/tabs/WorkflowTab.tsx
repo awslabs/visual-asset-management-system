@@ -52,9 +52,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     const getSortValue = (item: any, field: string): any => {
         if (field === "description") {
             // Parents show description, children show inputAssetFileKey
-            return item.parentId
-                ? (item.inputAssetFileKey ?? "")
-                : (item.description ?? "");
+            return item.parentId ? item.inputAssetFileKey ?? "" : item.description ?? "";
         }
         return item[field] ?? "";
     };
@@ -103,8 +101,10 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
             const aChildren = children.get(a.name) || [];
             const bChildren = children.get(b.name) || [];
             // Use the first child's value (most recent after sort) to represent the group
-            const aVal = aChildren.length > 0 ? getSortValue(aChildren[0], field) : getSortValue(a, field);
-            const bVal = bChildren.length > 0 ? getSortValue(bChildren[0], field) : getSortValue(b, field);
+            const aVal =
+                aChildren.length > 0 ? getSortValue(aChildren[0], field) : getSortValue(a, field);
+            const bVal =
+                bChildren.length > 0 ? getSortValue(bChildren[0], field) : getSortValue(b, field);
             let result: number;
             if (typeof aVal === "string" && typeof bVal === "string") {
                 result = aVal.localeCompare(bVal);
@@ -445,7 +445,8 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                 }}
                 expandableRows={{
                     getItemChildren: (item: any) => paginatedChildrenMap.get(item.name) || [],
-                    isItemExpandable: (item: any) => (paginatedChildrenMap.get(item.name) || []).length > 0,
+                    isItemExpandable: (item: any) =>
+                        (paginatedChildrenMap.get(item.name) || []).length > 0,
                     expandedItems,
                     onExpandableItemToggle: ({ detail: { item, expanded } }: any) => {
                         setExpandedItems((prev) =>
@@ -474,11 +475,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                                 Execute Workflow
                             </Button>
                         </div>
-                        <Header
-                            counter={`(${executionCount})`}
-                        >
-                            Workflow Executions
-                        </Header>
+                        <Header counter={`(${executionCount})`}>Workflow Executions</Header>
                     </>
                 }
                 pagination={

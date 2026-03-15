@@ -33,7 +33,6 @@ import {
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 
-
 export function buildWorkflowService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -497,10 +496,7 @@ export function buildWorkflowRole(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["events:PutEvents"],
-                resources: [
-                    IAMArn("*" + config.name + "*").eventBus,
-                    IAMArn("default").eventBus,
-                ],
+                resources: [IAMArn("*" + config.name + "*").eventBus, IAMArn("default").eventBus],
             }),
         ],
     });

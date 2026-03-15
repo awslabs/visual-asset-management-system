@@ -424,10 +424,10 @@ export default function CreatePipeline({
                             {formState.waitForCallback.value === "Disabled" &&
                                 formState.pipelineExecutionType.value !== "Lambda" && (
                                     <Alert type="info">
-                                        Without callback enabled, this pipeline will send data to the
-                                        downstream service as an information push only. No output
-                                        files, preview images, or metadata will be returned to VAMS
-                                        for integration into the asset.
+                                        Without callback enabled, this pipeline will send data to
+                                        the downstream service as an information push only. No
+                                        output files, preview images, or metadata will be returned
+                                        to VAMS for integration into the asset.
                                     </Alert>
                                 )}
                             {formState.waitForCallback.value === "Enabled" && (
@@ -436,15 +436,15 @@ export default function CreatePipeline({
                                         label="Task Timeout"
                                         constraintText="Positive integer (seconds). Maximum: 604800 (1 week). If the task runs longer, it fails with States.Timeout."
                                         errorText={
-                                            formState.taskTimeout && (
-                                                isNaN(Number(formState.taskTimeout)) || !Number.isInteger(Number(formState.taskTimeout))
-                                                    ? "Must be a whole number"
-                                                    : Number(formState.taskTimeout) <= 0
-                                                        ? "Must be a positive non-zero value"
-                                                        : Number(formState.taskTimeout) > 604800
-                                                            ? "Cannot exceed 604800 seconds (1 week)"
-                                                            : undefined
-                                            )
+                                            formState.taskTimeout &&
+                                            (isNaN(Number(formState.taskTimeout)) ||
+                                            !Number.isInteger(Number(formState.taskTimeout))
+                                                ? "Must be a whole number"
+                                                : Number(formState.taskTimeout) <= 0
+                                                ? "Must be a positive non-zero value"
+                                                : Number(formState.taskTimeout) > 604800
+                                                ? "Cannot exceed 604800 seconds (1 week)"
+                                                : undefined)
                                         }
                                     >
                                         <Input
@@ -466,15 +466,19 @@ export default function CreatePipeline({
                                         label="Task Heartbeat Timeout (Optional)"
                                         constraintText="Optional. Positive integer (seconds). Must be less than Task Timeout. If omitted, heartbeat checks are disabled. If set, tasks that don't send heartbeats within this interval will fail."
                                         errorText={
-                                            formState.taskHeartbeatTimeout && (
-                                                isNaN(Number(formState.taskHeartbeatTimeout)) || !Number.isInteger(Number(formState.taskHeartbeatTimeout))
-                                                    ? "Must be a whole number"
-                                                    : Number(formState.taskHeartbeatTimeout) <= 0
-                                                        ? "Must be a positive non-zero value"
-                                                        : formState.taskTimeout && Number(formState.taskHeartbeatTimeout) >= Number(formState.taskTimeout)
-                                                            ? "Must be less than Task Timeout"
-                                                            : undefined
+                                            formState.taskHeartbeatTimeout &&
+                                            (isNaN(Number(formState.taskHeartbeatTimeout)) ||
+                                            !Number.isInteger(
+                                                Number(formState.taskHeartbeatTimeout)
                                             )
+                                                ? "Must be a whole number"
+                                                : Number(formState.taskHeartbeatTimeout) <= 0
+                                                ? "Must be a positive non-zero value"
+                                                : formState.taskTimeout &&
+                                                  Number(formState.taskHeartbeatTimeout) >=
+                                                      Number(formState.taskTimeout)
+                                                ? "Must be less than Task Timeout"
+                                                : undefined)
                                         }
                                     >
                                         <Input
