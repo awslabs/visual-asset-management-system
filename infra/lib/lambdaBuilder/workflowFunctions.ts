@@ -33,6 +33,7 @@ import {
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 
+
 export function buildWorkflowService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -485,6 +486,21 @@ export function buildWorkflowRole(
                 effect: iam.Effect.ALLOW,
                 actions: ["iam:PassRole"],
                 resources: [IAMArn("*" + config.name + "*").role],
+            }),
+            // SQS SendMessage permission for SQS pipeline types
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["sqs:SendMessage"],
+                resources: [IAMArn("*" + config.name + "*").sqs],
+            }),
+            // EventBridge PutEvents permission for EventBridge pipeline types
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["events:PutEvents"],
+                resources: [
+                    IAMArn("*" + config.name + "*").eventBus,
+                    IAMArn("default").eventBus,
+                ],
             }),
         ],
     });

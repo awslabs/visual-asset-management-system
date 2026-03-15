@@ -23,6 +23,18 @@ asset_path_pipeline_pattern = r'^pipelines\/.+\/.+\/output\/.+\/$'
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
 userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
 
+# AWS resource patterns - partition-aware (aws, aws-us-gov, aws-cn, aws-iso, aws-iso-b)
+aws_partition_group = r'aws(?:-us-gov|-cn|-iso(?:-[a-z])?)?'
+# SQS Queue URL: https://sqs[-fips].{region}.amazonaws.com[.cn]/{account}/{queue-name}
+# Also supports VPC endpoint URLs: https://vpce-xxx.sqs.{region}.vpce.amazonaws.com/{account}/{queue-name}
+sqs_queue_url_pattern = r'^https://(vpce-[a-z0-9\-]+\.)?sqs[\-a-z]*\.[a-z0-9\-]+\.(vpce\.)?amazonaws\.com(\.cn)?/[0-9]{12}/[a-zA-Z0-9_\-\.]+$'
+# EventBridge Bus ARN: arn:{partition}:events:{region}:{account}:event-bus/{bus-name}
+eventbridge_bus_arn_pattern = r'^arn:(' + aws_partition_group + r'):events:[a-z0-9\-]+:[0-9]{12}:event-bus/[a-zA-Z0-9_\-\./]+$'
+# EventBridge source: reverse-DNS style, 1-256 chars, no aws. prefix (reserved)
+eventbridge_source_pattern = r'^(?!aws\.)[a-zA-Z0-9\-\.\_]{1,256}$'
+# EventBridge detail type: free-form string, 1-256 chars
+eventbridge_detail_type_pattern = r'^.{1,256}$'
+
 #Define local regexes that use the patterns
 id_regex = re.compile(id_pattern)
 uuid_regex = re.compile(uuid_pattern)
@@ -42,6 +54,11 @@ asset_auxiliarypreview_path_regex = re.compile(asset_auxiliarypreview_path_patte
 asset_path_pipeline_regex = re.compile(asset_path_pipeline_pattern)
 object_name_regex = re.compile(object_name_pattern)
 userid_regex = re.compile(userid_pattern)
+
+sqs_queue_url_regex = re.compile(sqs_queue_url_pattern)
+eventbridge_bus_arn_regex = re.compile(eventbridge_bus_arn_pattern)
+eventbridge_source_regex = re.compile(eventbridge_source_pattern)
+eventbridge_detail_type_regex = re.compile(eventbridge_detail_type_pattern, re.DOTALL)
 
 
 def validate_id(name, value):
@@ -261,6 +278,27 @@ def validate_bool(name, value):
         return (False, name + " is invalid. Must be a boolean string of 'true'/'false'.")
 
 
+def validate_sqs_queue_url(name, value):
+    if not sqs_queue_url_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid SQS queue URL (e.g., https://sqs.us-east-1.amazonaws.com/123456789012/my-queue). Supports all AWS partitions including GovCloud and China regions.")
+    return (True, '')
+
+def validate_eventbridge_bus_arn(name, value):
+    if not eventbridge_bus_arn_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid EventBridge bus ARN (e.g., arn:aws:events:us-east-1:123456789012:event-bus/my-bus). Supports all AWS partitions including GovCloud (arn:aws-us-gov), China (arn:aws-cn), and ISO partitions.")
+    return (True, '')
+
+def validate_eventbridge_source(name, value):
+    if not eventbridge_source_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be 1-256 characters, alphanumeric with dots/hyphens/underscores. Cannot start with 'aws.' (reserved prefix).")
+    return (True, '')
+
+def validate_eventbridge_detail_type(name, value):
+    if not eventbridge_detail_type_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be 1-256 characters.")
+    return (True, '')
+
+
 def validate(values):
     for k, v in values.items():
 
@@ -419,6 +457,22 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'BOOL':
             (valid, message) = validate_bool(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'SQS_QUEUE_URL':
+            (valid, message) = validate_sqs_queue_url(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'EVENTBRIDGE_BUS_ARN':
+            (valid, message) = validate_eventbridge_bus_arn(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'EVENTBRIDGE_SOURCE':
+            (valid, message) = validate_eventbridge_source(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'EVENTBRIDGE_DETAIL_TYPE':
+            (valid, message) = validate_eventbridge_detail_type(k, v['value'])
             if not valid:
                 return (valid, message)
 

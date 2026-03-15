@@ -304,3 +304,225 @@ def format_s3_uri_with_states_format(
         States.Format expression string
     """
     return f"States.Format('s3://{{}}/" + path_template + f"', {bucket_param}, {execution_name_placeholder})"
+
+
+# ---------------------------------------------------------------------------
+# Builder pattern for multi-type pipeline ASL generation
+# ---------------------------------------------------------------------------
+
+from abc import ABC, abstractmethod
+
+
+class TaskStateBuilder(ABC):
+    """Base class for Step Functions task state builders.
+    Builders produce Task state dicts with Type, Resource, Parameters,
+    Retry, and Catch. They do NOT add Next/End — that is handled by
+    create_workflow_definition().
+    """
+
+    @abstractmethod
+    def build_task_state(self, pipeline: Dict[str, Any], state_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        pass
+
+    def build_payload(self, pipeline: Dict[str, Any], path_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Shared payload construction — identical JSON body for all types."""
+        payload = {
+            "body": {
+                "inputS3AssetFilePath.$": path_context.get("inputS3AssetFilePath"),
+                "outputS3AssetFilesPath.$": path_context.get("outputS3AssetFilesPath"),
+                "outputS3AssetPreviewPath.$": path_context.get("outputS3AssetPreviewPath"),
+                "outputS3AssetMetadataPath.$": path_context.get("outputS3AssetMetadataPath"),
+                "inputOutputS3AssetAuxiliaryFilesPath.$": path_context.get("inputOutputS3AssetAuxiliaryFilesPath"),
+                "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
+                "bucketAsset.$": "$.bucketAsset",
+                "assetId.$": "$.assetId",
+                "databaseId.$": "$.databaseId",
+                "workflowDatabaseId.$": "$.workflowDatabaseId",
+                "workflowId.$": "$.workflowId",
+                "inputAssetFileKey.$": "$.inputAssetFileKey",
+                "inputAssetLocationKey.$": "$.inputAssetLocationKey",
+                "outputType": pipeline.get("outputType", ""),
+                "inputMetadata.$": "$.inputMetadata",
+                "inputParameters": pipeline.get('inputParameters', ''),
+                "executingUserName.$": "$.executingUserName",
+                "executingRequestContext.$": "$.executingRequestContext"
+            }
+        }
+        return payload
+
+    def apply_callback(self, payload: Dict[str, Any], pipeline: Dict[str, Any]) -> Dict[str, Any]:
+        if pipeline.get('waitForCallback') == 'Enabled':
+            payload["body"]["TaskToken.$"] = "$$.Task.Token"
+        return payload
+
+    def _parse_user_resource(self, pipeline: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse userProvidedResource JSON string into a dict. Defaults resourceType to Lambda."""
+        user_resource_str = pipeline.get('userProvidedResource', '{}')
+        if isinstance(user_resource_str, str):
+            user_resource = json.loads(user_resource_str) if user_resource_str else {}
+        else:
+            user_resource = user_resource_str
+        if 'resourceType' not in user_resource:
+            user_resource['resourceType'] = 'Lambda'
+        return user_resource
+
+    def _apply_callback_timeout(self, state: Dict[str, Any], pipeline: Dict[str, Any]) -> Dict[str, Any]:
+        if pipeline.get('waitForCallback') == 'Enabled':
+            timeout = pipeline.get('taskTimeout') or 86400
+            state["TimeoutSeconds"] = int(timeout)
+            # HeartbeatSeconds is optional — only set if explicitly provided.
+            # Many pipelines don't implement heartbeat logic; omitting it
+            # means Step Functions won't fail the task for missing heartbeats.
+            heartbeat = pipeline.get('taskHeartbeatTimeout')
+            if heartbeat and str(heartbeat).strip():
+                state["HeartbeatSeconds"] = int(heartbeat)
+        return state
+
+
+class LambdaTaskBuilder(TaskStateBuilder):
+    """Builder for Lambda invoke task states.
+
+    Uses ResultPath $.{state_name}.output to store each pipeline step's
+    response without overwriting the workflow state or other steps' results.
+    """
+
+    def build_task_state(self, pipeline: Dict[str, Any], state_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        user_resource = self._parse_user_resource(pipeline)
+        wait_for_callback = pipeline.get('waitForCallback') == 'Enabled'
+
+        if wait_for_callback:
+            resource = "arn:aws:states:::lambda:invoke.waitForTaskToken"
+        else:
+            resource = "arn:aws:states:::lambda:invoke"
+
+        state = {
+            "Type": "Task",
+            "Resource": resource,
+            "ResultPath": f"$.{state_name}.output",
+            "Parameters": {
+                "FunctionName": user_resource.get('resourceId', ''),
+                "Payload": payload
+            },
+            "Retry": [create_retry_config()],
+            "Catch": [create_catch_config(
+                error_equals=["States.ALL"],
+                next_state="WorkflowProcessingJobFailed"
+            )]
+        }
+
+        state = self._apply_callback_timeout(state, pipeline)
+        return state
+
+
+class SqsTaskBuilder(TaskStateBuilder):
+    """Builder for SQS sendMessage task states.
+
+    Uses ResultPath $.{state_name}.output to store each pipeline step's
+    response without overwriting the workflow state or other steps' results.
+    """
+
+    def build_task_state(self, pipeline: Dict[str, Any], state_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        user_resource = self._parse_user_resource(pipeline)
+        wait_for_callback = pipeline.get('waitForCallback') == 'Enabled'
+
+        if wait_for_callback:
+            resource = "arn:aws:states:::sqs:sendMessage.waitForTaskToken"
+        else:
+            resource = "arn:aws:states:::sqs:sendMessage"
+
+        state = {
+            "Type": "Task",
+            "Resource": resource,
+            "ResultPath": f"$.{state_name}.output",
+            "Parameters": {
+                "QueueUrl": user_resource.get('resourceId', ''),
+                "MessageBody": payload
+            },
+            "Retry": [create_retry_config()],
+            "Catch": [create_catch_config(
+                error_equals=["States.ALL"],
+                next_state="WorkflowProcessingJobFailed"
+            )]
+        }
+
+        state = self._apply_callback_timeout(state, pipeline)
+        return state
+
+
+class EventBridgeTaskBuilder(TaskStateBuilder):
+    """Builder for EventBridge putEvents task states.
+
+    The payload is placed directly as the Detail object in the Entries
+    Parameters. Step Functions automatically serializes the Detail object
+    to a JSON string when calling the EventBridge PutEvents API.
+
+    This approach eliminates the need for a preceding Pass state and
+    States.JsonToString, and allows $$.Task.Token to be resolved
+    correctly for the .waitForTaskToken callback pattern.
+    """
+
+    def build_task_state(self, pipeline: Dict[str, Any], state_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        user_resource = self._parse_user_resource(pipeline)
+        wait_for_callback = pipeline.get('waitForCallback') == 'Enabled'
+
+        if wait_for_callback:
+            resource = "arn:aws:states:::events:putEvents.waitForTaskToken"
+        else:
+            resource = "arn:aws:states:::events:putEvents"
+
+        event_bus_name = user_resource.get('resourceId', 'default') or 'default'
+        event_source = user_resource.get('eventSource', 'vams.pipeline') or 'vams.pipeline'
+        event_detail_type = user_resource.get('eventDetailType') or pipeline.get('pipelineId', state_name)
+
+        state = {
+            "Type": "Task",
+            "Resource": resource,
+            "ResultPath": f"$.{state_name}.output",
+            "Parameters": {
+                "Entries": [
+                    {
+                        "EventBusName": event_bus_name,
+                        "Source": event_source,
+                        "DetailType": event_detail_type,
+                        "Detail": payload
+                    }
+                ]
+            },
+            "Retry": [create_retry_config()],
+            "Catch": [create_catch_config(
+                error_equals=["States.ALL"],
+                next_state="WorkflowProcessingJobFailed"
+            )]
+        }
+
+        state = self._apply_callback_timeout(state, pipeline)
+        return state
+
+
+# ---------------------------------------------------------------------------
+# Builder registry
+# ---------------------------------------------------------------------------
+
+TASK_BUILDERS: Dict[str, TaskStateBuilder] = {
+    "Lambda": LambdaTaskBuilder(),
+    "SQS": SqsTaskBuilder(),
+    "EventBridge": EventBridgeTaskBuilder(),
+}
+
+
+def get_task_builder(pipeline_execution_type: str) -> TaskStateBuilder:
+    """Return the appropriate TaskStateBuilder for the given execution type.
+
+    Args:
+        pipeline_execution_type: One of "Lambda", "SQS", or "EventBridge".
+
+    Returns:
+        A TaskStateBuilder instance.
+
+    Raises:
+        ValueError: If the execution type is not supported.
+    """
+    builder = TASK_BUILDERS.get(pipeline_execution_type)
+    if not builder:
+        raise ValueError(f"Unsupported pipeline execution type: {pipeline_execution_type}")
+    return builder

@@ -7300,6 +7300,38 @@ components:
         object_name_pattern_regex:
             type: string
             pattern: ^[a-zA-Z0-9\-._ ]{1,256}$
+        PipelineExecutionType:
+            type: string
+            description: "The execution type for the pipeline"
+            enum:
+                - Lambda
+                - SQS
+                - EventBridge
+            default: Lambda
+
+        UserProvidedResource:
+            type: object
+            description: "Describes a user-provided resource (e.g., SQS queue or EventBridge bus) used by a pipeline"
+            properties:
+                resourceId:
+                    type: string
+                    description: "The resource identifier (e.g., SQS queue URL or EventBridge bus ARN)"
+                resourceType:
+                    type: string
+                    description: "The type of the resource"
+                    enum:
+                        - SQS_QUEUE
+                        - EVENTBRIDGE_BUS
+                isProvided:
+                    type: boolean
+                    description: "Whether the resource is user-provided (true) or managed by VAMS (false)"
+                eventSource:
+                    type: string
+                    description: "EventBridge event source (only for EventBridge resources)"
+                eventDetailType:
+                    type: string
+                    description: "EventBridge event detail-type (only for EventBridge resources)"
+
         pipeline:
             type: object
             properties:
@@ -7318,6 +7350,22 @@ components:
                 outputType:
                     #example: gltf
                     $ref: "#/components/schemas/file_type_regex"
+                pipelineExecutionType:
+                    $ref: "#/components/schemas/PipelineExecutionType"
+                sqsQueueUrl:
+                    type: string
+                    description: "SQS queue URL (required when pipelineExecutionType is SQS)"
+                eventBridgeBusArn:
+                    type: string
+                    description: "EventBridge bus ARN (optional when pipelineExecutionType is EventBridge; defaults to account default bus)"
+                eventBridgeSource:
+                    type: string
+                    description: "EventBridge event source (optional; defaults to 'vams.pipeline')"
+                eventBridgeDetailType:
+                    type: string
+                    description: "EventBridge event detail-type (optional; defaults to the pipelineId)"
+                userProvidedResource:
+                    $ref: "#/components/schemas/UserProvidedResource"
             required:
                 - pipelineId
                 - databaseId

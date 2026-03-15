@@ -1402,6 +1402,17 @@ export class ApiBuilderNestedStack extends NestedStack {
             ],
             true
         );
+
+        NagSuppressions.addResourceSuppressions(
+            this,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Wildcard scoped to deployment-named SQS queues and EventBridge buses via config.name. External (non-VAMS) resources require user-configured resource-based policies. Pipeline resources are created at runtime, so ARNs cannot be known at deploy time.",
+                },
+            ],
+            true
+        );
     }
 }
 

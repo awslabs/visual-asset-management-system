@@ -52,7 +52,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                 // If this is an execution (has parentId), don't make it a link
                 return <>{props.children}</>;
             },
-            sortingField: "assetName",
+            sortingField: "name",
         }),
         new ColumnDefinition({
             id: "databaseId",

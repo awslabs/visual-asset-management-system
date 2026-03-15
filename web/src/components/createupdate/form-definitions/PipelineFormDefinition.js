@@ -5,7 +5,9 @@
 
 import FormDefinition from "./types/FormDefinition";
 import ControlDefinition from "./types/ControlDefinition";
-import { Input, Select, Textarea } from "@cloudscape-design/components";
+import Input from "@cloudscape-design/components/input";
+import Select from "@cloudscape-design/components/select";
+import Textarea from "@cloudscape-design/components/textarea";
 import ElementDefinition from "./types/ElementDefinition";
 import DatabaseSelector from "../../selectors/DatabaseSelector";
 import { ENTITY_TYPES_NAMES } from "../entity-types/EntitieTypes";
@@ -25,6 +27,14 @@ export const pipelineExecutionTypeOptions = [
     {
         label: "Lambda",
         value: "Lambda",
+    },
+    {
+        label: "SQS",
+        value: "SQS",
+    },
+    {
+        label: "EventBridge",
+        value: "EventBridge",
     },
 ];
 
@@ -89,7 +99,7 @@ export const PipelineFormDefinition = new FormDefinition({
             label: "Wait for a Callback with the Task Token",
             id: "waitForCallback",
             constraintText:
-                "Applies to Lambda pipelines only. More information available in the Step Functions documentation https://docs.aws.amazon.com/step-functions/latest/dg/connect-to-resource.html.",
+                "When enabled, the downstream consumer must call SendTaskSuccess/SendTaskFailure with the TaskToken.",
             elementDefinition: new ElementDefinition({
                 formElement: Select,
                 elementProps: {
@@ -106,7 +116,6 @@ export const PipelineFormDefinition = new FormDefinition({
                     value: "Disabled",
                 },
             ],
-            appearsWhen: ["pipelineExecutionType", "Lambda"],
             defaultOption: {
                 label: "No",
                 value: "Disabled",
@@ -154,6 +163,50 @@ export const PipelineFormDefinition = new FormDefinition({
                 elementProps: { autoFocus: false },
             }),
             appearsWhen: ["pipelineExecutionType", "Lambda"],
+            required: false,
+        }),
+        new ControlDefinition({
+            label: "SQS Queue URL",
+            id: "sqsQueueUrl",
+            constraintText: "Full SQS queue URL",
+            elementDefinition: new ElementDefinition({
+                formElement: Input,
+                elementProps: { autoFocus: false },
+            }),
+            appearsWhen: ["pipelineExecutionType", "SQS"],
+            required: true,
+        }),
+        new ControlDefinition({
+            label: "EventBridge Bus ARN (Optional)",
+            id: "eventBridgeBusArn",
+            constraintText: "Leave empty to use the default event bus",
+            elementDefinition: new ElementDefinition({
+                formElement: Input,
+                elementProps: { autoFocus: false },
+            }),
+            appearsWhen: ["pipelineExecutionType", "EventBridge"],
+            required: false,
+        }),
+        new ControlDefinition({
+            label: "EventBridge Source (Optional)",
+            id: "eventBridgeSource",
+            constraintText: "Default: vams.pipeline",
+            elementDefinition: new ElementDefinition({
+                formElement: Input,
+                elementProps: { autoFocus: false },
+            }),
+            appearsWhen: ["pipelineExecutionType", "EventBridge"],
+            required: false,
+        }),
+        new ControlDefinition({
+            label: "EventBridge Detail Type (Optional)",
+            id: "eventBridgeDetailType",
+            constraintText: "Default: pipeline ID",
+            elementDefinition: new ElementDefinition({
+                formElement: Input,
+                elementProps: { autoFocus: false },
+            }),
+            appearsWhen: ["pipelineExecutionType", "EventBridge"],
             required: false,
         }),
         new ControlDefinition({

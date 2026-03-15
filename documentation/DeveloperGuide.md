@@ -877,6 +877,97 @@ Two additional settings enable your job to end with a timeout error by defining 
 
 If you would like your job check in to show that it is still running and fail the step if it does not check in within some amount of time less than the task timeout, define the Task Heartbeat Timeout on the create pipeline screen also. If more time than the specified seconds elapses between heartbeats from the task, this state fails with a States.Timeout error name.
 
+### Pipeline Types and Implementation Guide
+
+VAMS supports three pipeline execution types, each suited to different processing patterns. All types receive an identical JSON payload and integrate with the Step Functions workflow engine.
+
+#### Lambda Pipelines
+
+Lambda pipelines invoke an AWS Lambda function directly from the Step Functions workflow.
+
+-   **Sync or async**: Supports both fire-and-forget and callback patterns (`waitForCallback: Enabled/Disabled`)
+-   **Resource**: Lambda function (auto-created by VAMS pipelines or user-provided)
+-   **Use case**: Processing within Lambda limits (15-minute timeout, 10 GB memory)
+-   **Callback**: When `waitForCallback` is enabled, the Lambda (or a downstream system it triggers) must call `SendTaskSuccess` or `SendTaskFailure` with the `TaskToken`
+
+#### SQS Pipelines (NEW)
+
+SQS pipelines send a message to an Amazon SQS queue, enabling decoupled and fan-out processing patterns.
+
+-   **Async only**: Messages are sent to an SQS queue; the workflow waits for a callback or proceeds without one
+-   **Resource**: User-provided SQS queue URL (required)
+-   **Use case**: Decoupled processing, fan-out to external systems, long-running jobs beyond Lambda limits
+-   **Callback**: Optional -- the queue consumer can call `SendTaskSuccess` / `SendTaskFailure` with the `TaskToken` included in the message
+-   **Without callback**: Information push only -- no files, previews, or metadata are returned to VAMS. The workflow step completes immediately after sending the message.
+
+**Setup:**
+
+1. Create an SQS queue (Standard or FIFO)
+2. If the queue name does **not** contain "VAMS" or "vams", add a resource-based policy granting `sqs:SendMessage` to the VAMS workflow execution role
+3. Register the pipeline with `pipelineExecutionType: "SQS"` and provide the `sqsQueueUrl`
+
+#### EventBridge Pipelines (NEW)
+
+EventBridge pipelines publish an event to an Amazon EventBridge bus, enabling event-driven routing to multiple consumers.
+
+-   **Async only**: Events are published to an EventBridge bus; the workflow waits for a callback or proceeds without one
+-   **Resource**: Optional custom bus ARN (defaults to the account's default event bus)
+-   **Event structure**: Configurable `source` (default `"vams.pipeline"`) and `detail-type` (default is the pipeline ID)
+-   **Use case**: Event-driven architectures, routing to multiple consumers via EventBridge rules
+-   **Callback**: Same `TaskToken` pattern as SQS -- the event consumer calls `SendTaskSuccess` / `SendTaskFailure`
+
+**Setup:**
+
+1. Optionally create a custom EventBridge bus
+2. If the bus name does **not** contain "VAMS" or "vams", add a resource-based policy granting `events:PutEvents` to the VAMS workflow execution role
+3. Create an EventBridge rule matching the `source` and `detail-type` to route events to your consumer(s)
+4. Register the pipeline with `pipelineExecutionType: "EventBridge"` and optionally provide `eventBridgeBusArn`, `eventBridgeSource`, and `eventBridgeDetailType`
+
+#### Shared Payload Structure
+
+All pipeline execution types receive an identical JSON payload:
+
+```json
+{
+  "body": {
+    "inputS3AssetFilePath": "s3://bucket/assetId/path/file.ext",
+    "outputS3AssetFilesPath": "s3://bucket/assetId/",
+    "outputS3AssetPreviewPath": "s3://bucket/assetId/",
+    "outputS3AssetMetadataPath": "s3://bucket/assetId/",
+    "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux-bucket/assetId/",
+    "bucketAsset": "asset-bucket-name",
+    "bucketAssetAuxiliary": "auxiliary-bucket-name",
+    "assetId": "xd130a6d6...",
+    "databaseId": "my-database",
+    "workflowId": "my-workflow",
+    "outputType": ".glb",
+    "inputMetadata": "{...}",
+    "inputParameters": "{...}",
+    "executingUserName": "user@example.com",
+    "TaskToken": "AQC..."
+  }
+}
+```
+
+For SQS pipelines, this payload is the SQS message body. For EventBridge pipelines, it is the event `detail`.
+
+#### IAM Permission Model
+
+-   **VAMS-named resources** (queue or bus name containing "VAMS" or "vams"): Permissions are auto-granted by the CDK infrastructure
+-   **External resources**: The resource owner must configure a resource-based policy granting the VAMS workflow execution role permission to `sqs:SendMessage` (SQS) or `events:PutEvents` (EventBridge)
+
+#### Pipeline Type Comparison
+
+| Feature                | Lambda           | SQS                | EventBridge          |
+| ---------------------- | ---------------- | ------------------ | -------------------- |
+| Execution model        | Sync or async    | Async only         | Async only           |
+| Resource required      | Lambda function  | SQS queue URL      | EventBridge bus ARN  |
+| Resource auto-created  | Yes (built-in)   | No (user-provided) | No (user-provided)   |
+| Callback support       | Yes              | Optional           | Optional             |
+| Without callback       | N/A (sync mode)  | Fire-and-forget    | Fire-and-forget      |
+| Fan-out                | No               | Single consumer    | Multiple consumers   |
+| Max processing time    | 15 min (Lambda)  | Unlimited          | Unlimited            |
+
 ### Registering Pipelines in CDK
 
 VAMS provides an automated pipeline registration system that allows you to register your custom pipelines and workflows directly during CDK deployment. This eliminates the need for manual pipeline registration through the UI and ensures your pipelines are available immediately after deployment.
@@ -1081,7 +1172,7 @@ The custom resource accepts the following properties:
 | `pipelineId`            | string | Unique pipeline identifier (3-63 chars)            | `"my-custom-pipeline"`               |
 | `pipelineDescription`   | string | Human-readable pipeline description                | `"Custom 3D model processor"`        |
 | `pipelineType`          | string | Pipeline type: `"standardFile"` or `"previewFile"` | `"standardFile"`                     |
-| `pipelineExecutionType` | string | Execution type: `"Lambda"`                         | `"Lambda"`                           |
+| `pipelineExecutionType` | string | Execution type: `"Lambda"`, `"SQS"`, or `"EventBridge"` | `"Lambda"`                     |
 | `assetType`             | string | Input file extension                               | `".obj"`                             |
 | `outputType`            | string | Output file extension                              | `".glb"`                             |
 | `waitForCallback`       | string | Async mode: `"Enabled"` or `"Disabled"`            | `"Enabled"`                          |
@@ -1093,9 +1184,13 @@ The custom resource accepts the following properties:
 
 | Property               | Type   | Description                        | Range      | Default      |
 | ---------------------- | ------ | ---------------------------------- | ---------- | ------------ |
-| `taskTimeout`          | string | Task timeout in seconds            | 1-86400    | No timeout   |
-| `taskHeartbeatTimeout` | string | Heartbeat timeout in seconds       | 1-3600     | No heartbeat |
-| `inputParameters`      | string | JSON string of pipeline parameters | Valid JSON | `"{}"`       |
+| `taskTimeout`            | string | Task timeout in seconds                                       | 1-86400    | No timeout        |
+| `taskHeartbeatTimeout`   | string | Heartbeat timeout in seconds                                  | 1-3600     | No heartbeat      |
+| `inputParameters`        | string | JSON string of pipeline parameters                            | Valid JSON | `"{}"`            |
+| `sqsQueueUrl`            | string | SQS queue URL (required for SQS execution type)              | Valid URL  | N/A               |
+| `eventBridgeBusArn`      | string | EventBridge bus ARN (optional for EventBridge execution type) | Valid ARN  | Default event bus |
+| `eventBridgeSource`      | string | EventBridge event source                                      | String     | `"vams.pipeline"` |
+| `eventBridgeDetailType`  | string | EventBridge event detail-type                                 | String     | Pipeline ID       |
 
 #### Lambda Function Naming Requirements
 

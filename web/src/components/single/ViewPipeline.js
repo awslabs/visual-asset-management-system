@@ -3,14 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
-    BreadcrumbGroup,
-    Grid,
-    Input,
-    SpaceBetween,
-    Textarea,
-    TextContent,
-} from "@cloudscape-design/components";
+import BreadcrumbGroup from "@cloudscape-design/components/breadcrumb-group";
+import Grid from "@cloudscape-design/components/grid";
+import Input from "@cloudscape-design/components/input";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Textarea from "@cloudscape-design/components/textarea";
+import TextContent from "@cloudscape-design/components/text-content";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { fetchAllPipelines } from "../../services/APIService";
@@ -25,6 +23,7 @@ export default function ViewPipeline() {
     const [outputType, setOutputType] = useState("");
     const [pipelineType, setPipelineType] = useState("standardFile");
     const [pipelineExecutionType, setPipelineExecutionType] = useState("Lambda");
+    const [resourceDisplay, setResourceDisplay] = useState(null);
 
     useEffect(() => {
         const getData = async () => {
@@ -38,6 +37,17 @@ export default function ViewPipeline() {
                 setOutputType(currentItem?.outputType);
                 setPipelineType(currentItem?.pipelineType);
                 setPipelineExecutionType(currentItem?.pipelineExecutionType);
+
+                // Parse userProvidedResource for display
+                if (currentItem?.userProvidedResource) {
+                    try {
+                        const resource = JSON.parse(currentItem.userProvidedResource);
+                        setResourceDisplay(resource);
+                    } catch (e) {
+                        console.log("Failed to parse userProvidedResource", e);
+                        setResourceDisplay(null);
+                    }
+                }
             }
         };
         if (reload) {
@@ -77,6 +87,43 @@ export default function ViewPipeline() {
                     <Input name="pipelineType" value={pipelineType} disabled />
                     <TextContent>Pipeline Execution Type</TextContent>
                     <Input name="pipelineExecutionType" value={pipelineExecutionType} disabled />
+                    {resourceDisplay && resourceDisplay.resourceType === "Lambda" && (
+                        <>
+                            <TextContent>Lambda Function</TextContent>
+                            <Input
+                                value={resourceDisplay.resourceId || ""}
+                                disabled
+                            />
+                        </>
+                    )}
+                    {resourceDisplay && resourceDisplay.resourceType === "SQS" && (
+                        <>
+                            <TextContent>SQS Queue URL</TextContent>
+                            <Input
+                                value={resourceDisplay.resourceId || ""}
+                                disabled
+                            />
+                        </>
+                    )}
+                    {resourceDisplay && resourceDisplay.resourceType === "EventBridge" && (
+                        <>
+                            <TextContent>EventBridge Bus</TextContent>
+                            <Input
+                                value={resourceDisplay.resourceId || "default"}
+                                disabled
+                            />
+                            <TextContent>EventBridge Source</TextContent>
+                            <Input
+                                value={resourceDisplay.eventSource || "vams.pipeline"}
+                                disabled
+                            />
+                            <TextContent>EventBridge Detail Type</TextContent>
+                            <Input
+                                value={resourceDisplay.eventDetailType || pipelineName}
+                                disabled
+                            />
+                        </>
+                    )}
                     <TextContent>Description</TextContent>
                     <Textarea
                         placeholder="Description"

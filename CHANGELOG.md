@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 • New USD Web Viewer - Needle USD 3D WASM viewer with experimental dependency chain loading for .usd, .usda, .usdc, .usdz files integrated into plugin system
 • New 3D Mesh and CAD STP ThreeJs Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading and scene graph support, now primary viewer for common mesh types with optional LGPL-licensed CAD support
+• New SQS and EventBridge Pipeline Support - Pipelines and workflows now support SQS and EventBridge execution types alongside existing Lambda, enabling async integration with external processing systems. SQS pipelines send messages to user-provided queues, EventBridge pipelines publish events to user-provided or default event buses with configurable source and detail-type. Both support optional callback via Step Functions Task Tokens for workflow orchestration or fire-and-forget for downstream information pushes. Pipeline execution type is immutable after creation. Partition-aware input validation for queue URLs and bus ARNs across all AWS partitions (commercial, GovCloud, China, ISO). IAM permissions auto-granted for deployment-named resources, external resources require user-configured resource-based policies.
 • New 3D and PointCloud Preview Thumbnail (GIF) Generation Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
 • Enhanced Asset Versions Functionality - New asset version aliasing, archive/unarchive capabilities, asset version editing, metadata/attribute versioning, and revert functionality with metadata restoration
 • Enhanced File Selector and Download Functionality w/ Asset Versions - Version-aware download APIs with file and asset version query parameters, updated file viewers for file or asset version file retrieval, web asset version selector filtering for files and metadata
@@ -23,6 +24,7 @@ Asset versions have database table changes that require the running of migration
 
 ### Features
 
+-   **Pipeline** Pipelines and Workflows now have an additional option to launch pipelines through SQS and EventBridge, this compliments the existing Lambda option. 
 -   **Pipeline** Added new Preview 3D Thumbnail use-case pipeline (`usePreview3dThumbnail`) that generates animated GIF or static image preview thumbnails from 3D files. Supports mesh formats (PLY, STL, OBJ, GLB, GLTF, FBX, DRC), point clouds (LAS, LAZ, E57, PTX, PCD, FLS, FWS), CAD files (STP, STEP), and USD files (USD, USDA, USDC, USDZ). Uses CPU-based headless rendering via PyVista/VTK with Xvfb in an AWS Batch Fargate container. This pipeline is turned off by default in the configuration file due to some restrictive used library licenses [LGPL, etc.] (see NOTICE.md).
     -   100 GB maximum input file size with pre-download S3 size validation (can be extended but may require a EFS Fargate implementation)
     -   Configurable `overwriteExistingPreviewFiles` pipeline input parameter to control preview file overwrite behavior
@@ -75,6 +77,7 @@ Asset versions have database table changes that require the running of migration
 
 ### Chores
 
+-   Refactored the Pipelines and Workflows API backend to now have proper request/response models, better input validation, and now follows the new backend standard set in v2.2. This is in prepartion for a larger pipeline/workflow overhaul.
 -   Created `CLOUDFRONTDEPLOY` feature enablement flag to let the front-end know the type of web deployment the website is being served under
 -   **Web** Added service worker and proxy to manually set header flags for both local debugging and/or to set for website deployment to allow features like WebAssembly (WASM) loading.
 -   Added additional validation checks to the APIs regarding creating workflows and workflow execution

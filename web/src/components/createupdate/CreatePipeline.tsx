@@ -3,19 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
-    Modal,
-    Box,
-    SpaceBetween,
-    Button,
-    Form,
-    FormField,
-    Input,
-    Textarea,
-    MultiselectProps,
-    Select,
-    RadioGroup,
-} from "@cloudscape-design/components";
+import Modal from "@cloudscape-design/components/modal";
+import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Button from "@cloudscape-design/components/button";
+import Form from "@cloudscape-design/components/form";
+import FormField from "@cloudscape-design/components/form-field";
+import Input from "@cloudscape-design/components/input";
+import Textarea from "@cloudscape-design/components/textarea";
+import Select from "@cloudscape-design/components/select";
+import RadioGroup from "@cloudscape-design/components/radio-group";
+import Alert from "@cloudscape-design/components/alert";
 import { useState, useEffect } from "react";
 import { API } from "aws-amplify";
 import OptionDefinition from "./form-definitions/types/OptionDefinition";
@@ -24,8 +22,6 @@ import {
     pipelineExecutionTypeOptions,
 } from "./form-definitions/PipelineFormDefinition";
 import DatabaseSelector from "../selectors/DatabaseSelector";
-import { dataBind } from "jodit/types/core/helpers";
-import { check } from "prettier";
 
 // Type definition for string dictionary (was imported from babylonjs)
 type StringDictionary = { [key: string]: string };
@@ -47,6 +43,10 @@ interface PipelineFields {
     taskTimeout: string;
     taskHeartbeatTimeout: string;
     lambdaName: string;
+    sqsQueueUrl: string;
+    eventBridgeBusArn: string;
+    eventBridgeSource: string;
+    eventBridgeDetailType: string;
     description: string;
     assetType: string;
     outputType: string;
@@ -90,27 +90,32 @@ const waitForCallbackOptions = [
     },
 ];
 
+const getDefaultFormState = (): PipelineFields => ({
+    pipelineId: "",
+    databaseId: { label: "", value: "" },
+    pipelineTypeSelected: pipelineTypeOptions[0],
+    pipelineExecutionType: pipelineExecutionTypeOptions[0],
+    waitForCallback: waitForCallbackOptions[0],
+    taskTimeout: "",
+    taskHeartbeatTimeout: "",
+    lambdaName: "",
+    sqsQueueUrl: "",
+    eventBridgeBusArn: "",
+    eventBridgeSource: "",
+    eventBridgeDetailType: "",
+    description: "",
+    assetType: ".all",
+    outputType: ".all",
+    inputParameters: "",
+});
+
 export default function CreatePipeline({
     open,
     setOpen,
     setReload,
     initState,
 }: CreatePipelineProps) {
-    const [formState, setFormState] = useState<PipelineFields>({
-        pipelineId: "",
-        databaseId: { label: "", value: "" },
-        pipelineTypeSelected: pipelineTypeOptions[0],
-        pipelineExecutionType: pipelineExecutionTypeOptions[0],
-        waitForCallback: waitForCallbackOptions[0],
-        taskTimeout: "",
-        taskHeartbeatTimeout: "",
-        lambdaName: "",
-        description: "",
-        assetType: initState?.assetType || ".all",
-        outputType: initState?.outputType || ".all",
-        inputParameters: "",
-        ...initState,
-    });
+    const [formState, setFormState] = useState<PipelineFields>(getDefaultFormState());
 
     // if initState is detected, format initial state definitions, and set form state
     useEffect(() => {
@@ -130,6 +135,10 @@ export default function CreatePipeline({
         let initOutputType: string = ".all";
         let initDatabase: OptionDefinition = { label: null, value: null };
         let initLambdaName: string = "";
+        let initSqsQueueUrl: string = "";
+        let initEventBridgeBusArn: string = "";
+        let initEventBridgeSource: string = "";
+        let initEventBridgeDetailType: string = "";
 
         if (initState) {
             let type = pipelineTypeOptions.find((item) => item.value === initState.pipelineType);
@@ -143,19 +152,44 @@ export default function CreatePipeline({
             initAssetType = initState.assetType || ".all";
             initOutputType = initState.outputType || ".all";
             initDatabase = { label: initState.databaseId, value: initState.databaseId };
-            let obj = JSON.parse(initState.userProvidedResource);
-            initLambdaName = obj.resourceId;
+            try {
+                let obj = JSON.parse(initState.userProvidedResource);
+                if (obj.resourceType === "Lambda") {
+                    initLambdaName = obj.resourceId || "";
+                } else if (obj.resourceType === "SQS") {
+                    initSqsQueueUrl = obj.resourceId || "";
+                } else if (obj.resourceType === "EventBridge") {
+                    initEventBridgeBusArn = obj.resourceId || "";
+                    initEventBridgeSource = obj.eventSource || "";
+                    initEventBridgeDetailType = obj.eventDetailType || "";
+                }
+            } catch (e) {
+                console.log("Failed to parse userProvidedResource", e);
+            }
         }
-        setFormState((prev) => ({
-            ...prev,
-            pipelineTypeSelected: initPipelineType,
-            pipelineExecutionType: initPipelineExecutionType,
-            waitForCallback: initWaitForCallback,
-            assetType: initAssetType,
-            outputType: initOutputType,
-            databaseId: initDatabase,
-            lambdaName: initLambdaName,
-        }));
+        if (initState) {
+            setFormState((prev) => ({
+                ...prev,
+                pipelineId: initState.pipelineId || "",
+                description: initState.description || "",
+                taskTimeout: initState.taskTimeout || "",
+                taskHeartbeatTimeout: initState.taskHeartbeatTimeout || "",
+                inputParameters: initState.inputParameters || "",
+                pipelineTypeSelected: initPipelineType,
+                pipelineExecutionType: initPipelineExecutionType,
+                waitForCallback: initWaitForCallback,
+                assetType: initAssetType,
+                outputType: initOutputType,
+                databaseId: initDatabase,
+                lambdaName: initLambdaName,
+                sqsQueueUrl: initSqsQueueUrl,
+                eventBridgeBusArn: initEventBridgeBusArn,
+                eventBridgeSource: initEventBridgeSource,
+                eventBridgeDetailType: initEventBridgeDetailType,
+            }));
+        } else {
+            setFormState(getDefaultFormState());
+        }
     }, [initState]);
 
     // TODO: can refactor this approach, move handlers to separate file (utils.js) or combine into one change function
@@ -187,48 +221,56 @@ export default function CreatePipeline({
         }));
     };
 
+    const buildApiBody = (state: PipelineFields, updateAssociatedWorkflows: boolean) => {
+        const execType = state.pipelineExecutionType.value;
+
+        // Only send fields relevant to the selected execution type.
+        // Convert empty strings to undefined so they become null/omitted in JSON.
+        const emptyToUndefined = (val: string) => (val && val.trim() ? val.trim() : undefined);
+
+        const body: Record<string, any> = {
+            pipelineId: state.pipelineId,
+            databaseId: state.databaseId.value,
+            pipelineType: state.pipelineTypeSelected.value,
+            pipelineExecutionType: execType,
+            waitForCallback: state.waitForCallback.value,
+            taskTimeout: emptyToUndefined(state.taskTimeout),
+            taskHeartbeatTimeout: emptyToUndefined(state.taskHeartbeatTimeout),
+            description: state.description,
+            assetType: state.assetType,
+            outputType: state.outputType,
+            inputParameters: emptyToUndefined(state.inputParameters),
+            updateAssociatedWorkflows: updateAssociatedWorkflows,
+        };
+
+        // Execution-type-specific fields — only include for the relevant type
+        if (execType === "Lambda") {
+            body.lambdaName = emptyToUndefined(state.lambdaName);
+        } else if (execType === "SQS") {
+            body.sqsQueueUrl = state.sqsQueueUrl.trim();
+        } else if (execType === "EventBridge") {
+            body.eventBridgeBusArn = emptyToUndefined(state.eventBridgeBusArn);
+            body.eventBridgeSource = emptyToUndefined(state.eventBridgeSource);
+            body.eventBridgeDetailType = emptyToUndefined(state.eventBridgeDetailType);
+        }
+
+        return body;
+    };
+
     // eslint-disable-next-line no-mixed-operators
     const createOrUpdate = (initState && initState.pipelineId && "Update") || "Create";
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
     const [openWorkflowModal, setOpenWorkflowModal] = useState(false);
     const [radioValue, setRadioValue] = useState("yes");
-    const [pipeline, setPipeline] = useState<PipelineFields>({
-        pipelineId: "",
-        databaseId: { label: "", value: "" },
-        pipelineTypeSelected: pipelineTypeOptions[0],
-        pipelineExecutionType: pipelineExecutionTypeOptions[0],
-        waitForCallback: waitForCallbackOptions[0],
-        taskTimeout: "",
-        taskHeartbeatTimeout: "",
-        lambdaName: "",
-        description: "",
-        assetType: initState?.assetType || ".all",
-        outputType: initState?.outputType || ".all",
-        inputParameters: "",
-        ...initState,
-    });
+    const [pipeline, setPipeline] = useState<PipelineFields>(getDefaultFormState());
 
     return (
         <div>
             <Modal
                 onDismiss={() => {
                     setOpen(false);
-                    setFormState({
-                        pipelineId: "",
-                        databaseId: { label: "", value: "" },
-                        pipelineTypeSelected: pipelineTypeOptions[0],
-                        pipelineExecutionType: pipelineExecutionTypeOptions[0],
-                        waitForCallback: waitForCallbackOptions[0],
-                        taskTimeout: "",
-                        taskHeartbeatTimeout: "",
-                        lambdaName: "",
-                        description: "",
-                        assetType: ".all",
-                        outputType: ".all",
-                        inputParameters: "",
-                        ...initState,
-                    });
+                    setFormState(getDefaultFormState());
                     setFormError("");
                 }}
                 visible={open}
@@ -240,20 +282,7 @@ export default function CreatePipeline({
                                 variant="link"
                                 onClick={() => {
                                     setOpen(false);
-                                    setFormState({
-                                        pipelineId: "",
-                                        databaseId: { label: "", value: "" },
-                                        pipelineTypeSelected: pipelineTypeOptions[0],
-                                        pipelineExecutionType: pipelineExecutionTypeOptions[0],
-                                        waitForCallback: waitForCallbackOptions[0],
-                                        taskTimeout: "",
-                                        taskHeartbeatTimeout: "",
-                                        lambdaName: "",
-                                        description: "",
-                                        assetType: ".all",
-                                        outputType: ".all",
-                                        inputParameters: "",
-                                    });
+                                    setFormState(getDefaultFormState());
                                     setFormError("");
                                 }}
                             >
@@ -265,28 +294,14 @@ export default function CreatePipeline({
                                     if (createOrUpdate == "Create") {
                                         setInProgress(true);
                                         API.put("api", `pipelines`, {
-                                            body: {
-                                                pipelineId: formState.pipelineId,
-                                                databaseId: formState.databaseId.value,
-                                                pipelineType: formState.pipelineTypeSelected.value,
-                                                pipelineExecutionType:
-                                                    formState.pipelineExecutionType.value,
-                                                waitForCallback: formState.waitForCallback.value,
-                                                taskTimeout: formState.taskTimeout,
-                                                taskHeartbeatTimeout:
-                                                    formState.taskHeartbeatTimeout,
-                                                lambdaName: formState.lambdaName,
-                                                description: formState.description,
-                                                assetType: formState.assetType,
-                                                outputType: formState.outputType,
-                                                inputParameters: formState.inputParameters,
-                                                updateAssociatedWorkflows: false,
-                                            },
+                                            body: buildApiBody(formState, false),
                                         })
                                             .then((res) => {
                                                 console.log("Create/Update pipeline: ", res);
                                                 setReload(true);
                                                 setOpen(false);
+                                                setFormState(getDefaultFormState());
+                                                setFormError("");
                                             })
                                             .catch((err) => {
                                                 console.log("create pipeline error", err);
@@ -309,7 +324,9 @@ export default function CreatePipeline({
                                         validatePipelineDescriptionLength(formState.description) ===
                                             null &&
                                         formState.assetType.trim() !== "" &&
-                                        formState.outputType.trim() !== ""
+                                        formState.outputType.trim() !== "" &&
+                                        (formState.pipelineExecutionType.value !== "SQS" ||
+                                            formState.sqsQueueUrl.trim() !== "")
                                     )
                                 }
                                 data-testid={`${createOrUpdate}-pipeline-button`}
@@ -386,7 +403,10 @@ export default function CreatePipeline({
                                     }
                                 />
                             </FormField>
-                            <FormField label="Wait for a Callback with the Task Token">
+                            <FormField
+                                label="Wait for a Callback with the Task Token"
+                                constraintText="When enabled, the downstream consumer must call SendTaskSuccess/SendTaskFailure with the TaskToken."
+                            >
                                 <Select
                                     options={waitForCallbackOptions}
                                     selectedOption={formState.waitForCallback}
@@ -401,59 +421,184 @@ export default function CreatePipeline({
                                     }
                                 />
                             </FormField>
-                            <FormField
-                                label="Task Timeout"
-                                constraintText="If the task runs longer than the specified seconds, this state fails with a States.Timeout error name. Must be a positive, non-zero integer."
-                            >
-                                <Input
-                                    value={formState.taskTimeout}
-                                    onChange={({ detail }) =>
-                                        setFormState({ ...formState, taskTimeout: detail.value })
+                            {formState.waitForCallback.value === "Disabled" &&
+                                formState.pipelineExecutionType.value !== "Lambda" && (
+                                    <Alert type="info">
+                                        Without callback enabled, this pipeline will send data to the
+                                        downstream service as an information push only. No output
+                                        files, preview images, or metadata will be returned to VAMS
+                                        for integration into the asset.
+                                    </Alert>
+                                )}
+                            {formState.waitForCallback.value === "Enabled" && (
+                                <>
+                                    <FormField
+                                        label="Task Timeout"
+                                        constraintText="Positive integer (seconds). Maximum: 604800 (1 week). If the task runs longer, it fails with States.Timeout."
+                                        errorText={
+                                            formState.taskTimeout && (
+                                                isNaN(Number(formState.taskTimeout)) || !Number.isInteger(Number(formState.taskTimeout))
+                                                    ? "Must be a whole number"
+                                                    : Number(formState.taskTimeout) <= 0
+                                                        ? "Must be a positive non-zero value"
+                                                        : Number(formState.taskTimeout) > 604800
+                                                            ? "Cannot exceed 604800 seconds (1 week)"
+                                                            : undefined
+                                            )
+                                        }
+                                    >
+                                        <Input
+                                            value={formState.taskTimeout}
+                                            onChange={({ detail }) =>
+                                                setFormState({
+                                                    ...formState,
+                                                    taskTimeout: detail.value,
+                                                })
+                                            }
+                                            autoFocus={false}
+                                            type="number"
+                                            inputMode="numeric"
+                                            placeholder="86400"
+                                            data-testid="task-timeout"
+                                        />
+                                    </FormField>
+                                    <FormField
+                                        label="Task Heartbeat Timeout (Optional)"
+                                        constraintText="Optional. Positive integer (seconds). Must be less than Task Timeout. If omitted, heartbeat checks are disabled. If set, tasks that don't send heartbeats within this interval will fail."
+                                        errorText={
+                                            formState.taskHeartbeatTimeout && (
+                                                isNaN(Number(formState.taskHeartbeatTimeout)) || !Number.isInteger(Number(formState.taskHeartbeatTimeout))
+                                                    ? "Must be a whole number"
+                                                    : Number(formState.taskHeartbeatTimeout) <= 0
+                                                        ? "Must be a positive non-zero value"
+                                                        : formState.taskTimeout && Number(formState.taskHeartbeatTimeout) >= Number(formState.taskTimeout)
+                                                            ? "Must be less than Task Timeout"
+                                                            : undefined
+                                            )
+                                        }
+                                    >
+                                        <Input
+                                            value={formState.taskHeartbeatTimeout}
+                                            onChange={({ detail }) =>
+                                                setFormState({
+                                                    ...formState,
+                                                    taskHeartbeatTimeout: detail.value,
+                                                })
+                                            }
+                                            autoFocus={false}
+                                            type="number"
+                                            inputMode="numeric"
+                                            placeholder="3600"
+                                            data-testid="task-heartbeat-timeout"
+                                        />
+                                    </FormField>
+                                </>
+                            )}
+                            {formState.pipelineExecutionType.value === "Lambda" && (
+                                <FormField
+                                    label="Lambda Function Name (Optional)"
+                                    constraintText="If no name is provided a template lambda function will be deployed on your behalf."
+                                >
+                                    <Input
+                                        value={formState.lambdaName}
+                                        disabled={
+                                            inProgress ||
+                                            (initState && initState.lambdaName && true) ||
+                                            false
+                                        }
+                                        onChange={({ detail }) =>
+                                            setFormState({
+                                                ...formState,
+                                                lambdaName: detail.value,
+                                            })
+                                        }
+                                        autoFocus={false}
+                                        data-testid="lambda-name"
+                                    />
+                                </FormField>
+                            )}
+                            {formState.pipelineExecutionType.value === "SQS" && (
+                                <FormField
+                                    label="SQS Queue URL"
+                                    constraintText="Full SQS queue URL"
+                                    errorText={
+                                        formState.sqsQueueUrl.trim() === ""
+                                            ? "SQS Queue URL is required"
+                                            : null
                                     }
-                                    autoFocus={false}
-                                    type="number"
-                                    inputMode="numeric"
-                                    placeholder="86400"
-                                    data-testid="task-timeout"
-                                />
-                            </FormField>
-                            <FormField
-                                label="Task Heartbeat Timeout"
-                                constraintText="If more time than the specified seconds elapses between heartbeats from the task, this state fails with a States.Timeout error name. Must be a positive, non-zero integer less than the number of seconds specified in the TimeoutSeconds field."
-                            >
-                                <Input
-                                    value={formState.taskHeartbeatTimeout}
-                                    onChange={({ detail }) =>
-                                        setFormState({
-                                            ...formState,
-                                            taskHeartbeatTimeout: detail.value,
-                                        })
-                                    }
-                                    autoFocus={false}
-                                    type="number"
-                                    inputMode="numeric"
-                                    placeholder="3600"
-                                    data-testid="task-heartbeat-timeout"
-                                />
-                            </FormField>
-                            <FormField
-                                label="Lambda Function Name (Optional)"
-                                constraintText="If no name is provided a template lambda function will be deployed on your behalf."
-                            >
-                                <Input
-                                    value={formState.lambdaName}
-                                    disabled={
-                                        inProgress ||
-                                        (initState && initState.lambdaName && true) ||
-                                        false
-                                    }
-                                    onChange={({ detail }) =>
-                                        setFormState({ ...formState, lambdaName: detail.value })
-                                    }
-                                    autoFocus={false}
-                                    data-testid="task-heartbeat-timeout"
-                                />
-                            </FormField>
+                                >
+                                    <Input
+                                        value={formState.sqsQueueUrl}
+                                        disabled={inProgress}
+                                        onChange={({ detail }) =>
+                                            setFormState({
+                                                ...formState,
+                                                sqsQueueUrl: detail.value,
+                                            })
+                                        }
+                                        autoFocus={false}
+                                        placeholder="https://sqs.us-east-1.amazonaws.com/123456789012/my-queue"
+                                        data-testid="sqs-queue-url"
+                                    />
+                                </FormField>
+                            )}
+                            {formState.pipelineExecutionType.value === "EventBridge" && (
+                                <>
+                                    <FormField
+                                        label="EventBridge Bus ARN (Optional)"
+                                        constraintText="Leave empty to use the default event bus"
+                                    >
+                                        <Input
+                                            value={formState.eventBridgeBusArn}
+                                            disabled={inProgress}
+                                            onChange={({ detail }) =>
+                                                setFormState({
+                                                    ...formState,
+                                                    eventBridgeBusArn: detail.value,
+                                                })
+                                            }
+                                            autoFocus={false}
+                                            placeholder="arn:aws:events:us-east-1:123456789012:event-bus/my-bus"
+                                            data-testid="eventbridge-bus-arn"
+                                        />
+                                    </FormField>
+                                    <FormField
+                                        label="EventBridge Source (Optional)"
+                                        constraintText="Default: vams.pipeline"
+                                    >
+                                        <Input
+                                            value={formState.eventBridgeSource}
+                                            disabled={inProgress}
+                                            onChange={({ detail }) =>
+                                                setFormState({
+                                                    ...formState,
+                                                    eventBridgeSource: detail.value,
+                                                })
+                                            }
+                                            autoFocus={false}
+                                            placeholder="vams.pipeline"
+                                            data-testid="eventbridge-source"
+                                        />
+                                    </FormField>
+                                    <FormField
+                                        label="EventBridge Detail Type (Optional)"
+                                        constraintText="Default: pipeline ID"
+                                    >
+                                        <Input
+                                            value={formState.eventBridgeDetailType}
+                                            disabled={inProgress}
+                                            onChange={({ detail }) =>
+                                                setFormState({
+                                                    ...formState,
+                                                    eventBridgeDetailType: detail.value,
+                                                })
+                                            }
+                                            autoFocus={false}
+                                            data-testid="eventbridge-detail-type"
+                                        />
+                                    </FormField>
+                                </>
+                            )}
                             <FormField
                                 label="Pipeline Description"
                                 constraintText="Required. Max 256 characters."
@@ -543,22 +688,7 @@ export default function CreatePipeline({
                                     if (radioValue == "yes") {
                                         setInProgress(true);
                                         API.put("api", `pipelines`, {
-                                            body: {
-                                                pipelineId: pipeline.pipelineId,
-                                                databaseId: pipeline.databaseId.value,
-                                                pipelineType: pipeline.pipelineTypeSelected.value,
-                                                pipelineExecutionType:
-                                                    pipeline.pipelineExecutionType.value,
-                                                waitForCallback: pipeline.waitForCallback.value,
-                                                taskTimeout: pipeline.taskTimeout,
-                                                taskHeartbeatTimeout: pipeline.taskHeartbeatTimeout,
-                                                lambdaName: pipeline.lambdaName,
-                                                description: pipeline.description,
-                                                assetType: pipeline.assetType,
-                                                outputType: pipeline.outputType,
-                                                inputParameters: pipeline.inputParameters,
-                                                updateAssociatedWorkflows: true,
-                                            },
+                                            body: buildApiBody(pipeline, true),
                                         })
                                             .then((res) => {
                                                 console.log(
@@ -579,22 +709,7 @@ export default function CreatePipeline({
                                     } else {
                                         setInProgress(true);
                                         API.put("api", `pipelines`, {
-                                            body: {
-                                                pipelineId: pipeline.pipelineId,
-                                                databaseId: pipeline.databaseId.value,
-                                                pipelineType: pipeline.pipelineTypeSelected.value,
-                                                pipelineExecutionType:
-                                                    pipeline.pipelineExecutionType.value,
-                                                waitForCallback: pipeline.waitForCallback.value,
-                                                taskTimeout: pipeline.taskTimeout,
-                                                taskHeartbeatTimeout: pipeline.taskHeartbeatTimeout,
-                                                lambdaName: pipeline.lambdaName,
-                                                description: pipeline.description,
-                                                assetType: pipeline.assetType,
-                                                outputType: pipeline.outputType,
-                                                inputParameters: pipeline.inputParameters,
-                                                updateAssociatedWorkflows: false,
-                                            },
+                                            body: buildApiBody(pipeline, false),
                                         })
                                             .then((res) => {
                                                 console.log("Update pipeline: ", res);

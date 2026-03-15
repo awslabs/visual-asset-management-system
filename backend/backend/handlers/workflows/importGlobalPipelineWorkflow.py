@@ -131,25 +131,30 @@ def validate_pipeline_parameters(pipeline_data: Dict[str, Any]) -> None:
     """
     logger.info("Validating pipeline parameters")
     
-    # Required pipeline fields
+    # Required pipeline fields (common to all execution types)
     required_fields = [
         'pipelineId', 'pipelineDescription', 'pipelineType', 'pipelineExecutionType',
-        'assetType', 'outputType', 'waitForCallback', 'lambdaName'
+        'assetType', 'outputType', 'waitForCallback'
     ]
-    
+
     for field in required_fields:
         if field not in pipeline_data or not pipeline_data[field]:
             raise ValidationError(f"Missing required pipeline field: {field}")
-    
+
     # Validate pipelineType
     allowed_pipeline_types = ['standardFile', 'previewFile']
     if pipeline_data['pipelineType'] not in allowed_pipeline_types:
         raise ValidationError(f"Invalid pipelineType. Allowed values: {', '.join(allowed_pipeline_types)}")
-    
+
     # Validate pipelineExecutionType
-    allowed_execution_types = ['Lambda']
+    allowed_execution_types = ['Lambda', 'SQS', 'EventBridge']
     if pipeline_data['pipelineExecutionType'] not in allowed_execution_types:
         raise ValidationError(f"Invalid pipelineExecutionType. Allowed values: {', '.join(allowed_execution_types)}")
+
+    # Lambda execution type requires lambdaName
+    if pipeline_data['pipelineExecutionType'] == 'Lambda':
+        if 'lambdaName' not in pipeline_data or not pipeline_data['lambdaName']:
+            raise ValidationError("Missing required pipeline field for Lambda execution type: lambdaName")
     
     # Validate waitForCallback
     allowed_callback_values = ['Enabled', 'Disabled']
@@ -596,22 +601,27 @@ def create_pipeline(pipeline_data: Dict[str, Any], update_associated_workflows: 
     
     try:
         # Prepare the payload for createPipeline
+        body = {
+            'databaseId': pipeline_data['databaseId'],
+            'pipelineId': pipeline_data['pipelineId'],
+            'description': pipeline_data['pipelineDescription'],
+            'assetType': pipeline_data['assetType'],
+            'outputType': pipeline_data['outputType'],
+            'pipelineType': pipeline_data['pipelineType'],
+            'pipelineExecutionType': pipeline_data['pipelineExecutionType'],
+            'waitForCallback': pipeline_data['waitForCallback'],
+            'inputParameters': pipeline_data.get('inputParameters', ''),
+            'taskTimeout': pipeline_data.get('taskTimeout', ''),
+            'taskHeartbeatTimeout': pipeline_data.get('taskHeartbeatTimeout', ''),
+            'updateAssociatedWorkflows': update_associated_workflows
+        }
+
+        # Only include lambdaName for Lambda execution type
+        if pipeline_data['pipelineExecutionType'] == 'Lambda':
+            body['lambdaName'] = pipeline_data['lambdaName']
+
         payload = {
-            'body': {
-                'databaseId': pipeline_data['databaseId'],
-                'pipelineId': pipeline_data['pipelineId'],
-                'description': pipeline_data['pipelineDescription'],
-                'assetType': pipeline_data['assetType'],
-                'outputType': pipeline_data['outputType'],
-                'pipelineType': pipeline_data['pipelineType'],
-                'pipelineExecutionType': pipeline_data['pipelineExecutionType'],
-                'waitForCallback': pipeline_data['waitForCallback'],
-                'lambdaName': pipeline_data['lambdaName'],
-                'inputParameters': pipeline_data.get('inputParameters', ''),
-                'taskTimeout': pipeline_data.get('taskTimeout', ''),
-                'taskHeartbeatTimeout': pipeline_data.get('taskHeartbeatTimeout', ''),
-                'updateAssociatedWorkflows': update_associated_workflows
-            },
+            'body': body,
             'requestContext': {
                 'http': {
                     'method': 'POST',
@@ -854,6 +864,22 @@ def create_workflow(workflow_data: Dict[str, Any], pipeline_data: Dict[str, Any]
     try:
         # Build the specifiedPipelines structure
         # This should reference the pipeline that was created/updated
+        execution_type = pipeline_data['pipelineExecutionType']
+
+        # Build userProvidedResource based on execution type
+        if execution_type == 'Lambda':
+            user_provided_resource = json.dumps({
+                "isProvided": True,
+                "resourceId": pipeline_data['lambdaName']
+            })
+        else:
+            # SQS and EventBridge pipelines don't have a pre-provisioned resource at deploy time;
+            # the resource is configured by the user at runtime
+            user_provided_resource = json.dumps({
+                "isProvided": False,
+                "resourceId": ""
+            })
+
         specified_pipelines = {
             "functions": [
                 {
@@ -867,10 +893,7 @@ def create_workflow(workflow_data: Dict[str, Any], pipeline_data: Dict[str, Any]
                     "taskTimeout": pipeline_data.get('taskTimeout', ''),
                     "taskHeartbeatTimeout": pipeline_data.get('taskHeartbeatTimeout', ''),
                     "inputParameters": pipeline_data.get('inputParameters', ''),
-                    "userProvidedResource": json.dumps({
-                        "isProvided": True,
-                        "resourceId": pipeline_data['lambdaName']
-                    })
+                    "userProvidedResource": user_provided_resource
                 }
             ]
         }
@@ -1034,26 +1057,27 @@ def pipeline_needs_update(existing_pipeline: Dict[str, Any], new_pipeline_data: 
             logger.info(f"Pipeline field '{existing_field}' changed: '{existing_str}' -> '{new_str}'")
             return True
     
-    # Check lambda name from userProvidedResource
-    if 'userProvidedResource' in existing_pipeline:
-        try:
-            user_resource = json.loads(existing_pipeline['userProvidedResource'])
-            existing_lambda = user_resource.get('resourceId', '')
-        except (ValueError, TypeError):
+    # Check lambda name from userProvidedResource (only relevant for Lambda execution type)
+    if new_pipeline_data.get('pipelineExecutionType') == 'Lambda':
+        if 'userProvidedResource' in existing_pipeline:
+            try:
+                user_resource = json.loads(existing_pipeline['userProvidedResource'])
+                existing_lambda = user_resource.get('resourceId', '')
+            except (ValueError, TypeError):
+                existing_lambda = ''
+        else:
             existing_lambda = ''
-    else:
-        existing_lambda = ''
-    
-    new_lambda = new_pipeline_data.get('lambdaName', '')
-    
-    # Normalize and compare lambda names
-    existing_lambda = existing_lambda.strip() if existing_lambda else ''
-    new_lambda = new_lambda.strip() if new_lambda else ''
-    
-    if existing_lambda != new_lambda:
-        logger.info(f"Pipeline lambda name changed: '{existing_lambda}' -> '{new_lambda}'")
-        return True
-    
+
+        new_lambda = new_pipeline_data.get('lambdaName', '')
+
+        # Normalize and compare lambda names
+        existing_lambda = existing_lambda.strip() if existing_lambda else ''
+        new_lambda = new_lambda.strip() if new_lambda else ''
+
+        if existing_lambda != new_lambda:
+            logger.info(f"Pipeline lambda name changed: '{existing_lambda}' -> '{new_lambda}'")
+            return True
+
     logger.info("No significant pipeline changes detected")
     return False
 
@@ -1126,26 +1150,27 @@ def workflow_needs_update(existing_workflow: Dict[str, Any], new_workflow_data: 
             logger.info(f"Workflow pipeline field '{existing_field}' changed: '{existing_str}' -> '{new_str}'")
             return True
     
-    # Check lambda name from userProvidedResource in the workflow
-    if 'userProvidedResource' in existing_function:
-        try:
-            user_resource = json.loads(existing_function['userProvidedResource'])
-            existing_lambda = user_resource.get('resourceId', '')
-        except (ValueError, TypeError):
+    # Check lambda name from userProvidedResource in the workflow (only for Lambda execution type)
+    if new_pipeline_data.get('pipelineExecutionType') == 'Lambda':
+        if 'userProvidedResource' in existing_function:
+            try:
+                user_resource = json.loads(existing_function['userProvidedResource'])
+                existing_lambda = user_resource.get('resourceId', '')
+            except (ValueError, TypeError):
+                existing_lambda = ''
+        else:
             existing_lambda = ''
-    else:
-        existing_lambda = ''
-    
-    new_lambda = new_pipeline_data.get('lambdaName', '')
-    
-    # Normalize and compare lambda names
-    existing_lambda = existing_lambda.strip() if existing_lambda else ''
-    new_lambda = new_lambda.strip() if new_lambda else ''
-    
-    if existing_lambda != new_lambda:
-        logger.info(f"Workflow lambda name changed: '{existing_lambda}' -> '{new_lambda}'")
-        return True
-    
+
+        new_lambda = new_pipeline_data.get('lambdaName', '')
+
+        # Normalize and compare lambda names
+        existing_lambda = existing_lambda.strip() if existing_lambda else ''
+        new_lambda = new_lambda.strip() if new_lambda else ''
+
+        if existing_lambda != new_lambda:
+            logger.info(f"Workflow lambda name changed: '{existing_lambda}' -> '{new_lambda}'")
+            return True
+
     logger.info("No significant workflow changes detected")
     return False
 

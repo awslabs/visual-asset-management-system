@@ -9,13 +9,10 @@ import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
 import Pagination from "@cloudscape-design/components/pagination";
 import Table from "@cloudscape-design/components/table";
-import TextFilter from "@cloudscape-design/components/text-filter";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import { WorkflowExecutionListDefinition } from "../../list/list-definitions/WorkflowExecutionListDefinition";
 import { fetchDatabaseWorkflows, fetchWorkflowExecutions } from "../../../services/APIService";
-import { useNavigate } from "react-router";
 import { useStatusMessage } from "../../common/StatusMessage";
-import { useCollection } from "@cloudscape-design/collection-hooks";
 
 interface WorkflowTabProps {
     databaseId: string;
@@ -32,7 +29,6 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     onExecuteWorkflow,
     refreshTrigger,
 }) => {
-    const navigate = useNavigate();
     const { showMessage } = useStatusMessage();
     const [refreshing, setRefreshing] = useState(false);
     const [allItems, setAllItems] = useState<any[]>([]);
@@ -45,7 +41,39 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
     const initialLoadDoneRef = useRef<boolean>(false);
 
-    // Build parent items and children map from the flat allItems list
+    // Sorting state
+    const [sortingColumn, setSortingColumn] = useState<{ sortingField: string }>({
+        sortingField: "startDate",
+    });
+    const [isDescending, setIsDescending] = useState(true);
+
+    // Resolve the sortable value for an item given a sorting field.
+    // Some columns display different data for parent vs child rows.
+    const getSortValue = (item: any, field: string): any => {
+        if (field === "description") {
+            // Parents show description, children show inputAssetFileKey
+            return item.parentId
+                ? (item.inputAssetFileKey ?? "")
+                : (item.description ?? "");
+        }
+        return item[field] ?? "";
+    };
+
+    // Generic comparator that works for any field
+    const compareItems = (a: any, b: any, field: string, descending: boolean): number => {
+        const valA = getSortValue(a, field);
+        const valB = getSortValue(b, field);
+        let result: number;
+        if (typeof valA === "string" && typeof valB === "string") {
+            result = valA.localeCompare(valB);
+        } else {
+            result = valA < valB ? -1 : valA > valB ? 1 : 0;
+        }
+        return descending ? -result : result;
+    };
+
+    // Build parent items and children map from the flat allItems list,
+    // with sorting applied to both children within groups and groups themselves
     const { parentItems, childrenMap } = useMemo(() => {
         const parents: any[] = [];
         const children = new Map<string, any[]>();
@@ -60,8 +88,34 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
             }
         }
 
+        const field = sortingColumn.sortingField;
+
+        // Sort children within each group
+        Array.from(children.keys()).forEach((key) => {
+            const childList = children.get(key)!;
+            childList.sort((a: any, b: any) => compareItems(a, b, field, isDescending));
+            children.set(key, childList);
+        });
+
+        // Sort parent groups by their most recent child's sort value
+        // (first child after sorting, since children are already sorted)
+        parents.sort((a, b) => {
+            const aChildren = children.get(a.name) || [];
+            const bChildren = children.get(b.name) || [];
+            // Use the first child's value (most recent after sort) to represent the group
+            const aVal = aChildren.length > 0 ? getSortValue(aChildren[0], field) : getSortValue(a, field);
+            const bVal = bChildren.length > 0 ? getSortValue(bChildren[0], field) : getSortValue(b, field);
+            let result: number;
+            if (typeof aVal === "string" && typeof bVal === "string") {
+                result = aVal.localeCompare(bVal);
+            } else {
+                result = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+            }
+            return isDescending ? -result : result;
+        });
+
         return { parentItems: parents, childrenMap: children };
-    }, [allItems]);
+    }, [allItems, sortingColumn, isDescending]);
 
     // Auto-expand all parents when data changes
     useEffect(() => {
@@ -84,19 +138,45 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     // Calculate execution count (exclude parent workflow rows)
     const executionCount = allItems.filter((item) => item.parentId).length;
 
-    // Use Cloudscape collection hooks for sorting/pagination
-    const { items, collectionProps, paginationProps, filterProps, filteredItemsCount } =
-        useCollection(parentItems, {
-            sorting: {
-                defaultState: {
-                    sortingColumn: { sortingField: "startDate" },
-                    isDescending: true,
-                },
-            },
-            pagination: { pageSize: 15 },
-            filtering: {},
-            selection: {},
-        });
+    // Pagination based on execution (child) rows, not parent groups.
+    // Builds a flat list of all children in group order, paginates that,
+    // then determines which parents have visible children on this page.
+    const [currentPage, setCurrentPage] = useState(1);
+    const pageSize = 15;
+
+    const { paginatedParents, paginatedChildrenMap } = useMemo(() => {
+        // Build flat ordered list of all children following parent group order
+        const allChildren: any[] = [];
+        for (const parent of parentItems) {
+            const kids = childrenMap.get(parent.name) || [];
+            for (const kid of kids) {
+                allChildren.push({ ...kid, _parentName: parent.name });
+            }
+        }
+
+        // Slice to current page
+        const start = (currentPage - 1) * pageSize;
+        const pageChildren = allChildren.slice(start, start + pageSize);
+
+        // Group page children back by parent and determine which parents to show
+        const pageChildMap = new Map<string, any[]>();
+        const parentOrder: string[] = [];
+        for (const child of pageChildren) {
+            const pName = child._parentName;
+            if (!pageChildMap.has(pName)) {
+                pageChildMap.set(pName, []);
+                parentOrder.push(pName);
+            }
+            pageChildMap.get(pName)!.push(child);
+        }
+
+        // Build the parent list in the same order, only including parents with visible children
+        const visibleParents = parentOrder
+            .map((pName) => parentItems.find((p) => p.name === pName))
+            .filter(Boolean);
+
+        return { paginatedParents: visibleParents, paginatedChildrenMap: pageChildMap };
+    }, [parentItems, childrenMap, currentPage]);
 
     // Trigger a refresh when refreshTrigger changes (after workflow execution)
     useEffect(() => {
@@ -348,21 +428,24 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
         );
     }
 
-    // Remove ref from collectionProps to avoid React warning
-    const { ref, ...tableCollectionProps } = collectionProps as any;
-
     return (
         <ErrorBoundary componentName="Workflows">
             <Table
-                {...tableCollectionProps}
-                items={items}
+                items={paginatedParents}
                 loading={refreshing}
                 trackBy="name"
                 columnDefinitions={columnDefinitions}
                 visibleColumns={visibleColumns}
+                sortingColumn={sortingColumn}
+                sortingDescending={isDescending}
+                onSortingChange={({ detail }) => {
+                    setSortingColumn(detail.sortingColumn as { sortingField: string });
+                    setIsDescending(detail.isDescending ?? true);
+                    setCurrentPage(1);
+                }}
                 expandableRows={{
-                    getItemChildren: (item: any) => childrenMap.get(item.name) || [],
-                    isItemExpandable: (item: any) => (childrenMap.get(item.name) || []).length > 0,
+                    getItemChildren: (item: any) => paginatedChildrenMap.get(item.name) || [],
+                    isItemExpandable: (item: any) => (paginatedChildrenMap.get(item.name) || []).length > 0,
                     expandedItems,
                     onExpandableItemToggle: ({ detail: { item, expanded } }: any) => {
                         setExpandedItems((prev) =>
@@ -392,19 +475,19 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                             </Button>
                         </div>
                         <Header
-                            counter={
-                                items.length !== executionCount
-                                    ? `(${
-                                          allItems.filter((item) => item.parentId).length
-                                      }/${executionCount})`
-                                    : `(${executionCount})`
-                            }
+                            counter={`(${executionCount})`}
                         >
                             Workflow Executions
                         </Header>
                     </>
                 }
-                pagination={<Pagination {...paginationProps} />}
+                pagination={
+                    <Pagination
+                        currentPageIndex={currentPage}
+                        pagesCount={Math.ceil(executionCount / pageSize) || 1}
+                        onChange={({ detail }) => setCurrentPage(detail.currentPageIndex)}
+                    />
+                }
                 filter={
                     <div style={{ padding: "0 0 16px 0" }}>
                         <Button

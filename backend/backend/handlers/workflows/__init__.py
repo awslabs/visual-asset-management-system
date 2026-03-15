@@ -6,18 +6,17 @@ import boto3
 import botocore
 import json
 
-from common.constants import STANDARD_JSON_RESPONSE
+from common.stepfunctions_builder import get_task_builder
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from botocore.exceptions import ClientError
 
-claims_and_roles = {}
 logger = safeLogger(service="WorkflowCommon")
 
 dynamodb = boto3.resource('dynamodb')
 sf_client = boto3.client('stepfunctions')
-main_rest_response = STANDARD_JSON_RESPONSE
+
 
 # update all workflows that are associated with a pipeline
 def update_pipeline_workflows(self, pipelineData, event):
@@ -29,11 +28,10 @@ def update_pipeline_workflows(self, pipelineData, event):
 
     updated_pipeline = pipelineData['functions'][0]
 
-    global claims_and_roles
     claims_and_roles = request_to_claims(event)
     updated_workflows = []
 
-    for workflow in workflow_table_items: 
+    for workflow in workflow_table_items:
         if workflow:
             workflow.update({
                 "object__type": "workflow"
@@ -49,7 +47,7 @@ def update_pipeline_workflows(self, pipelineData, event):
             pipelines = workflow['specifiedPipelines']['functions']
             workflowId = workflow['workflowId']
             workflow_arn = workflow['workflow_arn']
-            for index, p in enumerate(pipelines): 
+            for index, p in enumerate(pipelines):
                 pipelineId = p['pipelineId']
                 if pipelineId == updated_pipeline['pipelineId']:
                     logger.info("Found match. Updating pipeline: " + pipelineId + ", in Workflow: ", workflowId)
@@ -77,19 +75,51 @@ def update_pipeline_workflows(self, pipelineData, event):
                     )
                     original_workflow = json.loads(response['definition'])
 
-                    for i, step_name in enumerate(original_workflow["States"]):
+                    # Determine execution type from the updated pipeline data
+                    # NOTE: pipelineExecutionType is immutable after creation, so the
+                    # execution type in the ASL always matches the updated pipeline's type.
+                    # No type-transition logic is needed.
+                    exec_type = updated_pipeline.get('pipelineExecutionType', 'Lambda')
+
+                    for step_name in original_workflow["States"]:
                         if updated_pipeline['pipelineId'] in step_name:
-                            try: 
-                                original_workflow["States"][step_name]["Parameters"]["Payload"]["body"]["outputType"] = updated_pipeline['outputType']
-                                original_workflow["States"][step_name]["Parameters"]["Payload"]["body"]["inputParameters"] = updated_pipeline['inputParameters']
-                                original_workflow["States"][step_name]["Parameters"]["FunctionName"] = updated_pipeline['lambdaName']
-                                original_workflow["States"][step_name]["TimeoutSeconds"] = int(updated_pipeline['taskTimeout'])
-                                original_workflow["States"][step_name]["HeartbeatSeconds"] = int(updated_pipeline['taskHeartbeatTimeout'])
+                            try:
+                                builder = get_task_builder(exec_type)
+
+                                # Preserve transition fields from existing state
+                                existing_state = original_workflow["States"][step_name]
+                                transition = {}
+                                if "Next" in existing_state:
+                                    transition["Next"] = existing_state["Next"]
+                                if "End" in existing_state:
+                                    transition["End"] = existing_state["End"]
+
+                                # Extract current payload based on execution type
+                                if existing_state.get("Type") == "Task":
+                                    if exec_type == 'Lambda':
+                                        current_payload = existing_state.get("Parameters", {}).get("Payload", {})
+                                    elif exec_type == 'SQS':
+                                        current_payload = existing_state.get("Parameters", {}).get("MessageBody", {})
+                                    elif exec_type == 'EventBridge':
+                                        # EventBridge stores payload as Detail in Entries[0]
+                                        entries = existing_state.get("Parameters", {}).get("Entries", [{}])
+                                        current_payload = entries[0].get("Detail", {}) if entries else {}
+                                    else:
+                                        current_payload = {}
+
+                                    if current_payload.get("body"):
+                                        current_payload["body"]["outputType"] = updated_pipeline['outputType']
+                                        current_payload["body"]["inputParameters"] = updated_pipeline.get('inputParameters', '')
+
+                                    new_state = builder.build_task_state(updated_pipeline, step_name, current_payload)
+                                    new_state.update(transition)
+                                    original_workflow["States"][step_name] = new_state
+
                             except KeyError:
                                 continue
                         if "process-outputs" in step_name:
                             if updated_pipeline['pipelineId'] == original_workflow["States"][step_name]["Parameters"]["Payload"]["body"]["pipeline"]:
-                                try: 
+                                try:
                                     original_workflow["States"][step_name]["Parameters"]["Payload"]["body"]["outputType"] = updated_pipeline['outputType']
                                 except KeyError:
                                     continue

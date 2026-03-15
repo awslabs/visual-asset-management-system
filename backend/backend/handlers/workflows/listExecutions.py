@@ -6,26 +6,36 @@ import os
 import boto3
 import botocore
 from boto3.dynamodb.conditions import Key
-from common.constants import STANDARD_JSON_RESPONSE
+from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
+from models.common import (
+    APIGatewayProxyResponseV2,
+    internal_error,
+    success,
+    validation_error,
+    authorization_error,
+    general_error,
+    VAMSGeneralErrorResponse
+)
 
-claims_and_roles = {}
 logger = safeLogger(service="ListExecutionsWorkflow")
 
 sfn = boto3.client('stepfunctions')
 dynamodb = boto3.resource('dynamodb')
-main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-except:
+    if not all([workflow_execution_database, asset_storage_table_name]):
+        logger.exception("Failed loading environment variables")
+        raise Exception("Failed Loading Environment Variables")
+except Exception as e:
     logger.exception("Failed loading environment variables")
-    main_rest_response['body'] = json.dumps({"message": "Failed Loading Environment Variables"})
+    raise e
 
 asset_table = dynamodb.Table(asset_storage_table_name)
 
@@ -37,10 +47,10 @@ def get_asset_details(databaseId, assetId):
             KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('assetId').eq(assetId),
             ScanIndexForward=False
         )
-        
+
         if not response.get('Items'):
             return None
-            
+
         # Return the first (most recent) item
         return response['Items'][0]
     except Exception as e:
@@ -48,10 +58,16 @@ def get_asset_details(databaseId, assetId):
         raise Exception(f"Error retrieving asset.")
 
 
-def get_executions(database_id, asset_id, workflow_database_id, workflow_id, query_params):
+def get_executions(database_id, asset_id, workflow_database_id, workflow_id, query_params, claims_and_roles):
     asset_of_workflow = get_asset_details(database_id, asset_id)
 
-    # Add Casbin Enforcer to check if the current user has permissions to GET the asset
+    if not asset_of_workflow:
+        return {
+            "statusCode": 404,
+            "message": "Asset not found"
+        }
+
+    # Add Casbin Enforcer to check if the current user has permissions to GET the asset (Tier 2)
     asset_of_workflow.update({
         "object__type": "asset"
     })
@@ -95,7 +111,7 @@ def get_executions(database_id, asset_id, workflow_database_id, workflow_id, que
             try:
                 logger.info("workflow execution: ")
                 logger.info(item)
-                # Add Casbin Enforcer to check if the current user has permissions to GET the workflow:
+                # Add Casbin Enforcer to check if the current user has permissions to GET the workflow (Tier 2):
                 item.update({
                     "object__type": "workflow"
                 })
@@ -169,32 +185,28 @@ def get_executions(database_id, asset_id, workflow_database_id, workflow_id, que
         }
 
 
-def lambda_handler(event, context):
-    global claims_and_roles
-    response = STANDARD_JSON_RESPONSE
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     logger.info(event)
 
-    request_body = {}
-    if event.get('body'):
-        try:
-            request_body = json.loads(event['body'])
-            logger.info("Request body: %s", request_body)
-        except json.JSONDecodeError as e:
-            logger.exception(f"Invalid JSON in request body: {e}")
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
-            return response
-
-    pathParams = event.get('pathParameters', {})
-    queryParameters = event.get('queryStringParameters', {})
-
-    #Set 50 maxitems/page size to avoid performance issues with state machine API call throttling
-    validate_pagination_info(queryParameters, 50)
-
-    #Workflow ID not required in path parameters (get all workflow executions for asset)
-    workflowId = pathParams.get('workflowId', '')
-
     try:
+        # Parse request body if present
+        request_body = {}
+        if event.get('body'):
+            try:
+                request_body = json.loads(event['body'])
+                logger.info("Request body: %s", request_body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': 'Invalid JSON in request body'}, event=event)
+
+        pathParams = event.get('pathParameters', {})
+        queryParameters = event.get('queryStringParameters', {})
+
+        #Set 50 maxitems/page size to avoid performance issues with state machine API call throttling
+        validate_pagination_info(queryParameters, 50)
+
+        #Workflow ID not required in path parameters (get all workflow executions for asset)
+        workflowId = pathParams.get('workflowId', '')
 
         logger.info("Validating Parameters")
         (valid, message) = validate({
@@ -216,57 +228,54 @@ def lambda_handler(event, context):
                 'validator': 'ID',
                 'allowGlobalKeyword': True,
                 'optional': True
-
             }
         })
 
         if not valid:
             logger.error(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
+            return validation_error(body={'message': message}, event=event)
 
+        # Get claims and roles
         claims_and_roles = request_to_claims(event)
+
+        # Check if method is allowed on API (Tier 1)
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
-        if method_allowed_on_api:
-            logger.info("Listing Workflow Executions")
-            result = get_executions(pathParams.get('databaseId'), pathParams['assetId'], request_body.get('workflowDatabaseId'), workflowId, queryParameters)
-            response['body'] = json.dumps({"message": result['message']})
-            response['statusCode'] = result['statusCode']
-            logger.info(response)
-            return response
+        if not method_allowed_on_api:
+            return authorization_error()
+
+        logger.info("Listing Workflow Executions")
+        result = get_executions(pathParams.get('databaseId'), pathParams['assetId'], request_body.get('workflowDatabaseId'), workflowId, queryParameters, claims_and_roles)
+
+        if result['statusCode'] == 200:
+            return success(body={'message': result['message']})
+        elif result['statusCode'] == 403:
+            return authorization_error(body={'message': result['message']})
         else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
+            return validation_error(status_code=result['statusCode'], body={'message': result['message']}, event=event)
+
     except botocore.exceptions.ClientError as err:
-        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException':
+        if err.response['Error']['Code'] in ('LimitExceededException', 'ThrottlingException'):
             logger.exception("Throttling Error")
-            response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
-            response['body'] = json.dumps({"message": "ThrottlingException: Too many requests within a given period."})
-            return response
+            return general_error(
+                status_code=err.response['ResponseMetadata']['HTTPStatusCode'],
+                body={'message': 'ThrottlingException: Too many requests within a given period.'},
+                event=event
+            )
         elif err.response['Error']['Code'] == 'ExecutionLimitExceeded':
             logger.exception("ExecutionLimitExceeded")
-            response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
-            response['body'] = json.dumps({"message": "ExecutionLimitExceeded: Reached the maximum state machine execution limit of 1,000,000"})
-            return response
+            return general_error(
+                status_code=err.response['ResponseMetadata']['HTTPStatusCode'],
+                body={'message': 'ExecutionLimitExceeded: Reached the maximum state machine execution limit of 1,000,000'},
+                event=event
+            )
         else:
             logger.exception(err)
-            response['statusCode'] = 500
-            response['body'] = json.dumps({"message": "Internal Server Error"})
-            return response
+            return internal_error(event=event)
     except Exception as e:
         logger.exception(e)
-        response['statusCode'] = 500
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
-
-
-if __name__ == "__main__":
-    test_response = lambda_handler(None, None)
-    logger.info(test_response)
+        return internal_error(event=event)
