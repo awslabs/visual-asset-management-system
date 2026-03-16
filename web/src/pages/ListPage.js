@@ -34,6 +34,7 @@ export default function ListPage(props) {
         onCreateCallback,
         editEnabled,
         hideDeleteButton = false,
+        customFilterControls,
     } = props;
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
@@ -138,6 +139,7 @@ export default function ListPage(props) {
                         setReload={setReload}
                         UpdateSelectedElement={CreateNewElement}
                         hideDeleteButton={hideDeleteButton}
+                        customFilterControls={customFilterControls}
                         createNewElement={
                             (CreateNewElement || onCreateCallback) && (
                                 <div style={{ float: "right" }}>
@@ -176,4 +178,5 @@ ListPage.propTypes = {
     onCreateCallback: PropTypes.func,
     editEnabled: PropTypes.bool,
     hideDeleteButton: PropTypes.bool,
+    customFilterControls: PropTypes.element,
 };

@@ -22,7 +22,7 @@ export const PipelineListDefinition = new ListDefinition({
         "outputType",
     ],
     filterColumns: [
-        // { name: "databaseId", placeholder: "Database" },
+        { name: "databaseId", placeholder: Synonyms.Database },
         { name: "pipelineType", placeholder: "Type" },
         { name: "pipelineExecutionType", placeholder: "Type" },
         { name: "assetType", placeholder: "Input" },

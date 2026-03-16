@@ -38,6 +38,7 @@ export default function TableList(props) {
         hideDeleteButton = false,
         customHeaderActions,
         onSelectionChange,
+        customFilterControls,
     } = props;
     const {
         columnDefinitions,
@@ -409,7 +410,15 @@ export default function TableList(props) {
                                 ariaLabel="Refresh data"
                             />
                         </div>
-                        <div style={{ float: "right" }}>
+                        <div
+                            style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "8px",
+                                float: "right",
+                            }}
+                        >
+                            {customFilterControls}
                             <Grid
                                 gridDefinition={filteredFilterColumns.map((filterColumn, i) => {
                                     return {
@@ -434,10 +443,18 @@ export default function TableList(props) {
                                             <Select
                                                 key={i}
                                                 selectedOption={
-                                                    !selectedValue
+                                                    selectedValue === null ||
+                                                    selectedValue === undefined
                                                         ? null
                                                         : {
-                                                              label: selectedValue,
+                                                              label:
+                                                                  typeof selectedValue === "boolean"
+                                                                      ? selectedValue
+                                                                          ? "True"
+                                                                          : "False"
+                                                                      : selectedValue === ""
+                                                                      ? "(none)"
+                                                                      : String(selectedValue),
                                                               value: selectedValue,
                                                           }
                                                 }
@@ -459,12 +476,24 @@ export default function TableList(props) {
                                                                 (row) => row[filterColumn.name]
                                                             )
                                                         ),
-                                                    ].map((cellValue) => {
-                                                        return {
-                                                            label: cellValue,
-                                                            value: cellValue,
-                                                        };
-                                                    })
+                                                    ]
+                                                        .filter(
+                                                            (v) => v !== undefined && v !== null
+                                                        )
+                                                        .map((cellValue) => {
+                                                            const displayLabel =
+                                                                typeof cellValue === "boolean"
+                                                                    ? cellValue
+                                                                        ? "True"
+                                                                        : "False"
+                                                                    : cellValue === ""
+                                                                    ? "(none)"
+                                                                    : String(cellValue);
+                                                            return {
+                                                                label: displayLabel,
+                                                                value: cellValue,
+                                                            };
+                                                        })
                                                 )}
                                                 placeholder={filterColumn.placeholder}
                                                 selectedAriaLabel="Selected"
@@ -511,4 +540,5 @@ TableList.propTypes = {
     customHeaderActions: PropTypes.element,
     onSelectionChange: PropTypes.func,
     hideDeleteButton: PropTypes.bool,
+    customFilterControls: PropTypes.element,
 };

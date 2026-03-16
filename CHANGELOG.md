@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file. See [standa
 • New 3D Mesh and CAD STP ThreeJs Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading and scene graph support, now primary viewer for common mesh types with optional LGPL-licensed CAD support
 • New SQS and EventBridge Pipeline Support - Pipelines and workflows now support SQS and EventBridge execution types alongside existing Lambda, enabling integration with external processing systems.
 • New 3D and PointCloud Preview Thumbnail (GIF) Generation Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
+• New Database Metadata and Location Mini-map Support - Database metadata management on the website and location service mini-map display option
 • Enhanced Asset Versions Functionality - New asset version aliasing, archive/unarchive capabilities, asset version editing, metadata/attribute versioning, and revert functionality with metadata restoration
 • Enhanced File Selector and Download Functionality w/ Asset Versions - Version-aware download APIs with file and asset version query parameters, updated file viewers for file or asset version file retrieval, web asset version selector filtering for files and metadata
 • New Cognito User Management - Web UI, API, and CLI functionality for managing Cognito users without AWS Console access, includes add/update/remove/reset password operations, new admin navigation page, enabled only when Cognito authentication is active
@@ -56,6 +57,9 @@ Asset versions have database table changes that require the running of migration
     -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions (and asset sub-tables)
 -   Added new API Key system to allow for the creation of API Keys through API, CLI, and the website (`API Key Management`). This will provide the ability to issue upstream or downstream API keys to applications to use VAMS. API Keys are assigned a user ID owner it will impersonate (both for user id used and roles applied). See the `DeveloeprGuide.md` for more information on how to generate these API keys and use them.
 -   **Web** updated the web navigation to split out `Admin - Auth` into its own admin navigation section and all others to `Admin - Data`. Removed "Asset Ingestion" from the admin menus as this web page is now deprecated although still exists for direct navigation, as permissions allow.
+-   **Web** Database listing page now supports viewing/modifying metadata on databases (backend/CLI implemented for databases in v2.4)
+-   **Web** Database listing page now supports mini-map views and display toggle (off by default) when LocationServices is enabled for VAMS, based on database metadata (ie. having a Location or Longitude+Latitude metadata key)
+-   **Web** Database listing page now has different filters based on columns that are more likely to be filtered for (S3 buckets, Restrict Metadata, Restrict File Uploads)
 
 ### Bug Fixes
 
@@ -66,6 +70,7 @@ Asset versions have database table changes that require the running of migration
 -   **Web** Fixed the file selector pop-up on the asset upload for existing assets to work in Firefox; folder selection on Firefox is still not yet supported
 -   **Web** Fixed bug in some table lists that prevented single row selects in certain scenarios (would select all rows)
 -   **Web** Fixed various bugs in pipeline editor and workflow execution list paging
+-   **Web** Pipeline listing page now properly shows database filter drop-down again
 -   Fixed bug in workflow creation and executions where assetId and databaseId was not being passed through. This will only be fixed for existing workflows that are re-created or edited but should not affect existing pipelines that are currently working already.
 -   Fixed bug in assets and files search to show full result counts, have appropriate paging functionality, and correct the backend API for a paging logic bug
 -   Added additional createWorkflow API input validation checks for edge input scenarios and cases where a user creating a workflow does not have authorization access to an underlying pipeline being specified
