@@ -284,10 +284,12 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         const encodedFileKey = encodedSegments.join("/");
                         let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                        // Only pass assetVersionId if provided — don't pass versionId to avoid
-                        // interfering with internal dependency resolution for multi-file assets
+                        // assetVersionId takes precedence (used for all files including deps)
+                        // versionId is S3 file version, only for the primary file (isMainFile)
                         if (assetVersionId) {
                             assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+                        } else if (versionId && fileKey === assetKey) {
+                            assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
                         }
 
                         const response = await fetch(assetUrl, {

@@ -179,10 +179,12 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             const encodedFileKey = encodedSegments.join("/");
                             let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                            // Only pass assetVersionId if provided — don't pass versionId to avoid
-                            // interfering with internal dependency resolution for multi-file assets
+                            // assetVersionId takes precedence (used for all files including deps)
+                            // versionId is S3 file version, only for the primary file
                             if (assetVersionId) {
                                 assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+                            } else if (versionId) {
+                                assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
                             }
 
                             console.log(`VEERUM Viewer: Loading 3D tileset from ${assetUrl}`);
@@ -492,7 +494,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             )}
 
             {/* Asset version warning */}
-            {assetVersionId && !dismissedVersionWarning && (
+            {(assetVersionId || versionId) && !dismissedVersionWarning && (
                 <div
                     style={{
                         position: "absolute",

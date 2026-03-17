@@ -745,10 +745,13 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 const encodedFileKey = encodedSegments.join("/");
                 let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                // Only pass assetVersionId if provided — don't pass versionId to avoid
-                // interfering with internal dependency resolution for multi-file assets
+                // Version resolution:
+                // - assetVersionId: used for ALL files (main + dependencies) to fetch from a specific asset version
+                // - versionId: S3 version ID, used only for the MAIN file (not dependencies)
                 if (assetVersionId) {
                     assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+                } else if (versionId && isSingleFile) {
+                    assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
                 }
 
                 const response = await fetch(assetUrl, {

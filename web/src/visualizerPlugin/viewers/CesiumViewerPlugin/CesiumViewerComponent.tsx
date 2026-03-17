@@ -73,6 +73,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     const [measurementMode, setMeasurementMode] = useState<"none" | "distance" | "area">("none");
     const [measurementPoints, setMeasurementPoints] = useState<any[]>([]);
     const [measurementEntities, setMeasurementEntities] = useState<any[]>([]);
+    const [dismissedVersionWarning, setDismissedVersionWarning] = useState(false);
     const [measurementResults, setMeasurementResults] = useState<
         Array<{ type: "distance" | "area"; value: number; unit: string; id: number }>
     >([]);
@@ -109,6 +110,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             if (assetVersionId) {
                 url += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
             }
+            // Note: versionId (S3 file version) is NOT passed for Cesium — tileset viewers
+            // require all files from the same version context, which only assetVersionId provides
             return url;
         },
         [config, databaseId, assetId, assetVersionId]
@@ -1055,6 +1058,48 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
     return (
         <div style={{ position: "relative", width: "100%", height: "100%" }}>
+            {/* File version warning — Cesium only supports assetVersionId, not individual file versions */}
+            {versionId && !assetVersionId && !dismissedVersionWarning && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: "0",
+                        left: "0",
+                        right: "0",
+                        backgroundColor: "#e8f4fd",
+                        border: "1px solid #0972d3",
+                        borderRadius: "4px",
+                        padding: "8px 12px",
+                        margin: "8px",
+                        zIndex: 1001,
+                        fontSize: "0.85em",
+                        color: "#0972d3",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                    }}
+                >
+                    <span style={{ textAlign: "center", flex: 1 }}>
+                        Specific file versions cannot be viewed except for when looking at files
+                        under an asset version ID. Viewing the latest version of this file.
+                    </span>
+                    <button
+                        onClick={() => setDismissedVersionWarning(true)}
+                        style={{
+                            background: "none",
+                            border: "none",
+                            color: "#0972d3",
+                            cursor: "pointer",
+                            fontSize: "1.1em",
+                            fontWeight: "bold",
+                            padding: "0 0 0 12px",
+                        }}
+                    >
+                        ×
+                    </button>
+                </div>
+            )}
+
             {/* Display initialization errors at the top */}
             {initError && (
                 <div

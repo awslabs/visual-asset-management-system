@@ -193,7 +193,7 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
 
     return (
         <div style={{ position: "relative", height: "100%" }} id="potree-root">
-            {assetVersionId && !dismissedVersionWarning && (
+            {(assetVersionId || versionId) && !dismissedVersionWarning && (
                 <div
                     style={{
                         position: "absolute",
