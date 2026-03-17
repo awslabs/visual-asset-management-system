@@ -63,10 +63,11 @@ The website overhaul may cause a high number of merge conflicts for any forked r
 -   Added functionality for asset versions to be archived/unarchived, be able to specify a version alias name, and be able to edit an existing asset version to change the alias name and/or associated comment. Asset versions in dynamoDB now properly store the asset's database id to prevent future system conflicts. This feature added new API routes, web UI, and CLI commands.
     -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions (and asset sub-tables)
 -   Added new API Key system to allow for the creation of API Keys through API, CLI, and the website (`API Key Management`). This will provide the ability to issue upstream or downstream API keys to applications to use VAMS. API Keys are assigned a user ID owner it will impersonate (both for user id used and roles applied). See the `DeveloeprGuide.md` for more information on how to generate these API keys and use them.
--   **Web** updated the web navigation to split out `Admin - Auth` into its own admin navigation section and all others to `Admin - Data`. Removed "Asset Ingestion" from the admin menus as this web page is now deprecated although still exists for direct navigation, as permissions allow.
+-   **Web** Updated the web navigation to split out `Admin - Auth` into its own admin navigation section and all others to `Admin - Data`. Removed "Asset Ingestion" from the admin menus as this web page is now deprecated although still exists for direct navigation, as permissions allow.
 -   **Web** Database listing page now supports viewing/modifying metadata on databases (backend/CLI implemented for databases in v2.4)
 -   **Web** Database listing page now supports mini-map views and display toggle (off by default) when LocationServices is enabled for VAMS, based on database metadata (ie. having a Location or Longitude+Latitude metadata key)
 -   **Web** Database listing page now has different filters based on columns that are more likely to be filtered for (S3 buckets, Restrict Metadata, Restrict File Uploads)
+-   **Web** New ability to specify destination file name when copying/moving single files; multiple file move/copy will retain still the original filename
 
 ### Bug Fixes
 

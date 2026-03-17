@@ -287,14 +287,15 @@ export const processMultipleFileOperations = async (
     files: string[],
     destinationFolder: string,
     operation: "move" | "copy",
-    destinationAssetId?: string
+    destinationAssetId?: string,
+    destFileNames?: Record<string, string>
 ): Promise<FileOperationResult[]> => {
     const results: FileOperationResult[] = [];
 
     for (const filePath of files) {
         try {
-            // Construct destination path
-            const fileName = filePath.split("/").pop() || filePath;
+            // Use custom filename if provided, otherwise extract from source path
+            const fileName = destFileNames?.[filePath] || filePath.split("/").pop() || filePath;
             const destinationPath = destinationFolder.endsWith("/")
                 ? `${destinationFolder}${fileName}`
                 : `${destinationFolder}/${fileName}`;
