@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { ThreeJSDependencyManager } from "./dependencies";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
@@ -24,7 +24,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
-    const [config] = useState(Cache.getItem("config"));
+    const [config] = useState(appCache.getItem("config"));
     const [threeReady, setThreeReady] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");

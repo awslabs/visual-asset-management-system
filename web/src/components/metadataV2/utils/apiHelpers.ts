@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { API } from "aws-amplify";
+import { apiClient } from "../../../services/apiClient";
 import {
     EntityType,
     FileMetadataType,
@@ -22,8 +22,7 @@ export const fetchMetadata = async (
     databaseId?: string,
     filePath?: string,
     fileType?: FileMetadataType,
-    assetVersionId?: string,
-    api = API
+    assetVersionId?: string
 ): Promise<MetadataAPIResponse> => {
     try {
         let endpoint = "";
@@ -60,7 +59,7 @@ export const fetchMetadata = async (
             queryParams.assetVersionId = assetVersionId;
         }
 
-        const response = await api.get("api", endpoint, {
+        const response = await apiClient.get(endpoint, {
             queryStringParameters: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         });
 
@@ -105,8 +104,7 @@ export const createMetadata = async (
     metadata: MetadataRecord[],
     databaseId?: string,
     filePath?: string,
-    fileType?: FileMetadataType,
-    api = API
+    fileType?: FileMetadataType
 ): Promise<BulkOperationResponse> => {
     try {
         let endpoint = "";
@@ -137,7 +135,7 @@ export const createMetadata = async (
                 throw new Error(`Unknown entity type: ${entityType}`);
         }
 
-        const response = await api.post("api", endpoint, { body });
+        const response = await apiClient.post(endpoint, { body });
 
         console.log(`[apiHelpers] createMetadata response for ${entityType}:`, response);
 
@@ -164,8 +162,7 @@ export const updateMetadata = async (
     updateType: UpdateType = "update",
     databaseId?: string,
     filePath?: string,
-    fileType?: FileMetadataType,
-    api = API
+    fileType?: FileMetadataType
 ): Promise<BulkOperationResponse> => {
     try {
         let endpoint = "";
@@ -196,7 +193,7 @@ export const updateMetadata = async (
                 throw new Error(`Unknown entity type: ${entityType}`);
         }
 
-        const response = await api.put("api", endpoint, { body });
+        const response = await apiClient.put(endpoint, { body });
 
         console.log(`[apiHelpers] updateMetadata response for ${entityType}:`, response);
 
@@ -222,8 +219,7 @@ export const deleteMetadata = async (
     metadataKeys: string[],
     databaseId?: string,
     filePath?: string,
-    fileType?: FileMetadataType,
-    api = API
+    fileType?: FileMetadataType
 ): Promise<BulkOperationResponse> => {
     try {
         let endpoint = "";
@@ -254,7 +250,7 @@ export const deleteMetadata = async (
                 throw new Error(`Unknown entity type: ${entityType}`);
         }
 
-        const response = await api.del("api", endpoint, { body });
+        const response = await apiClient.del(endpoint, { body });
 
         console.log(`[apiHelpers] deleteMetadata response for ${entityType}:`, response);
 
@@ -277,8 +273,7 @@ export const deleteMetadata = async (
 export const fetchMetadataSchema = async (
     databaseIds: string[],
     entityType: string,
-    filePath?: string,
-    api = API
+    filePath?: string
 ): Promise<any> => {
     try {
         // For now, we'll use the existing fetchAllMetadataSchema or fetchDatabaseMetadataSchema

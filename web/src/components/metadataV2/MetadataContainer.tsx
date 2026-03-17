@@ -24,6 +24,7 @@ import BulkEditMode from "./BulkEditMode";
 import MetadataSearchFilter from "./MetadataSearchFilter";
 import { createMetadata, updateMetadata, deleteMetadata } from "./utils/apiHelpers";
 import { convertToMetadataRecords } from "./utils/metadataHelpers";
+import { validateMetadataValue } from "./utils/validationHelpers";
 
 export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     entityType,
@@ -392,8 +393,6 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
             // Try to preserve the value if it validates against the new type
             let newValue = "";
             if (currentValue && currentValue.trim() !== "") {
-                // Import validation helper
-                const { validateMetadataValue } = require("./utils/validationHelpers");
                 const validation = validateMetadataValue(currentValue, type);
 
                 if (validation.isValid) {

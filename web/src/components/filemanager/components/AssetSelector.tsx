@@ -73,7 +73,7 @@ export function AssetSelector({
                     <Box>
                         <strong>{selectedAsset.assetName}</strong>
                         <br />
-                        <span style={{ color: "#687078", fontSize: "14px" }}>
+                        <span style={{ color: "var(--vams-text-secondary)", fontSize: "14px" }}>
                             {selectedAsset.description}
                         </span>
                     </Box>

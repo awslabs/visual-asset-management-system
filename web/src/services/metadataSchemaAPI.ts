@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { API } from "aws-amplify";
+import { apiClient } from "./apiClient";
 import {
     MetadataSchema,
     CreateMetadataSchemaRequest,
@@ -111,8 +111,7 @@ const normalizeFields = (fields: any): any => {
  */
 export const fetchMetadataSchemas = async (
     databaseId: string,
-    entityType?: MetadataSchemaEntityType,
-    api = API
+    entityType?: MetadataSchemaEntityType
 ): Promise<GetMetadataSchemasResponse> => {
     try {
         const params: any = { databaseId };
@@ -120,7 +119,7 @@ export const fetchMetadataSchemas = async (
             params.metadataEntityType = entityType;
         }
 
-        const response = await api.get("api", "metadataschema", {
+        const response = await apiClient.get("metadataschema", {
             queryStringParameters: params,
         });
 
@@ -154,13 +153,11 @@ export const fetchMetadataSchemas = async (
  */
 export const getMetadataSchema = async (
     databaseId: string,
-    metadataSchemaId: string,
-    api = API
+    metadataSchemaId: string
 ): Promise<MetadataSchema> => {
     try {
-        const response = await api.get(
-            "api",
-            `database/${databaseId}/metadataSchema/${metadataSchemaId}`,
+        const response = await apiClient.get(
+`database/${databaseId}/metadataSchema/${metadataSchemaId}`,
             {}
         );
 
@@ -183,11 +180,10 @@ export const getMetadataSchema = async (
  * Create a new metadata schema
  */
 export const createMetadataSchema = async (
-    schemaData: CreateMetadataSchemaRequest,
-    api = API
+    schemaData: CreateMetadataSchemaRequest
 ): Promise<MetadataSchemaOperationResponse> => {
     try {
-        const response = await api.post("api", "metadataschema", {
+        const response = await apiClient.post("metadataschema", {
             body: schemaData,
         });
 
@@ -213,11 +209,10 @@ export const createMetadataSchema = async (
  * Update an existing metadata schema
  */
 export const updateMetadataSchema = async (
-    schemaData: UpdateMetadataSchemaRequest,
-    api = API
+    schemaData: UpdateMetadataSchemaRequest
 ): Promise<MetadataSchemaOperationResponse> => {
     try {
-        const response = await api.put("api", "metadataschema", {
+        const response = await apiClient.put("metadataschema", {
             body: schemaData,
         });
 
@@ -245,13 +240,11 @@ export const updateMetadataSchema = async (
 export const deleteMetadataSchema = async (
     databaseId: string,
     metadataSchemaId: string,
-    deleteRequest: DeleteMetadataSchemaRequest,
-    api = API
+    deleteRequest: DeleteMetadataSchemaRequest
 ): Promise<MetadataSchemaOperationResponse> => {
     try {
-        const response = await api.del(
-            "api",
-            `database/${databaseId}/metadataSchema/${metadataSchemaId}`,
+        const response = await apiClient.del(
+`database/${databaseId}/metadataSchema/${metadataSchemaId}`,
             {
                 body: deleteRequest,
             }

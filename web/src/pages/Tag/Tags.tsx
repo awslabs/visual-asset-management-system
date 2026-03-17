@@ -6,7 +6,7 @@
 import CreateTag from "./CreateTag";
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import ListPageNoDatabase from "../ListPageNoDatabase";
 import CreateTagType from "./CreateTagType";
 import { fetchTags, fetchtagTypes } from "../../services/APIService";
@@ -23,7 +23,7 @@ export const TagsListDefinition = new ListDefinition({
     elementId: "tagName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `tags/${item.tagName}`, {});
+            const response: any = await apiClient.del(`tags/${item.tagName}`, {});
             return [true, response.message, ""];
         } catch (error: any) {
             console.log(error);
@@ -63,7 +63,7 @@ export const TagTypesListDefinition = new ListDefinition({
     elementId: "tagTypeName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `tag-types/${item.tagTypeName}`, {});
+            const response: any = await apiClient.del(`tag-types/${item.tagTypeName}`, {});
             return [true, response.message, ""];
         } catch (error: any) {
             console.log(error);

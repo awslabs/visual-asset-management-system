@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { Box, Button, TextContent, Alert } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { apiClient } from "../../../services/apiClient";
 import { generateUUID } from "../../../common/utils/utils";
 import { fetchAllComments } from "../../../services/APIService";
 import JoditEditor from "jodit-react";
@@ -146,9 +146,8 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             const fetchAsset = async () => {
                 if (assetId && databaseId) {
                     try {
-                        const response = await API.get(
-                            "api",
-                            `database/${databaseId}/assets/${assetId}`,
+                        const response = await apiClient.get(
+`database/${databaseId}/assets/${assetId}`,
                             {}
                         );
                         setAsset(response);
@@ -230,9 +229,8 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
         setLoading(true);
         setShowLoadingIcon(true);
         try {
-            const response = await API.post(
-                "api",
-                `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
+            const response = await apiClient.post(
+`comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
                 {
                     body: {
                         commentBody: content,

@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { VeerumDependencyManager } from "./dependencies";
 import { VeerumViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
@@ -74,7 +74,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 }
 
                 // Get config for API endpoint
-                const config = Cache.getItem("config");
+                const config = appCache.getItem("config");
                 if (!config) {
                     const errorMsg = "Configuration not available";
                     setInitError(errorMsg);

@@ -57,7 +57,7 @@ export const MetadataSearchFilter: React.FC<MetadataSearchFilterProps> = ({
     const typeOptions = [{ label: "All Types", value: "all" }, ...getAvailableValueTypes(false)];
 
     return (
-        <div style={{ padding: "12px", background: "#f9f9f9", borderRadius: "8px" }}>
+        <div style={{ padding: "12px", background: "var(--vams-bg-secondary)", borderRadius: "8px" }}>
             <SpaceBetween direction="vertical" size="s">
                 <div
                     style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}
@@ -121,7 +121,7 @@ export const MetadataSearchFilter: React.FC<MetadataSearchFilterProps> = ({
                 </div>
 
                 {hasActiveFilters && (
-                    <div style={{ fontSize: "12px", color: "#666" }}>
+                    <div style={{ fontSize: "12px", color: "var(--vams-text-secondary)" }}>
                         <Icon name="status-info" variant="subtle" /> Showing {filteredRows} of{" "}
                         {totalRows} metadata records
                     </div>

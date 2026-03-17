@@ -369,11 +369,17 @@ export default function DragDropFileUpload({
     };
 
     const dropZoneStyles = {
-        border: isDragActive || isDragOver ? "2px solid #0972d3" : "2px dashed #879596",
+        border:
+            isDragActive || isDragOver
+                ? "2px solid var(--vams-color-info)"
+                : "2px dashed var(--vams-border-input)",
         borderRadius: "8px",
         padding: "24px",
         textAlign: "center" as const,
-        backgroundColor: isDragActive || isDragOver ? "#f2f8fd" : "#fafbfc",
+        backgroundColor:
+            isDragActive || isDragOver
+                ? "var(--vams-bg-hover)"
+                : "var(--vams-bg-secondary)",
         transition: "all 0.2s ease-in-out",
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.6 : 1,

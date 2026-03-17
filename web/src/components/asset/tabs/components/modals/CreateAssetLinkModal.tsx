@@ -13,7 +13,7 @@ import {
     SpaceBetween,
     Alert,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { apiClient } from "../../../../../services/apiClient";
 import { fetchtagTypes } from "../../../../../services/APIService";
 import { useStatusMessage } from "../../../../common/StatusMessage";
 import { CreateAssetLinkModalProps } from "../../types/AssetLinksTypes";
@@ -214,7 +214,7 @@ export function CreateAssetLinkModal({
                 }
 
                 try {
-                    await API.post("api", "asset-links", {
+                    await apiClient.post("asset-links", {
                         body: assetLinkBody,
                     });
                     successCount++;

@@ -266,9 +266,9 @@ export default function AssetGrid(props) {
                                         { colspan: { l: "4", m: "4", default: "4" } },
                                     ]}
                                 >
-                                    <div style={{ color: "#545b64" }}>{Synonyms.Asset} Type</div>
-                                    <div style={{ color: "#545b64" }}>Distributable</div>
-                                    <div style={{ color: "#545b64" }}>Version</div>
+                                    <div style={{ color: "var(--vams-text-secondary)" }}>{Synonyms.Asset} Type</div>
+                                    <div style={{ color: "var(--vams-text-secondary)" }}>Distributable</div>
+                                    <div style={{ color: "var(--vams-text-secondary)" }}>Version</div>
                                 </Grid>
                             ),
                             content: (e) => {

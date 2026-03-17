@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import {
     Button,
     Header,
@@ -45,9 +45,8 @@ export const put = async (
             prefix = "/" + prefix;
         }
 
-        return API.put(
-            "api",
-            `database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`,
+        return apiClient.put(
+`database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`,
             {
                 body: {
                     version: "1",
@@ -56,7 +55,7 @@ export const put = async (
             }
         );
     } else {
-        return API.put("api", `database/${databaseId}/assets/${assetId}/metadata`, {
+        return apiClient.put(`database/${databaseId}/assets/${assetId}/metadata`, {
             body: {
                 version: "1",
                 metadata: record,
@@ -72,13 +71,12 @@ const get = async (databaseId: string, assetId: string, prefix?: string): Promis
             prefix = "/" + prefix;
         }
 
-        return API.get(
-            "api",
-            `database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`,
+        return apiClient.get(
+`database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`,
             {}
         );
     } else {
-        return API.get("api", `database/${databaseId}/assets/${assetId}/metadata`, {});
+        return apiClient.get(`database/${databaseId}/assets/${assetId}/metadata`, {});
     }
 };
 

@@ -6,7 +6,7 @@
 import CreateConstraint from "./CreateConstraint";
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import ListPageNoDatabase from "../ListPageNoDatabase";
 import { fetchConstraints } from "../../services/APIService";
 
@@ -18,7 +18,7 @@ export const ConstraintsListDefinition = new ListDefinition({
     elementId: "name",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `auth/constraints/${item.constraintId}`, {});
+            const response: any = await apiClient.del(`auth/constraints/${item.constraintId}`, {});
             return [true, response.message, ""];
         } catch (error: any) {
             console.log(error);

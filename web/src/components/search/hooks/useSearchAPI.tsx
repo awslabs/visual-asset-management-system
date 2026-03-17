@@ -4,7 +4,7 @@
  */
 
 import { useCallback } from "react";
-import { API } from "aws-amplify";
+import { apiClient } from "../../../services/apiClient";
 import { SearchQuery, SearchResponse, MetadataFilter } from "../types";
 
 /**
@@ -283,7 +283,7 @@ export const useSearchAPI = () => {
                 console.log("Search API request body:", body);
 
                 // Execute the search
-                const response = await API.post("api", "search", {
+                const response = await apiClient.post("search", {
                     "Content-type": "application/json",
                     body: body,
                 });
@@ -333,7 +333,7 @@ export const useSearchAPI = () => {
                     entityTypes: params.entityTypes,
                 };
 
-                const response = await API.post("api", "search/simple", {
+                const response = await apiClient.post("search/simple", {
                     "Content-type": "application/json",
                     body: body,
                 });
@@ -349,7 +349,7 @@ export const useSearchAPI = () => {
 
     const getSearchMappings = useCallback(async (): Promise<any> => {
         try {
-            const response = await API.get("api", "search", {});
+            const response = await apiClient.get("search", {});
             return response;
         } catch (error) {
             console.error("Search mappings API error:", error);

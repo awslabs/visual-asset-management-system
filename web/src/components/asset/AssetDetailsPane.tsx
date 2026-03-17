@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from "react";
 import { Box, Button, Container, Grid, Header, SpaceBetween } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
@@ -45,7 +45,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         if (!asset?.assetId) return;
 
         try {
-            const response = await API.post("api", "check-subscription", {
+            const response = await apiClient.post("check-subscription", {
                 body: {
                     userId: username,
                     assetId: asset.assetId,
@@ -79,7 +79,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         try {
             if (subscribed) {
                 // Unsubscribe
-                const response = await API.del("api", "unsubscribe", {
+                const response = await apiClient.del("unsubscribe", {
                     body: subscriptionBody,
                 });
 
@@ -101,7 +101,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                 }
             } else {
                 // Subscribe
-                const response = await API.post("api", "subscriptions", {
+                const response = await apiClient.post("subscriptions", {
                     body: subscriptionBody,
                 });
 

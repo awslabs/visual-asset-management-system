@@ -9,7 +9,7 @@ import {
     SpaceBetween,
     Textarea,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import { useEffect, useState } from "react";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
 import { fetchtagTypes } from "../../services/APIService";
@@ -156,7 +156,7 @@ export default function CreateTag({
                             onClick={() => {
                                 setInProgress(true);
                                 if (createOrUpdate === "Create") {
-                                    API.post("api", "tags", {
+                                    apiClient.post("tags", {
                                         body: tagBody,
                                     })
                                         .then((response) => {
@@ -188,7 +188,7 @@ export default function CreateTag({
                                             reloadChild();
                                         });
                                 } else {
-                                    API.put("api", "tags", {
+                                    apiClient.put("tags", {
                                         body: tagBody,
                                     })
                                         .then((response) => {

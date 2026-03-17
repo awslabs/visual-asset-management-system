@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { PotreeDependencyManager } from "./dependencies";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
@@ -18,7 +18,7 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
     const engineElement = useRef<HTMLDivElement>(null);
     const [loaded, setLoaded] = useState(false);
     const [showNoAssetMessage, setShowNoAssetMessage] = useState(false);
-    const [config] = useState(Cache.getItem("config"));
+    const [config] = useState(appCache.getItem("config"));
     const [potreeInstance, setPotreeInstance] = useState<any>(null);
     const [error, setError] = useState<string | null>(null);
     const [dismissedVersionWarning, setDismissedVersionWarning] = useState(false);

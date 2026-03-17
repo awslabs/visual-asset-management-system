@@ -6,7 +6,7 @@
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
 import viewerConfig from "../config/viewerConfig.json";
 import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../services/appCache";
 import { StylesheetManager } from "./StylesheetManager";
 import React from "react";
 
@@ -101,7 +101,7 @@ export class PluginRegistry {
 
         try {
             // Get the current configuration from cache (same pattern as ViewAsset.tsx)
-            const appConfig = Cache.getItem("config");
+            const appConfig = appCache.getItem("config");
 
             if (!appConfig || !appConfig.featuresEnabled) {
                 console.warn(

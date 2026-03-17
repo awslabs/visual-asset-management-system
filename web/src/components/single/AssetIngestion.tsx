@@ -9,7 +9,7 @@ import {
     SpaceBetween,
     Grid,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import { useState } from "react";
 import { generateUUID } from "../../common/utils/utils";
 
@@ -176,7 +176,7 @@ export default function AssetIngestion() {
                 ],
             };
 
-            const response = await API.post("api", "/ingest-asset", {
+            const response = await apiClient.post("/ingest-asset", {
                 body: completeBody,
             });
 
@@ -264,7 +264,7 @@ export default function AssetIngestion() {
             };
 
             // Call the API to initialize the upload
-            const response = await API.post("api", "/ingest-asset", {
+            const response = await apiClient.post("/ingest-asset", {
                 body: requestBody,
             });
 

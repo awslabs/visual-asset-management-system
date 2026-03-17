@@ -641,7 +641,7 @@ export default function ViewFile() {
                                 <Box padding="xxl" textAlign="center">
                                     <SpaceBetween direction="vertical" size="m">
                                         <Spinner size="large" />
-                                        <div style={{ color: "#666", fontSize: "16px" }}>
+                                        <div style={{ color: "var(--vams-text-secondary)", fontSize: "16px" }}>
                                             Loading file...
                                         </div>
                                     </SpaceBetween>
@@ -695,7 +695,7 @@ export default function ViewFile() {
                                             <h1>
                                                 {getHeaderText()}{" "}
                                                 {asset?.status === "archived" && (
-                                                    <span style={{ color: "#888" }}>
+                                                    <span style={{ color: "var(--vams-text-secondary)" }}>
                                                         (Archived)
                                                     </span>
                                                 )}
@@ -723,7 +723,7 @@ export default function ViewFile() {
                                     {/* Version info on its own row */}
                                     {!isMultiFileMode && singleFileInfo?.versionId && (
                                         <div style={{ marginTop: "4px" }}>
-                                            <span style={{ fontSize: "14px", color: "#666" }}>
+                                            <span style={{ fontSize: "14px", color: "var(--vams-text-secondary)" }}>
                                                 Version: {singleFileInfo.versionId}
                                             </span>
                                         </div>
@@ -820,7 +820,7 @@ export default function ViewFile() {
                                                                                     "" && (
                                                                                     <span
                                                                                         style={{
-                                                                                            color: "#666",
+                                                                                            color: "var(--vams-text-secondary)",
                                                                                             marginLeft:
                                                                                                 "4px",
                                                                                         }}
@@ -835,7 +835,7 @@ export default function ViewFile() {
                                                                             {file.versionId && (
                                                                                 <span
                                                                                     style={{
-                                                                                        color: "#666",
+                                                                                        color: "var(--vams-text-secondary)",
                                                                                         marginLeft:
                                                                                             "8px",
                                                                                     }}
@@ -907,7 +907,7 @@ export default function ViewFile() {
                                         /* Show message when files are archived or are directories */
                                         <Container>
                                             <Box padding="m" textAlign="center">
-                                                <div style={{ color: "#666", fontSize: "16px" }}>
+                                                <div style={{ color: "var(--vams-text-secondary)", fontSize: "16px" }}>
                                                     {hasArchivedFiles
                                                         ? "Visualizer is not available for archived files."
                                                         : "Visualizer is not available for directories."}
@@ -922,7 +922,7 @@ export default function ViewFile() {
                                                     <Box padding="m" textAlign="center">
                                                         <div
                                                             style={{
-                                                                color: "#666",
+                                                                color: "var(--vams-text-secondary)",
                                                                 fontSize: "16px",
                                                             }}
                                                         >

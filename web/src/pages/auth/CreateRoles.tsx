@@ -8,7 +8,7 @@ import {
     SpaceBetween,
     Input,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import { useState } from "react";
 
 interface RoleFields {
@@ -112,7 +112,7 @@ export default function CreateTagType({
                                 setInProgress(true);
                                 console.log("sending", roleBody);
                                 if (createOrUpdate === "Create") {
-                                    API.post("api", "roles", {
+                                    apiClient.post("roles", {
                                         body: roleBody,
                                     })
                                         .then((res) => {
@@ -141,7 +141,7 @@ export default function CreateTagType({
                                             setInProgress(false);
                                         });
                                 } else {
-                                    API.put("api", "roles", {
+                                    apiClient.put("roles", {
                                         body: roleBody,
                                     })
                                         .then((res) => {

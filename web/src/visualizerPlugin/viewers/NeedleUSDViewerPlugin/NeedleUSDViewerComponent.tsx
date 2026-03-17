@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { NeedleUSDDependencyManager } from "./dependencies";
 import { downloadAsset } from "../../../services/APIService";
@@ -23,7 +23,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
-    const [config] = useState(Cache.getItem("config"));
+    const [config] = useState(appCache.getItem("config"));
 
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");

@@ -15,7 +15,8 @@ import {
     Pagination,
     Spinner,
 } from "@cloudscape-design/components";
-import { API, Cache } from "aws-amplify";
+import { appCache } from "../../services/appCache";
+import { apiClient } from "../../services/apiClient";
 import { fetchAllAssets } from "../../services/APIService";
 import CustomTable from "../table/CustomTable";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
@@ -86,7 +87,7 @@ export function AssetSearchTable({
     const [selectedAssets, setSelectedAssets] = useState<AssetSearchItem[]>([]);
 
     // Check if OpenSearch is disabled
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
     const useNoOpenSearch =
         noOpenSearch || config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH);
 
@@ -172,7 +173,7 @@ export function AssetSearchTable({
                     includeArchived: false,
                 };
 
-                const response = await API.post("api", "search", {
+                const response = await apiClient.post("search", {
                     "Content-type": "application/json",
                     body: body,
                 });

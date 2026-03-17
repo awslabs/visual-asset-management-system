@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Auth as AmplifyAuth } from "aws-amplify";
+import { fetchAuthSession, TokenProvider, decodeJWT } from "aws-amplify/auth";
 import { OAuth2Token, OAuth2Client } from "@badgateway/oauth2-client";
 
 /**
@@ -110,8 +110,7 @@ export function setExternalOauth2Token(oauth2Token: OAuth2Token): void {
     const jwt = parseJwt(oauth2Token.accessToken);
     localStorage.setItem("user", JSON.stringify({ username: jwt.sub }));
 
-    // @ts-expect-error - Amplify internal method
-    AmplifyAuth.setUserSession({ username: jwt.sub }, oauth2Token.accessToken);
+    // Removed: AmplifyAuth.setUserSession() — not needed with custom apiClient + TokenProvider
 }
 
 /**
@@ -151,8 +150,8 @@ export async function getDualValidAccessToken(): Promise<string> {
     } else {
         // Cognito Mode
         try {
-            const session = await AmplifyAuth.currentSession();
-            return session.getIdToken().getJwtToken();
+            const session = await fetchAuthSession();
+            return session.tokens?.idToken?.toString() || "";
         } catch (error) {
             console.error("Failed to get Cognito session:", error);
             throw new Error("Failed to get valid Cognito token. Please log in again.");
@@ -170,3 +169,43 @@ export async function getDualAuthorizationHeader(): Promise<string> {
     const token = await getDualValidAccessToken();
     return `Bearer ${token}`;
 }
+
+/**
+ * Custom TokenProvider for external OAuth2 mode.
+ * Bridges @badgateway/oauth2-client tokens to Amplify v6's auth system.
+ * Used in Amplify.configure() when DISABLE_COGNITO is true.
+ */
+export const externalOAuthTokenProvider: TokenProvider = {
+    async getTokens({ forceRefresh } = {}) {
+        const oauth2TokenStr = localStorage.getItem("oauth2_token");
+        if (!oauth2TokenStr) return null;
+
+        let oauth2Token;
+        try {
+            oauth2Token = JSON.parse(oauth2TokenStr);
+        } catch {
+            return null;
+        }
+
+        if (forceRefresh && oauth2Token.refreshToken && oauth2ClientInstance) {
+            try {
+                const newToken = await oauth2ClientInstance.refreshToken(oauth2Token);
+                localStorage.setItem("oauth2_token", JSON.stringify(newToken));
+                return {
+                    accessToken: decodeJWT(newToken.accessToken),
+                    idToken: decodeJWT(newToken.accessToken),
+                };
+            } catch (error) {
+                console.error("Token refresh failed:", error);
+                return null;
+            }
+        }
+
+        if (!oauth2Token.accessToken) return null;
+
+        return {
+            accessToken: decodeJWT(oauth2Token.accessToken),
+            idToken: decodeJWT(oauth2Token.accessToken),
+        };
+    },
+};

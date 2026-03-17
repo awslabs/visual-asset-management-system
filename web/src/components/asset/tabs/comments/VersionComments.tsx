@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef } from "react";
-import { API } from "aws-amplify";
+import { apiClient } from "../../../../services/apiClient";
 import {
     ExpandableSection,
     Button,
@@ -71,10 +71,14 @@ export default function VersionComments(props: VersionCommentsProps) {
     const [editedContent, setEditedContent] = useState<string>("");
     const editor = useRef(null);
 
+    // Detect dark mode from the body class (set by useThemeSettings)
+    const isDarkMode = document.body.classList.contains("awsui-dark-mode");
+
     // Config for the Jodit editor
     const config = {
         readonly: false,
         minHeight: 100,
+        theme: isDarkMode ? "dark" : "default",
         showCharsCounter: false,
         showWordsCounter: false,
         showXPathInStatusbar: false,
@@ -133,9 +137,8 @@ export default function VersionComments(props: VersionCommentsProps) {
         showLoading(true);
 
         try {
-            await API.del(
-                "api",
-                `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
+            await apiClient.del(
+`comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
                 {}
             );
             showMessage({
@@ -171,9 +174,8 @@ export default function VersionComments(props: VersionCommentsProps) {
         showLoading(true);
 
         try {
-            await API.put(
-                "api",
-                `comments/assets/${assetId}/assetVersionId:commentId/${commentToEdit["assetVersionId:commentId"]}`,
+            await apiClient.put(
+`comments/assets/${assetId}/assetVersionId:commentId/${commentToEdit["assetVersionId:commentId"]}`,
                 {
                     body: {
                         commentBody: editedContent,

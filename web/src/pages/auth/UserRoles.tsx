@@ -5,7 +5,7 @@
 
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import ListPageNoDatabase from "../ListPageNoDatabase";
 import { fetchUserRoles } from "../../services/APIService";
 import CreateUserRole from "./CreateUserRole";
@@ -25,7 +25,7 @@ export const UserRolesListDefinition = new ListDefinition({
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         userRoleBody.userId = item.userId;
         try {
-            const response: any = await API.del("api", "user-roles", {
+            const response: any = await apiClient.del("user-roles", {
                 body: userRoleBody,
             });
             return [true, response.message, ""];

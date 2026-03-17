@@ -200,7 +200,7 @@ export const FileVersionsList: React.FC = () => {
             id: "valueType",
             header: "Value Type",
             cell: (item: AssetVersionMetadataItem) => (
-                <div style={{ fontSize: "0.9em", color: "#5f6b7a" }}>{item.metadataValueType}</div>
+                <div style={{ fontSize: "0.9em", color: "var(--vams-text-secondary)" }}>{item.metadataValueType}</div>
             ),
             sortingField: "metadataValueType",
         },
@@ -813,7 +813,7 @@ export const FileVersionsList: React.FC = () => {
                                     {selectedVersionDetails?.versionedMetadata &&
                                         filteredMetadata.length !==
                                             selectedVersionDetails.versionedMetadata.length && (
-                                            <span style={{ marginLeft: "8px", color: "#5f6b7a" }}>
+                                            <span style={{ marginLeft: "8px", color: "var(--vams-text-secondary)" }}>
                                                 (filtered from{" "}
                                                 {selectedVersionDetails.versionedMetadata.length})
                                             </span>

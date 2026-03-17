@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
+• Website Backend Overhaul - Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default. 
 • New USD Web Viewer - Needle USD 3D WASM viewer with experimental dependency chain loading for .usd, .usda, .usdc, .usdz files integrated into plugin system
 • New 3D Mesh and CAD STP ThreeJs Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading and scene graph support, now primary viewer for common mesh types with optional LGPL-licensed CAD support
 • New SQS and EventBridge Pipeline Support - Pipelines and workflows now support SQS and EventBridge execution types alongside existing Lambda, enabling integration with external processing systems.
@@ -24,7 +25,7 @@ Asset versions have database table changes that require the running of migration
 **Recommended Upgrade Path:** Run the upgrade script to migrate permission constraints from the old table to the new one if custom constraints were added or modified beyond VAMS defaults: `infra\deploymentDataMigration\v2.4_to_v2.5\upgrade`
 
 ### Features
-
+-  **Web** Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default. 
 -   **Pipeline** Pipelines and Workflows now have an additional option to launch pipelines through SQS and EventBridge, this compliments the existing Lambda option. See `DeveloperGuide.md` for more information on how to implement.
 -   **Pipeline** Added new Preview 3D Thumbnail use-case pipeline (`usePreview3dThumbnail`) that generates animated GIF or static image preview thumbnails from 3D files. Supports mesh formats (PLY, STL, OBJ, GLB, GLTF, FBX, DRC), point clouds (LAS, LAZ, E57, PTX, PCD, FLS, FWS), CAD files (STP, STEP), and USD files (USD, USDA, USDC, USDZ). Uses CPU-based headless rendering via PyVista/VTK with Xvfb in an AWS Batch Fargate container. This pipeline is turned off by default in the configuration file due to some restrictive used library licenses [LGPL, etc.] (see `NOTICE.md`).
     -   100 GB maximum input file size with pre-download S3 size validation (can be extended but may require a EFS Fargate implementation)
@@ -71,6 +72,7 @@ Asset versions have database table changes that require the running of migration
 -   **Web** Fixed bug in some table lists that prevented single row selects in certain scenarios (would select all rows)
 -   **Web** Fixed various bugs in pipeline editor and workflow execution list paging
 -   **Web** Pipeline listing page now properly shows database filter drop-down again
+-   **Web** Fixed text viewer to properly theme text window when toggling between dark and light themes. 
 -   Fixed bug in workflow creation and executions where assetId and databaseId was not being passed through. This will only be fixed for existing workflows that are re-created or edited but should not affect existing pipelines that are currently working already.
 -   Fixed bug in assets and files search to show full result counts, have appropriate paging functionality, and correct the backend API for a paging logic bug
 -   Added additional createWorkflow API input validation checks for edge input scenarios and cases where a user creating a workflow does not have authorization access to an underlying pipeline being specified
@@ -83,6 +85,7 @@ Asset versions have database table changes that require the running of migration
 
 ### Chores
 
+-  **Web** Refined Assets and Files search UI to support column resizing, shorter and better column names, and some text wrapping
 -   Refactored the Pipelines and Workflows API backend to now have proper request/response models, better input validation, and now follows the new backend standard set in v2.2. This is in prepartion for a larger pipeline/workflow overhaul.
 -   Created `CLOUDFRONTDEPLOY` feature enablement flag to let the front-end know the type of web deployment the website is being served under
 -   **Web** Added service worker and proxy to manually set header flags for both local debugging and/or to set for website deployment to allow features like WebAssembly (WASM) loading.

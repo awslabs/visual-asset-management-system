@@ -16,7 +16,7 @@ import {
     Spinner,
     Toggle,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import Synonyms from "../../synonyms";
 
 interface AssetDeleteModalProps {
@@ -170,7 +170,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                 };
             }
 
-            const response = await API.del("api", endpoint, {
+            const response = await apiClient.del(endpoint, {
                 body: body,
             });
 
@@ -210,7 +210,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                 };
             }
 
-            const response = await API.del("api", endpoint, {
+            const response = await apiClient.del(endpoint, {
                 body: body,
             });
 

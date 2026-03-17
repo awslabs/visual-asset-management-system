@@ -16,7 +16,7 @@ import {
     Container,
     ColumnLayout,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import Synonyms from "../../synonyms";
 
 interface AssetUnarchiveModalProps {
@@ -83,7 +83,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
 
             // Fetch asset details with showArchived=true to get archived assets
             const endpoint = `database/${dbId}/assets/${assetId}?showArchived=true`;
-            const response = await API.get("api", endpoint, {});
+            const response = await apiClient.get(endpoint, {});
 
             setState((prev) => ({
                 ...prev,
@@ -140,7 +140,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 reason: state.reason,
             };
 
-            await API.put("api", endpoint, {
+            await apiClient.put(endpoint, {
                 body: body,
             });
 

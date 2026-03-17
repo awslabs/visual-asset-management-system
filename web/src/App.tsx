@@ -5,12 +5,14 @@
 
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
-import { Cache, Auth as AmplifyAuth } from "aws-amplify";
+import { signOut as amplifySignOut } from "aws-amplify/auth";
+import { appCache } from "./services/appCache";
 import { HashRouter } from "react-router-dom";
 import { TopNavigation } from "@cloudscape-design/components";
 import { AppRoutes } from "./routes";
 import logoWhite from "./resources/img/logo_white.png";
 import "@aws-amplify/ui-react/styles.css";
+import { useThemeSettings } from "./hooks/useThemeSettings";
 
 const HeaderPortal = ({ children }) => {
     const domNode = document.querySelector("#headerWrapper");
@@ -18,6 +20,7 @@ const HeaderPortal = ({ children }) => {
 };
 
 function App() {
+    const { theme, setTheme, density, setDensity } = useThemeSettings();
     const [navigationOpen, setNavigationOpen] = useState(true);
 
     const user = localStorage.getItem("user")
@@ -25,20 +28,20 @@ function App() {
         : undefined;
 
     useEffect(() => {
-        const cachedNavigationOpen = Cache.getItem("navigationOpen");
+        const cachedNavigationOpen = appCache.getItem("navigationOpen");
         if (cachedNavigationOpen !== undefined && cachedNavigationOpen !== null) {
             setNavigationOpen(cachedNavigationOpen);
         }
     }, []);
 
     useEffect(() => {
-        const cachedNavigationOpen = Cache.getItem("navigationOpen");
+        const cachedNavigationOpen = appCache.getItem("navigationOpen");
         if (
             navigationOpen !== cachedNavigationOpen &&
             cachedNavigationOpen !== undefined &&
             cachedNavigationOpen !== null
         ) {
-            Cache.setItem("navigationOpen", navigationOpen);
+            appCache.setItem("navigationOpen", navigationOpen);
             console.log("set navigation open in cache ", navigationOpen);
         }
     }, [navigationOpen]);
@@ -50,7 +53,7 @@ function App() {
 
     const signOut = () => {
         localStorage.clear();
-        AmplifyAuth.signOut()
+        amplifySignOut()
             .then(() => {
                 console.log("User signed out - signout button clicked");
             })
@@ -73,6 +76,20 @@ function App() {
                         },
                     }}
                     utilities={[
+                        {
+                            type: "menu-dropdown",
+                            text: "Settings",
+                            iconName: "settings",
+                            onItemClick: (e) => {
+                                const id = e?.detail?.id;
+                                if (id === "theme-light") setTheme("light");
+                                if (id === "theme-dark") setTheme("dark");
+                            },
+                            items: [
+                                { id: "theme-light", text: "Light Theme" },
+                                { id: "theme-dark", text: "Dark Theme" },
+                            ],
+                        },
                         {
                             type: "menu-dropdown",
                             text: menuText,

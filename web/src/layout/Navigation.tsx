@@ -37,13 +37,81 @@ function CenterSpinner() {
     );
 }
 
+/**
+ * Recursively collects all link hrefs from navigation items,
+ * supporting both flat items arrays and nested expandable-link-group items.
+ */
+function collectRoutes(items) {
+    const routes = [];
+    for (const item of items) {
+        if (item.type === "link" && item.href) {
+            routes.push({
+                method: "GET",
+                route__path: item.href.replace("#", ""),
+            });
+        }
+        if (item.type === "expandable-link-group" && item.items) {
+            routes.push(...collectRoutes(item.items));
+        }
+        if (item.type === "section" && item.items) {
+            routes.push(...collectRoutes(item.items));
+        }
+    }
+    return routes;
+}
+
+/**
+ * Recursively filters navigation items based on allowed routes.
+ * For expandable-link-group, filters inner items and removes the group if empty.
+ * Top-level links (e.g. Home) are kept if their href is allowed.
+ */
+function filterNavItems(items, allowedRoutes) {
+    const result = [];
+    for (const item of items) {
+        if (item.type === "divider") {
+            result.push(item);
+            continue;
+        }
+        if (item.type === "section" || item.type === "expandable-link-group") {
+            const filteredChildren = (item.items || []).filter((child) =>
+                allowedRoutes.includes(child.href)
+            );
+            if (filteredChildren.length > 0) {
+                result.push({ ...item, items: filteredChildren });
+            }
+            continue;
+        }
+        if (item.type === "link" && item.href) {
+            if (allowedRoutes.includes(item.href)) {
+                result.push(item);
+            }
+            continue;
+        }
+        // Keep other item types as-is
+        result.push(item);
+    }
+
+    // Remove trailing dividers and dividers before nothing
+    return result.filter((item, index, arr) => {
+        if (item.type !== "divider") return true;
+        // Remove divider if it's the last item or the next non-divider item doesn't exist
+        const remaining = arr.slice(index + 1);
+        return remaining.some((r) => r.type !== "divider");
+    });
+}
+
 export function Navigation({
     activeHref,
     header = navHeader,
     onFollowHandler = defaultOnFollowHandler,
     user,
 }) {
-    let filteredNavItems = [
+    const filteredNavItems = [
+        {
+            type: "link",
+            text: "Home",
+            href: "#/",
+        },
         {
             type: "section",
             text: "Manage",
@@ -53,22 +121,6 @@ export function Navigation({
                 { type: "link", text: `Create ${Synonyms.Asset}`, href: "#/upload/" },
             ],
         },
-        // {
-        //     type: "section",
-        //     role: "assets",
-        //     text: "Visualize",
-        //     items: [
-        //         { type: "link", text: "3D Model Viewer", href: "#/visualizers/model" },
-        //         { type: "link", text: "3D Point Cloud Viewer", href: "#/visualizers/pc" },
-        //         { type: "link", text: "3D Plotter", href: "#/visualizers/plot" },
-        //         { type: "link", text: "Columnar Viewer", href: "#/visualizers/column" },
-        //     ],
-        // },
-        // {
-        //     type: "section",
-        //     text: "Transform",
-        //     items: [],
-        // },
         {
             type: "section",
             text: "Orchestrate & Automate",
@@ -77,23 +129,13 @@ export function Navigation({
                 { type: "link", text: "Workflows", href: "#/workflows/" },
             ],
         },
-        {
-            type: "divider",
-        },
+        { type: "divider" },
         {
             type: "section",
             text: "Admin - Data",
             items: [
-                {
-                    type: "link",
-                    text: "Metadata Schema",
-                    href: "#/metadataschema/",
-                },
-                {
-                    type: "link",
-                    text: "Tags Management",
-                    href: "#/auth/tags/",
-                },
+                { type: "link", text: "Metadata Schema", href: "#/metadataschema/" },
+                { type: "link", text: "Tags Management", href: "#/auth/tags/" },
                 {
                     type: "link",
                     text: "Subscription Management",
@@ -105,17 +147,13 @@ export function Navigation({
             type: "section",
             text: "Admin - Auth",
             items: [
-                { type: "link", text: "Access Control Contraints", href: "#/auth/constraints/" },
                 {
                     type: "link",
-                    text: "Roles",
-                    href: "#/auth/roles/",
+                    text: "Access Control Constraints",
+                    href: "#/auth/constraints/",
                 },
-                {
-                    type: "link",
-                    text: "Users in Roles",
-                    href: "#/auth/userroles/",
-                },
+                { type: "link", text: "Roles", href: "#/auth/roles/" },
+                { type: "link", text: "Users in Roles", href: "#/auth/userroles/" },
                 ...(!window.DISABLE_COGNITO
                     ? [
                           {
@@ -125,31 +163,17 @@ export function Navigation({
                           },
                       ]
                     : []),
-                {
-                    type: "link",
-                    text: "API Key Management",
-                    href: "#/auth/api-keys/",
-                },
+                { type: "link", text: "API Key Management", href: "#/auth/api-keys/" },
             ],
         },
     ];
+
     const [navigationItems, setNavigationItems] = useState([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        let allowedRoutes = [];
+        const allRoutes = collectRoutes(filteredNavItems);
 
-        let allRoutes = [];
-        for (let navigationItem of filteredNavItems) {
-            if (navigationItem.items) {
-                for (let item of navigationItem.items) {
-                    allRoutes.push({
-                        method: "GET",
-                        route__path: item.href.replace("#", ""),
-                    });
-                }
-            }
-        }
         try {
             webRoutes({ routes: allRoutes })
                 .then((value) => {
@@ -157,21 +181,12 @@ export function Navigation({
                         throw new Error("webRoutes - " + value[1]);
                     }
 
-                    for (let allowedRoute of value.allowedRoutes) {
-                        allowedRoutes.push("#" + allowedRoute.route__path);
-                    }
+                    const allowedRoutes = value.allowedRoutes.map(
+                        (r) => "#" + r.route__path
+                    );
 
-                    for (let navigationItem of filteredNavItems) {
-                        if (navigationItem.items) {
-                            navigationItem.items = navigationItem.items.filter((item) => {
-                                return allowedRoutes.includes(item.href);
-                            });
-                        }
-                    }
-                    filteredNavItems = filteredNavItems.filter((navigationItem) => {
-                        return navigationItem.items?.length > 0;
-                    });
-                    setNavigationItems(filteredNavItems);
+                    const filtered = filterNavItems(filteredNavItems, allowedRoutes);
+                    setNavigationItems(filtered);
                     setLoading(false);
                 })
                 .catch((error) => {
@@ -189,7 +204,7 @@ export function Navigation({
             style={{
                 padding: "20px",
                 textAlign: "center",
-                color: "#5f6b7a",
+                color: "var(--vams-text-secondary)",
             }}
         >
             <div style={{ marginBottom: "10px", fontSize: "16px", fontWeight: "bold" }}>

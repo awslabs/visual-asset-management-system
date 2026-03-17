@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useContext } from "react";
+import { useState, useEffect, useContext, useMemo } from "react";
 
 import ReactFlow, { MiniMap, Controls, Background, Elements, Position } from "react-flow-renderer";
 import { Button, Icon } from "@cloudscape-design/components";
@@ -130,6 +130,12 @@ const WorkflowEditor = (props: any) => {
 
     const elements = workflowPipelineToElements(workflowPipelines, databaseId);
 
+    // Detect dark mode for ReactFlow styling
+    const isDark = useMemo(
+        () => document.body.classList.contains("awsui-dark-mode"),
+        []
+    );
+
     const handleAddPipeline = () => {
         setActiveTab("pipelines");
         const newPipelines = workflowPipelines.slice();
@@ -161,31 +167,34 @@ const WorkflowEditor = (props: any) => {
                     <Icon name="close" /> Remove
                 </Button>
             </div>
-            <div style={{ height: "743px", width: "100%" }}>
+            <div style={{ height: "743px", width: "100%", background: isDark ? "var(--vams-bg-primary)" : undefined }}>
                 <ReactFlow
                     elements={elements}
                     onLoad={onLoad}
                     snapToGrid={true}
                     snapGrid={[25, 25]}
+                    style={{ background: isDark ? "var(--vams-bg-secondary)" : undefined }}
                 >
                     <MiniMap
                         nodeStrokeColor={(n) => {
                             if (n.style?.background) return n.style.background.toString();
                             if (n.type === "input") return "#0041d0";
                             if (n.type === "output") return "#ff0072";
-                            if (n.type === "default") return "#1a192b";
+                            if (n.type === "default") return isDark ? "#8d99a8" : "#1a192b";
 
-                            return "#eee";
+                            return isDark ? "#354150" : "#eee";
                         }}
                         nodeColor={(n) => {
                             if (n.style?.background) return n.style.background.toString();
 
-                            return "#fff";
+                            return isDark ? "#192534" : "#fff";
                         }}
                         nodeBorderRadius={2}
+                        maskColor={isDark ? "rgba(15, 27, 42, 0.7)" : undefined}
+                        style={isDark ? { backgroundColor: "#0f1b2a" } : undefined}
                     />
-                    <Controls />
-                    <Background color="#aaa" gap={16} />
+                    <Controls style={isDark ? { backgroundColor: "#192534", borderColor: "#354150" } : undefined} />
+                    <Background color={isDark ? "#354150" : "#aaa"} gap={16} />
                 </ReactFlow>
             </div>
         </>

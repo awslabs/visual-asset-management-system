@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useReducer, useState, useCallback, useRef } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { fetchAssetLinks } from "../../../services/APIService";
 import { AssetLinksTreeView, AssetLinksContext } from "./components/AssetLinksTreeView";
 import { AssetLinksDetailsPanel } from "./components/AssetLinksDetailsPanel";
@@ -58,7 +58,7 @@ function ViewModeAssetLinksTab(props: AssetLinksTabProps) {
     const [parentAssetData, setParentAssetData] = useState<any>(null);
 
     // Config
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
     const useNoOpenSearch = config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH);
 
     // Fetch asset links data
@@ -361,7 +361,7 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
     >("related");
 
     // Config (get once, not in a loop)
-    const [config] = useState(() => Cache.getItem("config"));
+    const [config] = useState(() => appCache.getItem("config"));
     const useNoOpenSearch = config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH);
 
     // Use ref to track previous data and prevent infinite loops

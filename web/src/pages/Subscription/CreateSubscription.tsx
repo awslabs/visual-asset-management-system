@@ -10,8 +10,8 @@ import {
     Grid,
     Link,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../services/appCache";
+import { apiClient } from "../../services/apiClient";
 import { useState, useEffect } from "react";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
 import CustomTable from "../../components/table/CustomTable";
@@ -85,7 +85,7 @@ export default function CreateSubscription({
     const [searchResult, setSearchResult] = useState<any | null>(null);
 
     //Enabled Features
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
     const [useNoOpenSearch] = useState(
         config.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
     );
@@ -113,7 +113,7 @@ export default function CreateSubscription({
                         };
                         console.log("body", body);
 
-                        result = await API.post("api", "search", {
+                        result = await apiClient.post("search", {
                             "Content-type": "application/json",
                             body: body,
                         });
@@ -286,7 +286,7 @@ export default function CreateSubscription({
                                 setInProgress(true);
                                 createBody();
                                 if (createOrUpdate === "Create") {
-                                    API.post("api", "subscriptions", {
+                                    apiClient.post("subscriptions", {
                                         body: ruleBody,
                                     })
                                         .then((res) => {
@@ -327,7 +327,7 @@ export default function CreateSubscription({
                                     // selectedEntityType?.value === "Database"
                                     //     ? formState.databaseId
                                     //     : formState.entityId;
-                                    API.put("api", "subscriptions", {
+                                    apiClient.put("subscriptions", {
                                         body: ruleBody,
                                     })
                                         .then((res) => {

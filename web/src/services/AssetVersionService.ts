@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { API } from "aws-amplify";
+import { apiClient } from "./apiClient";
 import { fetchAssetS3Files } from "./APIService";
 
 /**
@@ -15,10 +15,7 @@ import { fetchAssetS3Files } from "./APIService";
  * @param {boolean} [params.showArchived=false] - Whether to include archived versions
  * @returns {Promise<[boolean, any]>}
  */
-export const fetchAllAssetVersions = async (
-    { databaseId, assetId, pageSize = 100, showArchived = false },
-    api = API
-) => {
+export const fetchAllAssetVersions = async ({ databaseId, assetId, pageSize = 100, showArchived = false }) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -35,8 +32,7 @@ export const fetchAllAssetVersions = async (
                     pageSize,
                     startingToken: nextToken,
                     showArchived,
-                },
-                api
+                }
             );
 
             if (!success || !response) {
@@ -74,8 +70,7 @@ export const fetchAllAssetVersions = async (
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchAssetVersions = async (
-    { databaseId, assetId, pageSize = 100, startingToken = null, showArchived = false },
-    api = API
+    { databaseId, assetId, pageSize = 100, startingToken = null, showArchived = false }
 ) => {
     try {
         if (!databaseId || !assetId) {
@@ -94,9 +89,8 @@ export const fetchAssetVersions = async (
             queryParams.startingToken = startingToken;
         }
 
-        const response = await api.get(
-            "api",
-            `database/${databaseId}/assets/${assetId}/getVersions`,
+        const response = await apiClient.get(
+`database/${databaseId}/assets/${assetId}/getVersions`,
             {
                 queryStringParameters: queryParams,
             }
@@ -163,15 +157,14 @@ export const fetchAssetVersions = async (
  * @param {string} params.assetVersionId - Asset version ID
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId }, api = API) => {
+export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId }) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
         }
 
-        const response = await api.get(
-            "api",
-            `database/${databaseId}/assets/${assetId}/getVersion/${assetVersionId}`,
+        const response = await apiClient.get(
+`database/${databaseId}/assets/${assetId}/getVersion/${assetVersionId}`,
             {}
         );
 
@@ -216,8 +209,7 @@ export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId },
  * @param {*} api
  */
 export const createAssetVersion = async (
-    { databaseId, assetId, useLatestFiles = true, files = [], comment, versionAlias },
-    api = API
+    { databaseId, assetId, useLatestFiles = true, files = [], comment, versionAlias }
 ) => {
     try {
         if (!databaseId || !assetId) {
@@ -245,9 +237,8 @@ export const createAssetVersion = async (
             }));
         }
 
-        const response = await api.post(
-            "api",
-            `database/${databaseId}/assets/${assetId}/createVersion`,
+        const response = await apiClient.post(
+`database/${databaseId}/assets/${assetId}/createVersion`,
             {
                 body: body,
             }
@@ -292,8 +283,7 @@ export const createAssetVersion = async (
  * @returns {Promise<boolean|{message}|any>}
  */
 export const revertAssetVersion = async (
-    { databaseId, assetId, assetVersionId, comment = "", revertMetadata = false },
-    api = API
+    { databaseId, assetId, assetVersionId, comment = "", revertMetadata = false }
 ) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
@@ -308,9 +298,8 @@ export const revertAssetVersion = async (
             body.comment = comment;
         }
 
-        const response = await api.post(
-            "api",
-            `database/${databaseId}/assets/${assetId}/revertAssetVersion/${assetVersionId}`,
+        const response = await apiClient.post(
+`database/${databaseId}/assets/${assetId}/revertAssetVersion/${assetVersionId}`,
             {
                 body: body,
             }
@@ -355,8 +344,7 @@ export const revertAssetVersion = async (
  * @returns {Promise<boolean|{message}|any>}
  */
 export const compareAssetVersions = async (
-    { databaseId, assetId, version1Id, version2Id, compareWithCurrent = false },
-    api = API
+    { databaseId, assetId, version1Id, version2Id, compareWithCurrent = false }
 ) => {
     try {
         if (!databaseId || !assetId || !version1Id) {
@@ -369,8 +357,7 @@ export const compareAssetVersions = async (
                 databaseId,
                 assetId,
                 assetVersionId: version1Id,
-            },
-            api
+            }
         );
 
         if (!success1 || !version1) {
@@ -387,8 +374,7 @@ export const compareAssetVersions = async (
                     assetId,
                     includeArchived: false,
                     basic: false,
-                },
-                api
+                }
             );
 
             if (!successCurrent) {
@@ -414,8 +400,7 @@ export const compareAssetVersions = async (
                     databaseId,
                     assetId,
                     assetVersionId: version2Id,
-                },
-                api
+                }
             );
 
             if (!success2 || !v2) {
@@ -514,13 +499,13 @@ function generateComparison(version1, version2) {
  * @param {string} params.filePath - File path
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchFileVersions = async ({ databaseId, assetId, filePath }, api = API) => {
+export const fetchFileVersions = async ({ databaseId, assetId, filePath }) => {
     try {
         if (!databaseId || !assetId || !filePath) {
             return [false, "Database ID, Asset ID, and File Path are required"];
         }
 
-        const response = await api.get("api", `database/${databaseId}/assets/${assetId}/fileInfo`, {
+        const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/fileInfo`, {
             queryStringParameters: {
                 filePath: filePath,
                 includeVersions: "true",
@@ -555,8 +540,7 @@ export const fetchFileVersions = async ({ databaseId, assetId, filePath }, api =
  * @returns {Promise<[boolean, any]>}
  */
 export const updateAssetVersion = async (
-    { databaseId, assetId, assetVersionId, body },
-    api = API
+    { databaseId, assetId, assetVersionId, body }
 ) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
@@ -570,8 +554,7 @@ export const updateAssetVersion = async (
             return [false, "At least one of comment or versionAlias is required"];
         }
 
-        const response = await api.put(
-            "api",
+        const response = await apiClient.put(
             `database/${databaseId}/assets/${assetId}/assetversions/${assetVersionId}`,
             {
                 body: body,
@@ -615,14 +598,13 @@ export const updateAssetVersion = async (
  * @param {string} params.assetVersionId - Asset version ID
  * @returns {Promise<[boolean, any]>}
  */
-export const archiveAssetVersion = async ({ databaseId, assetId, assetVersionId }, api = API) => {
+export const archiveAssetVersion = async ({ databaseId, assetId, assetVersionId }) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
         }
 
-        const response = await api.post(
-            "api",
+        const response = await apiClient.post(
             `database/${databaseId}/assets/${assetId}/assetversions/${assetVersionId}/archive`,
             {
                 body: {},
@@ -666,14 +648,13 @@ export const archiveAssetVersion = async ({ databaseId, assetId, assetVersionId 
  * @param {string} params.assetVersionId - Asset version ID
  * @returns {Promise<[boolean, any]>}
  */
-export const unarchiveAssetVersion = async ({ databaseId, assetId, assetVersionId }, api = API) => {
+export const unarchiveAssetVersion = async ({ databaseId, assetId, assetVersionId }) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
         }
 
-        const response = await api.post(
-            "api",
+        const response = await apiClient.post(
             `database/${databaseId}/assets/${assetId}/assetversions/${assetVersionId}/unarchive`,
             {
                 body: {},

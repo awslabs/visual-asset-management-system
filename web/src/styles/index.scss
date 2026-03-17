@@ -7,6 +7,8 @@ html,
 body {
     touch-action: none;
     overflow-x: hidden;
+    background-color: var(--vams-bg-primary);
+    color: var(--vams-text-primary);
 }
 
 /* Firefox-specific rule to enable scrolling */
@@ -24,6 +26,8 @@ body {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     padding-bottom: 20px;
+    background-color: var(--vams-bg-primary);
+    color: var(--vams-text-primary);
 }
 
 code {
@@ -91,7 +95,7 @@ code {
 
 .view-edit-asset-container h5 {
     font-size: 14px;
-    color: #545b64;
+    color: var(--vams-text-secondary);
     text-align: left;
     line-height: 22px;
     font-weight: 400;
@@ -114,7 +118,7 @@ code {
 
 .visualizer-segment-control button {
     font-size: 14px;
-    color: #16191f;
+    color: var(--vams-text-primary);
     text-align: center;
     line-height: 22px;
     font-weight: 700;
@@ -229,7 +233,7 @@ code {
     margin: 0;
     text-align: center;
     width: 100%;
-    background-color: #ffffff99;
+    background-color: var(--vams-bg-primary);
 }
 
 .carousel {
@@ -291,11 +295,11 @@ code {
     width: 30px;
     height: 30px;
     border-radius: 50%;
-    background-color: #fff;
+    background-color: var(--vams-bg-primary);
     opacity: 0.5;
     margin: 10px;
     cursor: pointer;
-    border: solid 1px #ccc;
+    border: solid 1px var(--vams-border-default);
 }
 
 .carousel input:checked + .slide-container .slide-image {

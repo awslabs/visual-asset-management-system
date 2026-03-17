@@ -422,7 +422,7 @@ export function AssetLinksDetailsPanel({
                                         <span>Loading asset details...</span>
                                     </SpaceBetween>
                                 ) : assetDetailsError ? (
-                                    <span style={{ color: "#d13212", fontStyle: "italic" }}>
+                                    <span style={{ color: "var(--vams-color-error)", fontStyle: "italic" }}>
                                         {assetDetailsError}
                                     </span>
                                 ) : linkedAssetDetails ? (

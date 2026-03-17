@@ -15,7 +15,7 @@ import Select from "@cloudscape-design/components/select";
 import RadioGroup from "@cloudscape-design/components/radio-group";
 import Alert from "@cloudscape-design/components/alert";
 import { useState, useEffect } from "react";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import OptionDefinition from "./form-definitions/types/OptionDefinition";
 import {
     pipelineTypeOptions,
@@ -293,7 +293,7 @@ export default function CreatePipeline({
                                 onClick={() => {
                                     if (createOrUpdate == "Create") {
                                         setInProgress(true);
-                                        API.put("api", `pipelines`, {
+                                        apiClient.put(`pipelines`, {
                                             body: buildApiBody(formState, false),
                                         })
                                             .then((res) => {
@@ -691,7 +691,7 @@ export default function CreatePipeline({
                                 onClick={() => {
                                     if (radioValue == "yes") {
                                         setInProgress(true);
-                                        API.put("api", `pipelines`, {
+                                        apiClient.put(`pipelines`, {
                                             body: buildApiBody(pipeline, true),
                                         })
                                             .then((res) => {
@@ -712,7 +712,7 @@ export default function CreatePipeline({
                                             });
                                     } else {
                                         setInProgress(true);
-                                        API.put("api", `pipelines`, {
+                                        apiClient.put(`pipelines`, {
                                             body: buildApiBody(pipeline, false),
                                         })
                                             .then((res) => {

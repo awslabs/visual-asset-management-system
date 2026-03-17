@@ -27,7 +27,9 @@ Pipelines are a feature in VAMS that allow you to edit
 
 ### Frontend WebApp
 
-VAMS Frontend is a single page ReactJS application. It can be deployed via CloudFront or ALB
+VAMS Frontend is a single page ReactJS application built with Vite. It can be deployed via CloudFront or ALB.
+
+The web app supports dark/light theme via a Settings dropdown in the top navigation. The default theme is dark mode. Theme preference is persisted in localStorage
 
 ![Web App Network CloudFront](./diagrams/web_app_network_cf.jpeg)
 
@@ -62,7 +64,7 @@ Federated authentication with SAML is available with additional configuration. S
 -   Python 3.12
 -   Docker
 -   Node >=20.18.1
--   Yarn >=1.22.19
+-   npm (included with Node)
 -   Node Version Manager (nvm)
 -   Conda-forge [only for optional local development]
 -   AWS cli
@@ -76,9 +78,33 @@ Federated authentication with SAML is available with additional configuration. S
 
 For local development, there are 2 options in regards to the backend: pointing to a local mocked backend or a remote backend that has already been deployed.
 
-##### Local Backend
+##### Remote Backend (For regular local web development, live API testing)
+
+Pointing local frontend to a remote backend assumes the backend has already been deployed and functioning.
+
+-   In `web/src/config.ts`, update the following values:
+    -   Update `DEV_API_ENDPOINT` to point to the remote API endpoint
+
+Terminal 1 (Running web server):
+
+```bash
+cd ./web && npm install && npm run build && cd ./dist
+```
+
+The `npm install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
+
+`npm run build && python3 -m http.server 8001 -d dist`
+
+or `npm run start` to have **live reload** on code changes.
+
+_Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
+
+Now load [http://localhost:8001](http://localhost:8001) in a browser.
+
+##### Local Backend (For External IDP Web Testing)
 
 Some local development is possible when using a local backend, but not all APIs are available locally.
+Generally this can be used to test local OAUTH for External IDP testing
 
 Pre-reqs for local development:
 
@@ -111,41 +137,19 @@ python3 localDev_oauth2_server.py # port 9031
 Terminal 3 (Running web server):
 
 ```bash
-cd ./web && yarn install && npm run build && python3 -m http.server 8001 -d build
+cd ./web && npm install && npm run build && python3 -m http.server 8001 -d dist
 ```
 
-The `yarn install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
+The `npm install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
 
-`npm run build && python3 -m http.server 8001 -d build`
+`npm run build && python3 -m http.server 8001 -d dist`
 
 or `npm run start` to have **live reload** on code changes.
 
 _Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
 
-Now load [http://localhost:8001](http://localhost:8001) in a browser. (Don't need to provide any credentials on login)
+Now load [http://localhost:8001](http://localhost:8001) in a browser. (All credentials work on login for local OAUTH External IDP testing)
 
-##### Remote Backend
-
-Pointing local frontend to a remote backend assumes the backend has already been deployed and functioning.
-
--   In `web/src/config.ts`, update the following values:
-    -   Update `DEV_API_ENDPOINT` to point to the remote API endpoint
-
-Terminal 1 (Running web server):
-
-```bash
-cd ./web && yarn install && npm run build && cd ./build
-```
-
-The `yarn install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
-
-`npm run build && python3 -m http.server 8001 -d build`
-
-or `npm run start` to have **live reload** on code changes.
-
-_Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
-
-Now load [http://localhost:8001](http://localhost:8001) in a browser.
 
 #### Build & Deploy Steps (Linux/Mac)
 
@@ -155,7 +159,7 @@ You can identify stable releases by their tag. Fetch the tags `git fetch --all -
 
 1. `cd ./web && nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
-2. `yarn install` - make sure you install the packages required by the web app
+2. `npm install` - make sure you install the packages required by the web app
 
 3. `npm run build` - build the web app.
 

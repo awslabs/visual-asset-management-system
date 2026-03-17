@@ -35,9 +35,7 @@ This software includes third party software subject to the following copyrights:
 
 | Package                             | Version        | License                 |
 | :---------------------------------- | :------------- | :---------------------- |
-| @aws-amplify/auth                   | 5.6.15         | Apache-2.0              |
-| @aws-amplify/core                   | 5.8.14         | Apache-2.0              |
-| @aws-amplify/ui-react               | ^2.1.5         | Apache-2.0              |
+| @aws-amplify/ui-react               | ^6.15.2        | Apache-2.0              |
 | @aws-sdk/client-s3                  | ^3.400.0       | Apache-2.0              |
 | @aws-sdk/lib-storage                | ^3.400.0       | Apache-2.0              |
 | @aws-sdk/s3-request-presigner       | ^3.400.0       | Apache-2.0              |
@@ -57,8 +55,7 @@ This software includes third party software subject to the following copyrights:
 | @types/three                        | ^0.180.0       | MIT                     |
 | @types/wicg-file-system-access      | 2020.9.6       | MIT                     |
 | arraybuffer-to-buffer               | ^0.0.7         | MIT                     |
-| aws-amplify                         | 5.3.27         | Apache-2.0              |
-| aws-amplify-react                   | ^5.1.9         | Apache-2.0              |
+| aws-amplify                         | ^6.0.0         | Apache-2.0              |
 | axios                               | ^1.6.0         | MIT                     |
 | buffer                              | ^6.0.3         | MIT                     |
 | del-cli                             | ^5.0.0         | MIT                     |
@@ -90,7 +87,7 @@ This software includes third party software subject to the following copyrights:
 | react-pdf                           | ^10.1.0        | MIT                     |
 | react-router                        | ^6.0.0         | MIT                     |
 | react-router-dom                    | ^6.0.0         | MIT                     |
-| react-scripts                       | 5.0.1          | MIT                     |
+| vite                                | ^6.2.0         | MIT                     |
 | react-syntax-highlighter            | ^15.5.0        | MIT                     |
 | sanitize-html                       | ^2.11.0        | MIT                     |
 | semver                              | ^7.5.2         | ISC                     |

@@ -73,7 +73,7 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
                     alignItems: "center",
                     height: "100%",
                     fontSize: "16px",
-                    color: "#666",
+                    color: "var(--vams-text-secondary)",
                 }}
             >
                 Loading video...
@@ -90,7 +90,7 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
                     alignItems: "center",
                     height: "100%",
                     fontSize: "16px",
-                    color: "#d13212",
+                    color: "var(--vams-color-error)",
                 }}
             >
                 Error: {error}

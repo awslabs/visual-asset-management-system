@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Cache } from "aws-amplify";
+import { appCache } from "../services/appCache";
 import React, { useState } from "react";
 import sanitizeHtml from "sanitize-html";
 
 export function GlobalHeader({ authorizationHeader = false }) {
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
     const contentSecurityPolicy = config.contentSecurityPolicy;
     const bannerMessageHtml = config.bannerHtmlMessage;
 

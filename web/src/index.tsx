@@ -10,6 +10,7 @@
 import React, { Suspense, useEffect } from "react";
 import ReactDOM from "react-dom";
 import "./styles/index.scss";
+import "./styles/theme.css";
 import reportWebVitals from "./reportWebVitals";
 import Auth from "./FedAuth/Auth";
 

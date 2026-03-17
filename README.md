@@ -128,7 +128,7 @@ Various AWS partners, ISVs, or other external solutions that VAMS significantly 
 -   Python 3.12
 -   Docker
 -   Node >=20.18.1
--   Yarn >=1.22.19
+-   npm (included with Node)
 -   Node Version Manager (nvm)
 -   Conda-forge [only for optional local development]
 -   AWS cli
@@ -150,7 +150,7 @@ Note: If you are running behind a HTTPS SSL proxy that requires network nodes to
 
 1. `cd ./web && nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
-2. `yarn install` - make sure you install the packages required by the web app (Take note, `npm install` does not result in a working build of the application - please use yarn).
+2. `npm install` - make sure you install the packages required by the web app.
 
 3. `npm run build` - build the web app.
 
@@ -245,7 +245,7 @@ When you build systems on AWS infrastructure, security responsibilities are shar
 
 VAMS is provided under this shared responsibility model. Any customization for customer use must go through an AppSec review to confirm the modifications don't introduce new vulnerabilities. Any team implementing takes on the responsibility of ensuring their implementation has gone through a proper security review.
 
-1. Run `yarn audit` in the `web` directory prior to deploying front-end to ensure all packages are up-to-date. Run `yarn audit fix` to mitigate critical security vulnerabilities.
+1. Run `npm audit` in the `web` directory prior to deploying front-end to ensure all packages are up-to-date. Run `npm audit fix` to mitigate critical security vulnerabilities.
 2. When deploying to a customer account, create an IAM Role for deployment that limits access to the least privilege necessary based on the customers internal security policies.
 
 ### Security Considerations

@@ -6,7 +6,7 @@ import Synonyms from "../../synonyms";
 import Input from "@cloudscape-design/components/input";
 import { useEffect, useState } from "react";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { fetchTags, fetchtagTypes } from "../../services/APIService";
 import { TagType } from "../../pages/Tag/TagType.interface";
@@ -52,7 +52,7 @@ const update = async (
         };
 
         // Update asset metadata using the new API endpoint
-        await API.put("api", `database/${updatedAsset.databaseId}/assets/${updatedAsset.assetId}`, {
+        await apiClient.put(`database/${updatedAsset.databaseId}/assets/${updatedAsset.assetId}`, {
             "Content-type": "application/json",
             body: updateAssetData,
         });

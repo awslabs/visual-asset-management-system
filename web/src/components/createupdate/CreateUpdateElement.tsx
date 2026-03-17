@@ -14,8 +14,6 @@ import { AssetContext } from "../../context/AssetContex";
 import { ACTION_TYPES } from "../../common/constants/actions";
 import { ACTIONS, createUpdateElements } from "../../services/APIService";
 import { ENTITY_TYPES_NAMES } from "./entity-types/EntitieTypes";
-import { Storage } from "aws-amplify";
-
 const actionStrings = {
     CREATE: {
         lowerCase: "create",
@@ -36,12 +34,12 @@ async function fillFormWithAssetMetadata(asset) {
     const previewTransfer = new DataTransfer();
 
     //Retrieve the files from S3 so we can prefill them
-    let assetS3 = await Storage.get(asset.assetLocation.Key, { download: true });
-    let previewS3 = await Storage.get(asset.previewLocation.Key, { download: true });
+    let assetS3 = await fetch(asset.assetLocation.Key);
+    let previewS3 = await fetch(asset.previewLocation.Key);
 
-    assetTransfer.items.add(new File([assetS3.Body], asset.assetLocation.Key.split("/").pop()));
+    assetTransfer.items.add(new File([await assetS3.blob()], asset.assetLocation.Key.split("/").pop()));
     previewTransfer.items.add(
-        new File([previewS3.Body], asset.previewLocation.Key.split("/").pop())
+        new File([await previewS3.blob()], asset.previewLocation.Key.split("/").pop())
     );
 
     values.Asset = assetTransfer.files[0]; //File

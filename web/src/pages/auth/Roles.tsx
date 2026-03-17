@@ -5,7 +5,7 @@
 
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import ListPageNoDatabase from "../ListPageNoDatabase";
 import { fetchRoles } from "../../services/APIService";
 import { Box } from "@cloudscape-design/components";
@@ -28,7 +28,7 @@ export const RoleListDefinition = new ListDefinition({
     elementId: "roleName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `roles/${item.roleName}`, {});
+            const response: any = await apiClient.del(`roles/${item.roleName}`, {});
             return [true, response.message, ""];
         } catch (error: any) {
             console.log(error);

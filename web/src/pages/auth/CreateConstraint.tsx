@@ -16,7 +16,7 @@ import {
     Textarea,
 } from "@cloudscape-design/components";
 import { Optional } from "@cloudscape-design/components/internal/types";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import { useEffect, useState } from "react";
 import { generateUUID } from "../../common/utils/utils";
 import RoleGroupPermissionsTable, { RoleGroupPermission } from "./RoleGroupPermissionsTable";
@@ -372,7 +372,7 @@ export default function CreateConstraint({
                             onClick={() => {
                                 setInProgress(true);
                                 console.log("sending state", formState);
-                                API.post("api", `auth/constraints/${formState.constraintId}`, {
+                                apiClient.post(`auth/constraints/${formState.constraintId}`, {
                                     body: formState,
                                 })
                                     .then((res) => {

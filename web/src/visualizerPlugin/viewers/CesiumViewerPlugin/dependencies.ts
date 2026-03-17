@@ -72,7 +72,7 @@ export class CesiumDependencyManager {
             );
 
             // Configure Cesium Ion access token if available
-            const cesiumIonToken = process.env.REACT_APP_CESIUM_ION_TOKEN;
+            const cesiumIonToken = import.meta.env.VITE_CESIUM_ION_TOKEN;
             if (cesiumIonToken) {
                 this.cesiumInstance.Ion.defaultAccessToken = cesiumIonToken;
                 console.log(`[${this.PLUGIN_ID}] Cesium Ion token configured`);

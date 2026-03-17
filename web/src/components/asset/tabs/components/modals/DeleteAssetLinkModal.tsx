@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { Box, Button, Modal, SpaceBetween } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { apiClient } from "../../../../../services/apiClient";
 import { useStatusMessage } from "../../../../common/StatusMessage";
 import { DeleteAssetLinkModalProps } from "../../types/AssetLinksTypes";
 
@@ -26,7 +26,7 @@ export function DeleteAssetLinkModal({
         try {
             setDeleteDisabled(true);
 
-            await API.del("api", `asset-links/${assetLinkId}`, {});
+            await apiClient.del(`asset-links/${assetLinkId}`, {});
 
             showMessage({
                 type: "success",

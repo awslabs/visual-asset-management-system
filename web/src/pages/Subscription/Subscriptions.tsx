@@ -5,7 +5,7 @@
 
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
+import { apiClient } from "../../services/apiClient";
 import ListPageNoDatabase from "../ListPageNoDatabase";
 import { fetchSubscriptionRules } from "../../services/APIService";
 import { Link } from "@cloudscape-design/components";
@@ -32,7 +32,7 @@ export const SubscriptionListDefinition = new ListDefinition({
         ruleBody.subscribers = item.subscribers;
         ruleBody.eventName = item.eventName;
         try {
-            const response: any = await API.del("api", "subscriptions", {
+            const response: any = await apiClient.del("subscriptions", {
                 body: ruleBody,
             });
             return [true, response.message, ""];

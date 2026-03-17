@@ -25,7 +25,7 @@ import { useParams } from "react-router";
 import CreatePipeline from "./CreatePipeline";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
 //import AssetSelector from "../selectors/AssetSelector";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../services/appCache";
 import { fetchDatabaseWorkflows, saveWorkflow, runWorkflow } from "../../services/APIService";
 import { WorkflowContext } from "../../context/WorkflowContex";
 import { validateEntityId, verifyStringMaxLength } from "./entity-types/EntityPropTypes";
@@ -118,7 +118,7 @@ export default function CreateUpdateWorkflow(props) {
     }, [databaseId, reload, workflowId, workflowIdNew]);
 
     useEffect(() => {
-        const cachedActiveTab = Cache.getItem("workflowActiveTab");
+        const cachedActiveTab = appCache.getItem("workflowActiveTab");
         if (
             cachedActiveTab === "details" ||
             cachedActiveTab === "pipelines" ||
@@ -129,9 +129,9 @@ export default function CreateUpdateWorkflow(props) {
     }, []);
 
     useEffect(() => {
-        const cachedActiveTab = Cache.getItem("workflowActiveTab");
+        const cachedActiveTab = appCache.getItem("workflowActiveTab");
         if (activeTab !== cachedActiveTab) {
-            Cache.setItem("workflowActiveTab", activeTab);
+            appCache.setItem("workflowActiveTab", activeTab);
         }
     }, [activeTab]);
 
@@ -293,7 +293,7 @@ export default function CreateUpdateWorkflow(props) {
                         height: "100vh",
                         width: "100%",
                         pointerEvents: "none",
-                        background: "rgba(255,255,255,.5)",
+                        background: "color-mix(in srgb, var(--vams-bg-primary) 50%, transparent)",
                     }}
                 >
                     <Spinner size="large" />
@@ -330,7 +330,7 @@ export default function CreateUpdateWorkflow(props) {
                         }
                     >
                         <Grid disableGutters gridDefinition={[{ colspan: 12 }]}>
-                            <div style={{ borderRight: "solid 1px #eaeded", minHeight: "800px" }}>
+                            <div style={{ borderRight: "solid 1px var(--vams-border-default)", minHeight: "800px" }}>
                                 <Suspense
                                     fallback={
                                         <div className="workflow-editor-spinner">

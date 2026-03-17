@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../services/appCache";
 import { fetchAllDatabases } from "../services/APIService";
 import CreateDatabase from "../components/createupdate/CreateDatabase";
 import { createDatabaseListDefinition } from "../components/list/list-definitions/DatabaseListDefinition";
@@ -21,7 +21,7 @@ export default function Databases() {
     const [metadataModalDatabaseId, setMetadataModalDatabaseId] = useState(null);
     const [showMapThumbnails, setShowMapThumbnails] = useState(false);
 
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
     const useMapView = config?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES);
     const mapStyleUrl = config?.locationServiceApiUrl;
 

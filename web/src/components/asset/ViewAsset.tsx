@@ -16,7 +16,8 @@ import {
     AlertProps,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
-import { Cache, API } from "aws-amplify";
+import { appCache } from "../../services/appCache";
+import { apiClient } from "../../services/apiClient";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
 import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";
@@ -71,7 +72,7 @@ export default function ViewAsset() {
     const [versionsLoading, setVersionsLoading] = useState(false);
 
     // Config
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
     const [useNoOpenSearch] = useState(
         config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
     );
@@ -178,7 +179,13 @@ export default function ViewAsset() {
                     assetId,
                 });
                 if (success && result?.versions) {
-                    setVersions(result.versions);
+                    // Sort versions by dateModified (newest first)
+                    const sorted = [...result.versions].sort((a: any, b: any) => {
+                        const dateA = new Date(a.dateModified || 0).getTime();
+                        const dateB = new Date(b.dateModified || 0).getTime();
+                        return dateB - dateA;
+                    });
+                    setVersions(sorted);
                 }
             } catch (error) {
                 console.log("Failed to load asset versions:", error);

@@ -48,4 +48,4 @@ Try running github actions locally with [act](https://github.com/nektos/act/)
 
 ### Local Development
 
-See DeveloperGuide.md in the project root for instructions on how to deploy local developments for external OAUTH authenitcation and a basic API. 
+See DeveloperGuide.md in the project root for instructions on how to deploy local developments for external OAUTH authentication and a basic API. 
