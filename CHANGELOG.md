@@ -88,6 +88,7 @@ The website overhaul may cause a high number of merge conflicts for any forked r
 -   Fixed Gaussian Splat use-case pipeline Docker build error with updating to newest version of 3D reconstruction toolkit
 -   Fixed Gaussian Splat use-case pipeline to re-pull latest changes from 3d Reconstruction toolkit github every time of deployment
 -   Fixed VPC endpoint logic for ECS service for use-case pipelines that need an endpoint for both private and isolated VPC subnets; previously this caused errors when enabling multiple use-case pipelines that had both isolated and private subnets using the VAMS generated VPC configuration. See troubleshooting section if CDK ECS VPC endpoint errors occur during re-deployments.
+-   **Web** Fixed various minor bugs across the website including proper error reporting
 
 ### Chores
 

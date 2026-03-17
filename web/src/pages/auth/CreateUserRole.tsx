@@ -56,6 +56,7 @@ export default function CreateTagType({
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
     const [nameError, setNameError] = useState<string | null>(null);
+    const [rolesError, setRolesError] = useState<string | null>(null);
     const createOrUpdate = (initState && "Update") || "Create";
     const [formState, setFormState] = useState<UserRoleFields>({
         ...initState,
@@ -83,6 +84,7 @@ export default function CreateTagType({
                     ...initState,
                 });
                 setNameError("");
+                setRolesError(null);
                 setFormError("");
                 setselectedRoles([]);
             }}
@@ -100,6 +102,7 @@ export default function CreateTagType({
                                 });
                                 setInProgress(true);
                                 setNameError("");
+                                setRolesError(null);
                                 setFormError("");
                                 setselectedRoles([]);
                             }}
@@ -128,15 +131,15 @@ export default function CreateTagType({
                                         })
                                         .catch((err) => {
                                             console.log("Create subs error", err);
-                                            if (err.response && err.response.status === 400) {
+                                            if (err.status === 400) {
                                                 const errorMessage =
-                                                    "Role for this user " +
-                                                    " already exists or is not valid";
+                                                    err.message || "Role for this user already exists or is not valid";
                                                 setNameError(errorMessage);
-                                            }
-                                            if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} user role. Error: Request failed with status code 403`;
+                                            } else if (err.status === 403) {
+                                                let msg = `Unable to ${createOrUpdate} user role. Error: ${err.message || "Request failed with status code 403"}`;
                                                 setFormError(msg);
+                                            } else {
+                                                setFormError(err.message || "An error occurred while creating the user role");
                                             }
                                         })
                                         .finally(() => {
@@ -157,9 +160,11 @@ export default function CreateTagType({
                                         })
                                         .catch((err) => {
                                             console.log("Update subs error", err);
-                                            if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} user role. Error: Request failed with status code 403`;
+                                            if (err.status === 403) {
+                                                let msg = `Unable to ${createOrUpdate} user role. Error: ${err.message || "Request failed with status code 403"}`;
                                                 setFormError(msg);
+                                            } else {
+                                                setFormError(err.message || "An error occurred while updating the user role");
                                             }
                                         })
                                         .finally(() => {
@@ -201,6 +206,7 @@ export default function CreateTagType({
                     <FormField
                         label="Role Name"
                         constraintText="Required. Select at least one role"
+                        errorText={rolesError}
                     >
                         <Multiselect
                             selectedOptions={
@@ -223,6 +229,11 @@ export default function CreateTagType({
                                         (role) => role.value
                                     ),
                                 });
+                                if ((detail.selectedOptions as OptionDefinition[]).length === 0) {
+                                    setRolesError("Please select at least one role");
+                                } else {
+                                    setRolesError(null);
+                                }
                             }}
                         />
                     </FormField>

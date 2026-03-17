@@ -49,6 +49,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
         assetDetails: null,
         loadingDetails: false,
     });
+    const [reasonError, setReasonError] = useState("");
 
     // Fetch asset details when modal opens
     useEffect(() => {
@@ -67,6 +68,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 assetDetails: null,
                 loadingDetails: false,
             });
+            setReasonError("");
         }
     }, [visible]);
 
@@ -84,9 +86,19 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
             // Fetch asset details with showArchived=true to get archived assets
             const response = await fetchAsset({ databaseId: dbId, assetId, showArchived: true });
 
+            // Check for API error tuple [false, errorMessage]
+            if (Array.isArray(response) && response[0] === false) {
+                setState((prev) => ({
+                    ...prev,
+                    error: response[1] || "Failed to fetch asset details",
+                    loadingDetails: false,
+                }));
+                return;
+            }
+
             setState((prev) => ({
                 ...prev,
-                assetDetails: response,
+                assetDetails: Array.isArray(response) ? response[1] : response,
                 loadingDetails: false,
             }));
         } catch (error: any) {
@@ -133,7 +145,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 throw new Error("Missing database ID or asset ID");
             }
 
-            await unarchiveAsset({
+            const response = await unarchiveAsset({
                 databaseId: dbId,
                 assetId,
                 body: {
@@ -142,6 +154,16 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 },
             });
 
+            // Check for API error tuple [false, errorMessage]
+            if (Array.isArray(response) && response[0] === false) {
+                setState((prev) => ({
+                    ...prev,
+                    loading: false,
+                    error: response[1] || "Failed to unarchive asset.",
+                }));
+                return;
+            }
+
             setState((prev) => ({ ...prev, loading: false }));
             onSuccess();
         } catch (error: any) {
@@ -149,7 +171,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
             setState((prev) => ({
                 ...prev,
                 loading: false,
-                error: error.message || "An error occurred while unarchiving the asset.",
+                error: error?.response?.data?.message || error?.message || "An error occurred while unarchiving the asset.",
             }));
         }
     };
@@ -241,15 +263,16 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
 
                 {/* Reason for Unarchiving */}
                 <FormField
-                    label="Reason for unarchiving"
+                    label="Reason for unarchiving *"
                     description="Please provide a reason for unarchiving this asset."
-                    errorText={
-                        state.error && !state.reason.trim() ? "Reason is required" : undefined
-                    }
+                    errorText={reasonError}
                 >
                     <Input
                         value={state.reason}
-                        onChange={({ detail }) => handleReasonChange(detail.value)}
+                        onChange={({ detail }) => {
+                            handleReasonChange(detail.value);
+                            setReasonError(!detail.value.trim() ? "Reason is required" : "");
+                        }}
                         placeholder="Enter reason for unarchiving"
                         disabled={state.loading}
                     />

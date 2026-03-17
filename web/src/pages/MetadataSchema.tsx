@@ -433,6 +433,7 @@ export default function MetadataSchemaPage() {
                 onSubmit={editingSchema ? handleUpdateSchema : handleCreateSchema}
                 editingSchema={editingSchema}
                 databaseId={databaseId}
+                defaultEntityType={selectedEntityType !== "all" ? selectedEntityType : undefined}
             />
 
             <DeleteSchemaModal

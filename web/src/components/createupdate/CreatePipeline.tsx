@@ -321,6 +321,7 @@ export default function CreatePipeline({
                                         validatePipelineName(formState.pipelineId) === null &&
                                         validatePipelineDescriptionLength(formState.description) ===
                                             null &&
+                                        formState.databaseId.value.trim() !== "" &&
                                         formState.assetType.trim() !== "" &&
                                         formState.outputType.trim() !== "" &&
                                         (formState.pipelineExecutionType.value !== "SQS" ||
@@ -358,7 +359,7 @@ export default function CreatePipeline({
                                     data-testid="pipeline-name"
                                 />
                             </FormField>
-                            <FormField label="Database Name">
+                            <FormField label="Database Name" constraintText="Required. Select the database for this pipeline.">
                                 <DatabaseSelector
                                     disabled={
                                         inProgress ||

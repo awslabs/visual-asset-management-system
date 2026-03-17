@@ -66,6 +66,8 @@ export default function CreateSubscription({
     const [inProgress, setInProgress] = useState(false);
     const [nameError, setNameError] = useState<string | null>(null);
     const [optionError, setOptionError] = useState<string | null>(null);
+    const [eventError, setEventError] = useState<string | null>(null);
+    const [entityTypeError, setEntityTypeError] = useState<string | null>(null);
     const [formError, setFormError] = useState("");
     const createOrUpdate = (initState && "Update") || "Create";
     const [formState, setFormState] = useState<SubscriptionFields>({
@@ -97,26 +99,21 @@ export default function CreateSubscription({
                     if (!useNoOpenSearch) {
                         //Use OpenSearch API
                         const body = {
-                            tokens: [],
-                            operation: "AND",
                             from: 0,
                             size: 100,
                             query: searchedEntity,
-                            filters: [
-                                {
-                                    query_string: {
-                                        query: '(_rectype:("asset"))',
-                                    },
-                                },
-                            ],
+                            entityTypes: ["asset"],
+                            aggregations: false,
+                            includeHighlights: false,
+                            explainResults: false,
+                            includeArchived: false,
                         };
-                        console.log("body", body);
 
                         const [success, searchResult] = await searchAssets(body) as [boolean, any];
                         if (!success) {
                             throw new Error(searchResult || "Search failed");
                         }
-                        result = searchResult?.hits?.hits;
+                        result = searchResult?.hits?.hits || [];
                     } else {
                         //Use assets API
                         result = await fetchAllAssets();
@@ -251,6 +248,8 @@ export default function CreateSubscription({
                 setShowTable(false);
                 setSelectedItems([]);
                 setFormError("");
+                setEventError(null);
+                setEntityTypeError(null);
             }}
             size="large"
             header={`${createOrUpdate} Subscription`}
@@ -272,6 +271,8 @@ export default function CreateSubscription({
                                 setInProgress(false);
                                 setNameError(null);
                                 setOptionError(null);
+                                setEventError(null);
+                                setEntityTypeError(null);
                                 setSelectedItems([]);
                                 setFormError("");
                             }}
@@ -303,17 +304,7 @@ export default function CreateSubscription({
                                         })
                                         .catch((err) => {
                                             console.log("Create subs error", err);
-                                            if (err.response && err.response.status === 400) {
-                                                const errorMessage =
-                                                    "Subscription for this entity" +
-                                                    " already exists or is not valid";
-                                                setOptionError(errorMessage);
-                                                setInProgress(true);
-                                            }
-                                            if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to add subscription. Error: Request failed with status code 403`;
-                                                setFormError(msg);
-                                            }
+                                            setFormError(err.message || "An error occurred while creating the subscription");
                                             setShowTable(false);
                                         })
                                         .finally(() => {
@@ -337,10 +328,7 @@ export default function CreateSubscription({
                                         })
                                         .catch((err) => {
                                             console.log("Update subs error", err);
-                                            if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to update subscription. Error: Request failed with status code 403`;
-                                                setFormError(msg);
-                                            }
+                                            setFormError(err.message || "An error occurred while updating the subscription");
                                         })
                                         .finally(() => {
                                             setInProgress(false);
@@ -362,6 +350,7 @@ export default function CreateSubscription({
                         <FormField
                             label="Event Type"
                             constraintText="Required. Select one event type"
+                            errorText={eventError}
                         >
                             <Select
                                 selectedOption={
@@ -383,12 +372,14 @@ export default function CreateSubscription({
                                         ...formState,
                                         eventName: detail.selectedOption.label ?? "",
                                     });
+                                    setEventError(null);
                                 }}
                             />
                         </FormField>
                         <FormField
                             label="Entity Type"
                             constraintText="Required. Select one entity type"
+                            errorText={entityTypeError}
                         >
                             <Select
                                 selectedOption={
@@ -407,6 +398,7 @@ export default function CreateSubscription({
                                 disabled={createOrUpdate === "Update"}
                                 onChange={({ detail }) => {
                                     setOptionError("");
+                                    setEntityTypeError(null);
                                     setSelectedEntityType(
                                         detail.selectedOption as OptionDefinition
                                     );

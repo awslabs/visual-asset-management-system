@@ -729,6 +729,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
+                    width: 100,
+                    minWidth: 80,
                 },
                 ...enhancedColumnDefinitions,
             ];
@@ -752,6 +754,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
+                    width: 100,
+                    minWidth: 80,
                 },
                 ...enhancedColumnDefinitions,
             ];

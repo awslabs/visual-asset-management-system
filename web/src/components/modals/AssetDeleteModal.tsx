@@ -76,6 +76,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
         currentItemIndex: 0,
         processedCount: 0,
     });
+    const [reasonError, setReasonError] = useState("");
 
     // Reset state when modal opens/closes
     useEffect(() => {
@@ -89,6 +90,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                 currentItemIndex: 0,
                 processedCount: 0,
             });
+            setReasonError("");
         }
     }, [visible, forceDeleteMode]);
 
@@ -150,82 +152,82 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
     };
 
     const processAsset = async (asset: any) => {
-        try {
-            // Get the database ID either from props or from the asset itself
-            const dbId = databaseId || asset.databaseId || asset.str_databaseid;
-            const aId = asset.assetId || asset.str_assetid;
+        // Get the database ID either from props or from the asset itself
+        const dbId = databaseId || asset.databaseId || asset.str_databaseid;
+        const aId = asset.assetId || asset.str_assetid;
 
-            if (!dbId || !aId) {
-                throw new Error("Missing database ID or asset ID");
-            }
-
-            let response;
-
-            if (state.operation === "archive") {
-                response = await archiveAssetDelete({
-                    databaseId: dbId,
-                    assetId: aId,
-                    body: {
-                        confirmArchive: true,
-                        reason: state.reason,
-                    },
-                });
-            } else {
-                response = await deleteAssetPermanentDelete({
-                    databaseId: dbId,
-                    assetId: aId,
-                    body: {
-                        confirmPermanentDelete: true,
-                    },
-                });
-            }
-
-            return response;
-        } catch (error) {
-            console.error("Error processing asset:", error);
-            throw error;
+        if (!dbId || !aId) {
+            throw new Error("Missing database ID or asset ID");
         }
+
+        let response;
+
+        if (state.operation === "archive") {
+            response = await archiveAssetDelete({
+                databaseId: dbId,
+                assetId: aId,
+                body: {
+                    confirmArchive: true,
+                    reason: state.reason,
+                },
+            });
+        } else {
+            response = await deleteAssetPermanentDelete({
+                databaseId: dbId,
+                assetId: aId,
+                body: {
+                    confirmPermanentDelete: true,
+                },
+            });
+        }
+
+        // Check for API error tuple [false, errorMessage]
+        if (Array.isArray(response) && response[0] === false) {
+            throw new Error(response[1] || `Failed to ${state.operation} asset.`);
+        }
+
+        return response;
     };
 
     const processFile = async (file: any) => {
-        try {
-            // For files, we need both databaseId and assetId
-            if (!databaseId || !assetId) {
-                throw new Error("Missing database ID or asset ID for file operation");
-            }
-
-            // Get the file path
-            const filePath = file.relativePath;
-            const isFolder = file.isFolder || file.keyPrefix?.endsWith("/") || false;
-
-            let response;
-
-            if (state.operation === "archive") {
-                response = await archiveFile({
-                    databaseId,
-                    assetId,
-                    body: {
-                        filePath: filePath,
-                        isPrefix: isFolder,
-                    },
-                });
-            } else {
-                response = await deleteFilePermanent({
-                    databaseId,
-                    assetId,
-                    body: {
-                        filePath: filePath,
-                        isPrefix: isFolder,
-                        confirmPermanentDelete: true,
-                    },
-                });
-            }
-
-            return response;
-        } catch (error) {
-            console.error("Error processing file:", error);
-            throw error;
+        // For files, we need both databaseId and assetId
+        if (!databaseId || !assetId) {
+            throw new Error("Missing database ID or asset ID for file operation");
         }
+
+        // Get the file path
+        const filePath = file.relativePath;
+        const isFolder = file.isFolder || file.keyPrefix?.endsWith("/") || false;
+
+        let response;
+
+        if (state.operation === "archive") {
+            response = await archiveFile({
+                databaseId,
+                assetId,
+                body: {
+                    filePath: filePath,
+                    isPrefix: isFolder,
+                },
+            });
+        } else {
+            response = await deleteFilePermanent({
+                databaseId,
+                assetId,
+                body: {
+                    filePath: filePath,
+                    isPrefix: isFolder,
+                    confirmPermanentDelete: true,
+                },
+            });
+        }
+
+        // Check for API error tuple [false, errorMessage]
+        if (Array.isArray(response) && response[0] === false) {
+            throw new Error(response[1] || `Failed to ${state.operation} file.`);
+        }
+
+        return response;
     };
 
     const handleSubmit = async () => {
@@ -366,15 +368,16 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                 {/* Only show reason field for asset archiving */}
                 {isAssetMode && state.operation === "archive" && (
                     <FormField
-                        label="Reason for archiving"
+                        label="Reason for archiving *"
                         description="Please provide a reason for archiving this asset."
-                        errorText={
-                            state.error && !state.reason.trim() ? "Reason is required" : undefined
-                        }
+                        errorText={reasonError}
                     >
                         <Input
                             value={state.reason}
-                            onChange={({ detail }) => handleReasonChange(detail.value)}
+                            onChange={({ detail }) => {
+                                handleReasonChange(detail.value);
+                                setReasonError(!detail.value.trim() ? "Reason is required" : "");
+                            }}
                             placeholder="Enter reason for archiving"
                             disabled={state.loading}
                         />

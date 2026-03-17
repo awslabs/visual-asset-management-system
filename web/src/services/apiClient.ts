@@ -7,10 +7,12 @@ import { getDualAuthorizationHeader } from "../utils/authTokenUtils";
 
 export class ApiError extends Error {
     status: number;
-    constructor(message: string, status: number) {
+    body: any;
+    constructor(message: string, status: number, body?: any) {
         super(message);
         this.name = "ApiError";
         this.status = status;
+        this.body = body;
     }
 }
 
@@ -18,6 +20,37 @@ interface ApiClientOptions {
     queryStringParameters?: Record<string, string>;
     body?: any;
     headers?: Record<string, string>;
+}
+
+/**
+ * Parse error response body and extract the most useful error message.
+ * API errors typically return {"message": "..."} in the response body.
+ */
+async function parseErrorResponse(response: Response): Promise<ApiError> {
+    let body: any = null;
+    let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+
+    try {
+        body = await response.json();
+        // Extract the "message" field from the API error response
+        if (body?.message) {
+            errorMessage = body.message;
+        } else if (typeof body === "string") {
+            errorMessage = body;
+        }
+    } catch {
+        // Response body is not JSON — try text
+        try {
+            const text = await response.text();
+            if (text) {
+                errorMessage = text;
+            }
+        } catch {
+            // Could not read body at all — use default HTTP status message
+        }
+    }
+
+    return new ApiError(errorMessage, response.status, body);
 }
 
 class ApiClient {
@@ -48,7 +81,7 @@ class ApiClient {
         const url = this.buildUrl(path, options?.queryStringParameters);
         const headers = { ...(await this.getAuthHeaders()), ...options?.headers };
         const response = await fetch(url, { method: "GET", headers });
-        if (!response.ok) throw new ApiError(`HTTP ${response.status}: ${response.statusText}`, response.status);
+        if (!response.ok) throw await parseErrorResponse(response);
         return response.json();
     }
 
@@ -60,7 +93,7 @@ class ApiClient {
             headers,
             body: options?.body ? JSON.stringify(options.body) : undefined,
         });
-        if (!response.ok) throw new ApiError(`HTTP ${response.status}: ${response.statusText}`, response.status);
+        if (!response.ok) throw await parseErrorResponse(response);
         return response.json();
     }
 
@@ -72,7 +105,7 @@ class ApiClient {
             headers,
             body: options?.body ? JSON.stringify(options.body) : undefined,
         });
-        if (!response.ok) throw new ApiError(`HTTP ${response.status}: ${response.statusText}`, response.status);
+        if (!response.ok) throw await parseErrorResponse(response);
         return response.json();
     }
 
@@ -84,7 +117,7 @@ class ApiClient {
             headers,
             body: options?.body ? JSON.stringify(options.body) : undefined,
         });
-        if (!response.ok) throw new ApiError(`HTTP ${response.status}: ${response.statusText}`, response.status);
+        if (!response.ok) throw await parseErrorResponse(response);
         return response.json();
     }
 }

@@ -30,6 +30,7 @@ interface CreateEditSchemaModalProps {
     onSubmit: (schemaData: any) => Promise<void>;
     editingSchema?: MetadataSchema | null;
     databaseId: string;
+    defaultEntityType?: MetadataSchemaEntityType;
 }
 
 export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
@@ -38,6 +39,7 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
     onSubmit,
     editingSchema,
     databaseId,
+    defaultEntityType,
 }) => {
     const isEditMode = !!editingSchema;
 
@@ -60,7 +62,7 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
         } else {
             // Reset form for create mode
             setSchemaName("");
-            setEntityType("assetMetadata");
+            setEntityType(defaultEntityType || "assetMetadata");
             setEnabled(true);
             setFileKeyTypeRestriction("");
             setFields([]);

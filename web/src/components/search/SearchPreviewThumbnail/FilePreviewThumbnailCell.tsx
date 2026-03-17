@@ -27,7 +27,7 @@ interface FilePreviewThumbnailCellProps {
 /**
  * Component that displays a thumbnail preview of a file in the search results
  */
-export const FilePreviewThumbnailCell: React.FC<FilePreviewThumbnailCellProps> = ({
+const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = ({
     databaseId,
     assetId,
     fileKey,
@@ -275,5 +275,16 @@ export const FilePreviewThumbnailCell: React.FC<FilePreviewThumbnailCellProps> =
         </Box>
     );
 };
+
+export const FilePreviewThumbnailCell = React.memo(FilePreviewThumbnailCellInner, (prevProps, nextProps) => {
+    // Compare only data props, not callback references
+    return (
+        prevProps.databaseId === nextProps.databaseId &&
+        prevProps.assetId === nextProps.assetId &&
+        prevProps.fileKey === nextProps.fileKey &&
+        prevProps.fileName === nextProps.fileName &&
+        prevProps.fileSize === nextProps.fileSize
+    );
+});
 
 export default FilePreviewThumbnailCell;
