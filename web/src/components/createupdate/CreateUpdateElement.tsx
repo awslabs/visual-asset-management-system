@@ -10,7 +10,7 @@ import React, { useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import FormDefinition from "./form-definitions/types/FormDefinition";
 import { EntityPropTypes } from "./entity-types/EntityPropTypes";
-import { AssetContext } from "../../context/AssetContex";
+import { AssetContext } from "../../context/AssetContext";
 import { ACTION_TYPES } from "../../common/constants/actions";
 import { ACTIONS, createUpdateElements } from "../../services/APIService";
 import { ENTITY_TYPES_NAMES } from "./entity-types/EntitieTypes";

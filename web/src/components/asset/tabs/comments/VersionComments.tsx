@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef } from "react";
-import { apiClient } from "../../../../services/apiClient";
+import { deleteComment, updateComment } from "../../../../services/APIService";
 import {
     ExpandableSection,
     Button,
@@ -137,10 +137,7 @@ export default function VersionComments(props: VersionCommentsProps) {
         showLoading(true);
 
         try {
-            await apiClient.del(
-`comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-                {}
-            );
+            await deleteComment({ assetId, assetVersionIdAndCommentId });
             showMessage({
                 type: "success",
                 message: "Comment deleted successfully",
@@ -169,19 +166,18 @@ export default function VersionComments(props: VersionCommentsProps) {
     const handleEditComment = async () => {
         if (!commentToEdit) return;
 
-        const [assetId, assetVersionIdAndCommentId] =
+        const [assetId] =
             commentToEdit["assetVersionId:commentId"].split(":");
         showLoading(true);
 
         try {
-            await apiClient.put(
-`comments/assets/${assetId}/assetVersionId:commentId/${commentToEdit["assetVersionId:commentId"]}`,
-                {
-                    body: {
-                        commentBody: editedContent,
-                    },
-                }
-            );
+            await updateComment({
+                assetId,
+                assetVersionIdAndCommentId: commentToEdit["assetVersionId:commentId"],
+                body: {
+                    commentBody: editedContent,
+                },
+            });
             showMessage({
                 type: "success",
                 message: "Comment updated successfully",

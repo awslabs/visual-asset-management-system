@@ -5,7 +5,7 @@
 
 import React, { useContext, useEffect, useState, useRef } from "react";
 import { Button, FormField, Grid, SpaceBetween, TextContent } from "@cloudscape-design/components";
-import { AssetContext } from "../../context/AssetContex";
+import { AssetContext } from "../../context/AssetContext";
 
 //@link https://stackoverflow.com/questions/10420352/converting-file-size-in-bytes-to-human-readable-string/10420404
 export const formatFileSize = (bytes, si = false, dp = 1) => {

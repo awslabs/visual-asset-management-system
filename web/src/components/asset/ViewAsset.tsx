@@ -17,7 +17,6 @@ import {
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
 import { appCache } from "../../services/appCache";
-import { apiClient } from "../../services/apiClient";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
 import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";

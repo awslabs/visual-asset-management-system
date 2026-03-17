@@ -5,9 +5,8 @@
 
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { apiClient } from "../../services/apiClient";
 import ListPageNoDatabase from "../ListPageNoDatabase";
-import { fetchSubscriptionRules } from "../../services/APIService";
+import { fetchSubscriptionRules, deleteSubscription } from "../../services/APIService";
 import { Link } from "@cloudscape-design/components";
 import CreateSubscription from "./CreateSubscription";
 import { useState } from "react";
@@ -32,13 +31,11 @@ export const SubscriptionListDefinition = new ListDefinition({
         ruleBody.subscribers = item.subscribers;
         ruleBody.eventName = item.eventName;
         try {
-            const response: any = await apiClient.del("subscriptions", {
-                body: ruleBody,
-            });
-            return [true, response.message, ""];
+            const result: any = await deleteSubscription(ruleBody);
+            return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response.data.message];
+            return [false, error?.message, error?.response?.data?.message];
         }
     },
     columnDefinitions: [

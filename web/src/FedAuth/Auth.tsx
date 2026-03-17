@@ -13,9 +13,8 @@ import {
 } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
 import { appCache } from "../services/appCache";
-import { apiClient } from "../services/apiClient";
 import { OAuth2Client, OAuth2Token, generateCodeVerifier } from "@badgateway/oauth2-client";
-import { getSecureConfig, getAmplifyConfig } from "../services/APIService";
+import { getSecureConfig, getAmplifyConfig, fetchLoginProfile } from "../services/APIService";
 import { default as vamsConfig } from "../config";
 import { Authenticator } from "@aws-amplify/ui-react";
 import {
@@ -42,7 +41,6 @@ import { Header } from "./../authenticator/Header";
 import { Footer } from "./../authenticator/Footer";
 import { SignInHeader } from "./../authenticator/SignInHeader";
 import { SignInFooter } from "./../authenticator/SignInFooter";
-import { ApiError } from "../services/apiClient";
 import { useThemeSettings } from "../hooks/useThemeSettings";
 import { TopNavigation } from "@cloudscape-design/components";
 import logoWhite from "../resources/img/logo_white.png";
@@ -594,7 +592,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                     console.error("Error getting secure-config:", error.message);
 
                     // if response status code was 401 unauthorized, token may be invalid, so sign out
-                    if (error instanceof ApiError && error.status === 401) {
+                    if ((error as any).status === 401) {
                         signOutWithError();
                     }
                 });
@@ -606,18 +604,20 @@ const Auth: React.FC<AuthProps> = (props) => {
         let loginProfile = appCache.getItem("loginProfile");
         if (isLoggedIn && !loginProfile) {
             const user = JSON.parse(localStorage.getItem("user")!);
-            apiClient.post(`auth/loginProfile/${user.username}`)
-                .then((value) => {
-                    loginProfile = {};
-                    loginProfile.userId = value.message.Items[0].userId;
-                    loginProfile.email = value.message.Items[0].email;
-                    appCache.setItem("loginProfile", loginProfile);
+            fetchLoginProfile({ username: user.username })
+                .then((result) => {
+                    if (result[0] === true && result[1]?.Items?.[0]) {
+                        loginProfile = {};
+                        loginProfile.userId = result[1].Items[0].userId;
+                        loginProfile.email = result[1].Items[0].email;
+                        appCache.setItem("loginProfile", loginProfile);
+                    }
                 })
                 .catch((error: Error) => {
                     console.error("Error getting login-profile:", error.message);
 
                     // if response status code was 401 unauthorized, token may be invalid, so sign out
-                    if (error instanceof ApiError && error.status === 401) {
+                    if ((error as any).status === 401) {
                         signOutWithError();
                     }
                 });

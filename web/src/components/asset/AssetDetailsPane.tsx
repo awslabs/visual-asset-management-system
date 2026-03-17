@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from "react";
 import { Box, Button, Container, Grid, Header, SpaceBetween } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
-import { apiClient } from "../../services/apiClient";
+import { createSubscription, checkSubscription, unsubscribeFromAsset } from "../../services/APIService";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
@@ -45,14 +45,12 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         if (!asset?.assetId) return;
 
         try {
-            const response = await apiClient.post("check-subscription", {
-                body: {
-                    userId: username,
-                    assetId: asset.assetId,
-                },
-            });
+            const result = await checkSubscription({
+                userId: username,
+                assetId: asset.assetId,
+            }) as [boolean, any];
 
-            if (response.message === "success") {
+            if (result[0] && result[1] === "success") {
                 setSubscribed(true);
             } else {
                 setSubscribed(false);
@@ -79,11 +77,9 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         try {
             if (subscribed) {
                 // Unsubscribe
-                const response = await apiClient.del("unsubscribe", {
-                    body: subscriptionBody,
-                });
+                const result = await unsubscribeFromAsset(subscriptionBody);
 
-                if (response) {
+                if (result && result[0]) {
                     setSubscribed(false);
                     showMessage({
                         type: "success",
@@ -101,9 +97,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                 }
             } else {
                 // Subscribe
-                const response = await apiClient.post("subscriptions", {
-                    body: subscriptionBody,
-                });
+                const response = await createSubscription(subscriptionBody);
 
                 if (response) {
                     setSubscribed(true);

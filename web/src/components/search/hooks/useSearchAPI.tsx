@@ -4,7 +4,7 @@
  */
 
 import { useCallback } from "react";
-import { apiClient } from "../../../services/apiClient";
+import { searchAssets, searchAssetsSimple, fetchSearchMappings } from "../../../services/APIService";
 import { SearchQuery, SearchResponse, MetadataFilter } from "../types";
 
 /**
@@ -283,12 +283,12 @@ export const useSearchAPI = () => {
                 console.log("Search API request body:", body);
 
                 // Execute the search
-                const response = await apiClient.post("search", {
-                    "Content-type": "application/json",
-                    body: body,
-                });
+                const [success, result] = await searchAssets(body) as [boolean, any];
+                if (!success) {
+                    throw new Error(result || "Search failed");
+                }
 
-                return response;
+                return result;
             } catch (error) {
                 console.error("Search API error:", error);
                 throw error;
@@ -333,12 +333,12 @@ export const useSearchAPI = () => {
                     entityTypes: params.entityTypes,
                 };
 
-                const response = await apiClient.post("search/simple", {
-                    "Content-type": "application/json",
-                    body: body,
-                });
+                const [success, result] = await searchAssetsSimple(body) as [boolean, any];
+                if (!success) {
+                    throw new Error(result || "Simple search failed");
+                }
 
-                return response;
+                return result;
             } catch (error) {
                 console.error("Simple search API error:", error);
                 throw error;
@@ -349,7 +349,7 @@ export const useSearchAPI = () => {
 
     const getSearchMappings = useCallback(async (): Promise<any> => {
         try {
-            const response = await apiClient.get("search", {});
+            const response = await fetchSearchMappings();
             return response;
         } catch (error) {
             console.error("Search mappings API error:", error);

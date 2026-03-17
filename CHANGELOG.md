@@ -20,12 +20,18 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### ⚠ BREAKING CHANGES
 
-Asset versions have database table changes that require the running of migration scripts to properly update the table to include newly needed column data to avoid future system-wide conflicts with assets that share a similar ID across databases
+Asset versions have database table changes that require the running of migration scripts to properly update the table to include newly needed column data to avoid future system-wide conflicts with assets that share a similar ID across databases.
+
+The website overhaul may cause a high number of merge conflicts for any forked repositories due to the high number of file renames and refactors. Merging will need to be conducted cautiously. 
 
 **Recommended Upgrade Path:** Run the upgrade script to migrate permission constraints from the old table to the new one if custom constraints were added or modified beyond VAMS defaults: `infra\deploymentDataMigration\v2.4_to_v2.5\upgrade`
 
 ### Features
--  **Web** Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default. 
+-  **Web** Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default. This overhaul required refactoring of the API call and cache system across all web files. 
+    -   Refactored most .js files to .ts or .tsx
+    -   Moved/consolidated all API calls to service files in the web /service/ folder.
+    -   Fixed certain ilenames that followed old naming standards
+    -   Further removed deprecated pages/files that were no longer referenced
 -   **Pipeline** Pipelines and Workflows now have an additional option to launch pipelines through SQS and EventBridge, this compliments the existing Lambda option. See `DeveloperGuide.md` for more information on how to implement.
 -   **Pipeline** Added new Preview 3D Thumbnail use-case pipeline (`usePreview3dThumbnail`) that generates animated GIF or static image preview thumbnails from 3D files. Supports mesh formats (PLY, STL, OBJ, GLB, GLTF, FBX, DRC), point clouds (LAS, LAZ, E57, PTX, PCD, FLS, FWS), CAD files (STP, STEP), and USD files (USD, USDA, USDC, USDZ). Uses CPU-based headless rendering via PyVista/VTK with Xvfb in an AWS Batch Fargate container. This pipeline is turned off by default in the configuration file due to some restrictive used library licenses [LGPL, etc.] (see `NOTICE.md`).
     -   100 GB maximum input file size with pre-download S3 size validation (can be extended but may require a EFS Fargate implementation)

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { apiClient } from "../../../services/apiClient";
+import { apiClient } from "./apiClient";
 import {
     EntityType,
     FileMetadataType,
@@ -11,7 +11,7 @@ import {
     MetadataAPIResponse,
     BulkOperationResponse,
     UpdateType,
-} from "../types/metadata.types";
+} from "../components/metadataV2/types/metadata.types";
 
 /**
  * Fetch metadata for any entity type

@@ -9,7 +9,7 @@ import {
     SpaceBetween,
     Grid,
 } from "@cloudscape-design/components";
-import { apiClient } from "../../services/apiClient";
+import { ingestAsset } from "../../services/APIService";
 import { useState } from "react";
 import { generateUUID } from "../../common/utils/utils";
 
@@ -176,9 +176,12 @@ export default function AssetIngestion() {
                 ],
             };
 
-            const response = await apiClient.post("/ingest-asset", {
-                body: completeBody,
-            });
+            const result = await ingestAsset(completeBody);
+            const [success, responseData] = result as [boolean, any];
+
+            if (!success) {
+                throw new Error(responseData || "Failed to complete upload");
+            }
 
             let msg: any = (
                 <div>
@@ -190,7 +193,7 @@ export default function AssetIngestion() {
                     <br />
                     <strong>Asset Name:</strong> {jsonData.assetName}
                     <br />
-                    <strong>Message:</strong> {response.message}
+                    <strong>Message:</strong> {responseData}
                 </div>
             );
             setStatusMessage(msg);
@@ -264,9 +267,15 @@ export default function AssetIngestion() {
             };
 
             // Call the API to initialize the upload
-            const response = await apiClient.post("/ingest-asset", {
-                body: requestBody,
-            });
+            const initResult = await ingestAsset(requestBody);
+            const [initSuccess, initData] = initResult as [boolean, any];
+
+            if (!initSuccess) {
+                throw new Error(initData || "Failed to initialize upload");
+            }
+
+            // The init response has no .message, so initData is the full response object
+            const response = initData;
 
             // Store upload ID and file responses for the next stage
             setUploadId(response.uploadId);

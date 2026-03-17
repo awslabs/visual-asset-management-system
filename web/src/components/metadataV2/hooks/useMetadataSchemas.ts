@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback, useEffect } from "react";
-import { fetchMetadataSchemas } from "../../../services/metadataSchemaAPI";
+import { fetchMetadataSchemas } from "../../../services/MetadataSchemaService";
 import { MetadataValueType } from "../types/metadata.types";
 
 export interface MetadataSchemaField {

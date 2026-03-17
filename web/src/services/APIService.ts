@@ -2585,6 +2585,448 @@ export const deleteApiKey = async ({ apiKeyId }) => {
     }
 };
 
+// ===== Auth: Constraints =====
+
+export const deleteConstraint = async ({ constraintId }) => {
+    try {
+        const response = await apiClient.del(`auth/constraints/${constraintId}`, {});
+        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+            return [false, response.message];
+        }
+        return [true, response.message];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const createConstraint = async ({ constraintId, ...body }) => {
+    return apiClient.post(`auth/constraints/${constraintId}`, { body: { constraintId, ...body } });
+};
+
+// ===== Auth: Roles =====
+
+export const deleteRole = async ({ roleName }) => {
+    try {
+        const response = await apiClient.del(`roles/${roleName}`, {});
+        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+            return [false, response.message];
+        }
+        return [true, response.message];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const createRole = async (body) => {
+    return apiClient.post("roles", { body });
+};
+
+export const updateRole = async (body) => {
+    return apiClient.put("roles", { body });
+};
+
+// ===== Auth: User Roles =====
+
+export const deleteUserRole = async (body) => {
+    try {
+        const response = await apiClient.del("user-roles", { body });
+        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+            return [false, response.message];
+        }
+        return [true, response.message];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const createUserRole = async (body) => {
+    return apiClient.post("user-roles", { body });
+};
+
+export const updateUserRole = async (body) => {
+    return apiClient.put("user-roles", { body });
+};
+
+// ===== Tags =====
+
+export const deleteTag = async ({ tagName }) => {
+    try {
+        const response = await apiClient.del(`tags/${tagName}`, {});
+        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+            return [false, response.message];
+        }
+        return [true, response.message];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const deleteTagType = async ({ tagTypeName }) => {
+    try {
+        const response = await apiClient.del(`tag-types/${tagTypeName}`, {});
+        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+            return [false, response.message];
+        }
+        return [true, response.message];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const createTag = async (body) => {
+    return apiClient.post("tags", { body });
+};
+
+export const updateTag = async (body) => {
+    return apiClient.put("tags", { body });
+};
+
+export const createTagType = async (body) => {
+    return apiClient.post("tag-types", { body });
+};
+
+export const updateTagType = async (body) => {
+    return apiClient.put("tag-types", { body });
+};
+
+// ===== Subscriptions =====
+
+export const deleteSubscription = async (body) => {
+    try {
+        const response = await apiClient.del("subscriptions", { body });
+        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+            return [false, response.message];
+        }
+        return [true, response.message];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const createSubscription = async (body) => {
+    return apiClient.post("subscriptions", { body });
+};
+
+export const updateSubscription = async (body) => {
+    return apiClient.put("subscriptions", { body });
+};
+
+export const checkSubscription = async (body) => {
+    try {
+        const response = await apiClient.post("check-subscription", { body });
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const unsubscribeFromAsset = async (body) => {
+    try {
+        const response = await apiClient.del("unsubscribe", { body });
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const createComment = async ({ assetId, assetVersionIdAndCommentId, body }) => {
+    try {
+        const response = await apiClient.post(
+            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
+            { body }
+        );
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const updateComment = async ({ assetId, assetVersionIdAndCommentId, body }) => {
+    try {
+        const response = await apiClient.put(
+            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
+            { body }
+        );
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const createAssetLink = async (body) => {
+    try {
+        const response = await apiClient.post("asset-links", { body });
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const savePipeline = async (body) => {
+    try {
+        const response = await apiClient.put("pipelines", { body });
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const unarchiveAsset = async ({ databaseId, assetId, body }) => {
+    try {
+        const response = await apiClient.put(
+            `database/${databaseId}/assets/${assetId}/unarchiveAsset`,
+            { body }
+        );
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const archiveAssetDelete = async ({ databaseId, assetId, body }) => {
+    try {
+        const response = await apiClient.del(
+            `database/${databaseId}/assets/${assetId}/archiveAsset`,
+            { body }
+        );
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const deleteAssetPermanentDelete = async ({ databaseId, assetId, body }) => {
+    try {
+        const response = await apiClient.del(
+            `database/${databaseId}/assets/${assetId}/deleteAsset`,
+            { body }
+        );
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const archiveFile = async ({ databaseId, assetId, body }) => {
+    try {
+        const response = await apiClient.del(
+            `database/${databaseId}/assets/${assetId}/archiveFile`,
+            { body }
+        );
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const deleteFilePermanent = async ({ databaseId, assetId, body }) => {
+    try {
+        const response = await apiClient.del(
+            `database/${databaseId}/assets/${assetId}/deleteFile`,
+            { body }
+        );
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const searchAssets = async (body) => {
+    try {
+        const response = await apiClient.post("search", {
+            "Content-type": "application/json",
+            body,
+        });
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const searchAssetsSimple = async (body) => {
+    try {
+        const response = await apiClient.post("search/simple", {
+            "Content-type": "application/json",
+            body,
+        });
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const fetchSearchMappings = async () => {
+    try {
+        const response = await apiClient.get("search", {});
+        return response;
+    } catch (error) {
+        console.log(error);
+        return false;
+    }
+};
+
+export const ingestAsset = async (body) => {
+    try {
+        const response = await apiClient.post("ingest-asset", { body });
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const fetchLoginProfile = async ({ username }) => {
+    try {
+        const response = await apiClient.post(`auth/loginProfile/${username}`);
+        if (response.message) {
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
 export const ACTIONS = {
     CREATE: {
         DATABASE: createDatabase,

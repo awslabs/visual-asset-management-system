@@ -16,8 +16,7 @@ import {
     Spinner,
 } from "@cloudscape-design/components";
 import { appCache } from "../../services/appCache";
-import { apiClient } from "../../services/apiClient";
-import { fetchAllAssets } from "../../services/APIService";
+import { fetchAllAssets, searchAssets } from "../../services/APIService";
 import CustomTable from "../table/CustomTable";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
@@ -173,10 +172,11 @@ export function AssetSearchTable({
                     includeArchived: false,
                 };
 
-                const response = await apiClient.post("search", {
-                    "Content-type": "application/json",
-                    body: body,
-                });
+                const [success, searchResult] = await searchAssets(body) as [boolean, any];
+                if (!success) {
+                    throw new Error(searchResult || "Search failed");
+                }
+                const response = searchResult;
 
                 if (response?.hits?.hits) {
                     results = response.hits.hits.map((result: any) => {

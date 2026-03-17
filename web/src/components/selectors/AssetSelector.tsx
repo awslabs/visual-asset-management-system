@@ -7,7 +7,7 @@ import { useContext, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
 import { Select } from "@cloudscape-design/components";
-import { WorkflowContext } from "../../context/WorkflowContex";
+import { WorkflowContext } from "../../context/WorkflowContext";
 /**
  * No viewer yet for cad and archive file formats
  */

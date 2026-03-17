@@ -7,7 +7,7 @@ import { render } from "@testing-library/react";
 import { act } from "react-dom/test-utils";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import WorkflowEditor, { workflowPipelineToElements } from "./WorkflowEditor";
-import { WorkflowContext } from "../../context/WorkflowContex";
+import { WorkflowContext } from "../../context/WorkflowContext";
 
 class ResizeObserver {
     observe() {}

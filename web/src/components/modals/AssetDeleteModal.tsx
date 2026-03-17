@@ -16,7 +16,12 @@ import {
     Spinner,
     Toggle,
 } from "@cloudscape-design/components";
-import { apiClient } from "../../services/apiClient";
+import {
+    archiveAssetDelete,
+    deleteAssetPermanentDelete,
+    archiveFile,
+    deleteFilePermanent,
+} from "../../services/APIService";
 import Synonyms from "../../synonyms";
 
 interface AssetDeleteModalProps {
@@ -148,31 +153,32 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
         try {
             // Get the database ID either from props or from the asset itself
             const dbId = databaseId || asset.databaseId || asset.str_databaseid;
-            const assetId = asset.assetId || asset.str_assetid;
+            const aId = asset.assetId || asset.str_assetid;
 
-            if (!dbId || !assetId) {
+            if (!dbId || !aId) {
                 throw new Error("Missing database ID or asset ID");
             }
 
-            let endpoint = "";
-            let body = {};
+            let response;
 
             if (state.operation === "archive") {
-                endpoint = `database/${dbId}/assets/${assetId}/archiveAsset`;
-                body = {
-                    confirmArchive: true,
-                    reason: state.reason,
-                };
+                response = await archiveAssetDelete({
+                    databaseId: dbId,
+                    assetId: aId,
+                    body: {
+                        confirmArchive: true,
+                        reason: state.reason,
+                    },
+                });
             } else {
-                endpoint = `database/${dbId}/assets/${assetId}/deleteAsset`;
-                body = {
-                    confirmPermanentDelete: true,
-                };
+                response = await deleteAssetPermanentDelete({
+                    databaseId: dbId,
+                    assetId: aId,
+                    body: {
+                        confirmPermanentDelete: true,
+                    },
+                });
             }
-
-            const response = await apiClient.del(endpoint, {
-                body: body,
-            });
 
             return response;
         } catch (error) {
@@ -192,27 +198,28 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
             const filePath = file.relativePath;
             const isFolder = file.isFolder || file.keyPrefix?.endsWith("/") || false;
 
-            let endpoint = "";
-            let body = {};
+            let response;
 
             if (state.operation === "archive") {
-                endpoint = `database/${databaseId}/assets/${assetId}/archiveFile`;
-                body = {
-                    filePath: filePath,
-                    isPrefix: isFolder,
-                };
+                response = await archiveFile({
+                    databaseId,
+                    assetId,
+                    body: {
+                        filePath: filePath,
+                        isPrefix: isFolder,
+                    },
+                });
             } else {
-                endpoint = `database/${databaseId}/assets/${assetId}/deleteFile`;
-                body = {
-                    filePath: filePath,
-                    isPrefix: isFolder,
-                    confirmPermanentDelete: true,
-                };
+                response = await deleteFilePermanent({
+                    databaseId,
+                    assetId,
+                    body: {
+                        filePath: filePath,
+                        isPrefix: isFolder,
+                        confirmPermanentDelete: true,
+                    },
+                });
             }
-
-            const response = await apiClient.del(endpoint, {
-                body: body,
-            });
 
             return response;
         } catch (error) {

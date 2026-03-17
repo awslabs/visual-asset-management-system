@@ -34,7 +34,7 @@ import {
     createMetadataSchema,
     updateMetadataSchema,
     deleteMetadataSchema,
-} from "../services/metadataSchemaAPI";
+} from "../services/MetadataSchemaService";
 
 // Export for backward compatibility with old metadata components
 export interface SchemaContextData {

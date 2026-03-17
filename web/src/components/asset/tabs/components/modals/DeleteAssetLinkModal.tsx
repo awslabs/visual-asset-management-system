@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { Box, Button, Modal, SpaceBetween } from "@cloudscape-design/components";
-import { apiClient } from "../../../../../services/apiClient";
+import { deleteAssetLink } from "../../../../../services/APIService";
 import { useStatusMessage } from "../../../../common/StatusMessage";
 import { DeleteAssetLinkModalProps } from "../../types/AssetLinksTypes";
 
@@ -26,7 +26,7 @@ export function DeleteAssetLinkModal({
         try {
             setDeleteDisabled(true);
 
-            await apiClient.del(`asset-links/${assetLinkId}`, {});
+            await deleteAssetLink({ relationId: assetLinkId });
 
             showMessage({
                 type: "success",

@@ -22,7 +22,7 @@ import {
 import MetadataTable from "./MetadataTable";
 import BulkEditMode from "./BulkEditMode";
 import MetadataSearchFilter from "./MetadataSearchFilter";
-import { createMetadata, updateMetadata, deleteMetadata } from "./utils/apiHelpers";
+import { createMetadata, updateMetadata, deleteMetadata } from "../../services/MetadataService";
 import { convertToMetadataRecords } from "./utils/metadataHelpers";
 import { validateMetadataValue } from "./utils/validationHelpers";
 

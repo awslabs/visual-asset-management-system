@@ -16,7 +16,7 @@ import {
     Container,
     ColumnLayout,
 } from "@cloudscape-design/components";
-import { apiClient } from "../../services/apiClient";
+import { fetchAsset, unarchiveAsset } from "../../services/APIService";
 import Synonyms from "../../synonyms";
 
 interface AssetUnarchiveModalProps {
@@ -82,8 +82,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
             }
 
             // Fetch asset details with showArchived=true to get archived assets
-            const endpoint = `database/${dbId}/assets/${assetId}?showArchived=true`;
-            const response = await apiClient.get(endpoint, {});
+            const response = await fetchAsset({ databaseId: dbId, assetId, showArchived: true });
 
             setState((prev) => ({
                 ...prev,
@@ -134,14 +133,13 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 throw new Error("Missing database ID or asset ID");
             }
 
-            const endpoint = `database/${dbId}/assets/${assetId}/unarchiveAsset`;
-            const body = {
-                confirmUnarchive: true,
-                reason: state.reason,
-            };
-
-            await apiClient.put(endpoint, {
-                body: body,
+            await unarchiveAsset({
+                databaseId: dbId,
+                assetId,
+                body: {
+                    confirmUnarchive: true,
+                    reason: state.reason,
+                },
             });
 
             setState((prev) => ({ ...prev, loading: false }));

@@ -9,10 +9,9 @@ import {
     SpaceBetween,
     Textarea,
 } from "@cloudscape-design/components";
-import { apiClient } from "../../services/apiClient";
 import { useEffect, useState } from "react";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
-import { fetchtagTypes } from "../../services/APIService";
+import { fetchtagTypes, createTag, updateTag } from "../../services/APIService";
 var tagTypes: any[] = [];
 
 interface TagFields {
@@ -156,9 +155,7 @@ export default function CreateTag({
                             onClick={() => {
                                 setInProgress(true);
                                 if (createOrUpdate === "Create") {
-                                    apiClient.post("tags", {
-                                        body: tagBody,
-                                    })
+                                    createTag(tagBody)
                                         .then((response) => {
                                             console.log("API call successful", response);
                                             setOpen(false);
@@ -188,9 +185,7 @@ export default function CreateTag({
                                             reloadChild();
                                         });
                                 } else {
-                                    apiClient.put("tags", {
-                                        body: tagBody,
-                                    })
+                                    updateTag(tagBody)
                                         .then((response) => {
                                             console.log("API call successful", response);
                                             setOpen(false);

@@ -16,8 +16,8 @@ import {
     Textarea,
 } from "@cloudscape-design/components";
 import { Optional } from "@cloudscape-design/components/internal/types";
-import { apiClient } from "../../services/apiClient";
 import { useEffect, useState } from "react";
+import { createConstraint } from "../../services/APIService";
 import { generateUUID } from "../../common/utils/utils";
 import RoleGroupPermissionsTable, { RoleGroupPermission } from "./RoleGroupPermissionsTable";
 import UserPermissionsTable, { UserPermission } from "./UserPermissionsTable";
@@ -372,9 +372,7 @@ export default function CreateConstraint({
                             onClick={() => {
                                 setInProgress(true);
                                 console.log("sending state", formState);
-                                apiClient.post(`auth/constraints/${formState.constraintId}`, {
-                                    body: formState,
-                                })
+                                createConstraint(formState)
                                     .then((res) => {
                                         console.log("create auth criteria", res);
                                         setOpen(false);

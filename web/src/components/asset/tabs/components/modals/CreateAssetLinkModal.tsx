@@ -13,8 +13,7 @@ import {
     SpaceBetween,
     Alert,
 } from "@cloudscape-design/components";
-import { apiClient } from "../../../../../services/apiClient";
-import { fetchtagTypes } from "../../../../../services/APIService";
+import { fetchtagTypes, createAssetLink } from "../../../../../services/APIService";
 import { useStatusMessage } from "../../../../common/StatusMessage";
 import { CreateAssetLinkModalProps } from "../../types/AssetLinksTypes";
 import { AssetSearchTable, AssetSearchItem } from "../../../../searchSmall/AssetSearchTable";
@@ -214,9 +213,7 @@ export function CreateAssetLinkModal({
                 }
 
                 try {
-                    await apiClient.post("asset-links", {
-                        body: assetLinkBody,
-                    });
+                    await createAssetLink(assetLinkBody);
                     successCount++;
                 } catch (err: any) {
                     console.error("Error creating asset link:", err);

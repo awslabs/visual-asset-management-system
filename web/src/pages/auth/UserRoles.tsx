@@ -5,9 +5,8 @@
 
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { apiClient } from "../../services/apiClient";
 import ListPageNoDatabase from "../ListPageNoDatabase";
-import { fetchUserRoles } from "../../services/APIService";
+import { fetchUserRoles, deleteUserRole } from "../../services/APIService";
 import CreateUserRole from "./CreateUserRole";
 import { useState } from "react";
 
@@ -25,13 +24,11 @@ export const UserRolesListDefinition = new ListDefinition({
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         userRoleBody.userId = item.userId;
         try {
-            const response: any = await apiClient.del("user-roles", {
-                body: userRoleBody,
-            });
-            return [true, response.message, ""];
+            const result: any = await deleteUserRole(userRoleBody);
+            return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response.data.message];
+            return [false, error?.message, error?.response?.data?.message];
         }
     },
     columnDefinitions: [

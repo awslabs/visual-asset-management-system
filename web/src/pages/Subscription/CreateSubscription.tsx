@@ -11,11 +11,10 @@ import {
     Link,
 } from "@cloudscape-design/components";
 import { appCache } from "../../services/appCache";
-import { apiClient } from "../../services/apiClient";
 import { useState, useEffect } from "react";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
 import CustomTable from "../../components/table/CustomTable";
-import { fetchDatabase, fetchAllAssets } from "../../services/APIService";
+import { fetchDatabase, fetchAllAssets, createSubscription, updateSubscription, searchAssets } from "../../services/APIService";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
 interface SubscriptionFields {
@@ -113,11 +112,11 @@ export default function CreateSubscription({
                         };
                         console.log("body", body);
 
-                        result = await apiClient.post("search", {
-                            "Content-type": "application/json",
-                            body: body,
-                        });
-                        result = result?.hits?.hits;
+                        const [success, searchResult] = await searchAssets(body) as [boolean, any];
+                        if (!success) {
+                            throw new Error(searchResult || "Search failed");
+                        }
+                        result = searchResult?.hits?.hits;
                     } else {
                         //Use assets API
                         result = await fetchAllAssets();
@@ -286,9 +285,7 @@ export default function CreateSubscription({
                                 setInProgress(true);
                                 createBody();
                                 if (createOrUpdate === "Create") {
-                                    apiClient.post("subscriptions", {
-                                        body: ruleBody,
-                                    })
+                                    createSubscription(ruleBody)
                                         .then((res) => {
                                             console.log("Create subs", res);
                                             setOpen(false);
@@ -327,9 +324,7 @@ export default function CreateSubscription({
                                     // selectedEntityType?.value === "Database"
                                     //     ? formState.databaseId
                                     //     : formState.entityId;
-                                    apiClient.put("subscriptions", {
-                                        body: ruleBody,
-                                    })
+                                    updateSubscription(ruleBody)
                                         .then((res) => {
                                             console.log("Update subs", res);
                                             setOpen(false);

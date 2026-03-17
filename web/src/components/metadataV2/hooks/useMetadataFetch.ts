@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback, useEffect } from "react";
-import { fetchMetadata } from "../utils/apiHelpers";
+import { fetchMetadata } from "../../../services/MetadataService";
 import {
     EntityType,
     FileMetadataType,

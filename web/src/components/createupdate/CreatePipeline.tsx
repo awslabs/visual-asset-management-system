@@ -15,7 +15,7 @@ import Select from "@cloudscape-design/components/select";
 import RadioGroup from "@cloudscape-design/components/radio-group";
 import Alert from "@cloudscape-design/components/alert";
 import { useState, useEffect } from "react";
-import { apiClient } from "../../services/apiClient";
+import { savePipeline } from "../../services/APIService";
 import OptionDefinition from "./form-definitions/types/OptionDefinition";
 import {
     pipelineTypeOptions,
@@ -293,9 +293,7 @@ export default function CreatePipeline({
                                 onClick={() => {
                                     if (createOrUpdate == "Create") {
                                         setInProgress(true);
-                                        apiClient.put(`pipelines`, {
-                                            body: buildApiBody(formState, false),
-                                        })
+                                        savePipeline(buildApiBody(formState, false))
                                             .then((res) => {
                                                 console.log("Create/Update pipeline: ", res);
                                                 setReload(true);
@@ -691,9 +689,7 @@ export default function CreatePipeline({
                                 onClick={() => {
                                     if (radioValue == "yes") {
                                         setInProgress(true);
-                                        apiClient.put(`pipelines`, {
-                                            body: buildApiBody(pipeline, true),
-                                        })
+                                        savePipeline(buildApiBody(pipeline, true))
                                             .then((res) => {
                                                 console.log(
                                                     "Update pipeline and associated workflows: ",
@@ -712,9 +708,7 @@ export default function CreatePipeline({
                                             });
                                     } else {
                                         setInProgress(true);
-                                        apiClient.put(`pipelines`, {
-                                            body: buildApiBody(pipeline, false),
-                                        })
+                                        savePipeline(buildApiBody(pipeline, false))
                                             .then((res) => {
                                                 console.log("Update pipeline: ", res);
                                                 setReload(true);

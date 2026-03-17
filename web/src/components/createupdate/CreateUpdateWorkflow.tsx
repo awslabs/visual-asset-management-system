@@ -27,7 +27,7 @@ import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
 //import AssetSelector from "../selectors/AssetSelector";
 import { appCache } from "../../services/appCache";
 import { fetchDatabaseWorkflows, saveWorkflow, runWorkflow } from "../../services/APIService";
-import { WorkflowContext } from "../../context/WorkflowContex";
+import { WorkflowContext } from "../../context/WorkflowContext";
 import { validateEntityId, verifyStringMaxLength } from "./entity-types/EntityPropTypes";
 import Synonyms from "../../synonyms";
 

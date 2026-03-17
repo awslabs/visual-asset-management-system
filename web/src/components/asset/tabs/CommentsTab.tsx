@@ -5,9 +5,8 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { Box, Button, TextContent, Alert } from "@cloudscape-design/components";
-import { apiClient } from "../../../services/apiClient";
 import { generateUUID } from "../../../common/utils/utils";
-import { fetchAllComments } from "../../../services/APIService";
+import { fetchAllComments, fetchAsset, createComment } from "../../../services/APIService";
 import JoditEditor from "jodit-react";
 import LoadingIcons from "react-loading-icons";
 import PopulateComments from "./comments/PopulateComments";
@@ -143,13 +142,10 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             };
 
             // Fetch the asset data to get version information
-            const fetchAsset = async () => {
+            const loadAsset = async () => {
                 if (assetId && databaseId) {
                     try {
-                        const response = await apiClient.get(
-`database/${databaseId}/assets/${assetId}`,
-                            {}
-                        );
+                        const response = await fetchAsset({ databaseId, assetId });
                         setAsset(response);
                     } catch (error: any) {
                         console.error("Error fetching asset:", error);
@@ -166,7 +162,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             };
 
             getUserId();
-            fetchAsset();
+            loadAsset();
             getData();
         }
     }, [isActive, reload, assetId, databaseId, displayItemsWhileLoading]);
@@ -229,14 +225,13 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
         setLoading(true);
         setShowLoadingIcon(true);
         try {
-            const response = await apiClient.post(
-`comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-                {
-                    body: {
-                        commentBody: content,
-                    },
-                }
-            );
+            const response = await createComment({
+                assetId,
+                assetVersionIdAndCommentId,
+                body: {
+                    commentBody: content,
+                },
+            });
             console.log(response);
             showMessage({
                 type: "success",

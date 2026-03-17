@@ -11,7 +11,7 @@ import { Button, Icon } from "@cloudscape-design/components";
 import { useParams } from "react-router";
 //import AssetSelector from "../selectors/AssetSelector";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
-import { WorkflowContext } from "../../context/WorkflowContex";
+import { WorkflowContext } from "../../context/WorkflowContext";
 
 const AssetID = (props: any) => {
     const { asset } = useContext(WorkflowContext);

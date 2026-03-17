@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import Spinner from "@cloudscape-design/components/spinner";
-import { fetchMetadata } from "../../metadataV2/utils/apiHelpers";
+import { fetchMetadata } from "../../../services/MetadataService";
 import { extractLocationData } from "../utils/locationUtils";
 import MapThumbnail from "./MapThumbnail";
 

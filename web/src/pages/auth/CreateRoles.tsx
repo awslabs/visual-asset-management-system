@@ -8,8 +8,8 @@ import {
     SpaceBetween,
     Input,
 } from "@cloudscape-design/components";
-import { apiClient } from "../../services/apiClient";
 import { useState } from "react";
+import { createRole, updateRole } from "../../services/APIService";
 
 interface RoleFields {
     source: string;
@@ -112,9 +112,7 @@ export default function CreateTagType({
                                 setInProgress(true);
                                 console.log("sending", roleBody);
                                 if (createOrUpdate === "Create") {
-                                    apiClient.post("roles", {
-                                        body: roleBody,
-                                    })
+                                    createRole(roleBody)
                                         .then((res) => {
                                             console.log("Create subs", res);
                                             setOpen(false);
@@ -141,9 +139,7 @@ export default function CreateTagType({
                                             setInProgress(false);
                                         });
                                 } else {
-                                    apiClient.put("roles", {
-                                        body: roleBody,
-                                    })
+                                    updateRole(roleBody)
                                         .then((res) => {
                                             console.log("Update subs", res);
                                             setOpen(false);

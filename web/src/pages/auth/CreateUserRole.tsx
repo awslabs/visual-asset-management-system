@@ -9,8 +9,8 @@ import {
     Multiselect,
     Input,
 } from "@cloudscape-design/components";
-import { apiClient } from "../../services/apiClient";
 import { useState, useEffect } from "react";
+import { createUserRole, updateUserRole } from "../../services/APIService";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
 import { fetchRoles } from "../../services/APIService";
 var roles: any[] = [];
@@ -114,9 +114,7 @@ export default function CreateTagType({
                                 userRoleBody.roleName = formState.roleName;
                                 userRoleBody.userId = formState.userId;
                                 if (createOrUpdate === "Create") {
-                                    apiClient.post("user-roles", {
-                                        body: userRoleBody,
-                                    })
+                                    createUserRole(userRoleBody)
                                         .then((res) => {
                                             console.log("Create subs", res);
                                             setOpen(false);
@@ -145,9 +143,7 @@ export default function CreateTagType({
                                             setInProgress(false);
                                         });
                                 } else {
-                                    apiClient.put("user-roles", {
-                                        body: userRoleBody,
-                                    })
+                                    updateUserRole(userRoleBody)
                                         .then((res) => {
                                             console.log("Update subs", res);
                                             setOpen(false);
