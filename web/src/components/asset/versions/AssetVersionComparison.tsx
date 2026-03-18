@@ -97,13 +97,17 @@ const getStatusBadge = (status: string) => {
 const getStatusIcon = (status: string) => {
     switch (status) {
         case "added":
-            return <span style={{ color: "#037f0c", marginRight: "4px" }}>➕</span>;
+            return (
+                <span style={{ color: "var(--vams-color-success)", marginRight: "4px" }}>➕</span>
+            );
         case "removed":
-            return <span style={{ color: "#d91515", marginRight: "4px" }}>➖</span>;
+            return <span style={{ color: "var(--vams-color-error)", marginRight: "4px" }}>➖</span>;
         case "modified":
-            return <span style={{ color: "#0972d3", marginRight: "4px" }}>✏️</span>;
+            return <span style={{ color: "var(--vams-color-info)", marginRight: "4px" }}>✏️</span>;
         case "unchanged":
-            return <span style={{ color: "#5f6b7a", marginRight: "4px" }}>✓</span>;
+            return (
+                <span style={{ color: "var(--vams-text-secondary)", marginRight: "4px" }}>✓</span>
+            );
         default:
             return null;
     }
@@ -644,25 +648,45 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                                 {comparison.summary && (
                                     <>
                                         <div>
-                                            <span style={{ color: "#037f0c", marginRight: "4px" }}>
+                                            <span
+                                                style={{
+                                                    color: "var(--vams-color-success)",
+                                                    marginRight: "4px",
+                                                }}
+                                            >
                                                 ➕
                                             </span>
                                             <strong>Added:</strong> {comparison.summary.added}
                                         </div>
                                         <div>
-                                            <span style={{ color: "#d91515", marginRight: "4px" }}>
+                                            <span
+                                                style={{
+                                                    color: "var(--vams-color-error)",
+                                                    marginRight: "4px",
+                                                }}
+                                            >
                                                 ➖
                                             </span>
                                             <strong>Removed:</strong> {comparison.summary.removed}
                                         </div>
                                         <div>
-                                            <span style={{ color: "#0972d3", marginRight: "4px" }}>
+                                            <span
+                                                style={{
+                                                    color: "var(--vams-color-info)",
+                                                    marginRight: "4px",
+                                                }}
+                                            >
                                                 ✏️
                                             </span>
                                             <strong>Modified:</strong> {comparison.summary.modified}
                                         </div>
                                         <div>
-                                            <span style={{ color: "#5f6b7a", marginRight: "4px" }}>
+                                            <span
+                                                style={{
+                                                    color: "var(--vams-text-secondary)",
+                                                    marginRight: "4px",
+                                                }}
+                                            >
                                                 ✓
                                             </span>
                                             <strong>Unchanged:</strong>{" "}
@@ -1137,7 +1161,9 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
             id: "valueType",
             header: "Value Type",
             cell: (item: MetadataComparison) => (
-                <div style={{ fontSize: "0.9em", color: "#5f6b7a" }}>{item.valueType || "N/A"}</div>
+                <div style={{ fontSize: "0.9em", color: "var(--vams-text-secondary)" }}>
+                    {item.valueType || "N/A"}
+                </div>
             ),
         },
     ];
@@ -1683,25 +1709,45 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                                 {comparison.summary && (
                                     <>
                                         <div>
-                                            <span style={{ color: "#037f0c", marginRight: "4px" }}>
+                                            <span
+                                                style={{
+                                                    color: "var(--vams-color-success)",
+                                                    marginRight: "4px",
+                                                }}
+                                            >
                                                 ➕
                                             </span>
                                             <strong>Added:</strong> {comparison.summary.added}
                                         </div>
                                         <div>
-                                            <span style={{ color: "#d91515", marginRight: "4px" }}>
+                                            <span
+                                                style={{
+                                                    color: "var(--vams-color-error)",
+                                                    marginRight: "4px",
+                                                }}
+                                            >
                                                 ➖
                                             </span>
                                             <strong>Removed:</strong> {comparison.summary.removed}
                                         </div>
                                         <div>
-                                            <span style={{ color: "#0972d3", marginRight: "4px" }}>
+                                            <span
+                                                style={{
+                                                    color: "var(--vams-color-info)",
+                                                    marginRight: "4px",
+                                                }}
+                                            >
                                                 ✏️
                                             </span>
                                             <strong>Modified:</strong> {comparison.summary.modified}
                                         </div>
                                         <div>
-                                            <span style={{ color: "#5f6b7a", marginRight: "4px" }}>
+                                            <span
+                                                style={{
+                                                    color: "var(--vams-text-secondary)",
+                                                    marginRight: "4px",
+                                                }}
+                                            >
                                                 ✓
                                             </span>
                                             <strong>Unchanged:</strong>{" "}

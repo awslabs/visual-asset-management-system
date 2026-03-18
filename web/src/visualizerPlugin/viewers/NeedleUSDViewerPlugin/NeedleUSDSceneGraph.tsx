@@ -89,7 +89,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
         if (!usdRoot) return [];
 
         try {
-            const buildNode = (obj: any, isFileRoot: boolean = false): SceneNode => {
+            const buildNode = (obj: any, isFileRoot = false): SceneNode => {
                 const node: SceneNode = {
                     id: obj.uuid,
                     name: obj.name || obj.type || "Unnamed",
@@ -397,7 +397,7 @@ const NeedleUSDSceneGraph: React.FC<NeedleUSDSceneGraphProps> = ({
     );
 
     // Render tree node recursively
-    const renderNode = (node: SceneNode, depth: number = 0): React.ReactNode => {
+    const renderNode = (node: SceneNode, depth = 0): React.ReactNode => {
         const isExpanded = expandedNodes.has(node.id);
         const hasChildren = node.children.length > 0;
         // Check if this node's object is in the selected objects array

@@ -63,11 +63,11 @@ Please contact your system administrator to enable WASM support for CAD files.
 
 ## Installation
 
-The viewer is automatically installed when you run `yarn install` in the web directory, provided it is enabled in the viewer configuration.
+The viewer is automatically installed when you run `npm install` in the web directory, provided it is enabled in the viewer configuration.
 
 ## Build Process
 
-1. **Install dependencies**: `npm install` in this directory or `yarn install` in the web directory
+1. **Install dependencies**: `npm install` in this directory or `npm install` in the web directory
 2. **Build bundle**: `npx webpack` to create the minified bundle
 3. **Output**: Bundle is created at `../../public/viewers/threejs.min.js`
 

@@ -231,7 +231,7 @@ class SearchCacheManager {
     /**
      * Evict the least recently used entry from a cache
      */
-    private evictLRU<T>(cache: Map<string, CacheEntry<T>>, updateSize: boolean = false): void {
+    private evictLRU<T>(cache: Map<string, CacheEntry<T>>, updateSize = false): void {
         let oldestKey: string | null = null;
         let oldestTime = Infinity;
 

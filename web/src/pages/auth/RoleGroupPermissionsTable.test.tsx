@@ -1,4 +1,3 @@
-/* eslint-disable testing-library/no-unnecessary-act */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -35,7 +34,6 @@ describe("Group Permissions Table", () => {
         const promise = Promise.resolve(["one", "two"]);
         const fetchGroups = jest.fn(() => promise);
 
-        // eslint-disable-next-line testing-library/no-unnecessary-act
         await act(async () => {
             render(<Harness fetchGroups={fetchGroups} />);
             await promise;

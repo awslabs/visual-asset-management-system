@@ -55,7 +55,7 @@ This directory contains the custom installation system for the Cesium viewer, wh
 
 ## Installation Process
 
-The installation happens automatically during `yarn install` in the main web directory via the postinstall script.
+The installation happens automatically during `npm install` in the main web directory via the postinstall script.
 
 ### Manual Installation
 

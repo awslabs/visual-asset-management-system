@@ -9,8 +9,8 @@ import {
     SpaceBetween,
     Textarea,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
 import { useState } from "react";
+import { createTagType, updateTagType } from "../../services/APIService";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
 
 interface TagTypeFields {
@@ -134,9 +134,7 @@ export default function CreateTagType({
                             onClick={() => {
                                 setInProgress(true);
                                 if (createOrUpdate === "Create") {
-                                    API.post("api", "tag-types", {
-                                        body: tagtypeBody,
-                                    })
+                                    createTagType(tagtypeBody)
                                         .then((res) => {
                                             setOpen(false);
                                             setReload(true);
@@ -155,7 +153,7 @@ export default function CreateTagType({
                                                 setNameError(errorMessage);
                                             }
                                             if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
+                                                const msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
                                                 setFormError(msg);
                                             }
                                         })
@@ -164,9 +162,7 @@ export default function CreateTagType({
                                             reloadChild();
                                         });
                                 } else {
-                                    API.put("api", "tag-types", {
-                                        body: tagtypeBody,
-                                    })
+                                    updateTagType(tagtypeBody)
                                         .then((res) => {
                                             setOpen(false);
                                             setReload(true);
@@ -179,7 +175,7 @@ export default function CreateTagType({
                                             console.log("update tag-type ", err);
                                             handleApiError(err);
                                             if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
+                                                const msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
                                                 setFormError(msg);
                                             }
                                         })

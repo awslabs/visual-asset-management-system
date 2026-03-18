@@ -126,7 +126,7 @@ export class NeedleUSDDependencyManager {
     /**
      * Load a script dynamically
      */
-    private static loadScript(src: string, asModule: boolean = false): Promise<void> {
+    private static loadScript(src: string, asModule = false): Promise<void> {
         return new Promise((resolve, reject) => {
             // Check if script is in DOM
             const existingScript = document.querySelector(

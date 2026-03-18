@@ -59,6 +59,7 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey || "",
+                    versionId: versionId,
                     assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });

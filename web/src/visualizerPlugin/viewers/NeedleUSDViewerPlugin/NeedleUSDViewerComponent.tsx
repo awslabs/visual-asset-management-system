@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { NeedleUSDDependencyManager } from "./dependencies";
 import { downloadAsset } from "../../../services/APIService";
@@ -23,7 +23,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
-    const [config] = useState(Cache.getItem("config"));
+    const [config] = useState(appCache.getItem("config"));
 
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
@@ -281,7 +281,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         /**
          * Extract ASCII strings from binary data
          */
-        const extractASCIIStrings = (bytes: Uint8Array, minLength: number = 4): string[] => {
+        const extractASCIIStrings = (bytes: Uint8Array, minLength = 4): string[] => {
             const strings: string[] = [];
             let currentString = "";
 
@@ -370,7 +370,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const resolveRelativePath = (
             referencePath: string,
             sourceFilePath: string,
-            baseDirectory: string = ""
+            baseDirectory = ""
         ): string => {
             // Remove @ symbols if present
             const cleanPath = referencePath.replace(/@/g, "").trim();
@@ -666,9 +666,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             fileKey: string,
             content: ArrayBuffer,
             USD: any,
-            baseDirectory: string = ""
+            baseDirectory = ""
         ): string => {
-            let parts = fileKey.split("/");
+            const parts = fileKey.split("/");
 
             // Remove assetId from path if it's the first component
             // The assetId is passed in from the component props
@@ -736,8 +736,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const downloadFile = async (
             fileKey: string,
             authHeader: string,
-            isMainFile: boolean = false,
-            isSingleFile: boolean = false
+            isMainFile = false,
+            isSingleFile = false
         ): Promise<ArrayBuffer | null> => {
             try {
                 const pathSegments = fileKey.split("/");
@@ -745,10 +745,13 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 const encodedFileKey = encodedSegments.join("/");
                 let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                // Only pass assetVersionId if provided — don't pass versionId to avoid
-                // interfering with internal dependency resolution for multi-file assets
+                // Version resolution:
+                // - assetVersionId: used for ALL files (main + dependencies) to fetch from a specific asset version
+                // - versionId: S3 version ID, used only for the MAIN file (not dependencies)
                 if (assetVersionId) {
                     assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+                } else if (versionId && isSingleFile) {
+                    assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
                 }
 
                 const response = await fetch(assetUrl, {
@@ -861,7 +864,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     // filePathMatch[1] is the file number (e.g., "0", "1", "123")
                     // filePathMatch[2] is the path without the trailing @ (e.g., "Assets/ArchVis/.../Prime_Large.usd")
                     const fileIndex = parseInt(filePathMatch[1], 10);
-                    let path = filePathMatch[2].trim();
+                    const path = filePathMatch[2].trim();
 
                     if (path.length > 0 && !isNaN(fileIndex)) {
                         // Use path as key to deduplicate, but store fileIndex with it
@@ -914,7 +917,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         /**
          * Wait for WASM to settle (finish loading and reporting errors)
          */
-        const waitForWASMToSettle = (ms: number = 2000): Promise<void> => {
+        const waitForWASMToSettle = (ms = 2000): Promise<void> => {
             return new Promise((resolve) => setTimeout(resolve, ms));
         };
 
@@ -1324,7 +1327,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         }
                         // Handle Z-up axis
                         if (stage.GetUpAxis && String.fromCharCode(stage.GetUpAxis()) === "z") {
-                            let upAxis = String.fromCharCode(stage.GetUpAxis());
+                            const upAxis = String.fromCharCode(stage.GetUpAxis());
                             console.log("Up Axis from USD:", upAxis);
                             if (upAxis === "z") {
                                 fileInfos[0].fileGroup.rotation.x = -Math.PI / 2;
@@ -1375,7 +1378,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                     //Destroy the driver and we'll recreate again
                     driver.delete();
-                    let oldDriver = driver;
+                    const oldDriver = driver;
                     renderInterface = null;
                     driver = null;
                     console.log("Destroying driver to add additional dependencies");

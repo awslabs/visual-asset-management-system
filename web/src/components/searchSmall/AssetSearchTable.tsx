@@ -15,8 +15,8 @@ import {
     Pagination,
     Spinner,
 } from "@cloudscape-design/components";
-import { API, Cache } from "aws-amplify";
-import { fetchAllAssets } from "../../services/APIService";
+import { appCache } from "../../services/appCache";
+import { fetchAllAssets, searchAssets } from "../../services/APIService";
 import CustomTable from "../table/CustomTable";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
@@ -86,7 +86,7 @@ export function AssetSearchTable({
     const [selectedAssets, setSelectedAssets] = useState<AssetSearchItem[]>([]);
 
     // Check if OpenSearch is disabled
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
     const useNoOpenSearch =
         noOpenSearch || config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH);
 
@@ -129,7 +129,7 @@ export function AssetSearchTable({
     };
 
     // Handle search
-    const handleSearch = async (page: number = 1) => {
+    const handleSearch = async (page = 1) => {
         if (!searchTerm.trim()) {
             setSearchResults([]);
             setShowResults(false);
@@ -172,10 +172,11 @@ export function AssetSearchTable({
                     includeArchived: false,
                 };
 
-                const response = await API.post("api", "search", {
-                    "Content-type": "application/json",
-                    body: body,
-                });
+                const [success, searchResult] = (await searchAssets(body)) as [boolean, any];
+                if (!success) {
+                    throw new Error(searchResult || "Search failed");
+                }
+                const response = searchResult;
 
                 if (response?.hits?.hits) {
                     results = response.hits.hits.map((result: any) => {

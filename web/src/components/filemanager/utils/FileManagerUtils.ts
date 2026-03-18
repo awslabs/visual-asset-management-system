@@ -38,7 +38,7 @@ export function getRootByPath(root: FileTree | null, path: string): FileTree | n
     if (root.relativePath === path) {
         return root;
     } else {
-        for (let subtree of root.subTree) {
+        for (const subtree of root.subTree) {
             if (subtree.relativePath === path) {
                 return subtree;
             } else {
@@ -645,7 +645,7 @@ export async function downloadFile(
     assetId: string,
     databaseId: string,
     keyPrefix: string,
-    versionId: string = "",
+    versionId = "",
     assetVersionId?: string
 ) {
     try {

@@ -6,6 +6,7 @@ import {
     calculateTotalAssetSize,
     addFiles,
     mergeFiles,
+    getParentFolderPaths,
 } from "./FileManagerUtils";
 
 // Helper function to flatten the file tree into an array for shift-selection
@@ -555,8 +556,6 @@ export function fileManagerReducer(
             // Expand all parent folders leading to a specific file path
             const targetPath = action.payload.path;
 
-            // Import the helper function to get parent folder paths
-            const { getParentFolderPaths } = require("./FileManagerUtils");
             const parentPaths = getParentFolderPaths(targetPath);
 
             console.log("📂 EXPAND_PATH_TO_ITEM: Expanding folders for path:", targetPath);

@@ -99,7 +99,7 @@ const downloadSingleFile = async (
     file: FileTree,
     directoryHandle: any,
     dispatch: any,
-    flattenHierarchy: boolean = false,
+    flattenHierarchy = false,
     assetVersionId?: string,
     maxRetries = 3
 ): Promise<boolean> => {
@@ -229,7 +229,7 @@ const downloadFilesInParallel = async (
     files: Array<FileTree>,
     directoryHandle: any,
     dispatch: any,
-    flattenHierarchy: boolean = false,
+    flattenHierarchy = false,
     assetVersionId?: string,
     concurrencyLimit = 5
 ): Promise<void> => {
@@ -288,7 +288,7 @@ async function downloadFolder(
     databaseId: string,
     tree: FileTree,
     dispatch: any,
-    flattenHierarchy: boolean = false,
+    flattenHierarchy = false,
     assetVersionId?: string,
     setSelectedFolderName?: (name: string) => void
 ): Promise<void> {

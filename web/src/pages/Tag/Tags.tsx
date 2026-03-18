@@ -6,13 +6,12 @@
 import CreateTag from "./CreateTag";
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
 import ListPageNoDatabase from "../ListPageNoDatabase";
 import CreateTagType from "./CreateTagType";
-import { fetchTags, fetchtagTypes } from "../../services/APIService";
+import { fetchTags, fetchtagTypes, deleteTag, deleteTagType } from "../../services/APIService";
 import { useEffect, useState } from "react";
 import { Box } from "@cloudscape-design/components";
-var rel;
+let rel;
 
 export const TagsListDefinition = new ListDefinition({
     pluralName: "tags",
@@ -23,11 +22,11 @@ export const TagsListDefinition = new ListDefinition({
     elementId: "tagName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `tags/${item.tagName}`, {});
-            return [true, response.message, ""];
+            const result: any = await deleteTag({ tagName: item.tagName });
+            return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response.data.message];
+            return [false, error?.message, error?.response?.data?.message];
         }
     },
     columnDefinitions: [
@@ -63,11 +62,11 @@ export const TagTypesListDefinition = new ListDefinition({
     elementId: "tagTypeName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `tag-types/${item.tagTypeName}`, {});
-            return [true, response.message, ""];
+            const result: any = await deleteTagType({ tagTypeName: item.tagTypeName });
+            return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response.data.message];
+            return [false, error?.message, error?.response?.data?.message];
         }
     },
     columnDefinitions: [

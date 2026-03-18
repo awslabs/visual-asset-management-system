@@ -3,20 +3,16 @@
     "version": "0.1.0",
     "private": true,
     "license": "Apache-2.0",
-    "engines": {
-        "yarn": ">= 1.22.18"
-    },
     "dependencies": {
-        "@aws-amplify/auth": "5.6.15",
-        "@aws-amplify/core": "5.8.14",
-        "@aws-amplify/ui-react": "^2.1.5",
-        "@aws-sdk/client-s3": "^3.400.0",
-        "@aws-sdk/lib-storage": "^3.400.0",
-        "@aws-sdk/s3-request-presigner": "^3.400.0",
+        "@aws-amplify/ui-react": "^6.15.2",
+        "@aws-sdk/client-s3": "^3.700.0",
+        "@aws-sdk/lib-storage": "^3.700.0",
+        "@aws-sdk/s3-request-presigner": "^3.700.0",
         "@badgateway/oauth2-client": "2.4.2",
         "@cloudscape-design/collection-hooks": "^1.0.19",
         "@cloudscape-design/components": "^3.0.196",
         "@cloudscape-design/design-tokens": "^3.0.8",
+        "@cloudscape-design/global-styles": "^1.0.52",
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/sortable": "^10.0.0",
         "@dnd-kit/utilities": "^3.2.2",
@@ -29,26 +25,21 @@
         "@types/three": "^0.180.0",
         "@types/wicg-file-system-access": "2020.9.6",
         "arraybuffer-to-buffer": "^0.0.7",
-        "aws-amplify": "5.3.27",
-        "aws-amplify-react": "^5.1.9",
+        "aws-amplify": "^6.0.0",
         "axios": "^1.6.0",
         "buffer": "^6.0.3",
-        "del-cli": "^5.0.0",
-        "dompurify": "^2.3.6",
+        "dompurify": "^3.2.4",
         "fast-xml-parser": "^4.2.5",
         "fcs": "^0.1.2",
         "file-system-access": "1.0.4",
         "geojson": "^0.5.0",
         "jodit": "^4.0.0-beta.61",
         "jodit-react": "^1.3.39",
-        "loader-utils": "^3.2.0",
         "localforage": "^1.10.0",
         "maplibre-gl": "^5.8.0",
         "moment": "^2.29.4",
         "papaparse": "^5.4.1",
-        "patch-package": "^6.4.7",
         "postcss": "^8.4.31",
-        "postinstall-postinstall": "^2.1.0",
         "prop-types": "^15.8.1",
         "react": "^17.0.2",
         "react-data-grid": "7.0.0-beta.16",
@@ -60,19 +51,18 @@
         "react-map-gl": "^8.1.0",
         "react-papaparse": "^3.18.1",
         "react-pdf": "^10.1.0",
-        "react-router": "6.23.1",
-        "react-router-dom": "6.23.1",
-        "react-scripts": "5.0.1",
-        "react-syntax-highlighter": "^15.5.0",
+        "react-router": "^6.30.3",
+        "react-router-dom": "^6.30.3",
+        "react-syntax-highlighter": "^16.1.1",
         "sanitize-html": "^2.11.0",
         "semver": "^7.5.2",
         "styled-components": "^5.3.3",
         "tough-cookie": "^4.1.3",
-        "typescript": "4.4.4",
+        "typescript": "^5.0.0",
         "web-ifc": "^0.0.39",
         "web-vitals": "^1.1.2"
     },
-    "resolutions": {
+    "overrides": {
         "d3-color": "^3.1.0",
         "nth-check": "^2.0.1",
         "fast-xml-parser": "^4.2.5",
@@ -82,36 +72,21 @@
         "axios": "^1.6.0",
         "follow-redirects": "^1.15.4",
         "@types/react": "^17.0.2",
-        "react-router": "6.23.1"
+        "react-router": "^6.30.3"
     },
     "scripts": {
-        "start": "react-scripts --max-old-space-size=8192 start",
-        "build": "react-scripts --max-old-space-size=8192 build",
-        "build.lowmem": "GENERATE_SOURCEMAP=false react-scripts --max_old_space_size=4096 build",
-        "test": "react-scripts test --coverage",
-        "eject": "react-scripts eject",
-        "postinstall": "node ./customInstalls/needletools-usd-viewer/usdViewerInstall.js && node ./customInstalls/veerum/veerumInstall.js && node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/threejs/install.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js && patch-package"
-    },
-    "eslintConfig": {
-        "extends": [
-            "react-app",
-            "react-app/jest"
-        ]
-    },
-    "browserslist": {
-        "production": [
-            ">0.2%",
-            "not dead",
-            "not op_mini all"
-        ],
-        "development": [
-            "last 1 chrome version",
-            "last 1 firefox version",
-            "last 1 safari version"
-        ]
+        "start": "vite",
+        "build": "vite build",
+        "build.lowmem": "node --max-old-space-size=4096 node_modules/vite/bin/vite.js build --sourcemap false",
+        "preview": "vite preview",
+        "test": "jest --coverage",
+        "postinstall": "node ./customInstalls/needletools-usd-viewer/usdViewerInstall.js && node ./customInstalls/veerum/veerumInstall.js && node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/threejs/install.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js"
     },
     "devDependencies": {
         "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
+        "@babel/preset-env": "^7.0.0",
+        "@babel/preset-react": "^7.0.0",
+        "@babel/preset-typescript": "^7.0.0",
         "@cloudscape-design/jest-preset": "^2.0.8",
         "@jest/types": "^29.5.0",
         "@testing-library/jest-dom": "^5.14.1",
@@ -123,48 +98,17 @@
         "@types/react-dom": "^17.0.2",
         "@types/react-syntax-highlighter": "^15.5.0",
         "@types/sanitize-html": "^2.9.0",
+        "@vitejs/plugin-react": "^4.0.0",
         "assert": "^2.0.0",
         "babel-jest": "^29.5.0",
+        "eslint-plugin-react-hooks": "^5.2.0",
         "fs-extra": "^11.1.1",
         "prettier": "^2.4.1",
-        "react-error-overlay": "^6.0.9",
         "react-test-renderer": "^17.0.2",
         "sass": "^1.43.4",
-        "sass-loader": "^12.3.0",
         "simple-git": "^3.19.0",
-        "ts-node": "^10.9.1"
-    },
-    "jest": {
-        "collectCoverageFrom": [
-            "src/**/*.{js,jsx,ts,tsx}",
-            "!<rootDir>/node_modules/",
-            "!<rootDir>/path/to/dir/"
-        ],
-        "transform": {
-            "node_modules/@cloudscape-design/.+\\.js$": "./node_modules/@cloudscape-design/jest-preset/js-transformer",
-            "node_modules/@cloudscape-design/.+\\.css": "./node_modules/@cloudscape-design/jest-preset/css-transformer",
-            "node_modules/(d3-.*|internmap)/.+\\.js$": "./node_modules/@cloudscape-design/jest-preset/js-transformer"
-        },
-        "transformIgnorePatterns": [
-            "/node_modules/(?!(d3-.*|internmap|@cloudscape-design/)).+\\.js$",
-            "node_modules/(?!axios)/",
-            "node_modules/(?!(react-leaflet|@react-leaflet|d3-*|axios))",
-            "node_modules/(?!(d3-.*|internmap|@cloudscape-design/)).+\\.js$",
-            "!node_modules/"
-        ],
-        "moduleNameMapper": {
-            "^axios$": "axios/dist/axios.js"
-        },
-        "coverageThreshold": {
-            "global": {
-                "branches": 6,
-                "functions": 11,
-                "lines": 11,
-                "statements": 10
-            }
-        },
-        "coverageReporters": [
-            "text"
-        ]
+        "ts-node": "^10.9.1",
+        "vite": "^6.0.0",
+        "vite-plugin-node-polyfills": "^0.23.0"
     }
 }

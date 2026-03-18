@@ -15,7 +15,7 @@ import Select from "@cloudscape-design/components/select";
 import RadioGroup from "@cloudscape-design/components/radio-group";
 import Alert from "@cloudscape-design/components/alert";
 import { useState, useEffect } from "react";
-import { API } from "aws-amplify";
+import { savePipeline } from "../../services/APIService";
 import OptionDefinition from "./form-definitions/types/OptionDefinition";
 import {
     pipelineTypeOptions,
@@ -131,14 +131,14 @@ export default function CreatePipeline({
             label: waitForCallbackOptions[0].label,
             value: waitForCallbackOptions[0].value,
         };
-        let initAssetType: string = ".all";
-        let initOutputType: string = ".all";
+        let initAssetType = ".all";
+        let initOutputType = ".all";
         let initDatabase: OptionDefinition = { label: null, value: null };
-        let initLambdaName: string = "";
-        let initSqsQueueUrl: string = "";
-        let initEventBridgeBusArn: string = "";
-        let initEventBridgeSource: string = "";
-        let initEventBridgeDetailType: string = "";
+        let initLambdaName = "";
+        let initSqsQueueUrl = "";
+        let initEventBridgeBusArn = "";
+        let initEventBridgeSource = "";
+        let initEventBridgeDetailType = "";
 
         if (initState) {
             let type = pipelineTypeOptions.find((item) => item.value === initState.pipelineType);
@@ -153,7 +153,7 @@ export default function CreatePipeline({
             initOutputType = initState.outputType || ".all";
             initDatabase = { label: initState.databaseId, value: initState.databaseId };
             try {
-                let obj = JSON.parse(initState.userProvidedResource);
+                const obj = JSON.parse(initState.userProvidedResource);
                 if (obj.resourceType === "Lambda") {
                     initLambdaName = obj.resourceId || "";
                 } else if (obj.resourceType === "SQS") {
@@ -293,9 +293,7 @@ export default function CreatePipeline({
                                 onClick={() => {
                                     if (createOrUpdate == "Create") {
                                         setInProgress(true);
-                                        API.put("api", `pipelines`, {
-                                            body: buildApiBody(formState, false),
-                                        })
+                                        savePipeline(buildApiBody(formState, false))
                                             .then((res) => {
                                                 console.log("Create/Update pipeline: ", res);
                                                 setReload(true);
@@ -305,7 +303,7 @@ export default function CreatePipeline({
                                             })
                                             .catch((err) => {
                                                 console.log("create pipeline error", err);
-                                                let msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
+                                                const msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
                                                 setFormError(msg);
                                             })
                                             .finally(() => {
@@ -323,6 +321,7 @@ export default function CreatePipeline({
                                         validatePipelineName(formState.pipelineId) === null &&
                                         validatePipelineDescriptionLength(formState.description) ===
                                             null &&
+                                        formState.databaseId.value.trim() !== "" &&
                                         formState.assetType.trim() !== "" &&
                                         formState.outputType.trim() !== "" &&
                                         (formState.pipelineExecutionType.value !== "SQS" ||
@@ -360,7 +359,10 @@ export default function CreatePipeline({
                                     data-testid="pipeline-name"
                                 />
                             </FormField>
-                            <FormField label="Database Name">
+                            <FormField
+                                label="Database Name"
+                                constraintText="Required. Select the database for this pipeline."
+                            >
                                 <DatabaseSelector
                                     disabled={
                                         inProgress ||
@@ -691,9 +693,7 @@ export default function CreatePipeline({
                                 onClick={() => {
                                     if (radioValue == "yes") {
                                         setInProgress(true);
-                                        API.put("api", `pipelines`, {
-                                            body: buildApiBody(pipeline, true),
-                                        })
+                                        savePipeline(buildApiBody(pipeline, true))
                                             .then((res) => {
                                                 console.log(
                                                     "Update pipeline and associated workflows: ",
@@ -704,7 +704,7 @@ export default function CreatePipeline({
                                             })
                                             .catch((err) => {
                                                 console.log("update workflow error", err);
-                                                let msg = `Unable to update workflow. Error: Request failed with status code ${err.response.status}`;
+                                                const msg = `Unable to update workflow. Error: Request failed with status code ${err.response.status}`;
                                                 setFormError(msg);
                                             })
                                             .finally(() => {
@@ -712,9 +712,7 @@ export default function CreatePipeline({
                                             });
                                     } else {
                                         setInProgress(true);
-                                        API.put("api", `pipelines`, {
-                                            body: buildApiBody(pipeline, false),
-                                        })
+                                        savePipeline(buildApiBody(pipeline, false))
                                             .then((res) => {
                                                 console.log("Update pipeline: ", res);
                                                 setReload(true);
@@ -722,7 +720,7 @@ export default function CreatePipeline({
                                             })
                                             .catch((err) => {
                                                 console.log("create pipeline error", err);
-                                                let msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
+                                                const msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
                                                 setFormError(msg);
                                             })
                                             .finally(() => {

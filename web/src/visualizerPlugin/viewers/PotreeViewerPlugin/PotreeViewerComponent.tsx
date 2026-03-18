@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { PotreeDependencyManager } from "./dependencies";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
@@ -13,12 +13,13 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
     databaseId,
     assetKey,
+    versionId,
     assetVersionId,
 }) => {
     const engineElement = useRef<HTMLDivElement>(null);
     const [loaded, setLoaded] = useState(false);
     const [showNoAssetMessage, setShowNoAssetMessage] = useState(false);
-    const [config] = useState(Cache.getItem("config"));
+    const [config] = useState(appCache.getItem("config"));
     const [potreeInstance, setPotreeInstance] = useState<any>(null);
     const [error, setError] = useState<string | null>(null);
     const [dismissedVersionWarning, setDismissedVersionWarning] = useState(false);
@@ -45,8 +46,8 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             if (!potreeInstance || !assetKey || loaded || !config) return;
 
             try {
-                let fileKey = assetKey + "/preview/PotreeViewer/metadata.json";
-                let url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
+                const fileKey = assetKey + "/preview/PotreeViewer/metadata.json";
+                const url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
 
                 // Get a valid, fresh authorization header (automatically refreshes token if expired)
                 const authorizationHeader = await getDualAuthorizationHeader();
@@ -59,11 +60,11 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                     engineElement.current.setAttribute("pc", url);
 
                     setTimeout(() => {
-                        let parentDiv = engineElement.current;
+                        const parentDiv = engineElement.current;
                         if (!parentDiv || !potreeInstance) return;
 
                         try {
-                            let viewer = new potreeInstance.Viewer(parentDiv);
+                            const viewer = new potreeInstance.Viewer(parentDiv);
                             viewer.setEDLEnabled(true);
                             viewer.setFOV(60);
                             viewer.setPointBudget(1000000);
@@ -82,8 +83,8 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                                 .loadPointCloud(url, "Point Cloud", authHeader)
                                 .then(
                                     (e: any) => {
-                                        let pointcloud = e.pointcloud;
-                                        let material = pointcloud.material;
+                                        const pointcloud = e.pointcloud;
+                                        const material = pointcloud.material;
 
                                         material.activeAttributeName = "rgba";
                                         material.minSize = 2;
@@ -193,7 +194,7 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
 
     return (
         <div style={{ position: "relative", height: "100%" }} id="potree-root">
-            {assetVersionId && !dismissedVersionWarning && (
+            {(assetVersionId || versionId) && !dismissedVersionWarning && (
                 <div
                     style={{
                         position: "absolute",

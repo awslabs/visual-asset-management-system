@@ -9,11 +9,10 @@ import {
     SpaceBetween,
     Textarea,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
 import { useEffect, useState } from "react";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
-import { fetchtagTypes } from "../../services/APIService";
-var tagTypes: any[] = [];
+import { fetchtagTypes, createTag, updateTag } from "../../services/APIService";
+let tagTypes: any[] = [];
 
 interface TagFields {
     tagName: string;
@@ -156,9 +155,7 @@ export default function CreateTag({
                             onClick={() => {
                                 setInProgress(true);
                                 if (createOrUpdate === "Create") {
-                                    API.post("api", "tags", {
-                                        body: tagBody,
-                                    })
+                                    createTag(tagBody)
                                         .then((response) => {
                                             console.log("API call successful", response);
                                             setOpen(false);
@@ -179,7 +176,7 @@ export default function CreateTag({
                                                 setNameError(errorMessage);
                                             }
                                             if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
+                                                const msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
                                                 setFormError(msg);
                                             }
                                         })
@@ -188,9 +185,7 @@ export default function CreateTag({
                                             reloadChild();
                                         });
                                 } else {
-                                    API.put("api", "tags", {
-                                        body: tagBody,
-                                    })
+                                    updateTag(tagBody)
                                         .then((response) => {
                                             console.log("API call successful", response);
                                             setOpen(false);
@@ -204,7 +199,7 @@ export default function CreateTag({
                                         .catch((err) => {
                                             console.log("create tag error", err);
                                             if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
+                                                const msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
                                                 setFormError(msg);
                                             }
                                         })

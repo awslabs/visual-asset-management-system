@@ -16,8 +16,8 @@ import {
     Textarea,
 } from "@cloudscape-design/components";
 import { Optional } from "@cloudscape-design/components/internal/types";
-import { API } from "aws-amplify";
 import { useEffect, useState } from "react";
+import { createConstraint } from "../../services/APIService";
 import { generateUUID } from "../../common/utils/utils";
 import RoleGroupPermissionsTable, { RoleGroupPermission } from "./RoleGroupPermissionsTable";
 import UserPermissionsTable, { UserPermission } from "./UserPermissionsTable";
@@ -251,7 +251,7 @@ export default function CreateConstraint({
         groupPermissions: RoleGroupPermission[],
         userPermissions: UserPermission[]
     ): Record<string, string | null> {
-        let response: Record<string, string | null> = {
+        const response: Record<string, string | null> = {
             groupError: null,
             userError: null,
         };
@@ -372,9 +372,7 @@ export default function CreateConstraint({
                             onClick={() => {
                                 setInProgress(true);
                                 console.log("sending state", formState);
-                                API.post("api", `auth/constraints/${formState.constraintId}`, {
-                                    body: formState,
-                                })
+                                createConstraint(formState)
                                     .then((res) => {
                                         console.log("create auth criteria", res);
                                         setOpen(false);
@@ -387,7 +385,7 @@ export default function CreateConstraint({
                                     })
                                     .catch((err) => {
                                         console.log("create auth criteria error", err);
-                                        let msg = `Unable to ${createOrUpdate} constraints. Error: Request failed with status code ${err.response.status}`;
+                                        const msg = `Unable to ${createOrUpdate} constraints. Error: Request failed with status code ${err.response.status}`;
                                         setFormError(msg);
                                     })
                                     .finally(() => {

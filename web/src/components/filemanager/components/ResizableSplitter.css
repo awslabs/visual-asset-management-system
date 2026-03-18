@@ -8,7 +8,7 @@
 .resizable-left-panel {
     flex-shrink: 0;
     overflow: auto;
-    border-right: 1px solid #eaeded;
+    border-right: 1px solid var(--vams-border-default);
     padding: 10px 0;
 }
 
@@ -31,27 +31,27 @@
 }
 
 .resizable-splitter:hover {
-    background-color: #e9ecef;
+    background-color: var(--vams-border-default);
 }
 
 .resizable-splitter.dragging {
-    background-color: #007bff;
+    background-color: var(--vams-color-info);
 }
 
 .splitter-handle {
     width: 2px;
     height: 40px;
-    background-color: #dee2e6;
+    background-color: var(--vams-border-default);
     border-radius: 1px;
     transition: background-color 0.2s ease;
 }
 
 .resizable-splitter:hover .splitter-handle {
-    background-color: #6c757d;
+    background-color: var(--vams-text-secondary);
 }
 
 .resizable-splitter.dragging .splitter-handle {
-    background-color: #ffffff;
+    background-color: var(--vams-bg-primary);
 }
 
 /* Prevent text selection during drag */

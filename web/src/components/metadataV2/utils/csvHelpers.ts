@@ -69,7 +69,7 @@ export const exportToCSV = (rows: MetadataRowState[]): string => {
 /**
  * Download CSV file
  */
-export const downloadCSV = (csvContent: string, filename: string = "metadata.csv"): void => {
+export const downloadCSV = (csvContent: string, filename = "metadata.csv"): void => {
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);

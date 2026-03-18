@@ -6,7 +6,7 @@
 import { ViewerPluginProps } from "../../../core/types";
 
 // Re-export the base props
-export interface Online3DViewerProps extends ViewerPluginProps {}
+export type Online3DViewerProps = ViewerPluginProps;
 
 // Viewer state management
 export interface ViewerState {

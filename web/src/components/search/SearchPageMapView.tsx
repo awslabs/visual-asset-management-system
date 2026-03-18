@@ -23,7 +23,7 @@ import {
     Popover,
     Icon,
 } from "@cloudscape-design/components";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../services/appCache";
 import { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
 import { SearchExplanation, getTotalResultCount } from "./types";
@@ -223,7 +223,7 @@ const extractMetadata = (
 function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const [selectedItem, setSelectedItem] = useState<LocationDataWithDetails | null>(null);
     const mapRef = useRef<MapRef>(null);
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
 
     // Get pagination info from state
     const pageSize = state.tablePreferences?.pageSize || 50;

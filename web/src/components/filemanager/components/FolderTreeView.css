@@ -1,9 +1,9 @@
 .folder-tree-view {
     max-height: 300px;
     overflow-y: auto;
-    border: 1px solid #d5dbdb;
+    border: 1px solid var(--vams-border-default);
     border-radius: 4px;
-    background-color: #ffffff;
+    background-color: var(--vams-bg-primary);
 }
 
 .folder-tree-item {
@@ -20,16 +20,16 @@
 }
 
 .folder-tree-item-content:hover {
-    background-color: #f2f3f3;
+    background-color: var(--vams-bg-secondary);
 }
 
 .folder-tree-item-content.selected {
-    background-color: #0972d3;
-    color: #ffffff;
+    background-color: var(--vams-color-info);
+    color: var(--vams-bg-primary);
 }
 
 .folder-tree-item-content.selected:hover {
-    background-color: #0962c7;
+    background-color: var(--vams-color-info);
 }
 
 .folder-tree-item-caret {
@@ -67,7 +67,7 @@
 }
 
 .folder-tree-item-children {
-    border-left: 1px solid #e9ebed;
+    border-left: 1px solid var(--vams-border-default);
     margin-left: 8px;
 }
 
@@ -77,6 +77,6 @@
     display: block;
     padding: 16px;
     text-align: center;
-    color: #687078;
+    color: var(--vams-text-secondary);
     font-style: italic;
 }
