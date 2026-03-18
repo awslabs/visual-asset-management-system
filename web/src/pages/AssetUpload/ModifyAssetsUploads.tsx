@@ -76,7 +76,7 @@ interface FinishUploadsProps {
 
 const getFilesFromFileHandles = async (
     fileHandles: any[],
-    prefix: string = ""
+    prefix = ""
 ): Promise<FileUploadTableItem[]> => {
     const fileUploadTableItems: FileUploadTableItem[] = [];
     for (let i = 0; i < fileHandles.length; i++) {

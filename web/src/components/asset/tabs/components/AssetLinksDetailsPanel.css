@@ -7,7 +7,7 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    border: 1px solid #eaeded;
+    border: 1px solid var(--vams-border-default);
     border-radius: 4px;
 }
 
@@ -16,7 +16,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 10px 0;
-    border-bottom: 1px solid #eaeded;
+    border-bottom: 1px solid var(--vams-border-default);
     margin-bottom: 10px;
 }
 

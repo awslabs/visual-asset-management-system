@@ -269,7 +269,7 @@ Please contact your administrator to enable CAD format support for this viewer.
 ### Test With OCCT
 
 1. Add `occt-import-js` to `optionalDependencies`
-2. Run `yarn install` and `npm run build` in web directory
+2. Run `npm install` and `npm run build` in web directory
 3. Run install script
 4. Verify WASM file exists in public/viewers/threejs/
 5. Try to load .stp file
@@ -280,7 +280,7 @@ Please contact your administrator to enable CAD format support for this viewer.
 **To disable OCCT:**
 
 1. Remove from `optionalDependencies`
-2. Run `yarn install` in web directory
+2. Run `npm install` in web directory
 3. Run `npm run build` in web directory
 4. Run install script
 5. WASM file will not be copied
@@ -288,6 +288,6 @@ Please contact your administrator to enable CAD format support for this viewer.
 **To update OCCT version:**
 
 1. Update version in `optionalDependencies`
-2. Run `yarn install` in web directory
+2. Run `npm install` in web directory
 3. Run `npm run build` in web directory
 4. Run install script

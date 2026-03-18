@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef } from "react";
-import { API } from "aws-amplify";
+import { deleteComment, updateComment } from "../../../../services/APIService";
 import {
     ExpandableSection,
     Button,
@@ -71,10 +71,14 @@ export default function VersionComments(props: VersionCommentsProps) {
     const [editedContent, setEditedContent] = useState<string>("");
     const editor = useRef(null);
 
+    // Detect dark mode from the body class (set by useThemeSettings)
+    const isDarkMode = document.body.classList.contains("awsui-dark-mode");
+
     // Config for the Jodit editor
     const config = {
         readonly: false,
         minHeight: 100,
+        theme: isDarkMode ? "dark" : "default",
         showCharsCounter: false,
         showWordsCounter: false,
         showXPathInStatusbar: false,
@@ -128,16 +132,12 @@ export default function VersionComments(props: VersionCommentsProps) {
         console.log("Deleting Comment-- " + commentToDelete);
         const [assetId, assetVersionId, CommentId] = commentToDelete.split(":");
 
-        let assetVersionIdAndCommentId = assetVersionId + ":" + CommentId;
+        const assetVersionIdAndCommentId = assetVersionId + ":" + CommentId;
 
         showLoading(true);
 
         try {
-            await API.del(
-                "api",
-                `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-                {}
-            );
+            await deleteComment({ assetId, assetVersionIdAndCommentId });
             showMessage({
                 type: "success",
                 message: "Comment deleted successfully",
@@ -166,20 +166,17 @@ export default function VersionComments(props: VersionCommentsProps) {
     const handleEditComment = async () => {
         if (!commentToEdit) return;
 
-        const [assetId, assetVersionIdAndCommentId] =
-            commentToEdit["assetVersionId:commentId"].split(":");
+        const [assetId] = commentToEdit["assetVersionId:commentId"].split(":");
         showLoading(true);
 
         try {
-            await API.put(
-                "api",
-                `comments/assets/${assetId}/assetVersionId:commentId/${commentToEdit["assetVersionId:commentId"]}`,
-                {
-                    body: {
-                        commentBody: editedContent,
-                    },
-                }
-            );
+            await updateComment({
+                assetId,
+                assetVersionIdAndCommentId: commentToEdit["assetVersionId:commentId"],
+                body: {
+                    commentBody: editedContent,
+                },
+            });
             showMessage({
                 type: "success",
                 message: "Comment updated successfully",

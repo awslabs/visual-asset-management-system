@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { API } from "aws-amplify";
+import { apiClient } from "./apiClient";
 
 export interface MoveFileRequest {
     sourcePath: string;
@@ -66,12 +66,10 @@ export interface PresignedUrlResult {
 export const moveFile = async (
     databaseId: string,
     assetId: string,
-    request: MoveFileRequest,
-    api = API
+    request: MoveFileRequest
 ): Promise<FileOperationResponse> => {
     try {
-        const response = await api.post(
-            "api",
+        const response = await apiClient.post(
             `/database/${databaseId}/assets/${assetId}/moveFile`,
             {
                 body: request,
@@ -96,12 +94,10 @@ export const moveFile = async (
 export const copyFile = async (
     databaseId: string,
     assetId: string,
-    request: CopyFileRequest,
-    api = API
+    request: CopyFileRequest
 ): Promise<FileOperationResponse> => {
     try {
-        const response = await api.post(
-            "api",
+        const response = await apiClient.post(
             `/database/${databaseId}/assets/${assetId}/copyFile`,
             {
                 body: request,
@@ -126,12 +122,10 @@ export const copyFile = async (
 export const unarchiveFile = async (
     databaseId: string,
     assetId: string,
-    request: UnarchiveFileRequest,
-    api = API
+    request: UnarchiveFileRequest
 ): Promise<FileOperationResponse> => {
     try {
-        const response = await api.post(
-            "api",
+        const response = await apiClient.post(
             `/database/${databaseId}/assets/${assetId}/unarchiveFile`,
             {
                 body: request,
@@ -156,12 +150,10 @@ export const unarchiveFile = async (
 export const archiveFile = async (
     databaseId: string,
     assetId: string,
-    request: ArchiveFileRequest,
-    api = API
+    request: ArchiveFileRequest
 ): Promise<FileOperationResponse> => {
     try {
-        const response = await api.del(
-            "api",
+        const response = await apiClient.del(
             `/database/${databaseId}/assets/${assetId}/archiveFile`,
             {
                 body: request,
@@ -185,12 +177,10 @@ export const archiveFile = async (
  */
 export const deleteAssetPreview = async (
     databaseId: string,
-    assetId: string,
-    api = API
+    assetId: string
 ): Promise<DeleteAssetPreviewResponse> => {
     try {
-        const response = await api.del(
-            "api",
+        const response = await apiClient.del(
             `/database/${databaseId}/assets/${assetId}/deleteAssetPreview`,
             {}
         );
@@ -212,8 +202,7 @@ export const deleteAssetPreview = async (
  * Uses the same API as downloadAsset but returns the URLs instead of initiating downloads
  */
 export const generatePresignedUrls = async (
-    request: GeneratePresignedUrlsRequest,
-    api = API
+    request: GeneratePresignedUrlsRequest
 ): Promise<[boolean, PresignedUrlResult[] | string]> => {
     try {
         const { databaseId, assetId, assetVersionId, files } = request;
@@ -239,8 +228,7 @@ export const generatePresignedUrls = async (
                     downloadBody.versionId = file.versionId;
                 }
 
-                const response = await api.post(
-                    "api",
+                const response = await apiClient.post(
                     `/database/${databaseId}/assets/${assetId}/download`,
                     {
                         body: downloadBody,
@@ -299,14 +287,15 @@ export const processMultipleFileOperations = async (
     files: string[],
     destinationFolder: string,
     operation: "move" | "copy",
-    destinationAssetId?: string
+    destinationAssetId?: string,
+    destFileNames?: Record<string, string>
 ): Promise<FileOperationResult[]> => {
     const results: FileOperationResult[] = [];
 
     for (const filePath of files) {
         try {
-            // Construct destination path
-            const fileName = filePath.split("/").pop() || filePath;
+            // Use custom filename if provided, otherwise extract from source path
+            const fileName = destFileNames?.[filePath] || filePath.split("/").pop() || filePath;
             const destinationPath = destinationFolder.endsWith("/")
                 ? `${destinationFolder}${fileName}`
                 : `${destinationFolder}/${fileName}`;

@@ -19,7 +19,7 @@ interface PreviewThumbnailCellProps {
 /**
  * Component that displays a thumbnail preview of an asset in the search results
  */
-export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
+const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
     assetId,
     databaseId,
     onOpenFullPreview,
@@ -235,5 +235,17 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
         </Box>
     );
 };
+
+export const PreviewThumbnailCell = React.memo(
+    PreviewThumbnailCellInner,
+    (prevProps, nextProps) => {
+        // Compare only data props, not callback references
+        return (
+            prevProps.assetId === nextProps.assetId &&
+            prevProps.databaseId === nextProps.databaseId &&
+            prevProps.assetName === nextProps.assetName
+        );
+    }
+);
 
 export default PreviewThumbnailCell;

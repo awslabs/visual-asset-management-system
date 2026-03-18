@@ -34,7 +34,7 @@ import {
     createMetadataSchema,
     updateMetadataSchema,
     deleteMetadataSchema,
-} from "../services/metadataSchemaAPI";
+} from "../services/MetadataSchemaService";
 
 // Export for backward compatibility with old metadata components
 export interface SchemaContextData {
@@ -433,6 +433,7 @@ export default function MetadataSchemaPage() {
                 onSubmit={editingSchema ? handleUpdateSchema : handleCreateSchema}
                 editingSchema={editingSchema}
                 databaseId={databaseId}
+                defaultEntityType={selectedEntityType !== "all" ? selectedEntityType : undefined}
             />
 
             <DeleteSchemaModal

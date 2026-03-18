@@ -272,7 +272,7 @@ export function DirectoryTree({}: DirectoryTreeProps) {
                     <div
                         style={{
                             fontSize: "12px",
-                            color: "#666",
+                            color: "var(--vams-text-secondary)",
                             marginTop: "4px",
                             display: "flex",
                             alignItems: "center",
@@ -280,7 +280,7 @@ export function DirectoryTree({}: DirectoryTreeProps) {
                         }}
                     >
                         <span>{loadingMessage}</span>
-                        <span style={{ color: "#0972d3" }}>
+                        <span style={{ color: "var(--vams-color-info)" }}>
                             Page {state.loadingProgress.current}
                         </span>
                     </div>

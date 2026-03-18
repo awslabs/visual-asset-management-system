@@ -147,9 +147,9 @@ export const Matrix4x4Input: React.FC<Matrix4x4InputProps> = ({
                     style={{
                         padding: "4px 8px",
                         fontSize: "12px",
-                        border: "1px solid #ccc",
+                        border: "1px solid var(--vams-border-default)",
                         borderRadius: "4px",
-                        background: "#f5f5f5",
+                        background: "var(--vams-bg-secondary)",
                         cursor: disabled ? "not-allowed" : "pointer",
                     }}
                 >
@@ -175,8 +175,16 @@ export const Matrix4x4Input: React.FC<Matrix4x4InputProps> = ({
                     ))
                 )}
             </div>
-            {error && <div style={{ fontSize: "12px", color: "#d13212" }}>{error}</div>}
-            <div style={{ fontSize: "11px", color: "#666", textAlign: "center" }}>
+            {error && (
+                <div style={{ fontSize: "12px", color: "var(--vams-color-error)" }}>{error}</div>
+            )}
+            <div
+                style={{
+                    fontSize: "11px",
+                    color: "var(--vams-text-secondary)",
+                    textAlign: "center",
+                }}
+            >
                 Enter values for a 4x4 transformation matrix. Click "Identity" for identity matrix.
             </div>
         </SpaceBetween>

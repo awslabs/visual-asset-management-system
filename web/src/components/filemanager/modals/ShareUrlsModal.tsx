@@ -15,7 +15,7 @@ import {
 } from "@cloudscape-design/components";
 import { TableProps } from "@cloudscape-design/components/table";
 import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { generatePresignedUrls } from "../../../services/FileOperationsService";
 import { getDualValidAccessToken } from "../../../utils/authTokenUtils";
 import { FileTree } from "../types/FileManagerTypes";
@@ -165,7 +165,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
         setIsLoading(false);
         setError(null);
 
-        const config = Cache.getItem("config");
+        const config = appCache.getItem("config");
         if (!config?.api) {
             setError("API configuration not available");
             return;
@@ -371,7 +371,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
                     style={{
                         fontFamily: "monospace",
                         fontSize: "0.9em",
-                        color: "#666",
+                        color: "var(--vams-text-secondary)",
                     }}
                     title={item.filePath}
                 >

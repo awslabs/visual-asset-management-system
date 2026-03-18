@@ -215,7 +215,7 @@ export const getValueTypeLabel = (type: MetadataValueType): string => {
  * Note: inline_controlled_list is excluded as it's only for schema-defined fields
  */
 export const getAvailableValueTypes = (
-    isFileAttribute: boolean = false
+    isFileAttribute = false
 ): Array<{ label: string; value: MetadataValueType }> => {
     const allTypes: Array<{ label: string; value: MetadataValueType }> = [
         { label: "String", value: "string" },

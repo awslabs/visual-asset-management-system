@@ -19,14 +19,14 @@ def after_request(response):
 def amplifyConfig():
   return {
     'api': 'http://localhost:8002/',
-    'region': '',
+    'region': 'us-east-1',
     #'cognitoUserPoolId': 'XX-XXXX-X_abcd1234',
     #'cognitoAppClientId': '1',
-    'cognitoIdentityPoolId': 'XXXXX',
+    #'cognitoIdentityPoolId': 'XXXXX',
     'externalOAuthIdpURL': 'https://localhost:9031',
     'externalOAuthIdpClientId': 'clientId',
     'externalOAuthIdpScope': 'openid',
-    'externalOAuthIdpScopeMfa': 'test_mfa_scope',
+    'externalOAuthIdpScopeMfa': 'test_mfa_scope', #Remove this to remove MFA capability
     'externalOAuthIdpTokenEndpoint': '/as/token.oauth2',
     'externalOAuthIdpAuthorizationEndpoint': '/as/authorization.oauth2',
     'externalOAuthIdpDiscoveryEndpoint': '/.well-known/openid-configuration',

@@ -64,13 +64,13 @@ import {
 } from "../../utils/fileExtensionValidation";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
-var tags: any[] = [];
-var tagTypes: TagType[] = [];
-var assetOptions: { label: string; value: string }[] = [];
-var assetTags: string[] = [];
+let tags: any[] = [];
+let tagTypes: TagType[] = [];
+const assetOptions: { label: string; value: string }[] = [];
+let assetTags: string[] = [];
 
 export class AssetDetail {
-    isMultiFile: boolean = false;
+    isMultiFile = false;
     assetId?: string;
     assetName?: string;
     databaseId?: string;

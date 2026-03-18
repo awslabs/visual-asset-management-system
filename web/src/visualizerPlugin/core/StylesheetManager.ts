@@ -17,11 +17,7 @@ export class StylesheetManager {
      * @param href - The stylesheet URL
      * @param scoped - Whether to scope the CSS to a specific container (future enhancement)
      */
-    static async loadStylesheet(
-        pluginId: string,
-        href: string,
-        scoped: boolean = false
-    ): Promise<void> {
+    static async loadStylesheet(pluginId: string, href: string, scoped = false): Promise<void> {
         return new Promise((resolve, reject) => {
             // Check if already loaded
             if (this.loadedStylesheets.has(href)) {

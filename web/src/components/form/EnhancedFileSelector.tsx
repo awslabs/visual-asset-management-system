@@ -45,7 +45,7 @@ export default function EnhancedFileSelector({
 
     const processFileEntry = async (
         entry: any,
-        path: string = "",
+        path = "",
         fileHandles: FileHandle[] = []
     ): Promise<FileHandle[]> => {
         if (entry.kind === "file") {

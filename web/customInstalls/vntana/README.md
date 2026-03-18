@@ -49,7 +49,7 @@ This directory contains the build system for creating a bundled version of the V
 
 ## Installation Process
 
-The installation happens automatically during `yarn install` in the main web directory via the postinstall script.
+The installation happens automatically during `npm install` in the main web directory via the postinstall script.
 
 ### Manual Installation
 

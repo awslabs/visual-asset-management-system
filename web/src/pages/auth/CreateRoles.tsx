@@ -8,8 +8,8 @@ import {
     SpaceBetween,
     Input,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
 import { useState } from "react";
+import { createRole, updateRole } from "../../services/APIService";
 
 interface RoleFields {
     source: string;
@@ -112,9 +112,7 @@ export default function CreateTagType({
                                 setInProgress(true);
                                 console.log("sending", roleBody);
                                 if (createOrUpdate === "Create") {
-                                    API.post("api", "roles", {
-                                        body: roleBody,
-                                    })
+                                    createRole(roleBody)
                                         .then((res) => {
                                             console.log("Create subs", res);
                                             setOpen(false);
@@ -127,23 +125,29 @@ export default function CreateTagType({
                                         })
                                         .catch((err) => {
                                             console.log("Create subs error", err);
-                                            if (err.response && err.response.status === 400) {
+                                            if (err.status === 400) {
                                                 const errorMessage =
-                                                    "Role" + " already exists or is not valid";
+                                                    err.message ||
+                                                    "Role already exists or is not valid";
                                                 setNameError(errorMessage);
-                                            }
-                                            if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} role. Error: Request failed with status code 403`;
+                                            } else if (err.status === 403) {
+                                                const msg = `Unable to ${createOrUpdate} role. Error: ${
+                                                    err.message ||
+                                                    "Request failed with status code 403"
+                                                }`;
                                                 setFormError(msg);
+                                            } else {
+                                                setFormError(
+                                                    err.message ||
+                                                        "An error occurred while creating the role"
+                                                );
                                             }
                                         })
                                         .finally(() => {
                                             setInProgress(false);
                                         });
                                 } else {
-                                    API.put("api", "roles", {
-                                        body: roleBody,
-                                    })
+                                    updateRole(roleBody)
                                         .then((res) => {
                                             console.log("Update subs", res);
                                             setOpen(false);
@@ -156,9 +160,17 @@ export default function CreateTagType({
                                         })
                                         .catch((err) => {
                                             console.log("Update subs error", err);
-                                            if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} role. Error: Request failed with status code 403`;
+                                            if (err.status === 403) {
+                                                const msg = `Unable to ${createOrUpdate} role. Error: ${
+                                                    err.message ||
+                                                    "Request failed with status code 403"
+                                                }`;
                                                 setFormError(msg);
+                                            } else {
+                                                setFormError(
+                                                    err.message ||
+                                                        "An error occurred while updating the role"
+                                                );
                                             }
                                         })
                                         .finally(() => {
@@ -190,7 +202,7 @@ export default function CreateTagType({
                             value={formState.roleName}
                             onChange={({ detail }) => {
                                 setFormState({ ...formState, roleName: detail.value });
-                                setNameError("");
+                                setNameError(validateName(detail.value) || "");
                             }}
                             placeholder="Enter Name"
                             data-testid="role"

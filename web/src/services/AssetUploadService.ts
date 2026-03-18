@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { API } from "aws-amplify";
+import { apiClient } from "./apiClient";
 import { Metadata } from "../components/single/Metadata";
 
 export interface CreateAssetRequest {
@@ -111,7 +111,7 @@ export class AssetUploadService {
      */
     async createAsset(assetData: CreateAssetRequest): Promise<CreateAssetResponse> {
         try {
-            const response = await API.post("api", "assets", {
+            const response = await apiClient.post("assets", {
                 "Content-type": "application/json",
                 body: assetData,
             });
@@ -129,7 +129,7 @@ export class AssetUploadService {
      */
     async createAssetLink(linkData: CreateAssetLinkRequest): Promise<CreateAssetLinkResponse> {
         try {
-            const response = await API.post("api", "asset-links", {
+            const response = await apiClient.post("asset-links", {
                 "Content-type": "application/json",
                 body: linkData,
             });
@@ -168,11 +168,9 @@ export class AssetUploadService {
             });
 
             // Use new bulk metadata API
-            const response = await API.post(
-                "api",
+            const response = await apiClient.post(
                 `database/${databaseId}/assets/${assetId}/metadata`,
                 {
-                    "Content-type": "application/json",
                     body: {
                         metadata: metadataArray, // New bulk API format
                     },
@@ -194,7 +192,7 @@ export class AssetUploadService {
         uploadRequest: InitializeUploadRequest
     ): Promise<InitializeUploadResponse> {
         try {
-            const response = await API.post("api", "uploads", {
+            const response = await apiClient.post("uploads", {
                 "Content-type": "application/json",
                 body: uploadRequest,
             });
@@ -252,7 +250,7 @@ export class AssetUploadService {
     ): Promise<any> {
         try {
             // Use new bulk metadata API
-            const response = await API.post("api", `asset-links/${assetLinkId}/metadata`, {
+            const response = await apiClient.post(`asset-links/${assetLinkId}/metadata`, {
                 "Content-type": "application/json",
                 body: {
                     metadata: metadataArray, // New bulk API format
@@ -276,7 +274,7 @@ export class AssetUploadService {
         completionData: CompleteUploadRequest
     ): Promise<CompleteUploadResponse> {
         try {
-            const response = await API.post("api", `uploads/${uploadId}/complete`, {
+            const response = await apiClient.post(`uploads/${uploadId}/complete`, {
                 "Content-type": "application/json",
                 body: completionData,
             });

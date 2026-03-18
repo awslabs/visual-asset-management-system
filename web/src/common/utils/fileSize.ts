@@ -9,7 +9,7 @@
  * @param decimals - Number of decimal places (default: 2)
  * @returns Formatted file size string (e.g., "1.5 MB", "500 KB")
  */
-export function formatFileSize(bytes: number | undefined | null, decimals: number = 2): string {
+export function formatFileSize(bytes: number | undefined | null, decimals = 2): string {
     if (bytes === undefined || bytes === null || bytes === 0) {
         return "0 Bytes";
     }

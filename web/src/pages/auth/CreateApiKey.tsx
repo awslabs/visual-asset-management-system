@@ -42,6 +42,9 @@ const initialFormState: FormState = {
 export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyProps) {
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
+    const [nameError, setNameError] = useState("");
+    const [userIdError, setUserIdError] = useState("");
+    const [descriptionError, setDescriptionError] = useState("");
     const [formState, setFormState] = useState<FormState>({ ...initialFormState });
     const [createdKeyValue, setCreatedKeyValue] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
@@ -50,6 +53,9 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
         if (open) {
             setFormState({ ...initialFormState });
             setFormError("");
+            setNameError("");
+            setUserIdError("");
+            setDescriptionError("");
             setCreatedKeyValue(null);
             setCopied(false);
         }
@@ -147,8 +153,9 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                                 fontFamily: "monospace",
                                 fontSize: "14px",
                                 padding: "12px 16px",
-                                backgroundColor: "#f2f3f3",
-                                border: "1px solid #d5dbdb",
+                                backgroundColor: "var(--vams-bg-secondary)",
+                                border: "1px solid var(--vams-border-default)",
+                                color: "var(--vams-text-primary)",
                                 borderRadius: "4px",
                                 wordBreak: "break-all",
                                 userSelect: "all",
@@ -196,11 +203,17 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                     <FormField
                         label="Name"
                         constraintText="Required. Enter a name for the API key."
+                        errorText={nameError}
                     >
                         <Input
                             value={formState.name}
                             onChange={({ detail }) => {
                                 setFormState({ ...formState, name: detail.value });
+                                if (!detail.value.trim()) {
+                                    setNameError("Name is required");
+                                } else {
+                                    setNameError("");
+                                }
                             }}
                             placeholder="Enter API key name"
                             data-testid="api-key-name"
@@ -209,11 +222,17 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                     <FormField
                         label="User ID"
                         constraintText="Required. Enter the user ID this key will be associated with."
+                        errorText={userIdError}
                     >
                         <Input
                             value={formState.userId}
                             onChange={({ detail }) => {
                                 setFormState({ ...formState, userId: detail.value });
+                                if (!detail.value.trim()) {
+                                    setUserIdError("User ID is required");
+                                } else {
+                                    setUserIdError("");
+                                }
                             }}
                             placeholder="Enter User ID"
                             data-testid="api-key-userId"
@@ -222,11 +241,17 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                     <FormField
                         label="Description"
                         constraintText="Required. Enter a description for the API key."
+                        errorText={descriptionError}
                     >
                         <Textarea
                             value={formState.description}
                             onChange={({ detail }) => {
                                 setFormState({ ...formState, description: detail.value });
+                                if (!detail.value.trim()) {
+                                    setDescriptionError("Description is required");
+                                } else {
+                                    setDescriptionError("");
+                                }
                             }}
                             placeholder="Enter description"
                             data-testid="api-key-description"

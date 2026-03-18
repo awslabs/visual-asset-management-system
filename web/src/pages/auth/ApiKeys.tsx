@@ -10,6 +10,7 @@ import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Table from "@cloudscape-design/components/table";
 import TextContent from "@cloudscape-design/components/text-content";
+import TextFilter from "@cloudscape-design/components/text-filter";
 import Grid from "@cloudscape-design/components/grid";
 import Modal from "@cloudscape-design/components/modal";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
@@ -27,6 +28,7 @@ export default function ApiKeys() {
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [deleteInProgress, setDeleteInProgress] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [filterText, setFilterText] = useState("");
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -80,6 +82,17 @@ export default function ApiKeys() {
             setDeleteInProgress(false);
         }
     };
+
+    const filteredItems = filterText
+        ? allItems.filter((item: any) => {
+              const search = filterText.toLowerCase();
+              return (
+                  (item.apiKeyName && item.apiKeyName.toLowerCase().includes(search)) ||
+                  (item.userId && item.userId.toLowerCase().includes(search)) ||
+                  (item.description && item.description.toLowerCase().includes(search))
+              );
+          })
+        : allItems;
 
     const columnDefinitions = [
         {
@@ -161,20 +174,39 @@ export default function ApiKeys() {
                     <Table
                         loading={loading}
                         loadingText="Loading API keys..."
-                        items={allItems}
+                        items={filteredItems}
                         columnDefinitions={columnDefinitions}
                         selectionType="single"
                         selectedItems={selectedItems}
                         onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
                         sortingDisabled={false}
+                        filter={
+                            <div
+                                style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
+                            >
+                                <TextFilter
+                                    filteringText={filterText}
+                                    filteringAriaLabel="Filter API keys"
+                                    onChange={({ detail }) => setFilterText(detail.filteringText)}
+                                />
+                                <Button
+                                    iconName="refresh"
+                                    variant="icon"
+                                    onClick={() => setReload(true)}
+                                    loading={loading}
+                                    ariaLabel="Refresh data"
+                                />
+                            </div>
+                        }
                         header={
                             <Header
-                                counter={`(${allItems.length})`}
+                                counter={
+                                    filterText
+                                        ? `(${filteredItems.length}/${allItems.length})`
+                                        : `(${allItems.length})`
+                                }
                                 actions={
                                     <SpaceBetween direction="horizontal" size="xs">
-                                        <Button onClick={() => setReload(true)} iconName="refresh">
-                                            Refresh
-                                        </Button>
                                         <Button
                                             disabled={selectedItems.length !== 1}
                                             onClick={() => setEditOpen(true)}

@@ -34,7 +34,7 @@ export default function ListPageNoDatabase(props: any) {
     useEffect(() => {
         const getData = async () => {
             setLoading(true);
-            let items = await fetchAllElements();
+            const items = await fetchAllElements();
 
             if (items !== false && Array.isArray(items)) {
                 setLoading(false);

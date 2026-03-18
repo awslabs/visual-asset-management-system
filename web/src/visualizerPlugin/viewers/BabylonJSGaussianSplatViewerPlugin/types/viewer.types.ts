@@ -6,7 +6,7 @@
 import { ViewerPluginProps } from "../../../core/types";
 
 // Re-export the base props
-export interface BabylonJSGaussianSplatViewerProps extends ViewerPluginProps {}
+export type BabylonJSGaussianSplatViewerProps = ViewerPluginProps;
 
 // BabylonJS-specific types for Gaussian Splat viewing
 export interface GaussianSplatOptions {

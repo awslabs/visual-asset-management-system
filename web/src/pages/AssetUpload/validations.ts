@@ -40,7 +40,9 @@ export const validateRequiredTagTypeSelected = (
     allTagTypes: TagType[]
 ): string | undefined => {
     // Get required tag types
-    let requiredTagTypes: TagType[] = allTagTypes.filter((tagType) => tagType.required === "True");
+    const requiredTagTypes: TagType[] = allTagTypes.filter(
+        (tagType) => tagType.required === "True"
+    );
 
     // If no tags are selected but there are required tag types, when Next button is pressed, return this
     if ((!selectedTags || !selectedTags.length) && requiredTagTypes.length) {
@@ -50,7 +52,7 @@ export const validateRequiredTagTypeSelected = (
     // If tags are selected, determine which are missing
     if (selectedTags?.length) {
         // For each required tag type, check if there is at least one selected tag
-        let missingTagTypes: string[] = [];
+        const missingTagTypes: string[] = [];
         requiredTagTypes.forEach((tagType) => {
             const found = tagType.tags.some((tag) => selectedTags.includes(tag));
 

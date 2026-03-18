@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { VeerumDependencyManager } from "./dependencies";
 import { VeerumViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
@@ -74,7 +74,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 }
 
                 // Get config for API endpoint
-                const config = Cache.getItem("config");
+                const config = appCache.getItem("config");
                 if (!config) {
                     const errorMsg = "Configuration not available";
                     setInitError(errorMsg);
@@ -179,10 +179,12 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             const encodedFileKey = encodedSegments.join("/");
                             let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                            // Only pass assetVersionId if provided — don't pass versionId to avoid
-                            // interfering with internal dependency resolution for multi-file assets
+                            // assetVersionId takes precedence (used for all files including deps)
+                            // versionId is S3 file version, only for the primary file
                             if (assetVersionId) {
                                 assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+                            } else if (versionId) {
+                                assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
                             }
 
                             console.log(`VEERUM Viewer: Loading 3D tileset from ${assetUrl}`);
@@ -492,7 +494,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             )}
 
             {/* Asset version warning */}
-            {assetVersionId && !dismissedVersionWarning && (
+            {(assetVersionId || versionId) && !dismissedVersionWarning && (
                 <div
                     style={{
                         position: "absolute",

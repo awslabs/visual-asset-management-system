@@ -1,0 +1,146 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * VAMS Theme CSS Custom Properties
+ *
+ * Defines light and dark mode color tokens. Dark mode values are applied
+ * when Cloudscape adds .awsui-dark-mode class to the body element.
+ *
+ * Usage: color: var(--vams-text-primary);
+ *        background: var(--vams-bg-primary);
+ */
+
+/* Light mode (default) */
+:root {
+    /* Backgrounds */
+    --vams-bg-primary: #ffffff;
+    --vams-bg-secondary: #f9fafa;
+    --vams-bg-hover: #f2f3f3;
+    --vams-bg-input: #ffffff;
+    --vams-bg-container: #ffffff;
+
+    /* Text */
+    --vams-text-primary: #000716;
+    --vams-text-secondary: #5f6b7a;
+    --vams-text-heading: #000716;
+    --vams-text-disabled: #9ba7b6;
+
+    /* Borders */
+    --vams-border-default: #e9ebed;
+    --vams-border-input: #7d8998;
+
+    /* Status colors */
+    --vams-color-success: #037f0c;
+    --vams-color-error: #d91515;
+    --vams-color-warning: #8d6605;
+    --vams-color-info: #0972d3;
+
+    /* Interactive */
+    --vams-bg-selected: #f0fbff;
+    --vams-border-selected: #0972d3;
+
+    /* Scrollbar */
+    --vams-scrollbar-track: #f9fafa;
+    --vams-scrollbar-thumb: #d1d5db;
+}
+
+/*
+ * Global dark mode overrides for elements outside Cloudscape component scope.
+ * Cloudscape components handle their own dark mode via applyMode(), but
+ * non-Cloudscape elements (plain HTML, custom CSS) need these overrides.
+ */
+.awsui-dark-mode body,
+.awsui-dark-mode #root,
+.awsui-dark-mode #headerWrapper {
+    background-color: var(--vams-bg-primary);
+    color: var(--vams-text-primary);
+}
+
+/* ReactFlow dark mode overrides (workflow editor) */
+.awsui-dark-mode .react-flow__node {
+    background-color: var(--vams-bg-secondary);
+    color: var(--vams-text-primary);
+    border-color: var(--vams-border-default);
+}
+
+.awsui-dark-mode .react-flow__node-default,
+.awsui-dark-mode .react-flow__node-input,
+.awsui-dark-mode .react-flow__node-output {
+    background-color: var(--vams-bg-secondary);
+    color: var(--vams-text-primary);
+    border-color: var(--vams-border-default);
+}
+
+.awsui-dark-mode .react-flow__edge-path {
+    stroke: var(--vams-border-default);
+}
+
+.awsui-dark-mode .react-flow__controls-button {
+    background-color: var(--vams-bg-secondary);
+    border-color: var(--vams-border-default);
+    fill: var(--vams-text-primary);
+}
+
+.awsui-dark-mode .react-flow__controls-button:hover {
+    background-color: var(--vams-bg-hover);
+}
+
+.awsui-dark-mode .react-flow__controls-button svg {
+    fill: var(--vams-text-primary);
+}
+
+.awsui-dark-mode .react-flow__minimap {
+    background-color: var(--vams-bg-primary);
+}
+
+/* VNTANA viewer — always force light mode on UI overlay controls */
+.vntana-viewer-root,
+.vntana-viewer-root * {
+    color-scheme: light;
+}
+
+.awsui-dark-mode .vntana-viewer-root button,
+.awsui-dark-mode .vntana-viewer-root select,
+.awsui-dark-mode .vntana-viewer-root input,
+.awsui-dark-mode .vntana-viewer-root label,
+.awsui-dark-mode .vntana-viewer-root span {
+    color: #000716;
+}
+
+/* Dark mode - activated by Cloudscape's applyMode(Mode.Dark) */
+.awsui-dark-mode,
+:root.awsui-dark-mode {
+    /* Backgrounds */
+    --vams-bg-primary: #0f1b2a;
+    --vams-bg-secondary: #192534;
+    --vams-bg-hover: #1a2b3c;
+    --vams-bg-input: #192534;
+    --vams-bg-container: #192534;
+
+    /* Text */
+    --vams-text-primary: #d1d5db;
+    --vams-text-secondary: #8d99a8;
+    --vams-text-heading: #e9ebed;
+    --vams-text-disabled: #5f6b7a;
+
+    /* Borders */
+    --vams-border-default: #354150;
+    --vams-border-input: #5f6b7a;
+
+    /* Status colors */
+    --vams-color-success: #29ad32;
+    --vams-color-error: #eb6f6f;
+    --vams-color-warning: #e0ca57;
+    --vams-color-info: #5f9de8;
+
+    /* Interactive */
+    --vams-bg-selected: #0d2b45;
+    --vams-border-selected: #5f9de8;
+
+    /* Scrollbar */
+    --vams-scrollbar-track: #0f1b2a;
+    --vams-scrollbar-thumb: #354150;
+}

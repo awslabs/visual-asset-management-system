@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { ThreeJSDependencyManager } from "./dependencies";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
@@ -24,7 +24,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
-    const [config] = useState(Cache.getItem("config"));
+    const [config] = useState(appCache.getItem("config"));
     const [threeReady, setThreeReady] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
@@ -284,10 +284,12 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         const encodedFileKey = encodedSegments.join("/");
                         let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
 
-                        // Only pass assetVersionId if provided — don't pass versionId to avoid
-                        // interfering with internal dependency resolution for multi-file assets
+                        // assetVersionId takes precedence (used for all files including deps)
+                        // versionId is S3 file version, only for the primary file (isMainFile)
                         if (assetVersionId) {
                             assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+                        } else if (versionId && fileKey === assetKey) {
+                            assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
                         }
 
                         const response = await fetch(assetUrl, {

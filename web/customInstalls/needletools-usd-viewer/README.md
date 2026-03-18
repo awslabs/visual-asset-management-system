@@ -71,7 +71,7 @@ different browser (Chrome, Firefox, or Edge recommended).
 
 ## Installation
 
-The viewer is automatically installed when you run `yarn install` in the web directory, provided it is enabled in the viewer configuration.
+The viewer is automatically installed when you run `npm install` in the web directory, provided it is enabled in the viewer configuration.
 
 The installation process:
 

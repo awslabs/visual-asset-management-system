@@ -108,7 +108,7 @@ function TreeItem({ item }: TreeItemProps) {
             const tagsWithType = tags.map((tag) => {
                 if (tagTypes && tagTypes.length > 0) {
                     for (const tagType of tagTypes) {
-                        var tagTypeName = tagType.tagTypeName;
+                        let tagTypeName = tagType.tagTypeName;
 
                         if (tagType && tagType.required === "True") {
                             tagTypeName += " [R]";

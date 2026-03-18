@@ -11,20 +11,20 @@ export class MouseControls {
     private camera: any;
     private domElement: HTMLElement;
     private target: any; // THREE.Vector3
-    private enabled: boolean = true;
+    private enabled = true;
 
     // State
-    private isRotating: boolean = false;
-    private isPanning: boolean = false;
+    private isRotating = false;
+    private isPanning = false;
     private rotateStart: { x: number; y: number } = { x: 0, y: 0 };
     private panStart: { x: number; y: number } = { x: 0, y: 0 };
 
     // Settings
-    private rotateSpeed: number = 1.0;
-    private zoomSpeed: number = 1.0;
-    private panSpeed: number = 1.0;
-    private minDistance: number = 0.01;
-    private maxDistance: number = 10000;
+    private rotateSpeed = 1.0;
+    private zoomSpeed = 1.0;
+    private panSpeed = 1.0;
+    private minDistance = 0.01;
+    private maxDistance = 10000;
 
     constructor(camera: any, domElement: HTMLElement, THREE: any) {
         this.camera = camera;
@@ -56,7 +56,7 @@ export class MouseControls {
         this.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
     }
 
-    public hasMoved: boolean = false;
+    public hasMoved = false;
 
     private onMouseDown(event: MouseEvent): void {
         if (!this.enabled) return;

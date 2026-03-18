@@ -4,12 +4,12 @@ frontend:
         preBuild:
             commands:
                 - export NODE_OPTIONS=--max-old-space-size=8192
-                - yarn install --frozen-lockfile
+                - npm ci
         build:
             commands:
                 - npm run build
     artifacts:
-        baseDirectory: build
+        baseDirectory: dist
         files:
             - "**/*"
     cache:

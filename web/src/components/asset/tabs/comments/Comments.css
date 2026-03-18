@@ -16,7 +16,7 @@
 }
 
 .commentSectionTableBorder {
-    border: 1px solid #eaeded;
+    border: 1px solid var(--vams-border-default);
     border-radius: 8px;
 }
 
@@ -51,9 +51,9 @@
 .commentContainer {
     margin-bottom: 20px;
     padding: 10px;
-    border: 1px solid #eaeded;
+    border: 1px solid var(--vams-border-default);
     border-radius: 4px;
-    background-color: #f8f8f8;
+    background-color: var(--vams-bg-secondary);
 }
 
 .commentHeader {
@@ -67,7 +67,7 @@
 }
 
 .commentDate {
-    color: #666;
+    color: var(--vams-text-secondary);
     font-size: 0.9em;
 }
 
@@ -82,6 +82,55 @@
 
 .noCommentsDiv {
     padding: 10px;
-    color: #666;
+    color: var(--vams-text-secondary);
     font-style: italic;
+}
+
+/* Jodit editor dark mode overrides */
+.awsui-dark-mode .jodit-container {
+    background-color: var(--vams-bg-secondary);
+    border-color: var(--vams-border-default);
+}
+
+.awsui-dark-mode .jodit-workplace {
+    background-color: var(--vams-bg-primary);
+    color: var(--vams-text-primary);
+}
+
+.awsui-dark-mode .jodit-toolbar__box,
+.awsui-dark-mode .jodit-toolbar-editor-collection {
+    background-color: var(--vams-bg-secondary);
+    border-color: var(--vams-border-default);
+}
+
+.awsui-dark-mode .jodit-toolbar-button__button {
+    color: var(--vams-text-heading);
+}
+
+.awsui-dark-mode .jodit-toolbar-button__button svg {
+    fill: var(--vams-text-heading);
+    stroke: var(--vams-text-heading);
+}
+
+.awsui-dark-mode .jodit-toolbar-button__button:hover {
+    background-color: var(--vams-bg-hover);
+}
+
+.awsui-dark-mode .jodit-toolbar-button__button:hover svg {
+    fill: #ffffff;
+    stroke: #ffffff;
+}
+
+.awsui-dark-mode .jodit-ui-separator {
+    border-color: var(--vams-border-default);
+}
+
+.awsui-dark-mode .jodit-status-bar {
+    background-color: var(--vams-bg-secondary);
+    border-color: var(--vams-border-default);
+}
+
+.awsui-dark-mode .jodit-wysiwyg {
+    background-color: var(--vams-bg-primary);
+    color: var(--vams-text-primary);
 }
