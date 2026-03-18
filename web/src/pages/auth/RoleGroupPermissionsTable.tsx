@@ -65,7 +65,7 @@ export default function RoleGroupPermissionsTable({
 
     useEffect(() => {
         const getData = async () => {
-            let api_repsonse_message = await fetchRoles();
+            const api_repsonse_message = await fetchRoles();
 
             if (Array.isArray(api_repsonse_message)) {
                 let roleGroups: RoleGroup[] = [];

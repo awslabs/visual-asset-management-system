@@ -13,7 +13,7 @@ import { useState, useEffect } from "react";
 import { createUserRole, updateUserRole } from "../../services/APIService";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
 import { fetchRoles } from "../../services/APIService";
-var roles: any[] = [];
+let roles: any[] = [];
 interface UserRoleFields {
     userId: string;
     roleName: any[];
@@ -133,13 +133,20 @@ export default function CreateTagType({
                                             console.log("Create subs error", err);
                                             if (err.status === 400) {
                                                 const errorMessage =
-                                                    err.message || "Role for this user already exists or is not valid";
+                                                    err.message ||
+                                                    "Role for this user already exists or is not valid";
                                                 setNameError(errorMessage);
                                             } else if (err.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} user role. Error: ${err.message || "Request failed with status code 403"}`;
+                                                const msg = `Unable to ${createOrUpdate} user role. Error: ${
+                                                    err.message ||
+                                                    "Request failed with status code 403"
+                                                }`;
                                                 setFormError(msg);
                                             } else {
-                                                setFormError(err.message || "An error occurred while creating the user role");
+                                                setFormError(
+                                                    err.message ||
+                                                        "An error occurred while creating the user role"
+                                                );
                                             }
                                         })
                                         .finally(() => {
@@ -161,10 +168,16 @@ export default function CreateTagType({
                                         .catch((err) => {
                                             console.log("Update subs error", err);
                                             if (err.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} user role. Error: ${err.message || "Request failed with status code 403"}`;
+                                                const msg = `Unable to ${createOrUpdate} user role. Error: ${
+                                                    err.message ||
+                                                    "Request failed with status code 403"
+                                                }`;
                                                 setFormError(msg);
                                             } else {
-                                                setFormError(err.message || "An error occurred while updating the user role");
+                                                setFormError(
+                                                    err.message ||
+                                                        "An error occurred while updating the user role"
+                                                );
                                             }
                                         })
                                         .finally(() => {

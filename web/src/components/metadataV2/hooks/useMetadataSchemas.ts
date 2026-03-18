@@ -38,7 +38,7 @@ interface UseMetadataSchemasResult {
 export const useMetadataSchemas = (
     databaseId?: string,
     entityType?: "asset" | "assetLink",
-    enabled: boolean = true
+    enabled = true
 ): UseMetadataSchemasResult => {
     const [schemas, setSchemas] = useState<AggregatedSchema | null>(null);
     const [loading, setLoading] = useState(false);

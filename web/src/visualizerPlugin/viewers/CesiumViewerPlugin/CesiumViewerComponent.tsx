@@ -717,7 +717,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
         handler.setInputAction((event: any) => {
             // Try to pick from tileset first, then fallback to ellipsoid
-            let pickedPosition = viewerRef.current!.scene.pick(event.position);
+            const pickedPosition = viewerRef.current!.scene.pick(event.position);
 
             if (
                 pickedPosition &&
@@ -1024,7 +1024,13 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                         Error Loading 3D Tileset
                     </h3>
                     <p style={{ color: "var(--vams-text-secondary)" }}>{error}</p>
-                    <p style={{ color: "var(--vams-text-secondary)", fontSize: "0.9em", marginTop: "10px" }}>
+                    <p
+                        style={{
+                            color: "var(--vams-text-secondary)",
+                            fontSize: "0.9em",
+                            marginTop: "10px",
+                        }}
+                    >
                         Supported format: .json (3D Tileset definition files)
                     </p>
                 </div>
@@ -1157,7 +1163,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                         left: "50%",
                         transform: "translate(-50%, -50%)",
                         zIndex: 1000,
-                        backgroundColor: "color-mix(in srgb, var(--vams-bg-primary) 90%, transparent)",
+                        backgroundColor:
+                            "color-mix(in srgb, var(--vams-bg-primary) 90%, transparent)",
                         padding: "20px",
                         borderRadius: "8px",
                         textAlign: "center",
@@ -1165,7 +1172,13 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 >
                     <div>Loading 3D Tileset...</div>
                     {multiFileKeys && multiFileKeys.length > 1 && (
-                        <div style={{ fontSize: "0.9em", color: "var(--vams-text-secondary)", marginTop: "5px" }}>
+                        <div
+                            style={{
+                                fontSize: "0.9em",
+                                color: "var(--vams-text-secondary)",
+                                marginTop: "5px",
+                            }}
+                        >
                             Loading {multiFileKeys.length} tilesets
                         </div>
                     )}

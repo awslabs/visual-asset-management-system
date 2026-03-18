@@ -56,7 +56,7 @@ async function search(overrides: any, { dispatch, state }: SearchPropertyFilterP
     dispatch({ type: "search-results-requested" });
 
     try {
-        const [success, searchResult] = await searchAssets(body) as [boolean, any];
+        const [success, searchResult] = (await searchAssets(body)) as [boolean, any];
         if (!success) {
             throw new Error(searchResult || "Search failed");
         }

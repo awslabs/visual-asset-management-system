@@ -82,7 +82,7 @@ async function downloadDependency(
     }
 
     // Remove assetId from path if present (like Needle viewer)
-    let pathSegments = fullPath.split("/");
+    const pathSegments = fullPath.split("/");
     if (pathSegments.length > 0 && pathSegments[0] === config.assetId) {
         pathSegments.shift();
     }

@@ -1,4 +1,3 @@
-/* eslint-disable jsx-a11y/anchor-is-valid */
 /*
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -640,7 +639,12 @@ export default function ViewFile() {
                                 <Box padding="xxl" textAlign="center">
                                     <SpaceBetween direction="vertical" size="m">
                                         <Spinner size="large" />
-                                        <div style={{ color: "var(--vams-text-secondary)", fontSize: "16px" }}>
+                                        <div
+                                            style={{
+                                                color: "var(--vams-text-secondary)",
+                                                fontSize: "16px",
+                                            }}
+                                        >
                                             Loading file...
                                         </div>
                                     </SpaceBetween>
@@ -694,12 +698,23 @@ export default function ViewFile() {
                                             <h1 style={{ margin: "9px 0 0 0" }}>
                                                 {getHeaderText()}{" "}
                                                 {asset?.status === "archived" && (
-                                                    <span style={{ color: "var(--vams-text-secondary)" }}>
+                                                    <span
+                                                        style={{
+                                                            color: "var(--vams-text-secondary)",
+                                                        }}
+                                                    >
                                                         (Archived)
                                                     </span>
                                                 )}
                                                 {!isMultiFileMode && singleFileInfo?.versionId && (
-                                                    <span style={{ fontSize: "14px", fontWeight: "normal", color: "var(--vams-text-secondary)", marginLeft: "8px" }}>
+                                                    <span
+                                                        style={{
+                                                            fontSize: "14px",
+                                                            fontWeight: "normal",
+                                                            color: "var(--vams-text-secondary)",
+                                                            marginLeft: "8px",
+                                                        }}
+                                                    >
                                                         (Version: {singleFileInfo.versionId})
                                                     </span>
                                                 )}
@@ -738,11 +753,26 @@ export default function ViewFile() {
                                 !hasArchivedFiles ? (
                                     <SpaceBetween direction="vertical" size="xs">
                                         {/* Viewer */}
-                                        <div style={{ height: "65vh", maxHeight: "700px", minHeight: "100px", position: "relative", overflow: "hidden" }}>
+                                        <div
+                                            style={{
+                                                height: "65vh",
+                                                maxHeight: "700px",
+                                                minHeight: "100px",
+                                                position: "relative",
+                                                overflow: "hidden",
+                                            }}
+                                        >
                                             <div
                                                 id="view-edit-asset-right-column"
                                                 className={viewerMode}
-                                                style={{ height: "100%", width: "100%", position: "absolute", top: 0, left: 0, overflow: "hidden" }}
+                                                style={{
+                                                    height: "100%",
+                                                    width: "100%",
+                                                    position: "absolute",
+                                                    top: 0,
+                                                    left: 0,
+                                                    overflow: "hidden",
+                                                }}
                                             >
                                                 <DynamicViewer
                                                     key={`${viewType}-${assetId}-${
@@ -791,40 +821,49 @@ export default function ViewFile() {
                                                 }
                                             >
                                                 <SpaceBetween direction="vertical" size="xs">
-                                                    {currentFiles.map((file: any, index: number) => (
-                                                        <Box
-                                                            key={index}
-                                                            padding={{
-                                                                vertical: "xs",
-                                                                horizontal: "s",
-                                                            }}
-                                                        >
-                                                            <span style={{ fontFamily: "monospace" }}>
-                                                                {file.filename}
-                                                                {file.primaryType &&
-                                                                    file.primaryType.trim() !== "" && (
+                                                    {currentFiles.map(
+                                                        (file: any, index: number) => (
+                                                            <Box
+                                                                key={index}
+                                                                padding={{
+                                                                    vertical: "xs",
+                                                                    horizontal: "s",
+                                                                }}
+                                                            >
+                                                                <span
+                                                                    style={{
+                                                                        fontFamily: "monospace",
+                                                                    }}
+                                                                >
+                                                                    {file.filename}
+                                                                    {file.primaryType &&
+                                                                        file.primaryType.trim() !==
+                                                                            "" && (
+                                                                            <span
+                                                                                style={{
+                                                                                    color: "var(--vams-text-secondary)",
+                                                                                    marginLeft:
+                                                                                        "4px",
+                                                                                }}
+                                                                            >
+                                                                                ({file.primaryType})
+                                                                            </span>
+                                                                        )}
+                                                                    {file.versionId && (
                                                                         <span
                                                                             style={{
                                                                                 color: "var(--vams-text-secondary)",
-                                                                                marginLeft: "4px",
+                                                                                marginLeft: "8px",
                                                                             }}
                                                                         >
-                                                                            ({file.primaryType})
+                                                                            (Version:{" "}
+                                                                            {file.versionId})
                                                                         </span>
                                                                     )}
-                                                                {file.versionId && (
-                                                                    <span
-                                                                        style={{
-                                                                            color: "var(--vams-text-secondary)",
-                                                                            marginLeft: "8px",
-                                                                        }}
-                                                                    >
-                                                                        (Version: {file.versionId})
-                                                                    </span>
-                                                                )}
-                                                            </span>
-                                                        </Box>
-                                                    ))}
+                                                                </span>
+                                                            </Box>
+                                                        )
+                                                    )}
                                                 </SpaceBetween>
                                             </Container>
                                         )}

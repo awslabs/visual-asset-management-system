@@ -211,10 +211,18 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                     textAlign: "center",
                 }}
             >
-                <div style={{ color: "var(--vams-color-error)", marginBottom: "10px", fontSize: "16px" }}>
+                <div
+                    style={{
+                        color: "var(--vams-color-error)",
+                        marginBottom: "10px",
+                        fontSize: "16px",
+                    }}
+                >
                     Error loading file
                 </div>
-                <div style={{ color: "var(--vams-text-secondary)", fontSize: "14px" }}>{state.error}</div>
+                <div style={{ color: "var(--vams-text-secondary)", fontSize: "14px" }}>
+                    {state.error}
+                </div>
             </div>
         );
     }

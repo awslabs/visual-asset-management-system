@@ -8,15 +8,18 @@ import { default as vamsConfig } from "../config";
 
 export const getAmplifyConfig = async () => {
     console.log("getAmplifyConfig");
-    const baseUrl = vamsConfig.DEV_API_ENDPOINT === ""
-        ? window.location.origin
-        : vamsConfig.DEV_API_ENDPOINT;
+    const baseUrl =
+        vamsConfig.DEV_API_ENDPOINT === "" ? window.location.origin : vamsConfig.DEV_API_ENDPOINT;
     let amplifyConfigUrl: URL;
     try {
         amplifyConfigUrl = new URL("/api/amplify-config", baseUrl);
     } catch (error) {
         console.error("getAmplifyConfig: Invalid base URL", baseUrl);
-        return { _configError: true, _errorMessage: `Invalid API endpoint URL: ${baseUrl}`, _attemptedUrl: baseUrl };
+        return {
+            _configError: true,
+            _errorMessage: `Invalid API endpoint URL: ${baseUrl}`,
+            _attemptedUrl: baseUrl,
+        };
     }
 
     console.log(amplifyConfigUrl.href);
@@ -49,7 +52,9 @@ export const getAmplifyConfig = async () => {
         console.error("getAmplifyConfig: Fetch error", error);
         return {
             _configError: true,
-            _errorMessage: `Unable to connect to the API at ${amplifyConfigUrl.href}. ${error?.message || "Network error or server unreachable."}`,
+            _errorMessage: `Unable to connect to the API at ${amplifyConfigUrl.href}. ${
+                error?.message || "Network error or server unreachable."
+            }`,
             _attemptedUrl: amplifyConfigUrl.href,
         };
     }
@@ -87,9 +92,14 @@ export const webRoutes = async (body) => {
  * @param {string} [params.downloadType="assetFile"] - Download type: "assetFile" (default) or "assetPreview"
  * @returns {Promise<boolean|{message}|any>}
  */
-export const downloadAsset = async (
-    { databaseId, assetId, key, versionId, assetVersionId = undefined, downloadType = "assetFile" }
-) => {
+export const downloadAsset = async ({
+    databaseId,
+    assetId,
+    key,
+    versionId,
+    assetVersionId = undefined,
+    downloadType = "assetFile",
+}) => {
     try {
         // Build request body with new model structure
         // Only include one version parameter — assetVersionId takes priority over versionId
@@ -104,7 +114,7 @@ export const downloadAsset = async (
         }
 
         const response = await apiClient.post(
-`/database/${databaseId}/assets/${assetId}/download`,
+            `/database/${databaseId}/assets/${assetId}/download`,
             {
                 body: body,
             }
@@ -164,9 +174,13 @@ export const deleteElement = async ({ deleteRoute, elementId, item }) => {
  * Returns array of boolean and response/error message for the workflow that the current user is running, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const runWorkflow = async (
-    { databaseId, assetId, workflowId, fileKey, isGlobalWorkflow = false }
-) => {
+export const runWorkflow = async ({
+    databaseId,
+    assetId,
+    workflowId,
+    fileKey,
+    isGlobalWorkflow = false,
+}) => {
     try {
         let endpoint;
         let eventBody = {};
@@ -428,9 +442,7 @@ export const fetchtagTypes = async () => {
     }
 };
 
-export const fetchAssetLinks = async (
-    { assetId, databaseId, childTreeView = false }
-) => {
+export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = false }) => {
     try {
         let response;
         if (assetId) {
@@ -441,12 +453,9 @@ export const fetchAssetLinks = async (
 
             console.log("Fetching asset links with params:", queryParams);
 
-            response = await apiClient.get(
-`database/${databaseId}/assets/${assetId}/asset-links`,
-                {
-                    queryStringParameters: queryParams,
-                }
-            );
+            response = await apiClient.get(`database/${databaseId}/assets/${assetId}/asset-links`, {
+                queryStringParameters: queryParams,
+            });
 
             console.log("Raw asset links response:", response);
 
@@ -865,8 +874,8 @@ export const fetchAllComments = async ({ assetId }) => {
  */
 export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }) => {
     try {
-        let response = await apiClient.del(
-`comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
+        const response = await apiClient.del(
+            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
             {}
         );
         if (response.message) {
@@ -892,9 +901,13 @@ export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }) => 
  * @param {string} params.startingToken - Pagination token (optional)
  * @returns {Promise<Array>} Array of assets or empty array on error
  */
-export const fetchDatabaseAssets = async (
-    { databaseId, showArchived = false, maxItems = 1000, pageSize = 1000, startingToken = null }
-) => {
+export const fetchDatabaseAssets = async ({
+    databaseId,
+    showArchived = false,
+    maxItems = 1000,
+    pageSize = 1000,
+    startingToken = null,
+}) => {
     try {
         if (!databaseId) {
             return [];
@@ -965,9 +978,12 @@ export const fetchDatabaseAssets = async (
  * @param {string} params.startingToken - Pagination token (optional)
  * @returns {Promise<Array>} Array of assets or empty array on error
  */
-export const fetchAllAssets = async (
-    { showArchived = false, maxItems = 1000, pageSize = 1000, startingToken = null } = {}
-) => {
+export const fetchAllAssets = async ({
+    showArchived = false,
+    maxItems = 1000,
+    pageSize = 1000,
+    startingToken = null,
+} = {}) => {
     try {
         const queryParams = {
             showArchived: showArchived.toString(),
@@ -1161,9 +1177,7 @@ export const fetchAllWorkflows = async () => {
  * Returns array of all workflow executions the current user can access for the given databaseId & assetId, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchWorkflowExecutions = async (
-    { databaseId, assetId, workflowId = "" }
-) => {
+export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId = "" }) => {
     try {
         let response;
         let endpoint;
@@ -1272,7 +1286,7 @@ export const fetchDatabaseMetadataSchema = async ({ databaseId }) => {
 export const createFolder = async ({ databaseId, assetId, relativeKey }) => {
     try {
         const response = await apiClient.post(
-`database/${databaseId}/assets/${assetId}/createFolder`,
+            `database/${databaseId}/assets/${assetId}/createFolder`,
             {
                 body: { relativeKey },
             }
@@ -1293,16 +1307,14 @@ export const createFolder = async ({ databaseId, assetId, relativeKey }) => {
  * Reverts a file to a specific version by creating a new current version with the contents of the specified version
  * @returns {Promise<boolean|{message}|any>}
  */
-export const revertFileVersion = async (
-    { databaseId, assetId, filePath, versionId }
-) => {
+export const revertFileVersion = async ({ databaseId, assetId, filePath, versionId }) => {
     try {
         if (!databaseId || !assetId || !filePath || !versionId) {
             return [false, "Missing required parameters"];
         }
 
         const response = await apiClient.post(
-`database/${databaseId}/assets/${assetId}/revertFileVersion/${versionId}`,
+            `database/${databaseId}/assets/${assetId}/revertFileVersion/${versionId}`,
             {
                 body: { filePath },
             }
@@ -1374,9 +1386,7 @@ export const updateAsset = async ({ databaseId, assetId, updateData }) => {
  * @param {string} params.reason - Optional reason for archiving
  * @returns {Promise<boolean|{message}|any>}
  */
-export const archiveAsset = async (
-    { databaseId, assetId, confirmArchive = true, reason = "" }
-) => {
+export const archiveAsset = async ({ databaseId, assetId, confirmArchive = true, reason = "" }) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -1387,7 +1397,7 @@ export const archiveAsset = async (
         }
 
         const response = await apiClient.post(
-`database/${databaseId}/assets/${assetId}/archiveAsset`,
+            `database/${databaseId}/assets/${assetId}/archiveAsset`,
             {
                 body: {
                     confirmArchive,
@@ -1425,9 +1435,12 @@ export const archiveAsset = async (
  * @param {string} params.reason - Optional reason for deletion
  * @returns {Promise<boolean|{message}|any>}
  */
-export const deleteAssetPermanent = async (
-    { databaseId, assetId, confirmPermanentDelete = false, reason = "" }
-) => {
+export const deleteAssetPermanent = async ({
+    databaseId,
+    assetId,
+    confirmPermanentDelete = false,
+    reason = "",
+}) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -1438,7 +1451,7 @@ export const deleteAssetPermanent = async (
         }
 
         const response = await apiClient.post(
-`database/${databaseId}/assets/${assetId}/deleteAsset`,
+            `database/${databaseId}/assets/${assetId}/deleteAsset`,
             {
                 body: {
                     confirmPermanentDelete,
@@ -1473,7 +1486,7 @@ export const deleteAssetPermanent = async (
  */
 export const fetchBuckets = async () => {
     try {
-        let response = await apiClient.get("buckets", {});
+        const response = await apiClient.get("buckets", {});
         console.log("Raw buckets response:", response);
 
         // Direct return of the response which should contain Items array
@@ -1494,15 +1507,13 @@ export const fetchBuckets = async () => {
  * @param {string} params.restrictFileUploadsToExtensions - Comma-delimited file extensions
  * @returns {Promise<boolean|{message}|any>}
  */
-export const createDatabase = async (
-    {
-        databaseId,
-        description,
-        defaultBucketId,
-        restrictMetadataOutsideSchemas = false,
-        restrictFileUploadsToExtensions = "",
-    }
-) => {
+export const createDatabase = async ({
+    databaseId,
+    description,
+    defaultBucketId,
+    restrictMetadataOutsideSchemas = false,
+    restrictFileUploadsToExtensions = "",
+}) => {
     try {
         const response = await apiClient.post("database", {
             body: {
@@ -1536,15 +1547,13 @@ export const createDatabase = async (
  * @param {string} params.restrictFileUploadsToExtensions - Comma-delimited file extensions
  * @returns {Promise<boolean|{message}|any>}
  */
-export const updateDatabase = async (
-    {
-        databaseId,
-        description,
-        defaultBucketId,
-        restrictMetadataOutsideSchemas,
-        restrictFileUploadsToExtensions,
-    }
-) => {
+export const updateDatabase = async ({
+    databaseId,
+    description,
+    defaultBucketId,
+    restrictMetadataOutsideSchemas,
+    restrictFileUploadsToExtensions,
+}) => {
     try {
         const response = await apiClient.put(`database/${databaseId}`, {
             body: {
@@ -1634,9 +1643,12 @@ export const fetchAssetLinkMetadata = async ({ assetLinkId }) => {
  * @param {string} params.metadataValueType - Metadata value type ('XYZ' or 'String')
  * @returns {Promise<any>}
  */
-export const createAssetLinkMetadata = async (
-    { assetLinkId, metadataKey, metadataValue, metadataValueType }
-) => {
+export const createAssetLinkMetadata = async ({
+    assetLinkId,
+    metadataKey,
+    metadataValue,
+    metadataValueType,
+}) => {
     try {
         if (!assetLinkId || !metadataKey || !metadataValue || !metadataValueType) {
             return [false, "Missing required parameters"];
@@ -1679,23 +1691,23 @@ export const createAssetLinkMetadata = async (
  * @param {string} params.metadataValueType - Metadata value type ('XYZ' or 'String')
  * @returns {Promise<any>}
  */
-export const updateAssetLinkMetadata = async (
-    { assetLinkId, metadataKey, metadataValue, metadataValueType }
-) => {
+export const updateAssetLinkMetadata = async ({
+    assetLinkId,
+    metadataKey,
+    metadataValue,
+    metadataValueType,
+}) => {
     try {
         if (!assetLinkId || !metadataKey || !metadataValue || !metadataValueType) {
             return [false, "Missing required parameters"];
         }
 
-        const response = await apiClient.put(
-`asset-links/${assetLinkId}/metadata/${metadataKey}`,
-            {
-                body: {
-                    metadataValue,
-                    metadataValueType,
-                },
-            }
-        );
+        const response = await apiClient.put(`asset-links/${assetLinkId}/metadata/${metadataKey}`, {
+            body: {
+                metadataValue,
+                metadataValueType,
+            },
+        });
 
         if (response.message) {
             if (
@@ -1731,7 +1743,7 @@ export const deleteAssetLinkMetadata = async ({ assetLinkId, metadataKey }) => {
         }
 
         const response = await apiClient.del(
-`asset-links/${assetLinkId}/metadata/${metadataKey}`,
+            `asset-links/${assetLinkId}/metadata/${metadataKey}`,
             {}
         );
 
@@ -1765,16 +1777,20 @@ export const deleteAssetLinkMetadata = async ({ assetLinkId, metadataKey }) => {
  * @param {string} params.primaryTypeOther - Custom primary type when primaryType is 'other'
  * @returns {Promise<any>}
  */
-export const setPrimaryType = async (
-    { databaseId, assetId, filePath, primaryType, primaryTypeOther }
-) => {
+export const setPrimaryType = async ({
+    databaseId,
+    assetId,
+    filePath,
+    primaryType,
+    primaryTypeOther,
+}) => {
     try {
         if (!databaseId || !assetId || !filePath) {
             return [false, "Missing required parameters"];
         }
 
         const response = await apiClient.put(
-`database/${databaseId}/assets/${assetId}/setPrimaryFile`,
+            `database/${databaseId}/assets/${assetId}/setPrimaryFile`,
             {
                 body: {
                     filePath,
@@ -1815,9 +1831,12 @@ export const setPrimaryType = async (
  * @param {boolean} params.basic - Whether to just basic file information or detailed information (basic is much faster)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAssetS3Files = async (
-    { databaseId, assetId, includeArchived = false, basic = false }
-) => {
+export const fetchAssetS3Files = async ({
+    databaseId,
+    assetId,
+    includeArchived = false,
+    basic = false,
+}) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -1831,12 +1850,9 @@ export const fetchAssetS3Files = async (
             queryParams.basic = basic.toString();
         }
 
-        const response = await apiClient.get(
-`database/${databaseId}/assets/${assetId}/listFiles`,
-            {
-                queryStringParameters: queryParams,
-            }
-        );
+        const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/listFiles`, {
+            queryStringParameters: queryParams,
+        });
 
         console.log("fetchAssetS3Files raw response:", JSON.stringify(response, null, 2));
 
@@ -1848,7 +1864,7 @@ export const fetchAssetS3Files = async (
             let nextToken = response.NextToken;
             while (nextToken) {
                 const nextResponse = await apiClient.get(
-`database/${databaseId}/assets/${assetId}/listFiles`,
+                    `database/${databaseId}/assets/${assetId}/listFiles`,
                     {
                         queryStringParameters: {
                             includeArchived: includeArchived.toString(),
@@ -1876,7 +1892,7 @@ export const fetchAssetS3Files = async (
                 let nextToken = response.message.NextToken;
                 while (nextToken) {
                     const nextResponse = await apiClient.get(
-`database/${databaseId}/assets/${assetId}/listFiles`,
+                        `database/${databaseId}/assets/${assetId}/listFiles`,
                         {
                             queryStringParameters: {
                                 includeArchived: includeArchived.toString(),
@@ -1916,17 +1932,15 @@ export const fetchAssetS3Files = async (
  * @param {string|null} [params.assetVersionId] - Asset version ID to filter files (optional)
  * @returns {Promise<{success: boolean, items: Array, nextToken: string|null, error: string|null}>}
  */
-export const fetchAssetS3FilesPage = async (
-    {
-        databaseId,
-        assetId,
-        includeArchived = false,
-        basic = false,
-        startingToken = null,
-        pageSize = null,
-        assetVersionId = null,
-    }
-) => {
+export const fetchAssetS3FilesPage = async ({
+    databaseId,
+    assetId,
+    includeArchived = false,
+    basic = false,
+    startingToken = null,
+    pageSize = null,
+    assetVersionId = null,
+}) => {
     try {
         if (!databaseId || !assetId) {
             return {
@@ -1955,12 +1969,9 @@ export const fetchAssetS3FilesPage = async (
             queryParams.assetVersionId = assetVersionId;
         }
 
-        const response = await apiClient.get(
-`database/${databaseId}/assets/${assetId}/listFiles`,
-            {
-                queryStringParameters: queryParams,
-            }
-        );
+        const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/listFiles`, {
+            queryStringParameters: queryParams,
+        });
 
         console.log(
             `fetchAssetS3FilesPage (basic=${basic}, page=${startingToken ? "next" : "first"}):`,
@@ -2017,32 +2028,28 @@ export const fetchAssetS3FilesPage = async (
  * @param {string|null} [params.assetVersionId] - Asset version ID to filter files (optional)
  * @yields {Object} Page result with items and metadata
  */
-export async function* fetchAssetS3FilesStreaming(
-    {
-        databaseId,
-        assetId,
-        includeArchived = false,
-        basic = false,
-        pageSize,
-        assetVersionId = null,
-    }
-) {
+export async function* fetchAssetS3FilesStreaming({
+    databaseId,
+    assetId,
+    includeArchived = false,
+    basic = false,
+    pageSize,
+    assetVersionId = null,
+}) {
     let nextToken = null;
     let pageNumber = 0;
 
     do {
         pageNumber++;
-        const result = await fetchAssetS3FilesPage(
-            {
-                databaseId,
-                assetId,
-                includeArchived,
-                basic,
-                startingToken: nextToken,
-                pageSize,
-                assetVersionId,
-            }
-        );
+        const result = await fetchAssetS3FilesPage({
+            databaseId,
+            assetId,
+            includeArchived,
+            basic,
+            startingToken: nextToken,
+            pageSize,
+            assetVersionId,
+        });
 
         if (!result.success) {
             yield {
@@ -2079,9 +2086,7 @@ export async function* fetchAssetS3FilesStreaming(
  * @param {boolean} params.includeVersions - If to include file version data on the response
  * @returns {Promise<any>}
  */
-export const fetchFileInfo = async (
-    { databaseId, assetId, fileKey, includeVersions = false }
-) => {
+export const fetchFileInfo = async ({ databaseId, assetId, fileKey, includeVersions = false }) => {
     try {
         if (!databaseId || !assetId || !fileKey) {
             return [false, "Missing required parameters"];
@@ -2134,7 +2139,7 @@ export const fetchAssetMetadata = async ({ databaseId, assetId }) => {
         }
 
         const response = await apiClient.get(
-`database/${databaseId}/assets/${assetId}/metadata`,
+            `database/${databaseId}/assets/${assetId}/metadata`,
             {}
         );
         console.log("fetchAssetMetadata raw response:", response);
@@ -2177,12 +2182,9 @@ export const createAssetMetadata = async ({ databaseId, assetId, metadata }) => 
             return { success: false, message: "Missing required parameters" };
         }
 
-        const response = await apiClient.post(
-`database/${databaseId}/assets/${assetId}/metadata`,
-            {
-                body: { metadata },
-            }
-        );
+        const response = await apiClient.post(`database/${databaseId}/assets/${assetId}/metadata`, {
+            body: { metadata },
+        });
 
         console.log("createAssetMetadata response:", response);
         return response;
@@ -2201,9 +2203,12 @@ export const createAssetMetadata = async ({ databaseId, assetId, metadata }) => 
  * @param {string} params.updateType - 'update' or 'replace_all'
  * @returns {Promise<any>}
  */
-export const updateAssetMetadata = async (
-    { databaseId, assetId, metadata, updateType = "update" }
-) => {
+export const updateAssetMetadata = async ({
+    databaseId,
+    assetId,
+    metadata,
+    updateType = "update",
+}) => {
     try {
         if (!databaseId || !assetId || !metadata) {
             return { success: false, message: "Missing required parameters" };
@@ -2263,7 +2268,7 @@ export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type })
         }
 
         const response = await apiClient.get(
-`database/${databaseId}/assets/${assetId}/metadata/file`,
+            `database/${databaseId}/assets/${assetId}/metadata/file`,
             {
                 queryStringParameters: { filePath, type },
             }
@@ -2305,16 +2310,14 @@ export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type })
  * @param {Array} params.metadata - Array of metadata items
  * @returns {Promise<any>}
  */
-export const createFileMetadata = async (
-    { databaseId, assetId, filePath, type, metadata }
-) => {
+export const createFileMetadata = async ({ databaseId, assetId, filePath, type, metadata }) => {
     try {
         if (!databaseId || !assetId || !filePath || !type || !metadata) {
             return { success: false, message: "Missing required parameters" };
         }
 
         const response = await apiClient.post(
-`database/${databaseId}/assets/${assetId}/metadata/file`,
+            `database/${databaseId}/assets/${assetId}/metadata/file`,
             {
                 body: { filePath, type, metadata },
             }
@@ -2339,16 +2342,21 @@ export const createFileMetadata = async (
  * @param {string} params.updateType - 'update' or 'replace_all'
  * @returns {Promise<any>}
  */
-export const updateFileMetadata = async (
-    { databaseId, assetId, filePath, type, metadata, updateType = "update" }
-) => {
+export const updateFileMetadata = async ({
+    databaseId,
+    assetId,
+    filePath,
+    type,
+    metadata,
+    updateType = "update",
+}) => {
     try {
         if (!databaseId || !assetId || !filePath || !type || !metadata) {
             return { success: false, message: "Missing required parameters" };
         }
 
         const response = await apiClient.put(
-`database/${databaseId}/assets/${assetId}/metadata/file`,
+            `database/${databaseId}/assets/${assetId}/metadata/file`,
             {
                 body: { filePath, type, metadata, updateType },
             }
@@ -2372,16 +2380,14 @@ export const updateFileMetadata = async (
  * @param {Array} params.metadataKeys - Array of metadata keys to delete
  * @returns {Promise<any>}
  */
-export const deleteFileMetadata = async (
-    { databaseId, assetId, filePath, type, metadataKeys }
-) => {
+export const deleteFileMetadata = async ({ databaseId, assetId, filePath, type, metadataKeys }) => {
     try {
         if (!databaseId || !assetId || !filePath || !type || !metadataKeys) {
             return { success: false, message: "Missing required parameters" };
         }
 
         const response = await apiClient.del(
-`database/${databaseId}/assets/${assetId}/metadata/file`,
+            `database/${databaseId}/assets/${assetId}/metadata/file`,
             {
                 body: { filePath, type, metadataKeys },
             }
@@ -2467,9 +2473,7 @@ export const createDatabaseMetadata = async ({ databaseId, metadata }) => {
  * @param {string} params.updateType - 'update' or 'replace_all'
  * @returns {Promise<any>}
  */
-export const updateDatabaseMetadata = async (
-    { databaseId, metadata, updateType = "update" }
-) => {
+export const updateDatabaseMetadata = async ({ databaseId, metadata, updateType = "update" }) => {
     try {
         if (!databaseId || !metadata) {
             return { success: false, message: "Missing required parameters" };
@@ -2603,7 +2607,10 @@ export const deleteApiKey = async ({ apiKeyId }) => {
 export const deleteConstraint = async ({ constraintId }) => {
     try {
         const response = await apiClient.del(`auth/constraints/${constraintId}`, {});
-        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+        if (
+            response.message?.indexOf("error") !== -1 ||
+            response.message?.indexOf("Error") !== -1
+        ) {
             return [false, response.message];
         }
         return [true, response.message];
@@ -2622,7 +2629,10 @@ export const createConstraint = async ({ constraintId, ...body }) => {
 export const deleteRole = async ({ roleName }) => {
     try {
         const response = await apiClient.del(`roles/${roleName}`, {});
-        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+        if (
+            response.message?.indexOf("error") !== -1 ||
+            response.message?.indexOf("Error") !== -1
+        ) {
             return [false, response.message];
         }
         return [true, response.message];
@@ -2645,7 +2655,10 @@ export const updateRole = async (body) => {
 export const deleteUserRole = async (body) => {
     try {
         const response = await apiClient.del("user-roles", { body });
-        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+        if (
+            response.message?.indexOf("error") !== -1 ||
+            response.message?.indexOf("Error") !== -1
+        ) {
             return [false, response.message];
         }
         return [true, response.message];
@@ -2668,7 +2681,10 @@ export const updateUserRole = async (body) => {
 export const deleteTag = async ({ tagName }) => {
     try {
         const response = await apiClient.del(`tags/${tagName}`, {});
-        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+        if (
+            response.message?.indexOf("error") !== -1 ||
+            response.message?.indexOf("Error") !== -1
+        ) {
             return [false, response.message];
         }
         return [true, response.message];
@@ -2681,7 +2697,10 @@ export const deleteTag = async ({ tagName }) => {
 export const deleteTagType = async ({ tagTypeName }) => {
     try {
         const response = await apiClient.del(`tag-types/${tagTypeName}`, {});
-        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+        if (
+            response.message?.indexOf("error") !== -1 ||
+            response.message?.indexOf("Error") !== -1
+        ) {
             return [false, response.message];
         }
         return [true, response.message];
@@ -2712,7 +2731,10 @@ export const updateTagType = async (body) => {
 export const deleteSubscription = async (body) => {
     try {
         const response = await apiClient.del("subscriptions", { body });
-        if (response.message?.indexOf("error") !== -1 || response.message?.indexOf("Error") !== -1) {
+        if (
+            response.message?.indexOf("error") !== -1 ||
+            response.message?.indexOf("Error") !== -1
+        ) {
             return [false, response.message];
         }
         return [true, response.message];

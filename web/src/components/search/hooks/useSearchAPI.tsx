@@ -4,7 +4,11 @@
  */
 
 import { useCallback } from "react";
-import { searchAssets, searchAssetsSimple, fetchSearchMappings } from "../../../services/APIService";
+import {
+    searchAssets,
+    searchAssetsSimple,
+    fetchSearchMappings,
+} from "../../../services/APIService";
 import { SearchQuery, SearchResponse, MetadataFilter } from "../types";
 
 /**
@@ -283,7 +287,7 @@ export const useSearchAPI = () => {
                 console.log("Search API request body:", body);
 
                 // Execute the search
-                const [success, result] = await searchAssets(body) as [boolean, any];
+                const [success, result] = (await searchAssets(body)) as [boolean, any];
                 if (!success) {
                     throw new Error(result || "Search failed");
                 }
@@ -333,7 +337,7 @@ export const useSearchAPI = () => {
                     entityTypes: params.entityTypes,
                 };
 
-                const [success, result] = await searchAssetsSimple(body) as [boolean, any];
+                const [success, result] = (await searchAssetsSimple(body)) as [boolean, any];
                 if (!success) {
                     throw new Error(result || "Simple search failed");
                 }

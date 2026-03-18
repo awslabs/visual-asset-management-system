@@ -12,7 +12,7 @@ import {
 import { useEffect, useState } from "react";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
 import { fetchtagTypes, createTag, updateTag } from "../../services/APIService";
-var tagTypes: any[] = [];
+let tagTypes: any[] = [];
 
 interface TagFields {
     tagName: string;
@@ -176,7 +176,7 @@ export default function CreateTag({
                                                 setNameError(errorMessage);
                                             }
                                             if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
+                                                const msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
                                                 setFormError(msg);
                                             }
                                         })
@@ -199,7 +199,7 @@ export default function CreateTag({
                                         .catch((err) => {
                                             console.log("create tag error", err);
                                             if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
+                                                const msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
                                                 setFormError(msg);
                                             }
                                         })

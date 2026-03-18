@@ -330,7 +330,12 @@ export default function CreateUpdateWorkflow(props) {
                         }
                     >
                         <Grid disableGutters gridDefinition={[{ colspan: 12 }]}>
-                            <div style={{ borderRight: "solid 1px var(--vams-border-default)", minHeight: "800px" }}>
+                            <div
+                                style={{
+                                    borderRight: "solid 1px var(--vams-border-default)",
+                                    minHeight: "800px",
+                                }}
+                            >
                                 <Suspense
                                     fallback={
                                         <div className="workflow-editor-spinner">

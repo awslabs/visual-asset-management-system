@@ -51,16 +51,16 @@ export async function LoadStep(fileUrl: string, THREE: any): Promise<any> {
     });
 
     // Download the file
-    let response = await fetch(fileUrl);
-    let buffer = await response.arrayBuffer();
+    const response = await fetch(fileUrl);
+    const buffer = await response.arrayBuffer();
 
     // Read the imported step file
-    let fileBuffer = new Uint8Array(buffer);
-    let result = occt.ReadStepFile(fileBuffer);
+    const fileBuffer = new Uint8Array(buffer);
+    const result = occt.ReadStepFile(fileBuffer);
 
     // Process the geometries of the result
-    for (let resultMesh of result.meshes) {
-        let geometry = new THREE.BufferGeometry();
+    for (const resultMesh of result.meshes) {
+        const geometry = new THREE.BufferGeometry();
 
         geometry.setAttribute(
             "position",
@@ -116,16 +116,16 @@ export async function LoadIges(fileUrl: string, THREE: any): Promise<any> {
     });
 
     // Download the file
-    let response = await fetch(fileUrl);
-    let buffer = await response.arrayBuffer();
+    const response = await fetch(fileUrl);
+    const buffer = await response.arrayBuffer();
 
     // Read the imported IGES file
-    let fileBuffer = new Uint8Array(buffer);
-    let result = occt.ReadIgesFile(fileBuffer);
+    const fileBuffer = new Uint8Array(buffer);
+    const result = occt.ReadIgesFile(fileBuffer);
 
     // Process the geometries of the result
-    for (let resultMesh of result.meshes) {
-        let geometry = new THREE.BufferGeometry();
+    for (const resultMesh of result.meshes) {
+        const geometry = new THREE.BufferGeometry();
 
         geometry.setAttribute(
             "position",
@@ -181,16 +181,16 @@ export async function LoadBrep(fileUrl: string, THREE: any): Promise<any> {
     });
 
     // Download the file
-    let response = await fetch(fileUrl);
-    let buffer = await response.arrayBuffer();
+    const response = await fetch(fileUrl);
+    const buffer = await response.arrayBuffer();
 
     // Read the imported BREP file
-    let fileBuffer = new Uint8Array(buffer);
-    let result = occt.ReadBrepFile(fileBuffer);
+    const fileBuffer = new Uint8Array(buffer);
+    const result = occt.ReadBrepFile(fileBuffer);
 
     // Process the geometries of the result
-    for (let resultMesh of result.meshes) {
-        let geometry = new THREE.BufferGeometry();
+    for (const resultMesh of result.meshes) {
+        const geometry = new THREE.BufferGeometry();
 
         geometry.setAttribute(
             "position",

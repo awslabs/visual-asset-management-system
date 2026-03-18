@@ -1,4 +1,3 @@
-/* eslint-disable jsx-a11y/anchor-is-valid */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -266,9 +265,15 @@ export default function AssetGrid(props) {
                                         { colspan: { l: "4", m: "4", default: "4" } },
                                     ]}
                                 >
-                                    <div style={{ color: "var(--vams-text-secondary)" }}>{Synonyms.Asset} Type</div>
-                                    <div style={{ color: "var(--vams-text-secondary)" }}>Distributable</div>
-                                    <div style={{ color: "var(--vams-text-secondary)" }}>Version</div>
+                                    <div style={{ color: "var(--vams-text-secondary)" }}>
+                                        {Synonyms.Asset} Type
+                                    </div>
+                                    <div style={{ color: "var(--vams-text-secondary)" }}>
+                                        Distributable
+                                    </div>
+                                    <div style={{ color: "var(--vams-text-secondary)" }}>
+                                        Version
+                                    </div>
                                 </Grid>
                             ),
                             content: (e) => {

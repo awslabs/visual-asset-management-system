@@ -227,16 +227,29 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     }, []);
 
     // Determine the content to show inside the viewer container
-    const isShowingViewer = registryInitialized && !loading && !viewerLoading && !error && compatibleViewers.length > 0;
+    const isShowingViewer =
+        registryInitialized && !loading && !viewerLoading && !error && compatibleViewers.length > 0;
 
     const renderStatusContent = () => {
         if (!registryInitialized || loading || viewerLoading) {
             return (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px" }}>
+                <div
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        height: "100%",
+                        minHeight: "200px",
+                    }}
+                >
                     <Box textAlign="center">
                         <Spinner size="large" />
                         <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
-                            {!registryInitialized ? "Initializing viewers..." : viewerLoading ? "Loading viewer component..." : "Loading viewer..."}
+                            {!registryInitialized
+                                ? "Initializing viewers..."
+                                : viewerLoading
+                                ? "Loading viewer component..."
+                                : "Loading viewer..."}
                         </Box>
                     </Box>
                 </div>
@@ -244,20 +257,42 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         }
         if (error) {
             return (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px" }}>
+                <div
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        height: "100%",
+                        minHeight: "200px",
+                    }}
+                >
                     <Box textAlign="center">
-                        <Box variant="h3" color="text-status-error">Viewer Error</Box>
-                        <Box variant="p" color="text-status-error" margin={{ top: "s" }}>{error}</Box>
+                        <Box variant="h3" color="text-status-error">
+                            Viewer Error
+                        </Box>
+                        <Box variant="p" color="text-status-error" margin={{ top: "s" }}>
+                            {error}
+                        </Box>
                     </Box>
                 </div>
             );
         }
         if (compatibleViewers.length === 0) {
             return (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px" }}>
+                <div
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        height: "100%",
+                        minHeight: "200px",
+                    }}
+                >
                     <Box textAlign="center">
                         <Box variant="h3">No Viewers Available</Box>
-                        <Box variant="p" color="text-status-info" margin={{ top: "s" }}>No compatible viewers found for the selected file(s).</Box>
+                        <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
+                            No compatible viewers found for the selected file(s).
+                        </Box>
                     </Box>
                 </div>
             );
@@ -266,7 +301,15 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     };
 
     return (
-        <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div
+            style={{
+                height: "100%",
+                width: "100%",
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+            }}
+        >
             <Container
                 fitHeight={true}
                 disableContentPaddings={sizingMode === "container"}
@@ -293,109 +336,149 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                 }
             >
                 <ViewerErrorBoundary>
-                <Suspense
-                    fallback={
-                        <Box textAlign="center" padding="xl">
-                            <Spinner size="large" />
-                            <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
-                                Loading viewer component...
-                            </Box>
-                        </Box>
-                    }
-                >
-                    {!isShowingViewer ? renderStatusContent() : (
-                    <div style={sizingMode === "container" ? { padding: "2px", height: "100%", boxSizing: "border-box", overflow: "hidden" } : { height: "100%" }}>
-                    <div
-                        className={`visualizer-container ${
-                            loadedViewer
-                                ? StylesheetManager.getScopedClassName(loadedViewer.config.id)
-                                : ""
-                        }`}
-                        style={{
-                            height: sizingMode === "container" ? "100%" : "calc(100vh - 300px)",
-                            width: "100%",
-                            ...(sizingMode === "container" ? { background: "none", marginTop: 0 } : {}),
-                        }}
-                    >
-                        <div
-                            className="visualizer-container-canvases"
-                            style={{ height: "100%", width: "100%" }}
-                        >
-                            {loadedViewer ? (
-                                <loadedViewer.component
-                                    assetId={assetId}
-                                    databaseId={databaseId}
-                                    assetKey={files.length === 1 ? files[0].key : undefined}
-                                    multiFileKeys={
-                                        files.length > 1 ? files.map((f) => f.key) : undefined
-                                    }
-                                    versionId={files.length === 1 ? files[0].versionId : undefined}
-                                    assetVersionId={assetVersionId}
-                                    viewerMode={viewerMode}
-                                    onViewerModeChange={onViewerModeChange}
-                                    onDeletePreview={onDeletePreview}
-                                    isPreviewFile={isPreviewMode}
-                                    customParameters={loadedViewer.config.customParameters}
-                                />
-                            ) : (
-                                <Box textAlign="center" padding="xl">
-                                    <Box variant="p" color="text-status-error">
-                                        No Viewer Component Selected
-                                    </Box>
+                    <Suspense
+                        fallback={
+                            <Box textAlign="center" padding="xl">
+                                <Spinner size="large" />
+                                <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
+                                    Loading viewer component...
                                 </Box>
-                            )}
-                        </div>
+                            </Box>
+                        }
+                    >
+                        {!isShowingViewer ? (
+                            renderStatusContent()
+                        ) : (
+                            <div
+                                style={
+                                    sizingMode === "container"
+                                        ? {
+                                              padding: "2px",
+                                              height: "100%",
+                                              boxSizing: "border-box",
+                                              overflow: "hidden",
+                                          }
+                                        : { height: "100%" }
+                                }
+                            >
+                                <div
+                                    className={`visualizer-container ${
+                                        loadedViewer
+                                            ? StylesheetManager.getScopedClassName(
+                                                  loadedViewer.config.id
+                                              )
+                                            : ""
+                                    }`}
+                                    style={{
+                                        height:
+                                            sizingMode === "container"
+                                                ? "100%"
+                                                : "calc(100vh - 300px)",
+                                        width: "100%",
+                                        ...(sizingMode === "container"
+                                            ? { background: "none", marginTop: 0 }
+                                            : {}),
+                                    }}
+                                >
+                                    <div
+                                        className="visualizer-container-canvases"
+                                        style={{ height: "100%", width: "100%" }}
+                                    >
+                                        {loadedViewer ? (
+                                            <loadedViewer.component
+                                                assetId={assetId}
+                                                databaseId={databaseId}
+                                                assetKey={
+                                                    files.length === 1 ? files[0].key : undefined
+                                                }
+                                                multiFileKeys={
+                                                    files.length > 1
+                                                        ? files.map((f) => f.key)
+                                                        : undefined
+                                                }
+                                                versionId={
+                                                    files.length === 1
+                                                        ? files[0].versionId
+                                                        : undefined
+                                                }
+                                                assetVersionId={assetVersionId}
+                                                viewerMode={viewerMode}
+                                                onViewerModeChange={onViewerModeChange}
+                                                onDeletePreview={onDeletePreview}
+                                                isPreviewFile={isPreviewMode}
+                                                customParameters={
+                                                    loadedViewer.config.customParameters
+                                                }
+                                            />
+                                        ) : (
+                                            <Box textAlign="center" padding="xl">
+                                                <Box variant="p" color="text-status-error">
+                                                    No Viewer Component Selected
+                                                </Box>
+                                            </Box>
+                                        )}
+                                    </div>
 
-                        {/* Viewer controls footer - only show if viewer supports fullscreen and controls are not hidden */}
-                        {loadedViewer &&
-                            loadedViewer.config.canFullscreen &&
-                            !hideFullscreenControls && (
-                                <div className="visualizer-footer">
-                                    <a
-                                        title="View Wide"
-                                        onClick={() => onViewerModeChange("wide")}
-                                        className={viewerMode === "wide" ? "selected" : ""}
-                                    >
-                                        <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            enableBackground="new 0 0 24 24"
-                                            height="24px"
-                                            viewBox="0 0 24 24"
-                                            width="24px"
-                                            fill="#000000"
-                                        >
-                                            <g>
-                                                <rect fill="none" height="24" width="24" />
-                                            </g>
-                                            <g>
-                                                <g>
-                                                    <path d="M2,4v16h20V4H2z M20,18H4V6h16V18z" />
-                                                </g>
-                                            </g>
-                                        </svg>
-                                    </a>
-                                    <a
-                                        title="View Fullscreen"
-                                        onClick={() => onViewerModeChange("fullscreen")}
-                                        className={viewerMode === "fullscreen" ? "selected" : ""}
-                                    >
-                                        <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            height="24px"
-                                            viewBox="0 0 24 24"
-                                            width="24px"
-                                            fill="#000000"
-                                        >
-                                            <path d="M0 0h24v24H0V0z" fill="none" />
-                                            <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
-                                        </svg>
-                                    </a>
+                                    {/* Viewer controls footer - only show if viewer supports fullscreen and controls are not hidden */}
+                                    {loadedViewer &&
+                                        loadedViewer.config.canFullscreen &&
+                                        !hideFullscreenControls && (
+                                            <div className="visualizer-footer">
+                                                <a
+                                                    title="View Wide"
+                                                    onClick={() => onViewerModeChange("wide")}
+                                                    className={
+                                                        viewerMode === "wide" ? "selected" : ""
+                                                    }
+                                                >
+                                                    <svg
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                        enableBackground="new 0 0 24 24"
+                                                        height="24px"
+                                                        viewBox="0 0 24 24"
+                                                        width="24px"
+                                                        fill="#000000"
+                                                    >
+                                                        <g>
+                                                            <rect
+                                                                fill="none"
+                                                                height="24"
+                                                                width="24"
+                                                            />
+                                                        </g>
+                                                        <g>
+                                                            <g>
+                                                                <path d="M2,4v16h20V4H2z M20,18H4V6h16V18z" />
+                                                            </g>
+                                                        </g>
+                                                    </svg>
+                                                </a>
+                                                <a
+                                                    title="View Fullscreen"
+                                                    onClick={() => onViewerModeChange("fullscreen")}
+                                                    className={
+                                                        viewerMode === "fullscreen"
+                                                            ? "selected"
+                                                            : ""
+                                                    }
+                                                >
+                                                    <svg
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                        height="24px"
+                                                        viewBox="0 0 24 24"
+                                                        width="24px"
+                                                        fill="#000000"
+                                                    >
+                                                        <path d="M0 0h24v24H0V0z" fill="none" />
+                                                        <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
+                                                    </svg>
+                                                </a>
+                                            </div>
+                                        )}
                                 </div>
-                            )}
-                    </div>
-                    </div>
-                    )}
-                </Suspense>
+                            </div>
+                        )}
+                    </Suspense>
                 </ViewerErrorBoundary>
             </Container>
         </div>

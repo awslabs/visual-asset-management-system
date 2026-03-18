@@ -52,12 +52,12 @@
         <script>
             // Apply theme immediately before render to prevent flash
             // Default to dark mode if no preference is saved
-            (function() {
-                var theme = localStorage.getItem('vams-theme-preference') || 'dark';
-                if (theme === 'dark') {
-                    document.documentElement.classList.add('awsui-dark-mode');
-                    document.documentElement.style.backgroundColor = '#0f1b2a';
-                    document.documentElement.style.colorScheme = 'dark';
+            (function () {
+                var theme = localStorage.getItem("vams-theme-preference") || "dark";
+                if (theme === "dark") {
+                    document.documentElement.classList.add("awsui-dark-mode");
+                    document.documentElement.style.backgroundColor = "#0f1b2a";
+                    document.documentElement.style.colorScheme = "dark";
                 }
             })();
         </script>

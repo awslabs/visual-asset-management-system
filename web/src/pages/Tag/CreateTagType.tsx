@@ -153,7 +153,7 @@ export default function CreateTagType({
                                                 setNameError(errorMessage);
                                             }
                                             if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
+                                                const msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
                                                 setFormError(msg);
                                             }
                                         })
@@ -175,7 +175,7 @@ export default function CreateTagType({
                                             console.log("update tag-type ", err);
                                             handleApiError(err);
                                             if (err.response && err.response.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
+                                                const msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
                                                 setFormError(msg);
                                             }
                                         })

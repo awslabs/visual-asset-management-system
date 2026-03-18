@@ -171,7 +171,10 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
             setState((prev) => ({
                 ...prev,
                 loading: false,
-                error: error?.response?.data?.message || error?.message || "An error occurred while unarchiving the asset.",
+                error:
+                    error?.response?.data?.message ||
+                    error?.message ||
+                    "An error occurred while unarchiving the asset.",
             }));
         }
     };

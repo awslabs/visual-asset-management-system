@@ -175,8 +175,16 @@ export const Matrix4x4Input: React.FC<Matrix4x4InputProps> = ({
                     ))
                 )}
             </div>
-            {error && <div style={{ fontSize: "12px", color: "var(--vams-color-error)" }}>{error}</div>}
-            <div style={{ fontSize: "11px", color: "var(--vams-text-secondary)", textAlign: "center" }}>
+            {error && (
+                <div style={{ fontSize: "12px", color: "var(--vams-color-error)" }}>{error}</div>
+            )}
+            <div
+                style={{
+                    fontSize: "11px",
+                    color: "var(--vams-text-secondary)",
+                    textAlign: "center",
+                }}
+            >
                 Enter values for a 4x4 transformation matrix. Click "Identity" for identity matrix.
             </div>
         </SpaceBetween>

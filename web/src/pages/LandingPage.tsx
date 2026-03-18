@@ -333,9 +333,7 @@ const LandingPage = (props) => {
                                         </span>
                                     </Header>
                                 }
-                            >
-                                
-                            </Container>
+                            ></Container>
                         </SpaceBetween>
                     </div>
                 </Grid>

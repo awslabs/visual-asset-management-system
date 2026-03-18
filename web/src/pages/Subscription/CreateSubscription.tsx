@@ -14,7 +14,13 @@ import { appCache } from "../../services/appCache";
 import { useState, useEffect } from "react";
 import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
 import CustomTable from "../../components/table/CustomTable";
-import { fetchDatabase, fetchAllAssets, createSubscription, updateSubscription, searchAssets } from "../../services/APIService";
+import {
+    fetchDatabase,
+    fetchAllAssets,
+    createSubscription,
+    updateSubscription,
+    searchAssets,
+} from "../../services/APIService";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
 interface SubscriptionFields {
@@ -109,7 +115,10 @@ export default function CreateSubscription({
                             includeArchived: false,
                         };
 
-                        const [success, searchResult] = await searchAssets(body) as [boolean, any];
+                        const [success, searchResult] = (await searchAssets(body)) as [
+                            boolean,
+                            any
+                        ];
                         if (!success) {
                             throw new Error(searchResult || "Search failed");
                         }
@@ -304,7 +313,10 @@ export default function CreateSubscription({
                                         })
                                         .catch((err) => {
                                             console.log("Create subs error", err);
-                                            setFormError(err.message || "An error occurred while creating the subscription");
+                                            setFormError(
+                                                err.message ||
+                                                    "An error occurred while creating the subscription"
+                                            );
                                             setShowTable(false);
                                         })
                                         .finally(() => {
@@ -328,7 +340,10 @@ export default function CreateSubscription({
                                         })
                                         .catch((err) => {
                                             console.log("Update subs error", err);
-                                            setFormError(err.message || "An error occurred while updating the subscription");
+                                            setFormError(
+                                                err.message ||
+                                                    "An error occurred while updating the subscription"
+                                            );
                                         })
                                         .finally(() => {
                                             setInProgress(false);

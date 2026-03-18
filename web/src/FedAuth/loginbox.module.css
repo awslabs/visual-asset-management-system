@@ -105,8 +105,12 @@
     color: #ffffff !important;
 }
 
-:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global(button[type="submit"]):global(:disabled),
-:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global(button[type="submit"]):global([data-loading="true"]) {
+:global(.awsui-dark-mode)
+    :global([data-amplify-authenticator])
+    :global(button[type="submit"]):global(:disabled),
+:global(.awsui-dark-mode)
+    :global([data-amplify-authenticator])
+    :global(button[type="submit"]):global([data-loading="true"]) {
     background-color: var(--vams-color-info) !important;
     opacity: 0.7;
     color: #ffffff !important;

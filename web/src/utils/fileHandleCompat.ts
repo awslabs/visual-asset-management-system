@@ -39,10 +39,7 @@ export interface NormalizedFileHandle {
  * Create a normalized file handle from a File System Access API handle
  * or from a traditional File object
  */
-export const createNormalizedFileHandle = (
-    handle: any,
-    path: string = ""
-): NormalizedFileHandle => {
+export const createNormalizedFileHandle = (handle: any, path = ""): NormalizedFileHandle => {
     // If it's a standard File object (fallback for browsers without File System Access API)
     if (handle instanceof File) {
         return {

@@ -51,7 +51,7 @@ export default function DragDropFileUpload({
 
     const processFileEntry = async (
         entry: any,
-        path: string = "",
+        path = "",
         fileHandles: FileHandle[] = []
     ): Promise<FileHandle[]> => {
         if (entry.kind === "file") {
@@ -377,9 +377,7 @@ export default function DragDropFileUpload({
         padding: "24px",
         textAlign: "center" as const,
         backgroundColor:
-            isDragActive || isDragOver
-                ? "var(--vams-bg-hover)"
-                : "var(--vams-bg-secondary)",
+            isDragActive || isDragOver ? "var(--vams-bg-hover)" : "var(--vams-bg-secondary)",
         transition: "all 0.2s ease-in-out",
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.6 : 1,

@@ -39,13 +39,13 @@ The web app supports dark/light theme via a Settings dropdown in the top navigat
 
 Organizations can customize the web application by modifying `web/src/config.ts`. This is the single configuration file for all web-level branding and development settings.
 
-| Setting | Description | Default |
-|---|---|---|
-| `APP_TITLE` | Browser tab title | `"VAMS - Visual Asset Management System"` |
-| `APP_NAME` | Short name used in footer and logo alt text | `"Visual Asset Management System"` |
-| `FOOTER_COPYRIGHT` | Copyright text in the page footer. Set to empty string to hide the footer. | `"© 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved."` |
-| `CUSTOMER_LOGO` | Optional URL to a custom logo for the sidebar navigation header. Leave undefined to use the default VAMS logo. Supports relative paths or absolute URLs. | `undefined` |
-| `DEV_API_ENDPOINT` | API endpoint for local development. Set to empty string to use the same origin (production). Set to an API Gateway URL or `http://localhost:8002/` for dev. | `""` |
+| Setting            | Description                                                                                                                                                 | Default                                                                       |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `APP_TITLE`        | Browser tab title                                                                                                                                           | `"VAMS - Visual Asset Management System"`                                     |
+| `APP_NAME`         | Short name used in footer and logo alt text                                                                                                                 | `"Visual Asset Management System"`                                            |
+| `FOOTER_COPYRIGHT` | Copyright text in the page footer. Set to empty string to hide the footer.                                                                                  | `"© 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved."` |
+| `CUSTOMER_LOGO`    | Optional URL to a custom logo for the sidebar navigation header. Leave undefined to use the default VAMS logo. Supports relative paths or absolute URLs.    | `undefined`                                                                   |
+| `DEV_API_ENDPOINT` | API endpoint for local development. Set to empty string to use the same origin (production). Set to an API Gateway URL or `http://localhost:8002/` for dev. | `""`                                                                          |
 
 Example customization:
 
@@ -177,7 +177,6 @@ or `npm run start` to have **live reload** on code changes.
 _Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
 
 Now load [http://localhost:8001](http://localhost:8001) in a browser. (All credentials work on login for local OAUTH External IDP testing)
-
 
 #### Build & Deploy Steps (Linux/Mac)
 

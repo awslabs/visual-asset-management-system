@@ -46,8 +46,8 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             if (!potreeInstance || !assetKey || loaded || !config) return;
 
             try {
-                let fileKey = assetKey + "/preview/PotreeViewer/metadata.json";
-                let url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
+                const fileKey = assetKey + "/preview/PotreeViewer/metadata.json";
+                const url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
 
                 // Get a valid, fresh authorization header (automatically refreshes token if expired)
                 const authorizationHeader = await getDualAuthorizationHeader();
@@ -60,11 +60,11 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                     engineElement.current.setAttribute("pc", url);
 
                     setTimeout(() => {
-                        let parentDiv = engineElement.current;
+                        const parentDiv = engineElement.current;
                         if (!parentDiv || !potreeInstance) return;
 
                         try {
-                            let viewer = new potreeInstance.Viewer(parentDiv);
+                            const viewer = new potreeInstance.Viewer(parentDiv);
                             viewer.setEDLEnabled(true);
                             viewer.setFOV(60);
                             viewer.setPointBudget(1000000);
@@ -83,8 +83,8 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                                 .loadPointCloud(url, "Point Cloud", authHeader)
                                 .then(
                                     (e: any) => {
-                                        let pointcloud = e.pointcloud;
-                                        let material = pointcloud.material;
+                                        const pointcloud = e.pointcloud;
+                                        const material = pointcloud.material;
 
                                         material.activeAttributeName = "rgba";
                                         material.minSize = 2;

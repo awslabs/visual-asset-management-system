@@ -26,9 +26,9 @@ const isDistributableOptions: OptionDefinition[] = [
     { label: "No", value: "false" },
 ];
 
-var tags: any[] = [];
-var assetTags: any[] = [];
-var tagTypes: TagType[] = [];
+let tags: any[] = [];
+let assetTags: any[] = [];
+let tagTypes: TagType[] = [];
 
 const update = async (
     updatedAsset: any,

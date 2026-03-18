@@ -28,16 +28,18 @@ const actionStrings = {
 };
 
 async function fillFormWithAssetMetadata(asset) {
-    let values = {};
+    const values = {};
     // fill in form values based on formentitty proptypes
     const assetTransfer = new DataTransfer();
     const previewTransfer = new DataTransfer();
 
     //Retrieve the files from S3 so we can prefill them
-    let assetS3 = await fetch(asset.assetLocation.Key);
-    let previewS3 = await fetch(asset.previewLocation.Key);
+    const assetS3 = await fetch(asset.assetLocation.Key);
+    const previewS3 = await fetch(asset.previewLocation.Key);
 
-    assetTransfer.items.add(new File([await assetS3.blob()], asset.assetLocation.Key.split("/").pop()));
+    assetTransfer.items.add(
+        new File([await assetS3.blob()], asset.assetLocation.Key.split("/").pop())
+    );
     previewTransfer.items.add(
         new File([await previewS3.blob()], asset.previewLocation.Key.split("/").pop())
     );

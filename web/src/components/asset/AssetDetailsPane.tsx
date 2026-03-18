@@ -4,9 +4,24 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Box, Button, Container, Grid, Header, SpaceBetween, Select, FormField, Popover, Icon } from "@cloudscape-design/components";
+import {
+    Box,
+    Button,
+    Container,
+    Grid,
+    Header,
+    SpaceBetween,
+    Select,
+    FormField,
+    Popover,
+    Icon,
+} from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
-import { createSubscription, checkSubscription, unsubscribeFromAsset } from "../../services/APIService";
+import {
+    createSubscription,
+    checkSubscription,
+    unsubscribeFromAsset,
+} from "../../services/APIService";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
@@ -54,10 +69,10 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         if (!asset?.assetId) return;
 
         try {
-            const result = await checkSubscription({
+            const result = (await checkSubscription({
                 userId: username,
                 assetId: asset.assetId,
-            }) as [boolean, any];
+            })) as [boolean, any];
 
             if (result[0] && result[1] === "success") {
                 setSubscribed(true);
@@ -162,154 +177,209 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             </SpaceBetween>
                         }
                     >
-                        <span style={{ fontSize: "1.2em" }}>{asset?.assetName || "Asset Details"}</span>
+                        <span style={{ fontSize: "1.2em" }}>
+                            {asset?.assetName || "Asset Details"}
+                        </span>
                     </Header>
                 }
             >
                 <div style={{ marginBottom: "-20px" }}>
-                <Grid gridDefinition={[{ colspan: 4 }, { colspan: 4 }, { colspan: 4 }]}>
-                    {/* Row 1, Col 1: Asset Id */}
-                    <div>
-                        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Asset Id
-                        </div>
-                        <div style={{ marginBottom: "16px" }}>{asset?.assetId}</div>
-                        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Description
-                        </div>
-                        <div style={{ marginBottom: "16px" }}>{asset?.description}</div>
-                    </div>
-
-                    {/* Row 1, Col 2: Type / Distributable (combined) + Tags */}
-                    <div>
-                        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
-                            Type / Distributable
-                            <Popover
-                                dismissButton={false}
-                                position="top"
-                                size="medium"
-                                triggerType="custom"
-                                content={
-                                    <Box padding="s">
-                                        <strong>Type:</strong> "folder" means the asset contains multiple files.
-                                        Otherwise it shows the file extension of the single file contained.
-                                        <br /><br />
-                                        <strong>Distributable:</strong> Indicates whether the asset is currently
-                                        enabled to allow file downloads.
-                                    </Box>
-                                }
+                    <Grid gridDefinition={[{ colspan: 4 }, { colspan: 4 }, { colspan: 4 }]}>
+                        {/* Row 1, Col 1: Asset Id */}
+                        <div>
+                            <div
+                                style={{
+                                    fontSize: "16px",
+                                    fontWeight: "bold",
+                                    marginBottom: "4px",
+                                }}
                             >
-                                <span style={{ cursor: "help", color: "var(--vams-color-info)" }}>
-                                    <Icon name="status-info" size="small" />
-                                </span>
-                            </Popover>
+                                Asset Id
+                            </div>
+                            <div style={{ marginBottom: "16px" }}>{asset?.assetId}</div>
+                            <div
+                                style={{
+                                    fontSize: "16px",
+                                    fontWeight: "bold",
+                                    marginBottom: "4px",
+                                }}
+                            >
+                                Description
+                            </div>
+                            <div style={{ marginBottom: "16px" }}>{asset?.description}</div>
                         </div>
-                        <div style={{ marginBottom: "16px" }}>
-                            {asset?.assetType} / {asset?.isDistributable === true ? "Yes" : "No"}
-                        </div>
-                        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Tags
-                        </div>
-                        <div style={{ marginBottom: "16px" }}>
-                            {Array.isArray(asset?.tags) && asset.tags.length > 0
-                                ? asset.tags
-                                      .map((tag: any) => {
-                                          const tagType = JSON.parse(
-                                              localStorage.getItem("tagTypes") ||
-                                                  '{"tagTypeName": "", "tags": []}'
-                                          ).find((type: any) => type.tags.includes(tag));
-                                          if (tagType && tagType.required === "True") {
-                                              tagType.tagTypeName += " [R]";
-                                          }
-                                          return tagType ? `${tag} (${tagType.tagTypeName})` : tag;
-                                      })
-                                      .join(", ")
-                                : "No tags assigned"}
-                        </div>
-                    </div>
 
-                    {/* Row 1, Col 3: Latest Version + Version Selector */}
-                    <div>
-                        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Current Last Version
+                        {/* Row 1, Col 2: Type / Distributable (combined) + Tags */}
+                        <div>
+                            <div
+                                style={{
+                                    fontSize: "16px",
+                                    fontWeight: "bold",
+                                    marginBottom: "4px",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                }}
+                            >
+                                Type / Distributable
+                                <Popover
+                                    dismissButton={false}
+                                    position="top"
+                                    size="medium"
+                                    triggerType="custom"
+                                    content={
+                                        <Box padding="s">
+                                            <strong>Type:</strong> "folder" means the asset contains
+                                            multiple files. Otherwise it shows the file extension of
+                                            the single file contained.
+                                            <br />
+                                            <br />
+                                            <strong>Distributable:</strong> Indicates whether the
+                                            asset is currently enabled to allow file downloads.
+                                        </Box>
+                                    }
+                                >
+                                    <span
+                                        style={{ cursor: "help", color: "var(--vams-color-info)" }}
+                                    >
+                                        <Icon name="status-info" size="small" />
+                                    </span>
+                                </Popover>
+                            </div>
+                            <div style={{ marginBottom: "16px" }}>
+                                {asset?.assetType} /{" "}
+                                {asset?.isDistributable === true ? "Yes" : "No"}
+                            </div>
+                            <div
+                                style={{
+                                    fontSize: "16px",
+                                    fontWeight: "bold",
+                                    marginBottom: "4px",
+                                }}
+                            >
+                                Tags
+                            </div>
+                            <div style={{ marginBottom: "16px" }}>
+                                {Array.isArray(asset?.tags) && asset.tags.length > 0
+                                    ? asset.tags
+                                          .map((tag: any) => {
+                                              const tagType = JSON.parse(
+                                                  localStorage.getItem("tagTypes") ||
+                                                      '{"tagTypeName": "", "tags": []}'
+                                              ).find((type: any) => type.tags.includes(tag));
+                                              if (tagType && tagType.required === "True") {
+                                                  tagType.tagTypeName += " [R]";
+                                              }
+                                              return tagType
+                                                  ? `${tag} (${tagType.tagTypeName})`
+                                                  : tag;
+                                          })
+                                          .join(", ")
+                                    : "No tags assigned"}
+                            </div>
                         </div>
-                        <div style={{ marginBottom: "16px" }}>
-                            v{asset?.currentVersion?.Version}
-                            {(() => {
-                                const currentVer = versions.find(
-                                    (v: any) => v.Version === asset?.currentVersion?.Version
-                                );
-                                return currentVer?.versionAlias ? ` (${currentVer.versionAlias})` : "";
-                            })()}
-                            {asset?.currentVersion?.DateModified && (
-                                <span style={{ color: "var(--vams-text-secondary)", marginLeft: "4px" }}>
-                                    [{new Date(asset.currentVersion.DateModified).toLocaleString(
-                                        "en-US",
-                                        {
-                                            year: "numeric",
-                                            month: "numeric",
-                                            day: "numeric",
-                                            hour: "numeric",
-                                            minute: "numeric",
-                                            second: "numeric",
-                                            hour12: true,
+
+                        {/* Row 1, Col 3: Latest Version + Version Selector */}
+                        <div>
+                            <div
+                                style={{
+                                    fontSize: "16px",
+                                    fontWeight: "bold",
+                                    marginBottom: "4px",
+                                }}
+                            >
+                                Current Last Version
+                            </div>
+                            <div style={{ marginBottom: "16px" }}>
+                                v{asset?.currentVersion?.Version}
+                                {(() => {
+                                    const currentVer = versions.find(
+                                        (v: any) => v.Version === asset?.currentVersion?.Version
+                                    );
+                                    return currentVer?.versionAlias
+                                        ? ` (${currentVer.versionAlias})`
+                                        : "";
+                                })()}
+                                {asset?.currentVersion?.DateModified && (
+                                    <span
+                                        style={{
+                                            color: "var(--vams-text-secondary)",
+                                            marginLeft: "4px",
+                                        }}
+                                    >
+                                        [
+                                        {new Date(asset.currentVersion.DateModified).toLocaleString(
+                                            "en-US",
+                                            {
+                                                year: "numeric",
+                                                month: "numeric",
+                                                day: "numeric",
+                                                hour: "numeric",
+                                                minute: "numeric",
+                                                second: "numeric",
+                                                hour12: true,
+                                            }
+                                        )}
+                                        ]
+                                    </span>
+                                )}
+                            </div>
+                            {/* Version selector */}
+                            {versions.length > 0 && onVersionChange && (
+                                <FormField label="Version Selection">
+                                    <Select
+                                        selectedOption={
+                                            selectedVersionId
+                                                ? {
+                                                      label: `v${selectedVersionId}${
+                                                          versions.find(
+                                                              (v: any) =>
+                                                                  v.Version === selectedVersionId
+                                                          )?.versionAlias
+                                                              ? ` (${
+                                                                    versions.find(
+                                                                        (v: any) =>
+                                                                            v.Version ===
+                                                                            selectedVersionId
+                                                                    )?.versionAlias
+                                                                })`
+                                                              : ""
+                                                      }`,
+                                                      value: selectedVersionId,
+                                                  }
+                                                : {
+                                                      label: "LATEST (Non-Versioned)",
+                                                      value: "__LATEST__",
+                                                  }
                                         }
-                                    )}]
-                                </span>
+                                        onChange={({ detail }) => {
+                                            const val = detail.selectedOption.value;
+                                            onVersionChange(
+                                                val === "__LATEST__" ? null : val || null
+                                            );
+                                        }}
+                                        options={[
+                                            {
+                                                label: "LATEST (Non-Versioned)",
+                                                value: "__LATEST__",
+                                            },
+                                            ...versions.map((v: any) => ({
+                                                label: `v${v.Version}${
+                                                    v.versionAlias ? ` (${v.versionAlias})` : ""
+                                                } - ${v.Comment || "No comment"} (${new Date(
+                                                    v.DateModified
+                                                ).toLocaleDateString()})`,
+                                                value: v.Version,
+                                            })),
+                                        ]}
+                                        placeholder="Select version"
+                                        loadingText="Loading versions..."
+                                        statusType={versionsLoading ? "loading" : "finished"}
+                                    />
+                                </FormField>
                             )}
                         </div>
-                        {/* Version selector */}
-                        {versions.length > 0 && onVersionChange && (
-                            <FormField label="Version Selection">
-                                <Select
-                                    selectedOption={
-                                        selectedVersionId
-                                            ? {
-                                                  label: `v${selectedVersionId}${
-                                                      versions.find(
-                                                          (v: any) => v.Version === selectedVersionId
-                                                      )?.versionAlias
-                                                          ? ` (${
-                                                                versions.find(
-                                                                    (v: any) =>
-                                                                        v.Version === selectedVersionId
-                                                                )?.versionAlias
-                                                            })`
-                                                          : ""
-                                                  }`,
-                                                  value: selectedVersionId,
-                                              }
-                                            : {
-                                                  label: "LATEST (Non-Versioned)",
-                                                  value: "__LATEST__",
-                                              }
-                                    }
-                                    onChange={({ detail }) => {
-                                        const val = detail.selectedOption.value;
-                                        onVersionChange(val === "__LATEST__" ? null : val || null);
-                                    }}
-                                    options={[
-                                        {
-                                            label: "LATEST (Non-Versioned)",
-                                            value: "__LATEST__",
-                                        },
-                                        ...versions.map((v: any) => ({
-                                            label: `v${v.Version}${
-                                                v.versionAlias ? ` (${v.versionAlias})` : ""
-                                            } - ${v.Comment || "No comment"} (${new Date(
-                                                v.DateModified
-                                            ).toLocaleDateString()})`,
-                                            value: v.Version,
-                                        })),
-                                    ]}
-                                    placeholder="Select version"
-                                    loadingText="Loading versions..."
-                                    statusType={versionsLoading ? "loading" : "finished"}
-                                />
-                            </FormField>
-                        )}
-                    </div>
-                </Grid>
+                    </Grid>
                 </div>
             </Container>
         </ErrorBoundary>

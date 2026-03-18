@@ -56,86 +56,94 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
         <ErrorBoundary componentName="Tabbed Container">
             <Container>
                 <div style={{ marginBottom: "-20px" }}>
-                <Tabs
-                    activeTabId={activeTabId}
-                    onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
-                    tabs={[
-                        {
-                            id: "file-manager",
-                            label: assetVersionId
-                                ? `File Manager (v${assetVersionId})`
-                                : "File Manager",
-                            content: (
-                                <Suspense
-                                    fallback={<LoadingSpinner text="Loading File Manager..." />}
-                                >
-                                    <FileManagerTab
-                                        assetName={assetName}
-                                        filePathToNavigate={filePathToNavigate}
-                                        assetVersionId={assetVersionId}
-                                    />
-                                </Suspense>
-                            ),
-                        },
-                        {
-                            id: "relationships",
-                            label: "Relationships",
-                            content: (
-                                <Suspense
-                                    fallback={<LoadingSpinner text="Loading Relationships..." />}
-                                >
-                                    <AssetLinksTab
-                                        mode="view"
-                                        assetId={assetId}
-                                        databaseId={databaseId}
-                                        isActive={activeTabId === "relationships"}
-                                    />
-                                </Suspense>
-                            ),
-                        },
-                        {
-                            id: "workflows",
-                            label: "Workflows",
-                            content: (
-                                <Suspense fallback={<LoadingSpinner text="Loading Workflows..." />}>
-                                    <WorkflowTab
-                                        databaseId={databaseId}
-                                        assetId={assetId}
-                                        isActive={activeTabId === "workflows"}
-                                        onExecuteWorkflow={onExecuteWorkflow}
-                                        refreshTrigger={workflowRefreshTrigger}
-                                    />
-                                </Suspense>
-                            ),
-                        },
-                        {
-                            id: "comments",
-                            label: "Comments",
-                            content: (
-                                <Suspense fallback={<LoadingSpinner text="Loading Comments..." />}>
-                                    <CommentsTab
-                                        databaseId={databaseId}
-                                        assetId={assetId}
-                                        isActive={activeTabId === "comments"}
-                                    />
-                                </Suspense>
-                            ),
-                        },
-                        {
-                            id: "versions",
-                            label: "Versions",
-                            content: (
-                                <Suspense fallback={<LoadingSpinner text="Loading Versions..." />}>
-                                    <VersionsTab
-                                        databaseId={databaseId}
-                                        assetId={assetId}
-                                        isActive={activeTabId === "versions"}
-                                    />
-                                </Suspense>
-                            ),
-                        },
-                    ]}
-                />
+                    <Tabs
+                        activeTabId={activeTabId}
+                        onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
+                        tabs={[
+                            {
+                                id: "file-manager",
+                                label: assetVersionId
+                                    ? `File Manager (v${assetVersionId})`
+                                    : "File Manager",
+                                content: (
+                                    <Suspense
+                                        fallback={<LoadingSpinner text="Loading File Manager..." />}
+                                    >
+                                        <FileManagerTab
+                                            assetName={assetName}
+                                            filePathToNavigate={filePathToNavigate}
+                                            assetVersionId={assetVersionId}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
+                            {
+                                id: "relationships",
+                                label: "Relationships",
+                                content: (
+                                    <Suspense
+                                        fallback={
+                                            <LoadingSpinner text="Loading Relationships..." />
+                                        }
+                                    >
+                                        <AssetLinksTab
+                                            mode="view"
+                                            assetId={assetId}
+                                            databaseId={databaseId}
+                                            isActive={activeTabId === "relationships"}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
+                            {
+                                id: "workflows",
+                                label: "Workflows",
+                                content: (
+                                    <Suspense
+                                        fallback={<LoadingSpinner text="Loading Workflows..." />}
+                                    >
+                                        <WorkflowTab
+                                            databaseId={databaseId}
+                                            assetId={assetId}
+                                            isActive={activeTabId === "workflows"}
+                                            onExecuteWorkflow={onExecuteWorkflow}
+                                            refreshTrigger={workflowRefreshTrigger}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
+                            {
+                                id: "comments",
+                                label: "Comments",
+                                content: (
+                                    <Suspense
+                                        fallback={<LoadingSpinner text="Loading Comments..." />}
+                                    >
+                                        <CommentsTab
+                                            databaseId={databaseId}
+                                            assetId={assetId}
+                                            isActive={activeTabId === "comments"}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
+                            {
+                                id: "versions",
+                                label: "Versions",
+                                content: (
+                                    <Suspense
+                                        fallback={<LoadingSpinner text="Loading Versions..." />}
+                                    >
+                                        <VersionsTab
+                                            databaseId={databaseId}
+                                            assetId={assetId}
+                                            isActive={activeTabId === "versions"}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
+                        ]}
+                    />
                 </div>
             </Container>
         </ErrorBoundary>

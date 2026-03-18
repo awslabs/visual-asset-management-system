@@ -5,12 +5,7 @@
 
 import React, { PropsWithChildren, Suspense, useEffect, useState } from "react";
 import { Amplify } from "aws-amplify";
-import {
-    fetchAuthSession,
-    getCurrentUser,
-    signOut,
-    signInWithRedirect,
-} from "aws-amplify/auth";
+import { fetchAuthSession, getCurrentUser, signOut, signInWithRedirect } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
 import { appCache } from "../services/appCache";
 import { OAuth2Client, OAuth2Token, generateCodeVerifier } from "@badgateway/oauth2-client";
@@ -186,8 +181,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                     userPoolClientId: config.cognitoAppClientId,
                     loginWith: {
                         oauth: {
-                            domain:
-                                config.cognitoFederatedConfig?.customCognitoAuthDomain || "",
+                            domain: config.cognitoFederatedConfig?.customCognitoAuthDomain || "",
                             scopes: ["openid", "email", "profile"],
                             redirectSignIn: [window.location.origin],
                             redirectSignOut: [window.location.origin],
@@ -276,7 +270,6 @@ export function getOAuth2Client(): OAuth2Client | null {
     return oauth2Client || null;
 }
 
-
 const LoginHeader: React.FC = () => {
     const { theme, setTheme } = useThemeSettings();
     return (
@@ -300,8 +293,14 @@ const LoginHeader: React.FC = () => {
                             if (id === "theme-dark") setTheme("dark");
                         },
                         items: [
-                            { id: "theme-light", text: theme === "light" ? "✓ Light Theme" : "Light Theme" },
-                            { id: "theme-dark", text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme" },
+                            {
+                                id: "theme-light",
+                                text: theme === "light" ? "✓ Light Theme" : "Light Theme",
+                            },
+                            {
+                                id: "theme-dark",
+                                text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme",
+                            },
                         ],
                     },
                 ]}
@@ -362,7 +361,7 @@ const Auth: React.FC<AuthProps> = (props) => {
     }, []);
 
     const [config, setConfig] = useState(appCache.getItem("config"));
-    let [authError, setauthError] = useState<string | null>(() =>
+    const [authError, setauthError] = useState<string | null>(() =>
         localStorage.getItem("auth_error")
     );
 
@@ -387,11 +386,7 @@ const Auth: React.FC<AuthProps> = (props) => {
             // Validate that config is a proper object with required fields
             // This prevents crashes from corrupted cache data (e.g., from interrupted API calls)
             // Note: region can be empty for external IDP configurations (no Cognito)
-            if (
-                typeof config !== "object" ||
-                Array.isArray(config) ||
-                !config.api
-            ) {
+            if (typeof config !== "object" || Array.isArray(config) || !config.api) {
                 console.error("Invalid config detected, clearing cache and refetching:", config);
                 appCache.removeItem("config");
                 setConfig(null);
@@ -651,7 +646,7 @@ const Auth: React.FC<AuthProps> = (props) => {
     }, [config, isLoggedIn]);
 
     //External OAUTH Function for handling sign-in
-    const handleExternalOauthSignIn = async (require_mfa: boolean = false) => {
+    const handleExternalOauthSignIn = async (require_mfa = false) => {
         // Sign in
         setIsLoading(true);
 
@@ -866,7 +861,10 @@ const Auth: React.FC<AuthProps> = (props) => {
                             </Heading>
                             <Box padding={{ top: "l" }}>
                                 <SpaceBetween direction="vertical" size="s" alignItems="center">
-                                    <Button variant="primary" onClick={() => handleExternalOauthSignIn()}>
+                                    <Button
+                                        variant="primary"
+                                        onClick={() => handleExternalOauthSignIn()}
+                                    >
                                         Log in with SSO
                                     </Button>
                                     {config.externalOAuthIdpScopeMfa &&
@@ -944,7 +942,14 @@ const Auth: React.FC<AuthProps> = (props) => {
                 <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
                     <LoginHeader />
                     <GlobalHeader authorizationHeader={true} />
-                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <div
+                        style={{
+                            flex: 1,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                        }}
+                    >
                         <FedLoginBox
                             logoSrc={loginLogoSrc}
                             onLogin={() =>
@@ -986,10 +991,10 @@ const parseJwt = (
 ): {
     sub: string;
 } => {
-    var jsonPayload = "{}";
-    var base64Url = accessToken.split(".")[1];
+    let jsonPayload = "{}";
+    const base64Url = accessToken.split(".")[1];
     if (base64Url) {
-        var base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+        const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
         jsonPayload = decodeURIComponent(
             window
                 .atob(base64)
@@ -1005,7 +1010,7 @@ const parseJwt = (
 };
 
 let refreshTimer: NodeJS.Timeout | null;
-const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
+const startAccessTokenRefreshTimer = (startNewTimer = false) => {
     // If there was a previous refresh timer, the boolean param will clear it
     if (startNewTimer && refreshTimer) {
         clearTimeout(refreshTimer);
@@ -1047,7 +1052,7 @@ const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
     }
 };
 
-const signOutWithError = (key: string = "auth_error", value: string = "Unauthorized") => {
+const signOutWithError = (key = "auth_error", value = "Unauthorized") => {
     // Reset amplify info
     signOut()
         .then(() => {

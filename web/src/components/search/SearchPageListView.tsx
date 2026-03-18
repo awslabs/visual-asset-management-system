@@ -40,7 +40,7 @@ import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
 
-var tagTypes: any;
+let tagTypes: any;
 
 // Helper component to render explanation popover
 const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ explanation }) => (
@@ -267,7 +267,9 @@ const DualScrollWrapper: React.FC<{ children: React.ReactNode }> = ({ children }
                 if (syncing.current || !topScrollRef.current || !tableScrollElRef.current) return;
                 syncing.current = true;
                 topScrollRef.current.scrollLeft = tableScrollElRef.current.scrollLeft;
-                requestAnimationFrame(() => { syncing.current = false; });
+                requestAnimationFrame(() => {
+                    syncing.current = false;
+                });
             };
 
             scrollContainer.addEventListener("scroll", onTableScroll, { passive: true });
@@ -307,7 +309,9 @@ const DualScrollWrapper: React.FC<{ children: React.ReactNode }> = ({ children }
         if (syncing.current || !tableScrollElRef.current || !topScrollRef.current) return;
         syncing.current = true;
         tableScrollElRef.current.scrollLeft = topScrollRef.current.scrollLeft;
-        requestAnimationFrame(() => { syncing.current = false; });
+        requestAnimationFrame(() => {
+            syncing.current = false;
+        });
     }, []);
 
     return (
@@ -320,7 +324,9 @@ const DualScrollWrapper: React.FC<{ children: React.ReactNode }> = ({ children }
                     overflowX: "auto",
                     overflowY: "hidden",
                     height: scrollInfo.visible ? "14px" : "0px",
-                    borderBottom: scrollInfo.visible ? "1px solid var(--vams-border-default)" : "none",
+                    borderBottom: scrollInfo.visible
+                        ? "1px solid var(--vams-border-default)"
+                        : "none",
                 }}
             >
                 <div style={{ width: scrollInfo.width || 1, height: "1px" }} />
@@ -449,7 +455,7 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
         const tagsWithType = value.map((tag) => {
             if (tagTypes)
                 for (const tagType of tagTypes) {
-                    var tagTypeName = tagType.tagTypeName;
+                    let tagTypeName = tagType.tagTypeName;
 
                     //If tagType has required field add [R] to tag type name
                     if (tagType && tagType.required === "True") {
@@ -655,9 +661,26 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
             const isDateColumn = name.startsWith("date_");
             const isSizeColumn = name === "num_filesize" || name === "num_size";
             const isDescriptionColumn = name === "str_description";
-            const isVersionColumn = name === "str_asset_version_id" || name === "str_assetversionid";
-            const defaultWidth = isDateColumn ? 160 : isSizeColumn ? 100 : isDescriptionColumn ? 200 : isVersionColumn ? 180 : 150;
-            const defaultMinWidth = isDateColumn ? 120 : isSizeColumn ? 70 : isDescriptionColumn ? 120 : isVersionColumn ? 130 : 100;
+            const isVersionColumn =
+                name === "str_asset_version_id" || name === "str_assetversionid";
+            const defaultWidth = isDateColumn
+                ? 160
+                : isSizeColumn
+                ? 100
+                : isDescriptionColumn
+                ? 200
+                : isVersionColumn
+                ? 180
+                : 150;
+            const defaultMinWidth = isDateColumn
+                ? 120
+                : isSizeColumn
+                ? 70
+                : isDescriptionColumn
+                ? 120
+                : isVersionColumn
+                ? 130
+                : 100;
 
             // Use FIELD_MAPPINGS label if available, with overrides for brevity
             const shortLabels: Record<string, string> = {

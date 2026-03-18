@@ -53,8 +53,8 @@ export function getExternalOAuth2Token(): OAuth2Token {
  * Returns [accessTokenValid, refreshTokenValid]
  */
 export function externalTokenValidation(): [boolean, boolean] {
-    let accessTokenValid: boolean = false;
-    let refreshTokenValid: boolean = false;
+    let accessTokenValid = false;
+    let refreshTokenValid = false;
     const oauth2Token = getExternalOAuth2Token();
 
     // If access token exists and not expired, deem it as still valid
@@ -82,10 +82,10 @@ const parseJwt = (
 ): {
     sub: string;
 } => {
-    var jsonPayload = "{}";
-    var base64Url = accessToken.split(".")[1];
+    let jsonPayload = "{}";
+    const base64Url = accessToken.split(".")[1];
     if (base64Url) {
-        var base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+        const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
         jsonPayload = decodeURIComponent(
             window
                 .atob(base64)

@@ -123,7 +123,7 @@ export default function CognitoUsers() {
     useEffect(() => {
         const getData = async () => {
             setLoading(true);
-            let items = await fetchCognitoUsers();
+            const items = await fetchCognitoUsers();
 
             if (items !== false && Array.isArray(items)) {
                 setLoading(false);

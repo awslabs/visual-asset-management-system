@@ -206,10 +206,10 @@ export default function TableList(props) {
     };
 
     function DeleteModal({ selectedItems, onCancel, onOk }) {
-        let length = selectedItems.length;
-        let title = length > 1 ? pluralNameTitleCase : singularNameTitleCase;
+        const length = selectedItems.length;
+        const title = length > 1 ? pluralNameTitleCase : singularNameTitleCase;
         const shouldHideCancelButton = pluralName === "tag types";
-        let itemNames = [];
+        const itemNames = [];
         if (pluralName === "tag types") {
             for (let i = 0; i < length; i++) {
                 itemNames[i] = selectedItems[i]?.tagTypeName || "unknown";

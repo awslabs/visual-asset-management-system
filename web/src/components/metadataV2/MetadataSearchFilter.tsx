@@ -57,7 +57,9 @@ export const MetadataSearchFilter: React.FC<MetadataSearchFilterProps> = ({
     const typeOptions = [{ label: "All Types", value: "all" }, ...getAvailableValueTypes(false)];
 
     return (
-        <div style={{ padding: "12px", background: "var(--vams-bg-secondary)", borderRadius: "8px" }}>
+        <div
+            style={{ padding: "12px", background: "var(--vams-bg-secondary)", borderRadius: "8px" }}
+        >
             <SpaceBetween direction="vertical" size="s">
                 <div
                     style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}

@@ -157,7 +157,7 @@ export const getMetadataSchema = async (
 ): Promise<MetadataSchema> => {
     try {
         const response = await apiClient.get(
-`database/${databaseId}/metadataSchema/${metadataSchemaId}`,
+            `database/${databaseId}/metadataSchema/${metadataSchemaId}`,
             {}
         );
 
@@ -244,7 +244,7 @@ export const deleteMetadataSchema = async (
 ): Promise<MetadataSchemaOperationResponse> => {
     try {
         const response = await apiClient.del(
-`database/${databaseId}/metadataSchema/${metadataSchemaId}`,
+            `database/${databaseId}/metadataSchema/${metadataSchemaId}`,
             {
                 body: deleteRequest,
             }

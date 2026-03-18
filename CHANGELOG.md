@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
-• Website Backend Overhaul - Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default. 
+• Website Backend Overhaul - Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default.
 • New USD Web Viewer - Needle USD 3D WASM viewer with experimental dependency chain loading for .usd, .usda, .usdc, .usdz files integrated into plugin system
 • New 3D Mesh and CAD STP ThreeJs Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading and scene graph support, now primary viewer for common mesh types with optional LGPL-licensed CAD support
 • New SQS and EventBridge Pipeline Support - Pipelines and workflows now support SQS and EventBridge execution types alongside existing Lambda, enabling integration with external processing systems.
@@ -22,12 +22,13 @@ All notable changes to this project will be documented in this file. See [standa
 
 Asset versions have database table changes that require the running of migration scripts to properly update the table to include newly needed column data to avoid future system-wide conflicts with assets that share a similar ID across databases.
 
-The website overhaul may cause a high number of merge conflicts for any forked repositories due to the high number of file renames and refactors. Merging will need to be conducted cautiously. 
+The website overhaul may cause a high number of merge conflicts for any forked repositories due to the high number of file renames and refactors. Merging will need to be conducted cautiously.
 
 **Recommended Upgrade Path:** Run the upgrade script to migrate permission constraints from the old table to the new one if custom constraints were added or modified beyond VAMS defaults: `infra\deploymentDataMigration\v2.4_to_v2.5\upgrade`
 
 ### Features
--  **Web** Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default. This overhaul required refactoring of the API call and cache system across all web files. 
+
+-   **Web** Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default. This overhaul required refactoring of the API call and cache system across all web files.
     -   Added more website custommization configuration into `config.ts`
     -   Refactored most .js files to .ts or .tsx
     -   Moved/consolidated all API calls to service files in the web /service/ folder
@@ -65,7 +66,7 @@ The website overhaul may cause a high number of merge conflicts for any forked r
     -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions (and asset sub-tables)
 -   Added new API Key system to allow for the creation of API Keys through API, CLI, and the website (`API Key Management`). This will provide the ability to issue upstream or downstream API keys to applications to use VAMS. API Keys are assigned a user ID owner it will impersonate (both for user id used and roles applied). See the `DeveloeprGuide.md` for more information on how to generate these API keys and use them.
 -   **Web** Updated the web navigation to split out `Admin - Auth` into its own admin navigation section and all others to `Admin - Data`. Removed "Asset Ingestion" from the admin menus as this web page is now deprecated although still exists for direct navigation, as permissions allow.
--   **Web** Database listing page updates 
+-   **Web** Database listing page updates
     -   Supports viewing/modifying metadata on databases (backend/CLI implemented for databases in v2.4)
     -   Supports mini-map views and display toggle (off by default) when LocationServices is enabled for VAMS, based on database metadata (ie. having a Location or Longitude+Latitude metadata key)
     -   Implemented different filters based on columns that are more likely to be filtered for (S3 buckets, Restrict Metadata, Restrict File Uploads)
@@ -83,7 +84,7 @@ The website overhaul may cause a high number of merge conflicts for any forked r
 -   **Web** Fixed bug in some table lists that prevented single row selects in certain scenarios (would select all rows)
 -   **Web** Fixed various bugs in pipeline editor and workflow execution list paging
 -   **Web** Pipeline listing page now properly shows database filter drop-down again
--   **Web** Fixed text viewer to properly theme text window when toggling between dark and light themes. 
+-   **Web** Fixed text viewer to properly theme text window when toggling between dark and light themes.
 -   Fixed bug in workflow creation and executions where assetId and databaseId was not being passed through. This will only be fixed for existing workflows that are re-created or edited but should not affect existing pipelines that are currently working already.
 -   Fixed bug in assets and files search to show full result counts, have appropriate paging functionality, and correct the backend API for a paging logic bug
 -   Added additional createWorkflow API input validation checks for edge input scenarios and cases where a user creating a workflow does not have authorization access to an underlying pipeline being specified
@@ -97,8 +98,8 @@ The website overhaul may cause a high number of merge conflicts for any forked r
 
 ### Chores
 
--  **Web** Added a default footer message, changed login page layout based on new refactor
--  **Web** Refined Assets and Files search UI to support column resizing, shorter and better column names, and some text wrapping
+-   **Web** Added a default footer message, changed login page layout based on new refactor
+-   **Web** Refined Assets and Files search UI to support column resizing, shorter and better column names, and some text wrapping
 -   Refactored the Pipelines and Workflows API backend to now have proper request/response models, better input validation, and now follows the new backend standard set in v2.2. This is in prepartion for a larger pipeline/workflow overhaul.
 -   Created `CLOUDFRONTDEPLOY` feature enablement flag to let the front-end know the type of web deployment the website is being served under
 -   **Web** Added service worker and proxy to manually set header flags for both local debugging and/or to set for website deployment to allow features like WebAssembly (WASM) loading.

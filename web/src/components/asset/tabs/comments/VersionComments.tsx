@@ -132,7 +132,7 @@ export default function VersionComments(props: VersionCommentsProps) {
         console.log("Deleting Comment-- " + commentToDelete);
         const [assetId, assetVersionId, CommentId] = commentToDelete.split(":");
 
-        let assetVersionIdAndCommentId = assetVersionId + ":" + CommentId;
+        const assetVersionIdAndCommentId = assetVersionId + ":" + CommentId;
 
         showLoading(true);
 
@@ -166,8 +166,7 @@ export default function VersionComments(props: VersionCommentsProps) {
     const handleEditComment = async () => {
         if (!commentToEdit) return;
 
-        const [assetId] =
-            commentToEdit["assetVersionId:commentId"].split(":");
+        const [assetId] = commentToEdit["assetVersionId:commentId"].split(":");
         showLoading(true);
 
         try {

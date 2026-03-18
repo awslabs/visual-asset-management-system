@@ -88,8 +88,14 @@ function App() {
                                 if (id === "theme-dark") setTheme("dark");
                             },
                             items: [
-                                { id: "theme-light", text: theme === "light" ? "✓ Light Theme" : "Light Theme" },
-                                { id: "theme-dark", text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme" },
+                                {
+                                    id: "theme-light",
+                                    text: theme === "light" ? "✓ Light Theme" : "Light Theme",
+                                },
+                                {
+                                    id: "theme-dark",
+                                    text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme",
+                                },
                             ],
                         },
                         {

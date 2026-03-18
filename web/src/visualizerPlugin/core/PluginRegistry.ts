@@ -38,14 +38,12 @@ export class PluginRegistry {
     }
 
     // Lazy-loaded viewer component modules (Vite creates chunks for each at build time)
-    private static viewerModules = import.meta.glob<{ default: React.ComponentType<ViewerPluginProps> }>(
-        "../viewers/**/*Component.tsx"
-    );
+    private static viewerModules = import.meta.glob<{
+        default: React.ComponentType<ViewerPluginProps>;
+    }>("../viewers/**/*Component.tsx");
 
     // Lazy-loaded dependency manager modules
-    private static depModules = import.meta.glob<any>(
-        "../viewers/**/dependencies.ts"
-    );
+    private static depModules = import.meta.glob<any>("../viewers/**/dependencies.ts");
 
     // Dynamic component loader using manifest constants
     private async loadViewerComponent(
@@ -65,15 +63,17 @@ export class PluginRegistry {
 
         if (!loader) {
             // Fallback: try without extension or with different patterns
-            const matchingKey = Object.keys(PluginRegistry.viewerModules).find(
-                (key) => key.includes(relativePath)
+            const matchingKey = Object.keys(PluginRegistry.viewerModules).find((key) =>
+                key.includes(relativePath)
             );
             if (matchingKey) {
                 const module = await PluginRegistry.viewerModules[matchingKey]();
                 return module.default;
             }
             throw new Error(
-                `Viewer module not found for: ${relativePath}. Available: ${Object.keys(PluginRegistry.viewerModules).join(", ")}`
+                `Viewer module not found for: ${relativePath}. Available: ${Object.keys(
+                    PluginRegistry.viewerModules
+                ).join(", ")}`
             );
         }
 
@@ -98,8 +98,8 @@ export class PluginRegistry {
         const loader = PluginRegistry.depModules[globKey];
 
         if (!loader) {
-            const matchingKey = Object.keys(PluginRegistry.depModules).find(
-                (key) => key.includes(relativePath)
+            const matchingKey = Object.keys(PluginRegistry.depModules).find((key) =>
+                key.includes(relativePath)
             );
             if (matchingKey) {
                 return await PluginRegistry.depModules[matchingKey]();
@@ -301,7 +301,7 @@ export class PluginRegistry {
     getCompatibleViewers(
         fileExtensions: string[],
         isMultiFile: boolean,
-        isPreview: boolean = false
+        isPreview = false
     ): ViewerPluginMetadata[] {
         if (!this.initialized) {
             console.warn("PluginRegistry not initialized. Call initialize() first.");

@@ -127,13 +127,20 @@ export default function CreateTagType({
                                             console.log("Create subs error", err);
                                             if (err.status === 400) {
                                                 const errorMessage =
-                                                    err.message || "Role already exists or is not valid";
+                                                    err.message ||
+                                                    "Role already exists or is not valid";
                                                 setNameError(errorMessage);
                                             } else if (err.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} role. Error: ${err.message || "Request failed with status code 403"}`;
+                                                const msg = `Unable to ${createOrUpdate} role. Error: ${
+                                                    err.message ||
+                                                    "Request failed with status code 403"
+                                                }`;
                                                 setFormError(msg);
                                             } else {
-                                                setFormError(err.message || "An error occurred while creating the role");
+                                                setFormError(
+                                                    err.message ||
+                                                        "An error occurred while creating the role"
+                                                );
                                             }
                                         })
                                         .finally(() => {
@@ -154,10 +161,16 @@ export default function CreateTagType({
                                         .catch((err) => {
                                             console.log("Update subs error", err);
                                             if (err.status === 403) {
-                                                let msg = `Unable to ${createOrUpdate} role. Error: ${err.message || "Request failed with status code 403"}`;
+                                                const msg = `Unable to ${createOrUpdate} role. Error: ${
+                                                    err.message ||
+                                                    "Request failed with status code 403"
+                                                }`;
                                                 setFormError(msg);
                                             } else {
-                                                setFormError(err.message || "An error occurred while updating the role");
+                                                setFormError(
+                                                    err.message ||
+                                                        "An error occurred while updating the role"
+                                                );
                                             }
                                         })
                                         .finally(() => {

@@ -1,11 +1,10 @@
-/* eslint-disable jsx-a11y/alt-text */
 /*
  * Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { appCache } from "../services/appCache";
-import React, { useState } from "react";
+import React from "react";
 import sanitizeHtml from "sanitize-html";
 
 export function GlobalHeader({ authorizationHeader = false }) {
@@ -14,8 +13,6 @@ export function GlobalHeader({ authorizationHeader = false }) {
     const contentSecurityPolicy = config.contentSecurityPolicy;
     const bannerMessageHtml = config.bannerHtmlMessage;
 
-    //console.log(`config: ${JSON.stringify(config, null, 2)}`)
-
     // Skip CSP meta tag injection during local development. The production CSP is
     // generated for the deployed domain (CloudFront/ALB) and its 'self' directive
     // does not match localhost, causing spurious CSP violations in dev browsers.
@@ -23,13 +20,10 @@ export function GlobalHeader({ authorizationHeader = false }) {
     // response headers or ALB listener attributes), so this meta tag is only
     // needed as a fallback for non-standard deployments.
     const isDevelopment = process.env.NODE_ENV === "development";
-    const [useContentSecurityPolicy] = useState(
-        !isDevelopment && contentSecurityPolicy !== undefined && contentSecurityPolicy !== ""
-    );
+    const useContentSecurityPolicy =
+        !isDevelopment && contentSecurityPolicy !== undefined && contentSecurityPolicy !== "";
 
-    const [useBannerMessageHtml] = useState(
-        bannerMessageHtml !== undefined && bannerMessageHtml !== ""
-    );
+    const useBannerMessageHtml = bannerMessageHtml !== undefined && bannerMessageHtml !== "";
 
     const sanitizedBannerMessage = sanitizeHtml(bannerMessageHtml, {
         allowedTags: ["b", "em", "strong", "u"],

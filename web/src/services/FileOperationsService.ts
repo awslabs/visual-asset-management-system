@@ -66,11 +66,11 @@ export interface PresignedUrlResult {
 export const moveFile = async (
     databaseId: string,
     assetId: string,
-    request: MoveFileRequest,
+    request: MoveFileRequest
 ): Promise<FileOperationResponse> => {
     try {
         const response = await apiClient.post(
-`/database/${databaseId}/assets/${assetId}/moveFile`,
+            `/database/${databaseId}/assets/${assetId}/moveFile`,
             {
                 body: request,
             }
@@ -94,11 +94,11 @@ export const moveFile = async (
 export const copyFile = async (
     databaseId: string,
     assetId: string,
-    request: CopyFileRequest,
+    request: CopyFileRequest
 ): Promise<FileOperationResponse> => {
     try {
         const response = await apiClient.post(
-`/database/${databaseId}/assets/${assetId}/copyFile`,
+            `/database/${databaseId}/assets/${assetId}/copyFile`,
             {
                 body: request,
             }
@@ -122,11 +122,11 @@ export const copyFile = async (
 export const unarchiveFile = async (
     databaseId: string,
     assetId: string,
-    request: UnarchiveFileRequest,
+    request: UnarchiveFileRequest
 ): Promise<FileOperationResponse> => {
     try {
         const response = await apiClient.post(
-`/database/${databaseId}/assets/${assetId}/unarchiveFile`,
+            `/database/${databaseId}/assets/${assetId}/unarchiveFile`,
             {
                 body: request,
             }
@@ -150,11 +150,11 @@ export const unarchiveFile = async (
 export const archiveFile = async (
     databaseId: string,
     assetId: string,
-    request: ArchiveFileRequest,
+    request: ArchiveFileRequest
 ): Promise<FileOperationResponse> => {
     try {
         const response = await apiClient.del(
-`/database/${databaseId}/assets/${assetId}/archiveFile`,
+            `/database/${databaseId}/assets/${assetId}/archiveFile`,
             {
                 body: request,
             }
@@ -177,11 +177,11 @@ export const archiveFile = async (
  */
 export const deleteAssetPreview = async (
     databaseId: string,
-    assetId: string,
+    assetId: string
 ): Promise<DeleteAssetPreviewResponse> => {
     try {
         const response = await apiClient.del(
-`/database/${databaseId}/assets/${assetId}/deleteAssetPreview`,
+            `/database/${databaseId}/assets/${assetId}/deleteAssetPreview`,
             {}
         );
 
@@ -202,7 +202,7 @@ export const deleteAssetPreview = async (
  * Uses the same API as downloadAsset but returns the URLs instead of initiating downloads
  */
 export const generatePresignedUrls = async (
-    request: GeneratePresignedUrlsRequest,
+    request: GeneratePresignedUrlsRequest
 ): Promise<[boolean, PresignedUrlResult[] | string]> => {
     try {
         const { databaseId, assetId, assetVersionId, files } = request;
@@ -229,7 +229,7 @@ export const generatePresignedUrls = async (
                 }
 
                 const response = await apiClient.post(
-`/database/${databaseId}/assets/${assetId}/download`,
+                    `/database/${databaseId}/assets/${assetId}/download`,
                     {
                         body: downloadBody,
                     }

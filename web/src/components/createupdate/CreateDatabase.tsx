@@ -235,14 +235,14 @@ export default function CreateDatabase({
                                             setReload(true);
                                         } else {
                                             // Display the actual error message from the API
-                                            let msg =
+                                            const msg =
                                                 res[1] || `Unable to ${createOrUpdate} database`;
                                             setFormError(msg);
                                         }
                                     })
                                     .catch((err) => {
                                         console.log(`${createOrUpdate} database error`, err);
-                                        let msg =
+                                        const msg =
                                             err.message || `Unable to ${createOrUpdate} database`;
                                         setFormError(msg);
                                     })

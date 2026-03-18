@@ -93,7 +93,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
 
             const getUserId = async () => {
                 try {
-                    let userName = JSON.parse(localStorage.getItem("user")!).username;
+                    const userName = JSON.parse(localStorage.getItem("user")!).username;
                     setUserId(userName);
                 } catch {
                     setUserId("");

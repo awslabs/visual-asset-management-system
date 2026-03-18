@@ -78,7 +78,8 @@ export function MoveFilesModal({
             setError(null);
             // Initialize filename for single file
             if (selectedFiles.length === 1) {
-                const fileName = selectedFiles[0].relativePath.split("/").pop() || selectedFiles[0].displayName;
+                const fileName =
+                    selectedFiles[0].relativePath.split("/").pop() || selectedFiles[0].displayName;
                 setDestFileName(fileName);
             } else {
                 setDestFileName("");
@@ -184,9 +185,8 @@ export function MoveFilesModal({
                     : undefined;
 
             // For single file, pass the custom destination filename
-            const destFileNames = selectedFiles.length === 1
-                ? { [filePaths[0]]: destFileName.trim() }
-                : undefined;
+            const destFileNames =
+                selectedFiles.length === 1 ? { [filePaths[0]]: destFileName.trim() } : undefined;
 
             const results = await processMultipleFileOperations(
                 databaseId,

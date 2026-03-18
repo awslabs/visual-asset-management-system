@@ -671,7 +671,8 @@ export const AssetVersionManager: React.FC = () => {
                                                                     alignItems: "center",
                                                                     gap: "8px",
                                                                     padding: "4px 8px",
-                                                                    backgroundColor: "var(--vams-bg-secondary)",
+                                                                    backgroundColor:
+                                                                        "var(--vams-bg-secondary)",
                                                                     borderRadius: "4px",
                                                                     border: "1px solid var(--vams-border-default)",
                                                                 }}
@@ -747,28 +748,44 @@ export const AssetVersionManager: React.FC = () => {
                                                     <p>The comparison will show:</p>
                                                     <ul>
                                                         <li>
-                                                            <span style={{ color: "var(--vams-color-success)" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-success)",
+                                                                }}
+                                                            >
                                                                 Added files
                                                             </span>{" "}
                                                             - Files present in the second version
                                                             but not in the first
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "var(--vams-color-error)" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-error)",
+                                                                }}
+                                                            >
                                                                 Removed files
                                                             </span>{" "}
                                                             - Files present in the first version but
                                                             not in the second
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "var(--vams-color-info)" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-info)",
+                                                                }}
+                                                            >
                                                                 Modified files
                                                             </span>{" "}
                                                             - Files present in both versions but
                                                             with different content
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "var(--vams-text-secondary)" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-text-secondary)",
+                                                                }}
+                                                            >
                                                                 Unchanged files
                                                             </span>{" "}
                                                             - Files identical in both versions
@@ -787,28 +804,44 @@ export const AssetVersionManager: React.FC = () => {
                                                     </p>
                                                     <ul>
                                                         <li>
-                                                            <span style={{ color: "var(--vams-color-success)" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-success)",
+                                                                }}
+                                                            >
                                                                 Added files
                                                             </span>{" "}
                                                             - New files added since the selected
                                                             version
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "var(--vams-color-error)" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-error)",
+                                                                }}
+                                                            >
                                                                 Removed files
                                                             </span>{" "}
                                                             - Files that existed in the selected
                                                             version but are no longer present
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "var(--vams-color-info)" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-info)",
+                                                                }}
+                                                            >
                                                                 Modified files
                                                             </span>{" "}
                                                             - Files that have been changed since the
                                                             selected version
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "var(--vams-text-secondary)" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-text-secondary)",
+                                                                }}
+                                                            >
                                                                 Unchanged files
                                                             </span>{" "}
                                                             - Files that remain the same

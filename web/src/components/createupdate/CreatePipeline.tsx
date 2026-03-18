@@ -131,14 +131,14 @@ export default function CreatePipeline({
             label: waitForCallbackOptions[0].label,
             value: waitForCallbackOptions[0].value,
         };
-        let initAssetType: string = ".all";
-        let initOutputType: string = ".all";
+        let initAssetType = ".all";
+        let initOutputType = ".all";
         let initDatabase: OptionDefinition = { label: null, value: null };
-        let initLambdaName: string = "";
-        let initSqsQueueUrl: string = "";
-        let initEventBridgeBusArn: string = "";
-        let initEventBridgeSource: string = "";
-        let initEventBridgeDetailType: string = "";
+        let initLambdaName = "";
+        let initSqsQueueUrl = "";
+        let initEventBridgeBusArn = "";
+        let initEventBridgeSource = "";
+        let initEventBridgeDetailType = "";
 
         if (initState) {
             let type = pipelineTypeOptions.find((item) => item.value === initState.pipelineType);
@@ -153,7 +153,7 @@ export default function CreatePipeline({
             initOutputType = initState.outputType || ".all";
             initDatabase = { label: initState.databaseId, value: initState.databaseId };
             try {
-                let obj = JSON.parse(initState.userProvidedResource);
+                const obj = JSON.parse(initState.userProvidedResource);
                 if (obj.resourceType === "Lambda") {
                     initLambdaName = obj.resourceId || "";
                 } else if (obj.resourceType === "SQS") {
@@ -303,7 +303,7 @@ export default function CreatePipeline({
                                             })
                                             .catch((err) => {
                                                 console.log("create pipeline error", err);
-                                                let msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
+                                                const msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
                                                 setFormError(msg);
                                             })
                                             .finally(() => {
@@ -359,7 +359,10 @@ export default function CreatePipeline({
                                     data-testid="pipeline-name"
                                 />
                             </FormField>
-                            <FormField label="Database Name" constraintText="Required. Select the database for this pipeline.">
+                            <FormField
+                                label="Database Name"
+                                constraintText="Required. Select the database for this pipeline."
+                            >
                                 <DatabaseSelector
                                     disabled={
                                         inProgress ||
@@ -701,7 +704,7 @@ export default function CreatePipeline({
                                             })
                                             .catch((err) => {
                                                 console.log("update workflow error", err);
-                                                let msg = `Unable to update workflow. Error: Request failed with status code ${err.response.status}`;
+                                                const msg = `Unable to update workflow. Error: Request failed with status code ${err.response.status}`;
                                                 setFormError(msg);
                                             })
                                             .finally(() => {
@@ -717,7 +720,7 @@ export default function CreatePipeline({
                                             })
                                             .catch((err) => {
                                                 console.log("create pipeline error", err);
-                                                let msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
+                                                const msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
                                                 setFormError(msg);
                                             })
                                             .finally(() => {

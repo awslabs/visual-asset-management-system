@@ -236,13 +236,16 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
     );
 };
 
-export const PreviewThumbnailCell = React.memo(PreviewThumbnailCellInner, (prevProps, nextProps) => {
-    // Compare only data props, not callback references
-    return (
-        prevProps.assetId === nextProps.assetId &&
-        prevProps.databaseId === nextProps.databaseId &&
-        prevProps.assetName === nextProps.assetName
-    );
-});
+export const PreviewThumbnailCell = React.memo(
+    PreviewThumbnailCellInner,
+    (prevProps, nextProps) => {
+        // Compare only data props, not callback references
+        return (
+            prevProps.assetId === nextProps.assetId &&
+            prevProps.databaseId === nextProps.databaseId &&
+            prevProps.assetName === nextProps.assetName
+        );
+    }
+);
 
 export default PreviewThumbnailCell;

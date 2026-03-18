@@ -170,7 +170,7 @@ export const boolPropType = (props, propName) => {
 };
 
 export const objectPropType = (props, propName) => {
-    let testValue = props[propName];
+    const testValue = props[propName];
 
     if (!verifyIsObject(testValue)) {
         return new Error(`Invalid prop ${propName}. Value must be object.`);
@@ -250,7 +250,7 @@ export const typedObjectArrayPropType = function (type, props, propName) {
         return new Error(`Invalid value for ${propName}. Value must be an array.`);
     }
     for (let i = 0; i < testValues.length; i++) {
-        let testValue = testValues[i];
+        const testValue = testValues[i];
         const results = typedObjectPropType(type, null, null, testValue);
         if (results !== null) {
             return results;

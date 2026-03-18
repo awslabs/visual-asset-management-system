@@ -181,7 +181,9 @@ export default function ApiKeys() {
                         onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
                         sortingDisabled={false}
                         filter={
-                            <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                            <div
+                                style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
+                            >
                                 <TextFilter
                                     filteringText={filterText}
                                     filteringAriaLabel="Filter API keys"

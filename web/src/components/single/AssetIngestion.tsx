@@ -183,7 +183,7 @@ export default function AssetIngestion() {
                 throw new Error(responseData || "Failed to complete upload");
             }
 
-            let msg: any = (
+            const msg: any = (
                 <div>
                     <strong>Asset uploaded successfully.</strong>
                     <br />
@@ -313,7 +313,7 @@ export default function AssetIngestion() {
         }
     };
 
-    let defaultPlaceholder = `{
+    const defaultPlaceholder = `{
     "databaseId": "<database-name>",
     "assetName": "<name of asset>",
     "description": "<Enter Asset description here>",

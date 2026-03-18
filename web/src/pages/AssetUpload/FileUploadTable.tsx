@@ -292,7 +292,7 @@ export const FileUploadTable = ({
     // If no custom column definitions are provided, add actions column if needed
     if (!columnDefinitions) {
         // Start with the default column definitions
-        let customColumnDefinitions = [...FileUploadTableColumnDefinitions];
+        const customColumnDefinitions = [...FileUploadTableColumnDefinitions];
 
         // Find the index of the status column to insert version ID before it
         const statusColumnIndex = customColumnDefinitions.findIndex((col) => col.id === "status");

@@ -181,9 +181,7 @@ export function Navigation({
                         throw new Error("webRoutes - " + value[1]);
                     }
 
-                    const allowedRoutes = value.allowedRoutes.map(
-                        (r) => "#" + r.route__path
-                    );
+                    const allowedRoutes = value.allowedRoutes.map((r) => "#" + r.route__path);
 
                     const filtered = filterNavItems(filteredNavItems, allowedRoutes);
                     setNavigationItems(filtered);

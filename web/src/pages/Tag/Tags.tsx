@@ -11,7 +11,7 @@ import CreateTagType from "./CreateTagType";
 import { fetchTags, fetchtagTypes, deleteTag, deleteTagType } from "../../services/APIService";
 import { useEffect, useState } from "react";
 import { Box } from "@cloudscape-design/components";
-var rel;
+let rel;
 
 export const TagsListDefinition = new ListDefinition({
     pluralName: "tags",

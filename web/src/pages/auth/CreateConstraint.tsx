@@ -251,7 +251,7 @@ export default function CreateConstraint({
         groupPermissions: RoleGroupPermission[],
         userPermissions: UserPermission[]
     ): Record<string, string | null> {
-        let response: Record<string, string | null> = {
+        const response: Record<string, string | null> = {
             groupError: null,
             userError: null,
         };
@@ -385,7 +385,7 @@ export default function CreateConstraint({
                                     })
                                     .catch((err) => {
                                         console.log("create auth criteria error", err);
-                                        let msg = `Unable to ${createOrUpdate} constraints. Error: Request failed with status code ${err.response.status}`;
+                                        const msg = `Unable to ${createOrUpdate} constraints. Error: Request failed with status code ${err.response.status}`;
                                         setFormError(msg);
                                     })
                                     .finally(() => {

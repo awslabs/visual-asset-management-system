@@ -441,7 +441,7 @@ const VeerumSceneGraph: React.FC<VeerumSceneGraphProps> = ({
     }, [selectedObject, originalTransforms]);
 
     // Render tree node recursively
-    const renderNode = (node: SceneNode, depth: number = 0): React.ReactNode => {
+    const renderNode = (node: SceneNode, depth = 0): React.ReactNode => {
         const isExpanded = expandedNodes.has(node.id);
         const hasChildren = node.children.length > 0;
         const isSelected = selectedObject?.uuid === node.id;

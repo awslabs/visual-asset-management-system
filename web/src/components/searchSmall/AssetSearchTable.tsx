@@ -129,7 +129,7 @@ export function AssetSearchTable({
     };
 
     // Handle search
-    const handleSearch = async (page: number = 1) => {
+    const handleSearch = async (page = 1) => {
         if (!searchTerm.trim()) {
             setSearchResults([]);
             setShowResults(false);
@@ -172,7 +172,7 @@ export function AssetSearchTable({
                     includeArchived: false,
                 };
 
-                const [success, searchResult] = await searchAssets(body) as [boolean, any];
+                const [success, searchResult] = (await searchAssets(body)) as [boolean, any];
                 if (!success) {
                     throw new Error(searchResult || "Search failed");
                 }

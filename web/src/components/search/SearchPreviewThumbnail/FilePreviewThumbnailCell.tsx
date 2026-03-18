@@ -276,15 +276,18 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
     );
 };
 
-export const FilePreviewThumbnailCell = React.memo(FilePreviewThumbnailCellInner, (prevProps, nextProps) => {
-    // Compare only data props, not callback references
-    return (
-        prevProps.databaseId === nextProps.databaseId &&
-        prevProps.assetId === nextProps.assetId &&
-        prevProps.fileKey === nextProps.fileKey &&
-        prevProps.fileName === nextProps.fileName &&
-        prevProps.fileSize === nextProps.fileSize
-    );
-});
+export const FilePreviewThumbnailCell = React.memo(
+    FilePreviewThumbnailCellInner,
+    (prevProps, nextProps) => {
+        // Compare only data props, not callback references
+        return (
+            prevProps.databaseId === nextProps.databaseId &&
+            prevProps.assetId === nextProps.assetId &&
+            prevProps.fileKey === nextProps.fileKey &&
+            prevProps.fileName === nextProps.fileName &&
+            prevProps.fileSize === nextProps.fileSize
+        );
+    }
+);
 
 export default FilePreviewThumbnailCell;
