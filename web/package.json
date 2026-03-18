@@ -77,6 +77,7 @@
     "scripts": {
         "start": "vite",
         "build": "vite build",
+        "build.lowmem": "node --max-old-space-size=4096 node_modules/vite/bin/vite.js build --sourcemap false",
         "preview": "vite preview",
         "test": "jest --coverage",
         "postinstall": "node ./customInstalls/needletools-usd-viewer/usdViewerInstall.js && node ./customInstalls/veerum/veerumInstall.js && node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/threejs/install.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js"

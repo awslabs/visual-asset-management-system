@@ -35,6 +35,32 @@ The web app supports dark/light theme via a Settings dropdown in the top navigat
 
 ![Web App Network ALB](./diagrams/web_app_network_alb.jpeg)
 
+#### Web Application Customization
+
+Organizations can customize the web application by modifying `web/src/config.ts`. This is the single configuration file for all web-level branding and development settings.
+
+| Setting | Description | Default |
+|---|---|---|
+| `APP_TITLE` | Browser tab title | `"VAMS - Visual Asset Management System"` |
+| `APP_NAME` | Short name used in footer and logo alt text | `"Visual Asset Management System"` |
+| `FOOTER_COPYRIGHT` | Copyright text in the page footer. Set to empty string to hide the footer. | `"© 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved."` |
+| `CUSTOMER_LOGO` | Optional URL to a custom logo for the sidebar navigation header. Leave undefined to use the default VAMS logo. Supports relative paths or absolute URLs. | `undefined` |
+| `DEV_API_ENDPOINT` | API endpoint for local development. Set to empty string to use the same origin (production). Set to an API Gateway URL or `http://localhost:8002/` for dev. | `""` |
+
+Example customization:
+
+```typescript
+const config: VAMSConfig = {
+    APP_TITLE: "My Company - Asset Manager",
+    APP_NAME: "My Company Asset Manager",
+    FOOTER_COPYRIGHT: "© 2026, My Company. All rights reserved.",
+    CUSTOMER_LOGO: "/my-company-logo.png",
+    DEV_API_ENDPOINT: "",
+};
+```
+
+Display names for entities like "Asset", "Database", and "Comment" can be customized in `web/src/synonyms.tsx`.
+
 ### Queue Systems
 
 ![Data Queue Flows](./diagrams/dataQueues_MainFlow.png)
@@ -121,7 +147,9 @@ source ~/.bash_profile # for conda
 cd ./backend
 conda env create --name vams --file=vams-local.conda.yaml -y
 conda activate vams
-USE_LOCAL_MOCKS=true python3 backend/localDev_api_server.py # port 8002 # powershell: $env:USE_LOCAL_MOCKS = "true"
+export USE_LOCAL_MOCKS=true  # powershell: $env:USE_LOCAL_MOCKS = "true"
+export COGNITO_AUTH_ENABLED=false # or true if testing cognito auth # powershell: $env:COGNITO_AUTH_ENABLED = "true"
+python3 backend/localDev_api_server.py # port 8002
 ```
 
 Terminal 2 (Running mocked auth server):

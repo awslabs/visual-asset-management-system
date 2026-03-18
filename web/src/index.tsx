@@ -13,8 +13,12 @@ import "./styles/index.scss";
 import "./styles/theme.css";
 import reportWebVitals from "./reportWebVitals";
 import Auth from "./FedAuth/Auth";
+import config from "./config";
 
 window.LOG_LEVEL = "INFO";
+
+// Set browser tab title from config
+document.title = config.APP_TITLE;
 
 const App = React.lazy(() => import("./App"));
 ReactDOM.render(

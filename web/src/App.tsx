@@ -13,6 +13,8 @@ import { AppRoutes } from "./routes";
 import logoWhite from "./resources/img/logo_white.png";
 import "@aws-amplify/ui-react/styles.css";
 import { useThemeSettings } from "./hooks/useThemeSettings";
+import { PageFooter } from "./authenticator/Footer";
+import config from "./config";
 
 const HeaderPortal = ({ children }) => {
     const domNode = document.querySelector("#headerWrapper");
@@ -72,7 +74,7 @@ function App() {
                         href: "/",
                         logo: {
                             src: logoWhite,
-                            alt: "Visual Asset Management System",
+                            alt: config.APP_NAME,
                         },
                     }}
                     utilities={[
@@ -86,8 +88,8 @@ function App() {
                                 if (id === "theme-dark") setTheme("dark");
                             },
                             items: [
-                                { id: "theme-light", text: "Light Theme" },
-                                { id: "theme-dark", text: "Dark Theme" },
+                                { id: "theme-light", text: theme === "light" ? "✓ Light Theme" : "Light Theme" },
+                                { id: "theme-dark", text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme" },
                             ],
                         },
                         {
@@ -115,6 +117,7 @@ function App() {
                     setNavigationOpen={setNavigationOpen}
                 />
             </HashRouter>
+            <PageFooter />
         </>
     );
 }

@@ -287,6 +287,8 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                 path={path}
                 element={
                     <AppLayout
+                        headerSelector="#headerWrapper"
+                        footerSelector="#appFooter"
                         disableContentPaddings={navigationOpen}
                         content={
                             loading ? (

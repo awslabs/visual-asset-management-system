@@ -13,6 +13,7 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
     databaseId,
     assetKey,
+    versionId,
     assetVersionId,
 }) => {
     const engineElement = useRef<HTMLDivElement>(null);

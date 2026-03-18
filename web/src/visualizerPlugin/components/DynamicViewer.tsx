@@ -3,8 +3,47 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useState, useEffect, useRef } from "react";
-import { Container, Grid, Header, Spinner, Box } from "@cloudscape-design/components";
+import React, { Suspense, useState, useEffect, useRef, Component } from "react";
+import { Container, Grid, Header, Spinner, Box, Alert } from "@cloudscape-design/components";
+
+/**
+ * Error boundary that catches render errors from viewer plugins.
+ * Prevents viewer crashes from propagating to the file manager or parent components.
+ */
+class ViewerErrorBoundary extends Component<
+    { children: React.ReactNode },
+    { hasError: boolean; error: Error | null }
+> {
+    constructor(props: { children: React.ReactNode }) {
+        super(props);
+        this.state = { hasError: false, error: null };
+    }
+
+    static getDerivedStateFromError(error: Error) {
+        return { hasError: true, error };
+    }
+
+    componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+        console.error("Viewer plugin render error:", error, errorInfo);
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return (
+                <Box padding="l" textAlign="center">
+                    <Alert type="error" header="Viewer Error">
+                        The viewer encountered an error and could not render.
+                        <br />
+                        <Box variant="small" padding={{ top: "xs" }}>
+                            {this.state.error?.message || "Unknown error"}
+                        </Box>
+                    </Alert>
+                </Box>
+            );
+        }
+        return this.props.children;
+    }
+}
 import {
     PluginRegistry,
     getFileExtensions,
@@ -257,6 +296,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                     </Grid>
                 }
             >
+                <ViewerErrorBoundary>
                 <Suspense
                     fallback={
                         <Box textAlign="center" padding="xl">
@@ -356,6 +396,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                             )}
                     </div>
                 </Suspense>
+                </ViewerErrorBoundary>
             </Container>
         </div>
     );

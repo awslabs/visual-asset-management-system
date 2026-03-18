@@ -9,6 +9,8 @@ body {
     overflow-x: hidden;
     background-color: var(--vams-bg-primary);
     color: var(--vams-text-primary);
+    margin: 0;
+    padding: 0;
 }
 
 /* Firefox-specific rule to enable scrolling */
@@ -25,7 +27,6 @@ body {
         "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    padding-bottom: 20px;
     background-color: var(--vams-bg-primary);
     color: var(--vams-text-primary);
 }
@@ -56,12 +57,14 @@ code {
 }
 
 #root {
-    margin-top: 0px;
+    margin: 0;
+    padding: 0;
 }
 
 #root div[class^="awsui_drawer-content"] {
     top: 56px !important;
 }
+
 
 #view-edit-asset-right-column.wide {
     display: block;

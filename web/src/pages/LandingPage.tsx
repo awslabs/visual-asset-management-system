@@ -334,7 +334,7 @@ const LandingPage = (props) => {
                                     </Header>
                                 }
                             >
-                                Coming Soon
+                                
                             </Container>
                         </SpaceBetween>
                     </div>

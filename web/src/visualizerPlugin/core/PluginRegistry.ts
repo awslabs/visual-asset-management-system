@@ -37,6 +37,16 @@ export class PluginRegistry {
         return PluginRegistry.instance;
     }
 
+    // Lazy-loaded viewer component modules (Vite creates chunks for each at build time)
+    private static viewerModules = import.meta.glob<{ default: React.ComponentType<ViewerPluginProps> }>(
+        "../viewers/**/*Component.tsx"
+    );
+
+    // Lazy-loaded dependency manager modules
+    private static depModules = import.meta.glob<any>(
+        "../viewers/**/dependencies.ts"
+    );
+
     // Dynamic component loader using manifest constants
     private async loadViewerComponent(
         componentPath: string
@@ -49,8 +59,25 @@ export class PluginRegistry {
             );
         }
 
-        // Use dynamic import with the relative path from manifest (already includes ./ prefix)
-        const module = await import(`../viewers/${relativePath}`);
+        // Find the matching glob entry — glob keys are relative paths like "../viewers/XPlugin/XComponent.tsx"
+        const globKey = `../viewers/${relativePath}.tsx`;
+        const loader = PluginRegistry.viewerModules[globKey];
+
+        if (!loader) {
+            // Fallback: try without extension or with different patterns
+            const matchingKey = Object.keys(PluginRegistry.viewerModules).find(
+                (key) => key.includes(relativePath)
+            );
+            if (matchingKey) {
+                const module = await PluginRegistry.viewerModules[matchingKey]();
+                return module.default;
+            }
+            throw new Error(
+                `Viewer module not found for: ${relativePath}. Available: ${Object.keys(PluginRegistry.viewerModules).join(", ")}`
+            );
+        }
+
+        const module = await loader();
         return module.default;
     }
 
@@ -66,8 +93,22 @@ export class PluginRegistry {
             return null;
         }
 
-        // Use dynamic import with the relative path from manifest (already includes ./ prefix)
-        return await import(`../viewers/${relativePath}`);
+        // Find the matching glob entry
+        const globKey = `../viewers/${relativePath}.ts`;
+        const loader = PluginRegistry.depModules[globKey];
+
+        if (!loader) {
+            const matchingKey = Object.keys(PluginRegistry.depModules).find(
+                (key) => key.includes(relativePath)
+            );
+            if (matchingKey) {
+                return await PluginRegistry.depModules[matchingKey]();
+            }
+            console.warn(`Dependency module not found for: ${relativePath}`);
+            return null;
+        }
+
+        return await loader();
     }
 
     async initialize(): Promise<void> {

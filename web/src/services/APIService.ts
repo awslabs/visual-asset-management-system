@@ -8,21 +8,28 @@ import { default as vamsConfig } from "../config";
 
 export const getAmplifyConfig = async () => {
     console.log("getAmplifyConfig");
+    const baseUrl = vamsConfig.DEV_API_ENDPOINT === ""
+        ? window.location.origin
+        : vamsConfig.DEV_API_ENDPOINT;
+    let amplifyConfigUrl: URL;
     try {
-        const amplifyConfigUrl = new URL(
-            "/api/amplify-config",
-            vamsConfig.DEV_API_ENDPOINT === ""
-                ? window.location.origin
-                : vamsConfig.DEV_API_ENDPOINT
-        );
-        console.log(amplifyConfigUrl.href);
+        amplifyConfigUrl = new URL("/api/amplify-config", baseUrl);
+    } catch (error) {
+        console.error("getAmplifyConfig: Invalid base URL", baseUrl);
+        return { _configError: true, _errorMessage: `Invalid API endpoint URL: ${baseUrl}`, _attemptedUrl: baseUrl };
+    }
+
+    console.log(amplifyConfigUrl.href);
+    try {
         const response = await fetch(amplifyConfigUrl);
 
         if (!response.ok) {
             console.error("getAmplifyConfig: HTTP error", response.status, response.statusText);
-            // Return null on error - don't return corrupted data
-            // This allows the caller to detect the error and not cache bad data
-            return null;
+            return {
+                _configError: true,
+                _errorMessage: `Unable to reach the API configuration endpoint. The server returned HTTP ${response.status} (${response.statusText}).`,
+                _attemptedUrl: amplifyConfigUrl.href,
+            };
         }
 
         const config = await response.json();
@@ -30,15 +37,21 @@ export const getAmplifyConfig = async () => {
         // Validate that we got a proper config object (not an error response)
         if (!config || typeof config !== "object" || Array.isArray(config)) {
             console.error("getAmplifyConfig: Invalid config response", config);
-            return null;
+            return {
+                _configError: true,
+                _errorMessage: "The API returned an invalid configuration response.",
+                _attemptedUrl: amplifyConfigUrl.href,
+            };
         }
 
         return config;
-    } catch (error) {
+    } catch (error: any) {
         console.error("getAmplifyConfig: Fetch error", error);
-        // Return null on error - don't return corrupted data like [false, error.message]
-        // This prevents caching invalid data that would cause crashes
-        return null;
+        return {
+            _configError: true,
+            _errorMessage: `Unable to connect to the API at ${amplifyConfigUrl.href}. ${error?.message || "Network error or server unreachable."}`,
+            _attemptedUrl: amplifyConfigUrl.href,
+        };
     }
 };
 

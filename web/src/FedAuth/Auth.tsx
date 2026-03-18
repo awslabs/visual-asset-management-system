@@ -27,8 +27,9 @@ import {
 
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import loginBgImageSrc from "../resources/img/login_bg.png";
-import logoDarkImageSrc from "../resources/img/logo_dark.svg";
+import logoDarkImageSrc from "../../logo_dark.png";
 
 import LoadingScreen from "../components/loading/LoadingScreen";
 import { Alert } from "@cloudscape-design/components";
@@ -38,12 +39,12 @@ import { Heading, useTheme } from "@aws-amplify/ui-react";
 
 import { GlobalHeader } from "./../common/GlobalHeader";
 import { Header } from "./../authenticator/Header";
-import { Footer } from "./../authenticator/Footer";
+import { Footer, PageFooter } from "./../authenticator/Footer";
 import { SignInHeader } from "./../authenticator/SignInHeader";
 import { SignInFooter } from "./../authenticator/SignInFooter";
 import { useThemeSettings } from "../hooks/useThemeSettings";
 import { TopNavigation } from "@cloudscape-design/components";
-import logoWhite from "../resources/img/logo_white.png";
+import logoWhite from "../../logo_white.png";
 
 /**
  * Additional configuration needed to use federated identities
@@ -223,9 +224,10 @@ const cognitoAuthenticatorComponents = {
 
 interface CognitoFederatedLoginProps {
     onLogin: () => void;
+    logoSrc?: string;
 }
 
-const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin }) => {
+const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin, logoSrc }) => {
     const { tokens } = useTheme();
 
     return (
@@ -234,9 +236,9 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin }) => {
                 <div className={styles.centeredBox}>
                     <Heading level={3} padding={`${tokens.space.xl} ${tokens.space.xl} 0`}>
                         <img
-                            style={{ width: "100%" }}
-                            src={loginLogoSrc}
-                            alt="Visual Asset Management System Logo"
+                            style={{ width: "100%", maxWidth: "390px" }}
+                            src={logoSrc || logoDarkImageSrc}
+                            alt={`${vamsConfig.APP_NAME} Logo`}
                         />
                     </Heading>
                     <button
@@ -284,7 +286,7 @@ const LoginHeader: React.FC = () => {
                     href: "/",
                     logo: {
                         src: logoWhite,
-                        alt: "Visual Asset Management System",
+                        alt: vamsConfig.APP_NAME,
                     },
                 }}
                 utilities={[
@@ -298,8 +300,8 @@ const LoginHeader: React.FC = () => {
                             if (id === "theme-dark") setTheme("dark");
                         },
                         items: [
-                            { id: "theme-light", text: "Light Theme" },
-                            { id: "theme-dark", text: "Dark Theme" },
+                            { id: "theme-light", text: theme === "light" ? "✓ Light Theme" : "Light Theme" },
+                            { id: "theme-dark", text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme" },
                         ],
                     },
                 ]}
@@ -343,7 +345,21 @@ const Auth: React.FC<AuthProps> = (props) => {
     }
 
     const { theme } = useThemeSettings();
-    const loginLogoSrc = theme === "dark" ? logoWhite : logoDarkImageSrc;
+    const [loginLogoSrc, setLoginLogoSrc] = useState(
+        document.body.classList.contains("awsui-dark-mode") ? logoWhite : logoDarkImageSrc
+    );
+
+    // Watch for theme changes via body class mutation to keep logo in sync
+    useEffect(() => {
+        const updateLogo = () => {
+            const isDark = document.body.classList.contains("awsui-dark-mode");
+            setLoginLogoSrc(isDark ? logoWhite : logoDarkImageSrc);
+        };
+        updateLogo();
+        const observer = new MutationObserver(updateLogo);
+        observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        return () => observer.disconnect();
+    }, []);
 
     const [config, setConfig] = useState(appCache.getItem("config"));
     let [authError, setauthError] = useState<string | null>(() =>
@@ -363,13 +379,18 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Fetch && Setup Initial global configurations
     useEffect(() => {
         if (config) {
+            // If config is an error object, don't process further — the error page will render
+            if (config._configError) {
+                return;
+            }
+
             // Validate that config is a proper object with required fields
             // This prevents crashes from corrupted cache data (e.g., from interrupted API calls)
+            // Note: region can be empty for external IDP configurations (no Cognito)
             if (
                 typeof config !== "object" ||
                 Array.isArray(config) ||
-                !config.api ||
-                !config.region
+                !config.api
             ) {
                 console.error("Invalid config detected, clearing cache and refetching:", config);
                 appCache.removeItem("config");
@@ -404,8 +425,12 @@ const Auth: React.FC<AuthProps> = (props) => {
             configureAmplify(config, setAmpInit);
         } else {
             getAmplifyConfig().then(async (fetchedConfig) => {
-                // Only cache and set config if we got a valid response
-                // getAmplifyConfig now returns null on error instead of corrupted data
+                // Check if getAmplifyConfig returned an error object
+                if (fetchedConfig?._configError) {
+                    setConfig(fetchedConfig);
+                    return;
+                }
+                // Validate we got a proper config with required fields
                 if (
                     fetchedConfig &&
                     typeof fetchedConfig === "object" &&
@@ -416,11 +441,10 @@ const Auth: React.FC<AuthProps> = (props) => {
                     setConfig(fetchedConfig);
                 } else {
                     console.error("Failed to fetch valid config from API:", fetchedConfig);
-                    // Set config to a special error state to show the error page
                     setConfig({
                         _configError: true,
                         _errorMessage:
-                            "Failed to load VAMS configuration. Please refresh the page or contact your administrator.",
+                            "The API returned a configuration response but it is missing required fields (e.g., 'api' endpoint).",
                     });
                 }
             });
@@ -730,23 +754,24 @@ const Auth: React.FC<AuthProps> = (props) => {
     // Show error page if config failed to load
     if (config._configError) {
         return (
-            <>
-                <GlobalHeader authorizationHeader={true} />
+            <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+                <LoginHeader />
                 <div
                     style={{
+                        flex: 1,
                         display: "flex",
-                        alignItems: "center",
+                        alignItems: "flex-start",
                         justifyContent: "center",
-                        minHeight: "80vh",
+                        paddingTop: "5vh",
                     }}
                 >
                     <div className={styles.container}>
                         <div className={styles.centeredBox}>
                             <Heading level={3}>
                                 <img
-                                    style={{ width: "100%" }}
+                                    style={{ width: "100%", maxWidth: "390px" }}
                                     src={loginLogoSrc}
-                                    alt="Visual Asset Management System Logo"
+                                    alt={`${vamsConfig.APP_NAME} Logo`}
                                 />
                             </Heading>
                             <Alert
@@ -796,7 +821,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                         }}
                     />
                 </div>
-            </>
+                <PageFooter />
+            </div>
         );
     }
 
@@ -817,46 +843,49 @@ const Auth: React.FC<AuthProps> = (props) => {
     //External OAUTH Login Page Return
     if (window.DISABLE_COGNITO === true && !isLoggedIn && ampInit) {
         return (
-            <>
+            <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
                 <LoginHeader />
                 <GlobalHeader authorizationHeader={true} />
                 <div
                     style={{
+                        flex: 1,
                         display: "flex",
-                        alignItems: "center",
+                        alignItems: "flex-start",
                         justifyContent: "center",
+                        paddingTop: "5vh",
                     }}
                 >
                     <div className={styles.container}>
                         <div className={styles.centeredBox}>
                             <Heading level={3}>
                                 <img
-                                    style={{ width: "100%" }}
+                                    style={{ width: "100%", maxWidth: "390px" }}
                                     src={loginLogoSrc}
-                                    alt="Visual Asset Management System Logo"
+                                    alt={`${vamsConfig.APP_NAME} Logo`}
                                 />
                             </Heading>
-                            <Button variant="primary" onClick={() => handleExternalOauthSignIn()}>
-                                Log in with SSO
-                            </Button>
-                            {config.externalOAuthIdpScopeMfa != undefined &&
-                            config.externalOAuthIdpScopeMfa != "undefined" &&
-                            config.externalOAuthIdpScopeMfa != "" ? (
-                                <>
-                                    <Box
-                                        fontWeight="normal"
-                                        padding={{ top: "xxs", bottom: "xxs" }}
-                                    >
-                                        <span>or</span>
-                                    </Box>
-                                    <Button
-                                        variant="normal"
-                                        onClick={() => handleExternalOauthSignIn(true)}
-                                    >
-                                        Log in with MFA
+                            <Box padding={{ top: "l" }}>
+                                <SpaceBetween direction="vertical" size="s" alignItems="center">
+                                    <Button variant="primary" onClick={() => handleExternalOauthSignIn()}>
+                                        Log in with SSO
                                     </Button>
-                                </>
-                            ) : null}
+                                    {config.externalOAuthIdpScopeMfa &&
+                                    config.externalOAuthIdpScopeMfa !== "undefined" &&
+                                    config.externalOAuthIdpScopeMfa.trim() !== "" ? (
+                                        <>
+                                            <Box fontWeight="normal">
+                                                <span>or</span>
+                                            </Box>
+                                            <Button
+                                                variant="normal"
+                                                onClick={() => handleExternalOauthSignIn(true)}
+                                            >
+                                                Log in with MFA
+                                            </Button>
+                                        </>
+                                    ) : null}
+                                </SpaceBetween>
+                            </Box>
                         </div>
                         {authError ? (
                             <div className={styles.alertError}>
@@ -878,7 +907,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                         }}
                     />
                 </div>
-            </>
+                <PageFooter />
+            </div>
         );
     }
 
@@ -887,34 +917,49 @@ const Auth: React.FC<AuthProps> = (props) => {
         if (window.COGNITO_FEDERATED === false) {
             //Non-federated login
             return (
-                <>
+                <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
                     <LoginHeader />
                     <GlobalHeader authorizationHeader={true} />
-                    <Authenticator
-                        components={cognitoAuthenticatorComponents}
-                        loginMechanisms={["username"]}
-                        hideSignUp={true}
-                    />
-                </>
+                    <div
+                        style={{
+                            flex: 1,
+                            display: "flex",
+                            justifyContent: "center",
+                            alignItems: "flex-start",
+                            paddingTop: "5vh",
+                        }}
+                    >
+                        <Authenticator
+                            components={cognitoAuthenticatorComponents}
+                            loginMechanisms={["username"]}
+                            hideSignUp={true}
+                        />
+                    </div>
+                    <PageFooter />
+                </div>
             );
         } else {
             //Federated Login
             return (
-                <>
+                <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
                     <LoginHeader />
                     <GlobalHeader authorizationHeader={true} />
-                    <FedLoginBox
-                        onLogin={() =>
-                            signInWithRedirect({
-                                provider: {
-                                    custom:
-                                        config.cognitoFederatedConfig
-                                            ?.customFederatedIdentityProviderName || "",
-                                },
-                            })
-                        }
-                    />
-                </>
+                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <FedLoginBox
+                            logoSrc={loginLogoSrc}
+                            onLogin={() =>
+                                signInWithRedirect({
+                                    provider: {
+                                        custom:
+                                            config.cognitoFederatedConfig
+                                                ?.customFederatedIdentityProviderName || "",
+                                    },
+                                })
+                            }
+                        />
+                    </div>
+                    <PageFooter />
+                </div>
             );
         }
     }

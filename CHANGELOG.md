@@ -28,8 +28,9 @@ The website overhaul may cause a high number of merge conflicts for any forked r
 
 ### Features
 -  **Web** Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default. This overhaul required refactoring of the API call and cache system across all web files. 
+    -   Added more website custommization configuration into `config.ts`
     -   Refactored most .js files to .ts or .tsx
-    -   Moved/consolidated all API calls to service files in the web /service/ folder.
+    -   Moved/consolidated all API calls to service files in the web /service/ folder
     -   Fixed certain ilenames that followed old naming standards
     -   Further removed deprecated pages/files that were no longer referenced
 -   **Pipeline** Pipelines and Workflows now have an additional option to launch pipelines through SQS and EventBridge, this compliments the existing Lambda option. See `DeveloperGuide.md` for more information on how to implement.
@@ -93,6 +94,7 @@ The website overhaul may cause a high number of merge conflicts for any forked r
 
 ### Chores
 
+-  **Web** Added a default footer message, changed login page layout based on new refactor
 -  **Web** Refined Assets and Files search UI to support column resizing, shorter and better column names, and some text wrapping
 -   Refactored the Pipelines and Workflows API backend to now have proper request/response models, better input validation, and now follows the new backend standard set in v2.2. This is in prepartion for a larger pipeline/workflow overhaul.
 -   Created `CLOUDFRONTDEPLOY` feature enablement flag to let the front-end know the type of web deployment the website is being served under

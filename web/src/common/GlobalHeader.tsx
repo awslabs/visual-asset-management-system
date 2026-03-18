@@ -10,6 +10,7 @@ import sanitizeHtml from "sanitize-html";
 
 export function GlobalHeader({ authorizationHeader = false }) {
     const config = appCache.getItem("config");
+    if (!config) return null;
     const contentSecurityPolicy = config.contentSecurityPolicy;
     const bannerMessageHtml = config.bannerHtmlMessage;
 

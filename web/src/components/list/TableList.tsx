@@ -8,7 +8,6 @@ import PropTypes from "prop-types";
 import { useCollection } from "@cloudscape-design/collection-hooks";
 import {
     Button,
-    Grid,
     Header,
     Pagination,
     Select,
@@ -381,19 +380,22 @@ export default function TableList(props) {
                 selectionType={"multi"}
                 pagination={<Pagination {...paginationProps} />}
                 filter={
-                    <Grid
-                        gridDefinition={[
-                            { colspan: { default: "7" } },
-                            { colspan: { default: "5" } },
-                        ]}
+                    <div
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            flexWrap: "wrap",
+                        }}
                     >
                         <div
                             id="textFilterCapture"
                             style={{
-                                display: "inline-flex",
+                                display: "flex",
                                 alignItems: "center",
                                 gap: "8px",
-                                maxWidth: "100%",
+                                flex: "1 1 250px",
+                                minWidth: "200px",
                             }}
                         >
                             <TextFilter
@@ -412,23 +414,20 @@ export default function TableList(props) {
                         </div>
                         <div
                             style={{
-                                display: "inline-flex",
+                                display: "flex",
                                 alignItems: "center",
                                 gap: "8px",
-                                float: "right",
+                                flexWrap: "wrap",
                             }}
                         >
                             {customFilterControls}
-                            <Grid
-                                gridDefinition={filteredFilterColumns.map((filterColumn, i) => {
-                                    return {
-                                        colspan: {
-                                            default: String(
-                                                Math.floor(12 / (filterColumn.length + 1))
-                                            ),
-                                        },
-                                    };
-                                })}
+                            <div
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                    flexWrap: "wrap",
+                                }}
                             >
                                 {filteredFilterColumns.map((filterColumn, i) => {
                                     const selectedValue = activeFilters[filterColumn.name];
@@ -500,9 +499,9 @@ export default function TableList(props) {
                                             />
                                         );
                                 })}
-                            </Grid>
+                            </div>
                         </div>
-                    </Grid>
+                    </div>
                 }
             />
             <DeleteModal

@@ -84,6 +84,7 @@ export default defineConfig({
         outDir: "dist",
         sourcemap: true,
         target: "es2020",
+        chunkSizeWarningLimit: 1500, // Large third-party libs: maplibre-gl (~1MB), pdf.worker (~1MB), jodit (~870KB)
         rollupOptions: {
             // Stub out @aws-amplify/geo — it's a transitive dep from
             // @aws-amplify/ui-react v5's maplibre-gl-js-amplify that
