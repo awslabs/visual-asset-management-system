@@ -55,6 +55,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     return (
         <ErrorBoundary componentName="Tabbed Container">
             <Container>
+                <div style={{ marginBottom: "-20px" }}>
                 <Tabs
                     activeTabId={activeTabId}
                     onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
@@ -135,6 +136,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                         },
                     ]}
                 />
+                </div>
             </Container>
         </ErrorBoundary>
     );

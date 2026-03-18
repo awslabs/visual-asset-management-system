@@ -96,6 +96,20 @@
     background-color: var(--vams-bg-primary);
 }
 
+/* VNTANA viewer — always force light mode on UI overlay controls */
+.vntana-viewer-root,
+.vntana-viewer-root * {
+    color-scheme: light;
+}
+
+.awsui-dark-mode .vntana-viewer-root button,
+.awsui-dark-mode .vntana-viewer-root select,
+.awsui-dark-mode .vntana-viewer-root input,
+.awsui-dark-mode .vntana-viewer-root label,
+.awsui-dark-mode .vntana-viewer-root span {
+    color: #000716;
+}
+
 /* Dark mode - activated by Cloudscape's applyMode(Mode.Dark) */
 .awsui-dark-mode,
 :root.awsui-dark-mode {

@@ -232,11 +232,13 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
     return (
         <div
             ref={containerRef}
+            className="vntana-viewer-root"
             style={{
                 width: "100%",
                 height: "100%",
                 backgroundColor: "#1a1a1a",
                 position: "relative",
+                colorScheme: "light",
             }}
         >
             {/* Loading overlay */}

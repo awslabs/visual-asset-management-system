@@ -65,6 +65,8 @@ export interface DynamicViewerProps {
     isPreviewMode?: boolean;
     onDeletePreview?: () => void;
     hideFullscreenControls?: boolean;
+    /** "viewport" uses calc(100vh - 300px) for modals, "container" uses 100% to fill parent */
+    sizingMode?: "viewport" | "container";
 }
 
 export const DynamicViewer: React.FC<DynamicViewerProps> = ({
@@ -78,6 +80,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     isPreviewMode = false,
     onDeletePreview,
     hideFullscreenControls = false,
+    sizingMode = "viewport",
 }) => {
     const [selectedViewerId, setSelectedViewerId] = useState<string | null>(null);
     const [compatibleViewers, setCompatibleViewers] = useState<ViewerPluginMetadata[]>([]);
@@ -223,63 +226,56 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         };
     }, []);
 
-    // Show loading state
-    if (!registryInitialized || loading || viewerLoading) {
-        return (
-            <Container>
-                <Box textAlign="center" padding="xl">
-                    <Spinner size="large" />
-                    <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
-                        {!registryInitialized
-                            ? "Initializing viewers..."
-                            : viewerLoading
-                            ? "Loading viewer component..."
-                            : "Loading viewer..."}
-                    </Box>
-                </Box>
-            </Container>
-        );
-    }
+    // Determine the content to show inside the viewer container
+    const isShowingViewer = registryInitialized && !loading && !viewerLoading && !error && compatibleViewers.length > 0;
 
-    // Show error state
-    if (error) {
-        return (
-            <Container>
-                <Box textAlign="center" padding="xl">
-                    <Box variant="h3" color="text-status-error">
-                        Viewer Error
+    const renderStatusContent = () => {
+        if (!registryInitialized || loading || viewerLoading) {
+            return (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px" }}>
+                    <Box textAlign="center">
+                        <Spinner size="large" />
+                        <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
+                            {!registryInitialized ? "Initializing viewers..." : viewerLoading ? "Loading viewer component..." : "Loading viewer..."}
+                        </Box>
                     </Box>
-                    <Box variant="p" color="text-status-error" margin={{ top: "s" }}>
-                        {error}
+                </div>
+            );
+        }
+        if (error) {
+            return (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px" }}>
+                    <Box textAlign="center">
+                        <Box variant="h3" color="text-status-error">Viewer Error</Box>
+                        <Box variant="p" color="text-status-error" margin={{ top: "s" }}>{error}</Box>
                     </Box>
-                </Box>
-            </Container>
-        );
-    }
-
-    // Show no viewers available
-    if (compatibleViewers.length === 0) {
-        return (
-            <Container>
-                <Box textAlign="center" padding="xl">
-                    <Box variant="h3">No Viewers Available</Box>
-                    <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
-                        No compatible viewers found for the selected file(s).
+                </div>
+            );
+        }
+        if (compatibleViewers.length === 0) {
+            return (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px" }}>
+                    <Box textAlign="center">
+                        <Box variant="h3">No Viewers Available</Box>
+                        <Box variant="p" color="text-status-info" margin={{ top: "s" }}>No compatible viewers found for the selected file(s).</Box>
                     </Box>
-                </Box>
-            </Container>
-        );
-    }
+                </div>
+            );
+        }
+        return null;
+    };
 
     return (
-        <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column" }}>
+        <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <Container
+                fitHeight={true}
+                disableContentPaddings={sizingMode === "container"}
                 header={
                     <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
-                        <Box margin={{ bottom: "m" }}>
+                        <Box>
                             <Header variant="h2">Visualizer</Header>
                         </Box>
-                        <Box textAlign="right" margin={{ bottom: "m" }}>
+                        <Box textAlign="right">
                             {showViewerSelector && compatibleViewers.length > 0 && (
                                 <ViewerSelector
                                     viewers={compatibleViewers.map((metadata) => ({
@@ -307,6 +303,8 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                         </Box>
                     }
                 >
+                    {!isShowingViewer ? renderStatusContent() : (
+                    <div style={sizingMode === "container" ? { padding: "2px", height: "100%", boxSizing: "border-box", overflow: "hidden" } : { height: "100%" }}>
                     <div
                         className={`visualizer-container ${
                             loadedViewer
@@ -314,9 +312,9 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                 : ""
                         }`}
                         style={{
-                            height: "calc(100vh - 300px)", // Use viewport height minus space for modal header/footer/container header
+                            height: sizingMode === "container" ? "100%" : "calc(100vh - 300px)",
                             width: "100%",
-                            //minHeight: '400px', // Fallback minimum height
+                            ...(sizingMode === "container" ? { background: "none", marginTop: 0 } : {}),
                         }}
                     >
                         <div
@@ -395,6 +393,8 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                 </div>
                             )}
                     </div>
+                    </div>
+                    )}
                 </Suspense>
                 </ViewerErrorBoundary>
             </Container>

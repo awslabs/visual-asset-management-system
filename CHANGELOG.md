@@ -65,10 +65,13 @@ The website overhaul may cause a high number of merge conflicts for any forked r
     -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions (and asset sub-tables)
 -   Added new API Key system to allow for the creation of API Keys through API, CLI, and the website (`API Key Management`). This will provide the ability to issue upstream or downstream API keys to applications to use VAMS. API Keys are assigned a user ID owner it will impersonate (both for user id used and roles applied). See the `DeveloeprGuide.md` for more information on how to generate these API keys and use them.
 -   **Web** Updated the web navigation to split out `Admin - Auth` into its own admin navigation section and all others to `Admin - Data`. Removed "Asset Ingestion" from the admin menus as this web page is now deprecated although still exists for direct navigation, as permissions allow.
--   **Web** Database listing page now supports viewing/modifying metadata on databases (backend/CLI implemented for databases in v2.4)
--   **Web** Database listing page now supports mini-map views and display toggle (off by default) when LocationServices is enabled for VAMS, based on database metadata (ie. having a Location or Longitude+Latitude metadata key)
--   **Web** Database listing page now has different filters based on columns that are more likely to be filtered for (S3 buckets, Restrict Metadata, Restrict File Uploads)
+-   **Web** Database listing page updates 
+    -   Supports viewing/modifying metadata on databases (backend/CLI implemented for databases in v2.4)
+    -   Supports mini-map views and display toggle (off by default) when LocationServices is enabled for VAMS, based on database metadata (ie. having a Location or Longitude+Latitude metadata key)
+    -   Implemented different filters based on columns that are more likely to be filtered for (S3 buckets, Restrict Metadata, Restrict File Uploads)
 -   **Web** New ability to specify destination file name when copying/moving single files; multiple file move/copy will retain still the original filename
+-   **Web** Viewe Asset page has cleaned up asset details component containers and overall layout spacing to help compress
+-   **Web** View File page has cleaned up component containers and layout to help compress
 
 ### Bug Fixes
 

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Box, Button, Container, Grid, Header, SpaceBetween } from "@cloudscape-design/components";
+import { Box, Button, Container, Grid, Header, SpaceBetween, Select, FormField, Popover, Icon } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import { createSubscription, checkSubscription, unsubscribeFromAsset } from "../../services/APIService";
 import BellIcon from "../../resources/img/bellIcon.svg";
@@ -16,6 +16,11 @@ interface AssetDetailsPaneProps {
     databaseId: string;
     onOpenUpdateAsset: () => void;
     onOpenDeleteModal: () => void;
+    // Version selector props (passed through from ViewAsset)
+    versions?: any[];
+    versionsLoading?: boolean;
+    selectedVersionId?: string | null;
+    onVersionChange?: (versionId: string | null) => void;
 }
 
 export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
@@ -23,6 +28,10 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     databaseId,
     onOpenUpdateAsset,
     onOpenDeleteModal,
+    versions = [],
+    versionsLoading = false,
+    selectedVersionId,
+    onVersionChange,
 }) => {
     const navigate = useNavigate();
     const { showMessage } = useStatusMessage();
@@ -153,12 +162,13 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             </SpaceBetween>
                         }
                     >
-                        Asset Details
+                        <span style={{ fontSize: "1.2em" }}>{asset?.assetName || "Asset Details"}</span>
                     </Header>
                 }
             >
+                <div style={{ marginBottom: "-20px" }}>
                 <Grid gridDefinition={[{ colspan: 4 }, { colspan: 4 }, { colspan: 4 }]}>
-                    {/* Column 1 */}
+                    {/* Row 1, Col 1: Asset Id */}
                     <div>
                         <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
                             Asset Id
@@ -168,6 +178,35 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             Description
                         </div>
                         <div style={{ marginBottom: "16px" }}>{asset?.description}</div>
+                    </div>
+
+                    {/* Row 1, Col 2: Type / Distributable (combined) + Tags */}
+                    <div>
+                        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
+                            Type / Distributable
+                            <Popover
+                                dismissButton={false}
+                                position="top"
+                                size="medium"
+                                triggerType="custom"
+                                content={
+                                    <Box padding="s">
+                                        <strong>Type:</strong> "folder" means the asset contains multiple files.
+                                        Otherwise it shows the file extension of the single file contained.
+                                        <br /><br />
+                                        <strong>Distributable:</strong> Indicates whether the asset is currently
+                                        enabled to allow file downloads.
+                                    </Box>
+                                }
+                            >
+                                <span style={{ cursor: "help", color: "var(--vams-color-info)" }}>
+                                    <Icon name="status-info" size="small" />
+                                </span>
+                            </Popover>
+                        </div>
+                        <div style={{ marginBottom: "16px" }}>
+                            {asset?.assetType} / {asset?.isDistributable === true ? "Yes" : "No"}
+                        </div>
                         <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
                             Tags
                         </div>
@@ -179,12 +218,9 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                               localStorage.getItem("tagTypes") ||
                                                   '{"tagTypeName": "", "tags": []}'
                                           ).find((type: any) => type.tags.includes(tag));
-
-                                          //If tagType has required field add [R] to tag type name
                                           if (tagType && tagType.required === "True") {
                                               tagType.tagTypeName += " [R]";
                                           }
-
                                           return tagType ? `${tag} (${tagType.tagTypeName})` : tag;
                                       })
                                       .join(", ")
@@ -192,49 +228,89 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                         </div>
                     </div>
 
-                    {/* Column 2 */}
+                    {/* Row 1, Col 3: Latest Version + Version Selector */}
                     <div>
                         <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Asset Type
-                        </div>
-                        <div style={{ marginBottom: "16px" }}>{asset?.assetType}</div>
-                        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Is Distributable
-                        </div>
-                        <div style={{ marginBottom: "16px" }}>
-                            {asset?.isDistributable === true ? "Yes" : "No"}
-                        </div>
-                    </div>
-
-                    {/* Column 3 */}
-                    <div>
-                        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Current Version
+                            Current Last Version
                         </div>
                         <div style={{ marginBottom: "16px" }}>
                             v{asset?.currentVersion?.Version}
+                            {(() => {
+                                const currentVer = versions.find(
+                                    (v: any) => v.Version === asset?.currentVersion?.Version
+                                );
+                                return currentVer?.versionAlias ? ` (${currentVer.versionAlias})` : "";
+                            })()}
+                            {asset?.currentVersion?.DateModified && (
+                                <span style={{ color: "var(--vams-text-secondary)", marginLeft: "4px" }}>
+                                    [{new Date(asset.currentVersion.DateModified).toLocaleString(
+                                        "en-US",
+                                        {
+                                            year: "numeric",
+                                            month: "numeric",
+                                            day: "numeric",
+                                            hour: "numeric",
+                                            minute: "numeric",
+                                            second: "numeric",
+                                            hour12: true,
+                                        }
+                                    )}]
+                                </span>
+                            )}
                         </div>
-                        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>
-                            Current Version Date
-                        </div>
-                        <div style={{ marginBottom: "16px" }}>
-                            {asset?.currentVersion?.DateModified
-                                ? new Date(asset.currentVersion.DateModified).toLocaleString(
-                                      "en-US",
-                                      {
-                                          year: "numeric",
-                                          month: "numeric",
-                                          day: "numeric",
-                                          hour: "numeric",
-                                          minute: "numeric",
-                                          second: "numeric",
-                                          hour12: true,
-                                      }
-                                  )
-                                : ""}
-                        </div>
+                        {/* Version selector */}
+                        {versions.length > 0 && onVersionChange && (
+                            <FormField label="Version Selection">
+                                <Select
+                                    selectedOption={
+                                        selectedVersionId
+                                            ? {
+                                                  label: `v${selectedVersionId}${
+                                                      versions.find(
+                                                          (v: any) => v.Version === selectedVersionId
+                                                      )?.versionAlias
+                                                          ? ` (${
+                                                                versions.find(
+                                                                    (v: any) =>
+                                                                        v.Version === selectedVersionId
+                                                                )?.versionAlias
+                                                            })`
+                                                          : ""
+                                                  }`,
+                                                  value: selectedVersionId,
+                                              }
+                                            : {
+                                                  label: "LATEST (Non-Versioned)",
+                                                  value: "__LATEST__",
+                                              }
+                                    }
+                                    onChange={({ detail }) => {
+                                        const val = detail.selectedOption.value;
+                                        onVersionChange(val === "__LATEST__" ? null : val || null);
+                                    }}
+                                    options={[
+                                        {
+                                            label: "LATEST (Non-Versioned)",
+                                            value: "__LATEST__",
+                                        },
+                                        ...versions.map((v: any) => ({
+                                            label: `v${v.Version}${
+                                                v.versionAlias ? ` (${v.versionAlias})` : ""
+                                            } - ${v.Comment || "No comment"} (${new Date(
+                                                v.DateModified
+                                            ).toLocaleDateString()})`,
+                                            value: v.Version,
+                                        })),
+                                    ]}
+                                    placeholder="Select version"
+                                    loadingText="Loading versions..."
+                                    statusType={versionsLoading ? "loading" : "finished"}
+                                />
+                            </FormField>
+                        )}
                     </div>
                 </Grid>
+                </div>
             </Container>
         </ErrorBoundary>
     );

@@ -61,9 +61,15 @@ code {
     padding: 0;
 }
 
+/* Reduce gap between tab bar and tab content in TabbedContainer on ViewAsset */
+#root [class*="tabs-content-wrapper"][class*="with-paddings"] > [class*="tabs-content"] {
+    padding-block-start: 6px !important;
+}
+
 #root div[class^="awsui_drawer-content"] {
     top: 56px !important;
 }
+
 
 
 #view-edit-asset-right-column.wide {
