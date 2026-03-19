@@ -86,6 +86,7 @@ export default function ProgressScreen({
                     </SpaceBetween>
                 </div>
             </Grid>
+            <div style={{ paddingBottom: "20px" }} />
         </Box>
     );
 }

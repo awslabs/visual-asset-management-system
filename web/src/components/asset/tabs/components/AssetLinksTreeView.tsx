@@ -195,6 +195,22 @@ function TreeItem({ item }: TreeItemProps) {
 
                 <span className="asset-links-tree-item-name">
                     {item.name}
+                    {/* Show cross-database indicator */}
+                    {item.type === "asset" &&
+                        item.assetData?.databaseId &&
+                        state.currentDatabaseId &&
+                        item.assetData.databaseId !== state.currentDatabaseId && (
+                            <span
+                                className="asset-links-cross-db"
+                                title="This asset is in a different database"
+                                style={{
+                                    color: "var(--vams-color-warning, #ff9900)",
+                                    marginLeft: "4px",
+                                }}
+                            >
+                                (Database: {item.assetData.databaseId})
+                            </span>
+                        )}
                     {/* Show alias ID for parent/child relationships */}
                     {item.type === "asset" &&
                         item.assetData?.assetLinkAliasId &&
@@ -276,7 +292,22 @@ function SearchResults() {
                     <span className="asset-links-search-result-icon">
                         <Icon name="settings" />
                     </span>
-                    <span className="asset-links-search-result-name">{item.name}</span>
+                    <span className="asset-links-search-result-name">
+                        {item.name}
+                        {item.type === "asset" &&
+                            item.assetData?.databaseId &&
+                            state.currentDatabaseId &&
+                            item.assetData.databaseId !== state.currentDatabaseId && (
+                                <span
+                                    style={{
+                                        color: "var(--vams-color-warning, #ff9900)",
+                                        marginLeft: "4px",
+                                    }}
+                                >
+                                    (Database: {item.assetData.databaseId})
+                                </span>
+                            )}
+                    </span>
                     <span className="asset-links-search-result-type">
                         {item.relationshipType
                             ? item.relationshipType.charAt(0).toUpperCase() +

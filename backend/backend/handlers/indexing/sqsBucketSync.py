@@ -28,7 +28,7 @@ lambda_client = boto3.client('lambda')
 dynamodb_client = boto3.client('dynamodb')
 logger = safeLogger(service_name="sqsBucketSync")
 
-reservedPrefixFolders = ['temp-upload', 'temp-uploads', 'preview','previews', 'pipeline', 'pipelines']
+reservedPrefixFolders = ['temp-upload', 'temp-uploads', 'preview','previews', 'pipeline', 'pipelines', 'workspace', 'workspaces']
 
 # Environment variables
 try:

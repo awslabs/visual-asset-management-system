@@ -391,7 +391,19 @@ export function CreateAssetLinkModal({
                         showSelectedAssets={true}
                         tagTypes={tagTypes}
                         noOpenSearch={noOpenSearch}
+                        restrictToCurrentDatabase={false}
                     />
+
+                    {/* Cross-database warning */}
+                    {selectedAssets.some(
+                        (a) => (a.databaseName || a.databaseId) !== currentDatabaseId
+                    ) && (
+                        <Alert type="warning">
+                            Cross-database link: One or more selected assets are in a different
+                            database than <strong>{currentDatabaseId}</strong>. Ensure you have the
+                            required permissions on all involved databases.
+                        </Alert>
+                    )}
                 </SpaceBetween>
             </div>
         </Modal>

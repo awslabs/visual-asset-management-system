@@ -703,6 +703,7 @@ export default function ModifyAssetsUploadsPage() {
                     </div>
                 </Grid>
             </SpaceBetween>
+            <div style={{ paddingBottom: "20px" }} />
         </Box>
     );
 }

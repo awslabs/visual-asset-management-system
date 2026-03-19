@@ -33,6 +33,7 @@ interface FormState {
 export default function UpdateApiKey({ open, setOpen, setReload, apiKey }: UpdateApiKeyProps) {
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
+    const [descriptionError, setDescriptionError] = useState("");
     const [formState, setFormState] = useState<FormState>({
         description: "",
         expiresDate: "",
@@ -124,7 +125,7 @@ export default function UpdateApiKey({ open, setOpen, setReload, apiKey }: Updat
                         <Button
                             variant="primary"
                             onClick={handleSubmit}
-                            disabled={inProgress}
+                            disabled={inProgress || formState.description.length > 256}
                             data-testid="update-api-key-button"
                         >
                             Update API Key
@@ -143,12 +144,20 @@ export default function UpdateApiKey({ open, setOpen, setReload, apiKey }: Updat
                     </FormField>
                     <FormField
                         label="Description"
-                        constraintText="Optional. Update the description for this API key."
+                        constraintText="Optional. Max 256 characters."
+                        errorText={descriptionError}
                     >
                         <Textarea
                             value={formState.description}
                             onChange={({ detail }) => {
                                 setFormState({ ...formState, description: detail.value });
+                                if (detail.value.length > 256) {
+                                    setDescriptionError(
+                                        "Description must be 256 characters or less"
+                                    );
+                                } else {
+                                    setDescriptionError("");
+                                }
                             }}
                             placeholder="Enter description"
                             data-testid="update-api-key-description"

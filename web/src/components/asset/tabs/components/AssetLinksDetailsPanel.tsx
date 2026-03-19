@@ -12,6 +12,7 @@ import {
     Header,
     Spinner,
     Link,
+    Icon,
 } from "@cloudscape-design/components";
 import { AssetLinksContext } from "./AssetLinksTreeView";
 import { AssetLinkMetadata } from "./AssetLinkMetadata";
@@ -405,6 +406,29 @@ export function AssetLinksDetailsPanel({
                                 </div>
                             </div>
                         )}
+                    {/* Database info for asset nodes */}
+                    {selectedNode.type === "asset" && selectedNode.assetData?.databaseId && (
+                        <div className="asset-links-info-item">
+                            <div className="asset-links-info-label">Database:</div>
+                            <div className="asset-links-info-value">
+                                {selectedNode.assetData.databaseId}
+                                {state.currentDatabaseId &&
+                                    selectedNode.assetData.databaseId !==
+                                        state.currentDatabaseId && (
+                                        <span
+                                            style={{
+                                                marginLeft: "8px",
+                                                color: "var(--vams-color-warning, #ff9900)",
+                                            }}
+                                            title="This asset is in a different database"
+                                        >
+                                            <Icon name="status-warning" size="small" />{" "}
+                                            Cross-database link
+                                        </span>
+                                    )}
+                            </div>
+                        </div>
+                    )}
                     {selectedNode.relationshipType && (
                         <div className="asset-links-info-item">
                             <div className="asset-links-info-label">Unauthorized Sub-Assets:</div>

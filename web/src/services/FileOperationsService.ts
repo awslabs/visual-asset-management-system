@@ -14,6 +14,7 @@ export interface CopyFileRequest {
     sourcePath: string;
     destinationPath: string;
     destinationAssetId?: string;
+    destinationDatabaseId?: string;
 }
 
 export interface UnarchiveFileRequest {
@@ -288,7 +289,8 @@ export const processMultipleFileOperations = async (
     destinationFolder: string,
     operation: "move" | "copy",
     destinationAssetId?: string,
-    destFileNames?: Record<string, string>
+    destFileNames?: Record<string, string>,
+    destinationDatabaseId?: string
 ): Promise<FileOperationResult[]> => {
     const results: FileOperationResult[] = [];
 
@@ -316,6 +318,7 @@ export const processMultipleFileOperations = async (
                     sourcePath: filePath,
                     destinationPath: destinationPath,
                     destinationAssetId: destinationAssetId,
+                    ...(destinationDatabaseId && { destinationDatabaseId }),
                 });
 
                 results.push({

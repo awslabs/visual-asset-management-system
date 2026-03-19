@@ -54,6 +54,9 @@ export interface AssetSearchTableProps {
 
     // Optional no-OpenSearch mode
     noOpenSearch?: boolean;
+
+    // When true (default), restrict search to currentDatabaseId. When false, search across all databases.
+    restrictToCurrentDatabase?: boolean;
 }
 
 export function AssetSearchTable({
@@ -68,6 +71,7 @@ export function AssetSearchTable({
     tagTypes = [],
     onAssetFilesLoad,
     noOpenSearch = false,
+    restrictToCurrentDatabase = true,
 }: AssetSearchTableProps) {
     const [searchTerm, setSearchTerm] = useState("");
     const [searchResults, setSearchResults] = useState<AssetSearchItem[]>([]);
@@ -149,8 +153,8 @@ export function AssetSearchTable({
                 // Build filters array
                 const filters: object[] = [];
 
-                // Add database filter if specified (for both single and multi select modes)
-                if (currentDatabaseId) {
+                // Add database filter if specified and restricted to current database
+                if (currentDatabaseId && restrictToCurrentDatabase) {
                     filters.push({
                         query_string: {
                             query: `(str_databaseid:("${currentDatabaseId}"))`,
@@ -212,11 +216,18 @@ export function AssetSearchTable({
                 // Use assets API with client-side pagination
                 const allAssets = await fetchAllAssets();
                 if (Array.isArray(allAssets)) {
-                    const filtered = allAssets
+                    let filtered = allAssets
                         .filter((asset: any) => asset.databaseId.indexOf("#deleted") === -1)
                         .filter((asset: any) =>
                             asset.assetName.toLowerCase().includes(searchTerm.toLowerCase())
                         );
+
+                    // Filter to current database if restricted
+                    if (currentDatabaseId && restrictToCurrentDatabase) {
+                        filtered = filtered.filter(
+                            (asset: any) => asset.databaseId === currentDatabaseId
+                        );
+                    }
 
                     total = filtered.length;
                     const startIndex = (page - 1) * pageSize;
@@ -518,7 +529,9 @@ export function AssetSearchTable({
                                     {totalResults} results
                                 </Badge>
                             )}
-                            {currentDatabaseId && <Badge>Database: {currentDatabaseId}</Badge>}
+                            {currentDatabaseId && restrictToCurrentDatabase && (
+                                <Badge>Database: {currentDatabaseId}</Badge>
+                            )}
                         </SpaceBetween>
                         {selectionMode === "multi" && (
                             <Button

@@ -142,6 +142,7 @@ class FileDocumentModel(BaseModel, extra='allow'):
     num_filesize: Optional[int] = Field(None, description="File size in bytes")
     str_etag: Optional[str] = Field(None, description="S3 ETag")
     str_s3_version_id: Optional[str] = Field(None, description="S3 version ID")
+    str_previewfilekey: str = Field("", description="S3 key of the associated preview file, empty if none")
     bool_archived: bool = Field(False, description="Archive status (delete marker present)")
     
     # Asset tags inherited from parent asset
@@ -241,6 +242,12 @@ class AssetDocumentModel(BaseModel, extra='allow'):
     date_asset_version_createdate: Optional[str] = Field(None, description="Version creation date")
     str_asset_version_comment: Optional[str] = Field(None, description="Version comment")
     
+    # Asset location
+    str_assetlocationkey: str = Field("", description="S3 key from asset's assetLocation, empty if none")
+
+    # Preview
+    str_previewfilekey: str = Field("", description="S3 key of the asset preview file, empty if none")
+
     # Relationship flags
     bool_has_asset_children: bool = Field(False, description="Has child assets")
     bool_has_asset_parents: bool = Field(False, description="Has parent assets")

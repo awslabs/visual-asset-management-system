@@ -6,125 +6,134 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
-• Website Backend Overhaul - Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default.
-• New USD Web Viewer - Needle USD 3D WASM viewer with experimental dependency chain loading for .usd, .usda, .usdc, .usdz files integrated into plugin system
-• New 3D Mesh and CAD STP ThreeJs Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading and scene graph support, now primary viewer for common mesh types with optional LGPL-licensed CAD support
-• New SQS and EventBridge Pipeline Support - Pipelines and workflows now support SQS and EventBridge execution types alongside existing Lambda, enabling integration with external processing systems.
-• New 3D and PointCloud Preview Thumbnail (GIF) Generation Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
-• New Database Metadata and Location Mini-map Support - Database metadata management on the website and location service mini-map display option
-• Enhanced Asset Versions Functionality - New asset version aliasing, archive/unarchive capabilities, asset version editing, metadata/attribute versioning, and revert functionality with metadata restoration
-• Enhanced File Selector and Download Functionality w/ Asset Versions - Version-aware download APIs with file and asset version query parameters, updated file viewers for file or asset version file retrieval, web asset version selector filtering for files and metadata
-• New Cognito User Management - Web UI, API, and CLI functionality for managing Cognito users without AWS Console access, includes add/update/remove/reset password operations, new admin navigation page, enabled only when Cognito authentication is active
-• New API Key Management - Complete API Key system with creation through API/CLI/web UI, user ID impersonation with role assignment, upstream/downstream application integration support, admin web interface for key management
-• New Permission Constraints Templating - Bulk-import permission constraints from JSON templates with server-side variable substitution via API endpoint, pre-built templates for common profiles (database-admin, database-user, database-readonly, global-readonly, deny-tagged-assets), CLI import command, automated deployment tool, comprehensive Permissions Guide documentation
+• Website Overhaul - Migrated to Vite build framework, AWS Amplify V6 Gen2 SDK, and added dark/light theme support (dark is now the default)
+• New USD Web Viewer - Needle USD 3D WASM viewer with dependency chain loading for .usd, .usda, .usdc, .usdz files
+• New ThreeJS 3D and CAD STP Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading, scene graph support, and optional LGPL-licensed CAD support; now the primary viewer for common mesh types
+• New Pipeline Type Support - Pipelines and workflows now support SQS and EventBridge execution types alongside Lambda, enabling integration with external processing systems
+• New 3D/Point Cloud Preview Thumbnail Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
+• New Database Metadata and Location Map Support - Database metadata management on the website with location service mini-map display option
+• Website Asset and File Page Refinement - Refined asset and file viewing page layouts; added asset preview thumbnail to top details section
+• Enhanced Asset Versions - Version aliasing, archive/unarchive, version editing, metadata/attribute versioning, and revert with metadata restoration
+• Enhanced File and Download Functionality with Asset Versions - Version-aware download APIs with file and asset version query parameters, updated file viewers for versioned file retrieval, and web version selector filtering for files and metadata
+• Enhanced Cross-Database Support - Cross-database asset linking and file copying
+• New Cognito User Management - Web UI, API, and CLI for managing Cognito users without AWS Console access; includes add/update/remove/reset password operations and a new admin navigation page (enabled only when Cognito authentication is active)
+• New API Key Management - Complete API Key system with creation through API/CLI/web UI, user ID impersonation with role assignment, upstream/downstream application integration, and admin web interface for key management
+• New Permission Constraints Templating - Bulk-import permission constraints from JSON templates with server-side variable substitution, pre-built templates for common profiles (database-admin, database-user, database-readonly, global-readonly, deny-tagged-assets), CLI import command, automated deployment tool, and comprehensive Permissions Guide documentation
 
 ### ⚠ BREAKING CHANGES
 
-Asset versions have database table changes that require the running of migration scripts to properly update the table to include newly needed column data to avoid future system-wide conflicts with assets that share a similar ID across databases.
+Asset versions have database table changes that require running migration scripts to add new column data, preventing system-wide conflicts with assets that share similar IDs across databases.
 
-The website overhaul may cause a high number of merge conflicts for any forked repositories due to the high number of file renames and refactors. Merging will need to be conducted cautiously.
+The website overhaul may cause a high number of merge conflicts for forked repositories due to extensive file renames and refactors. Merging should be conducted cautiously.
 
 **Recommended Upgrade Path:** Run the upgrade script to migrate permission constraints from the old table to the new one if custom constraints were added or modified beyond VAMS defaults: `infra\deploymentDataMigration\v2.4_to_v2.5\upgrade`
 
 ### Features
 
--   **Web** Website overhauled to now use the Vite framework, AWS Amplify V6 Gen2 SDK, and support theming like light and dark modes, dark now being the new default. This overhaul required refactoring of the API call and cache system across all web files.
-    -   Added more website custommization configuration into `config.ts`
+-   **Web** Overhauled website to use Vite build framework, AWS Amplify V6 Gen2 SDK, and dark/light theme support (dark is now the default). This required refactoring the API call and cache system across all web files.
+    -   Added additional website customization configuration to `config.ts`
     -   Refactored most .js files to .ts or .tsx
-    -   Moved/consolidated all API calls to service files in the web /service/ folder
-    -   Fixed certain ilenames that followed old naming standards
-    -   Further removed deprecated pages/files that were no longer referenced
--   **Pipeline** Pipelines and Workflows now have an additional option to launch pipelines through SQS and EventBridge, this compliments the existing Lambda option. See `DeveloperGuide.md` for more information on how to implement.
--   **Pipeline** Added new Preview 3D Thumbnail use-case pipeline (`usePreview3dThumbnail`) that generates animated GIF or static image preview thumbnails from 3D files. Supports mesh formats (PLY, STL, OBJ, GLB, GLTF, FBX, DRC), point clouds (LAS, LAZ, E57, PTX, PCD, FLS, FWS), CAD files (STP, STEP), and USD files (USD, USDA, USDC, USDZ). Uses CPU-based headless rendering via PyVista/VTK with Xvfb in an AWS Batch Fargate container. This pipeline is turned off by default in the configuration file due to some restrictive used library licenses [LGPL, etc.] (see `NOTICE.md`).
-    -   100 GB maximum input file size with pre-download S3 size validation (can be extended but may require a EFS Fargate implementation)
+    -   Consolidated all API calls into service files under web /services/ folder
+    -   Fixed filenames that followed outdated naming conventions
+    -   Removed deprecated pages/files that were no longer referenced
+-   **Pipeline** Pipelines and workflows now support launching through SQS and EventBridge in addition to the existing Lambda option. See `DeveloperGuide.md` for implementation details.
+-   **Pipeline** Added Preview 3D Thumbnail pipeline (`usePreview3dThumbnail`) that generates animated GIF or static image preview thumbnails from 3D files. Supports mesh formats (PLY, STL, OBJ, GLB, GLTF, FBX, DRC), point clouds (LAS, LAZ, E57, PTX, PCD, FLS, FWS), CAD files (STP, STEP), and USD files (USD, USDA, USDC, USDZ). Uses CPU-based headless rendering via PyVista/VTK with Xvfb in an AWS Batch Fargate container. Disabled by default due to restrictive library licenses [LGPL, etc.] (see `NOTICE.md`).
+    -   100 GB maximum input file size with pre-download S3 size validation (can be extended but may require an EFS Fargate implementation)
     -   Configurable `overwriteExistingPreviewFiles` pipeline input parameter to control preview file overwrite behavior
     -   Auto-registration with VAMS pipelines and workflows via CDK custom resources
--   **Web** Added new open-source Needle USD 3D WASM Web Viewer to the viewer plugin system for `.usd, .usda, .usdc, .usdz` files. Supports full dependency chain loading of files although Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
-    -   Note: Uses WASM which relies on either the Cloudfront deployment mode or the newly implemented front-end service worker to set proper https headers to allow WASM to load. If these are not set due to additional organizational security restrictions, this viewer will not load. Safari currently does not support the way we implemented this viewer.
-    -   Note: Needle Viewer in our implementation has issues with loading dependencies from compressed (USDC) files as these cannot be reliabiliy parsed out ahead of time.
--   **Web** Added new open-source ThreeJS 3D Web Viewer to the viewer plugin system for `.gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep` files. Supports full dependency chain loading of files and scene graph support. ThreeJS will now be the first primary viewer of choice for most common mesh file types. Additional libraries need to be installed to support CAD file types that are LGPL licensed and requires WASM support (see ./web/customInstalls/threejs/README.md for information).
-    -   Note: The CAD loading uses WASM which relies on either the Cloudfront deployment mode or using the newly implemented front-end service worker to set proper https headers to allow WASM to load. If these are not set due to additional organizational security restrictions, this viewer will simply not work for CAD extensions however will still work with the other mesh extensions viewed. Safari currently does not support the way we implemented the CAD WASM library.
--   **Web** Online3DViewer web viewer configuration has been adjusted to only show up for the 3D files types of `.3dm, .amf, .bim, .off, .wrl`, these file types are currently not supported by the ThreeJS viewer.
--   Updated the `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` GET API endpoint to support an optional `?versionId =` and `?assetVersionid=` query parameter to specify the file version or asset file version being retrieved
-    -   Updated documentation to show how to use the download API and download stream API can work for downstream applications that want to pull versions from a specific asset version id.
--   **Web** Added functionality to viewer download APIs and viewers (all viewers updated) to include asset version ID (if an asset version ID selected) to automatically find the right file version through the API to pull based on the provided/saved asset version.
--   **Web** Updated Veerum Viewer to use the new streaming API endpoint query parameter for versionId, this will enable proper file version viewing.
--   Added new API, web, and CLI functionality to manage cognito users to remove the requirement of needing to go into the AWS Console or CLI to add/update/remove/reset password for users. This is only enabled when Cognito authentication is enabled.
-    -   **Web** Includes new admin navigation page for `User Management`
+-   **Web** Added Needle USD 3D WASM viewer to the plugin system for `.usd, .usda, .usdc, .usdz` files with full dependency chain loading. Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
+    -   Note: Requires CloudFront deployment mode or the front-end service worker to set proper HTTPS headers for WASM loading. Will not load if organizational security restrictions prevent this. Safari is not currently supported.
+    -   Note: Needle Viewer has issues loading dependencies from compressed (USDC) files as these cannot be reliably parsed ahead of time.
+-   **Web** Added ThreeJS 3D viewer to the plugin system for `.gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep` files with full dependency chain loading and scene graph support. Now the primary viewer for most common mesh file types. Additional LGPL-licensed libraries are required for CAD file support (see `./web/customInstalls/threejs/README.md`).
+    -   Note: CAD loading requires WASM support via CloudFront deployment mode or the front-end service worker. Without proper HTTPS headers, the viewer will not work for CAD extensions but will still function for other mesh formats. Safari is not currently supported for CAD WASM.
+-   **Web** Online3DViewer configuration adjusted to only display for `.3dm, .amf, .bim, .off, .wrl` file types, which are not currently supported by the ThreeJS viewer.
+-   Updated `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` GET API endpoint to support optional `?versionId=` and `?assetVersionId=` query parameters for specifying the file version or asset version being retrieved
+    -   Updated documentation for using the download API and stream API with version parameters for downstream applications
+-   **Web** Updated all viewer download APIs and viewers to include asset version ID (when selected) for automatic file version resolution through the API
+-   **Web** Updated Veerum Viewer to use the streaming API endpoint `versionId` query parameter for proper file version viewing
+-   Added API, web, and CLI functionality for Cognito user management, removing the need for AWS Console access to add/update/remove/reset password for users. Only enabled when Cognito authentication is active.
+    -   **Web** New admin navigation page for `User Management`
     -   New API endpoints `/user/cognito` GET/POST, `/user/cognito/{userId}` PUT/DELETE, `/user/cognito/{userId}/resetPassword` POST
--   **CLI** Added commands for admin functionality such as adding new cognito users (with new APIs), users in role management, role management, and constraint management.
--   Added new `POST /auth/constraintsTemplateImport` API endpoint for bulk-importing permission constraints from JSON templates in a single API call. The API handles server-side variable substitution, UUID generation, groupId mapping, and constraint creation in DynamoDB, replacing the previous client-side XML parsing and one-by-one constraint creation approach.
-    -   **CLI** Added `vamscli role constraint template import` command to import permission constraint templates via the new API endpoint.
-    -   Added a new tool `tools/permissionsSetup/apply_template.py` that uses the CLI to automate the deployment of new roles and constraint templates as needed. This can be used by admins to help setup new permission structures for when new databases are created for an organization.
-    -   Added pre-built JSON permission templates in `documentation/permissionsTemplates/` for common permission profiles: `database-admin.json` (13 constraints), `database-user.json` (15 constraints), `database-readonly.json` (10 constraints), `global-readonly.json` (10 constraints), and `deny-tagged-assets.json` (1 constraint). Templates define complete constraint sets for roles with variable placeholders for database IDs and role names.
-    -   Added comprehensive Permissions Guide (`documentation/PermissionsGuide.md`) covering the full ABAC/RBAC constraint matrix, two-tier authorization enforcement, GLOBAL keyword usage, archive vs permanent delete enforcement, deny overlay patterns, and step-by-step examples for common permission profiles.
--   **Web** Added version selector on view asset page to easily show files and metadata for a particular stored version
-    -   APIs updated for getting asset file information and metadata for assets / files to have an optional parameter for specifying a asset version id.
--   **Web** Added a toggle ability to get both embedded auth presigned URLs for asset files as well as long-lasting URI's that require users to embed their VAMS authorization token into the Share URLs component
--   **Web** Added functionality to the view asset page to allow selection of a particular asset version. This filters the file manager and metadata components to only showing a read-only version of what is in that asset version
--   Added functionality for asset versions to be archived/unarchived, be able to specify a version alias name, and be able to edit an existing asset version to change the alias name and/or associated comment. Asset versions in dynamoDB now properly store the asset's database id to prevent future system conflicts. This feature added new API routes, web UI, and CLI commands.
-    -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions (and asset sub-tables)
--   Added new API Key system to allow for the creation of API Keys through API, CLI, and the website (`API Key Management`). This will provide the ability to issue upstream or downstream API keys to applications to use VAMS. API Keys are assigned a user ID owner it will impersonate (both for user id used and roles applied). See the `DeveloeprGuide.md` for more information on how to generate these API keys and use them.
--   **Web** Updated the web navigation to split out `Admin - Auth` into its own admin navigation section and all others to `Admin - Data`. Removed "Asset Ingestion" from the admin menus as this web page is now deprecated although still exists for direct navigation, as permissions allow.
--   **Web** Database listing page updates
-    -   Supports viewing/modifying metadata on databases (backend/CLI implemented for databases in v2.4)
-    -   Supports mini-map views and display toggle (off by default) when LocationServices is enabled for VAMS, based on database metadata (ie. having a Location or Longitude+Latitude metadata key)
-    -   Implemented different filters based on columns that are more likely to be filtered for (S3 buckets, Restrict Metadata, Restrict File Uploads)
--   **Web** New ability to specify destination file name when copying/moving single files; multiple file move/copy will retain still the original filename
--   **Web** Viewe Asset page has cleaned up asset details component containers and overall layout spacing to help compress
--   **Web** View File page has cleaned up component containers and layout to help compress
+-   **CLI** Added commands for admin functionality including Cognito user management, user-role management, role management, and constraint management
+-   Added `POST /auth/constraintsTemplateImport` API endpoint for bulk-importing permission constraints from JSON templates. Handles server-side variable substitution, UUID generation, groupId mapping, and constraint creation in DynamoDB, replacing the previous client-side XML parsing and one-by-one creation approach.
+    -   **CLI** Added `vamscli role constraint template import` command for importing permission constraint templates
+    -   Added `tools/permissionsSetup/apply_template.py` tool for automating deployment of roles and constraint templates, useful for setting up permission structures when new databases are created
+    -   Added pre-built JSON permission templates in `documentation/permissionsTemplates/` for common profiles: `database-admin.json` (13 constraints), `database-user.json` (15 constraints), `database-readonly.json` (10 constraints), `global-readonly.json` (10 constraints), and `deny-tagged-assets.json` (1 constraint) with variable placeholders for database IDs and role names
+    -   Added comprehensive Permissions Guide (`documentation/PermissionsGuide.md`) covering ABAC/RBAC constraint matrix, two-tier authorization, GLOBAL keyword usage, archive vs permanent delete enforcement, deny overlay patterns, and step-by-step examples
+-   **Web** Added version selector on View Asset page for viewing files and metadata from a specific stored version
+    -   APIs updated for asset file information and metadata retrieval to accept an optional asset version ID parameter
+-   **Web** Added toggle for embedded auth presigned URLs as well as long-lasting URIs that require embedding the VAMS authorization token, available in the Share URLs component
+-   **Web** Added asset version selection on View Asset page that filters the file manager and metadata components to a read-only view of the selected version
+-   Added asset version archive/unarchive, version alias naming, and version editing (alias and comment). Asset versions in DynamoDB now properly store the asset's database ID to prevent cross-database conflicts. Includes new API routes, web UI, and CLI commands.
+    -   Migration scripts required to update previous asset versions with the database ID field on asset versions and sub-tables
+-   Added API Key system with creation through API, CLI, and web UI (`API Key Management`). API keys are assigned a user ID to impersonate (including that user's roles). See `DeveloperGuide.md` for usage details.
+-   Moving or copying files now also copies/moves the associated metadata and attributes. When copying/moving to an existing file (where versioning rolls), metadata and attributes are merged with the existing records.
+-   Added `str_previewfilekey` field to both asset and file OpenSearch indexes. An empty string indicates no preview file; absence of the field indicates the document predates this change and fallback API lookups should be used. Optionally re-index to populate all existing records immediately.
+-   Added `str_assetlocationkey` field to the asset OpenSearch index. Populated on asset modifications; optionally re-index for existing records.
+    -   **Web** Updated asset and file search page to check this field first before making additional API calls for preview file information, reducing per-record API calls when preview thumbnails are toggled
+-   **Web** Split web navigation into `Admin - Auth` and `Admin - Data` sections. Removed "Asset Ingestion" from admin menus (page still accessible via direct navigation as permissions allow).
+-   **Web** Database listing page updates:
+    -   View/modify metadata on databases (backend/CLI implemented in v2.4)
+    -   Mini-map views with display toggle (off by default) when LocationServices is enabled, based on database metadata (Location or Longitude+Latitude keys)
+    -   Column-specific filters for S3 buckets, Restrict Metadata, and Restrict File Uploads
+-   **Web** Added ability to specify destination file name when copying/moving single files; multi-file operations retain original filenames
+-   **Web** Refined View Asset page with cleaner asset details containers and compressed layout spacing
+-   **Web** View Asset page now displays the asset preview thumbnail in the top details section when a preview file is available
+-   **Web** Refined View File page with cleaner component containers and compressed layout
+-   Added cross-database asset link/relationship and file copy support (requires user access to both databases and assets via the auth asset entity)
 
 ### Bug Fixes
 
--   Permission constraints now allow `GLOBAL` as an input for criteria field values, previously this threw a API validation error
--   Revised CDK deployment code for the ALB website to try to fix a rare-recurring error when deploying that ALB targets need a unique IP list (issue with how custom resources were fetching subnet IPs and applying them)
--   **Web** Updated web initial amplify config logic to properly error if the API config cannot be fetched and not to set error valued config into cookies, causing future reloads to use the errored config (and not refetch the API) without a cookie/cache reset.
--   **CLI** Continued fixes to various CLI commands to make sure outputs when using the `--json-ouput` parameter only return a JSON output. This round of fixes is to take care of both missing inputs that required confirmation or showing errors becuase of missing parameters
--   **Web** Fixed the file selector pop-up on the asset upload for existing assets to work in Firefox; folder selection on Firefox is still not yet supported
--   **Web** Fixed bug in some table lists that prevented single row selects in certain scenarios (would select all rows)
+-   Permission constraints now allow `GLOBAL` as an input for criteria field values (previously threw an API validation error)
+-   Revised CDK deployment code for ALB website to fix a rare recurring error where ALB targets require a unique IP list (issue with how custom resources fetched subnet IPs)
+-   **Web** Fixed initial Amplify config logic to properly error when the API config cannot be fetched, preventing errored config from being cached and reused on future page loads
+-   **CLI** Continued fixes to ensure `--json-output` parameter returns only JSON output, including handling missing required inputs and parameter validation errors
+-   **Web** Fixed file selector pop-up on asset upload for existing assets to work in Firefox; folder selection on Firefox is still not yet supported
+-   **Web** Fixed table lists where single row selection would incorrectly select all rows in certain scenarios
 -   **Web** Fixed various bugs in pipeline editor and workflow execution list paging
--   **Web** Pipeline listing page now properly shows database filter drop-down again
--   **Web** Fixed text viewer to properly theme text window when toggling between dark and light themes.
--   Fixed bug in workflow creation and executions where assetId and databaseId was not being passed through. This will only be fixed for existing workflows that are re-created or edited but should not affect existing pipelines that are currently working already.
--   Fixed bug in assets and files search to show full result counts, have appropriate paging functionality, and correct the backend API for a paging logic bug
--   Added additional createWorkflow API input validation checks for edge input scenarios and cases where a user creating a workflow does not have authorization access to an underlying pipeline being specified
--   Fixed typo in reserved S3 prefix list (`piplines`->`pipelines`) which auto-created assets in some cases for reserved prefix folders
--   Attempted to fix edge cases where local web debugging was causing CSP policy errors for some development users
--   Fixed bug in GenAI MetataLabelinng use-case pipeline where the CDK pathing has a case sensitivity for non-windows builds (caused CDK errors)
--   Fixed Gaussian Splat use-case pipeline Docker build error with updating to newest version of 3D reconstruction toolkit
--   Fixed Gaussian Splat use-case pipeline to re-pull latest changes from 3d Reconstruction toolkit github every time of deployment
--   Fixed VPC endpoint logic for ECS service for use-case pipelines that need an endpoint for both private and isolated VPC subnets; previously this caused errors when enabling multiple use-case pipelines that had both isolated and private subnets using the VAMS generated VPC configuration. See troubleshooting section if CDK ECS VPC endpoint errors occur during re-deployments.
+-   **Web** Pipeline listing page now properly shows database filter dropdown
+-   **Web** Fixed text viewer to properly theme text window when toggling between dark and light themes
+-   Fixed workflow creation and executions where assetId and databaseId were not being passed through. Only fixed for workflows that are re-created or edited; does not affect currently working pipelines.
+-   Fixed assets and files search to show full result counts with proper paging functionality, including a backend API paging logic fix
+-   Added createWorkflow API validation checks for edge cases and unauthorized pipeline access during workflow creation
+-   Fixed typo in reserved S3 prefix list (`piplines` -> `pipelines`) which auto-created assets for reserved prefix folders
+-   Pipelines can no longer be deleted if they are currently part of a workflow
+-   Added proper error messaging when attempting to archive or unarchive an asset that is not in the correct state
+-   Fixed edge cases where local web debugging caused CSP policy errors for some development users
+-   Fixed GenAI MetadataLabeling pipeline CDK path case sensitivity issue on non-Windows builds
+-   Fixed Gaussian Splat pipeline Docker build error by updating to the newest version of the 3D reconstruction toolkit
+-   Fixed Gaussian Splat pipeline to re-pull latest changes from the 3D reconstruction toolkit repository on every deployment
+-   Fixed VPC endpoint logic for ECS service in pipelines needing endpoints for both private and isolated VPC subnets; previously caused errors when enabling multiple pipelines with mixed subnet types. See troubleshooting section for CDK ECS VPC endpoint errors during re-deployments.
 -   **Web** Fixed various minor bugs across the website including proper error reporting
 
 ### Chores
 
--   **Web** Added a default footer message, changed login page layout based on new refactor
--   **Web** Refined Assets and Files search UI to support column resizing, shorter and better column names, and some text wrapping
--   Refactored the Pipelines and Workflows API backend to now have proper request/response models, better input validation, and now follows the new backend standard set in v2.2. This is in prepartion for a larger pipeline/workflow overhaul.
--   Created `CLOUDFRONTDEPLOY` feature enablement flag to let the front-end know the type of web deployment the website is being served under
--   **Web** Added service worker and proxy to manually set header flags for both local debugging and/or to set for website deployment to allow features like WebAssembly (WASM) loading.
--   Added additional validation checks to the APIs regarding creating workflows and workflow execution
--   Added featuresEnabled dynamoDB table writing check during CDK deployment to de-deplicate and overwrite existing values
--   Updated description of viewers that currently do not support showing non-current version files for the primary selected file (will always show the latest file).
--   **Web** Changed some of the columns that show up on the new asset and existing asset file table to not show the progress bar or status. This will help alleviate confusion on the pre-upload screen for users who were expecting files to start uploading after immediate selection.
--   Further API performance improvements in listing asset files and gathering asset export data
--   Updated Gaussian Splat use-case pipeline to newest version of 3D reconstruction toolkit
--   Updated CLINE/KIRO workflows for clarifying CLI patterns for json-output
--   Updated NPM dependencies in web (yarn audit fixes) and refactored old components (RelatedTable) that are now solved by newer packages
--   Updated NPM dependencies in web visualizers for npm audit fixes
--   Updated NPM dependencies in infra for npm audit fixes
+-   Indexers now ignore `workspace` and `workspaces` asset bucket prefixes in preparation for personal workspaces functionality
+-   **Web** Added default footer message and updated login page layout
+-   **Web** Refined asset and file search UI with column resizing, shorter column names, and text wrapping
+-   Refactored Pipelines and Workflows API backend with proper request/response models, improved input validation, and alignment with v2.2 backend standards. Preparation for a larger pipeline/workflow overhaul.
+-   Added `CLOUDFRONTDEPLOY` feature enablement flag to indicate web deployment type to the front-end
+-   **Web** Added service worker and proxy for setting header flags to enable WebAssembly (WASM) loading in both local debugging and deployed environments
+-   Added additional workflow creation and execution API validation checks
+-   Added featuresEnabled DynamoDB table deduplication check during CDK deployment to overwrite existing values
+-   Updated viewer descriptions for those that do not support showing non-current version files (always show the latest file)
+-   **Web** Removed progress bar and status columns from asset file tables on the pre-upload screen to avoid confusion about upload state
+-   Further API performance improvements for listing asset files and gathering asset export data
+-   Updated Gaussian Splat pipeline to the newest version of the 3D reconstruction toolkit
+-   Updated CLINE/KIRO workflows for clarifying CLI patterns with json-output
+-   Updated NPM dependencies in web, web visualizers, and infra for audit fixes; refactored deprecated components (RelatedTable) replaced by newer packages
 
 ### Known Outstanding Issues
 
--   With multiple S3 bucket support, scenarios may occur where identical assetIds exist across different buckets/prefixes in different databases, causing lookup conflicts in comments and subscriptions functionality. This can only occur with manual S3 changes, as assetIds generated from VAMS uploads use unique GUIDs.
--   Using the same pipeline ID in both GLOBAL and non-GLOBAL databases will cause overlap conflicts and issues.
--   Pipeline metadata inputs have a limit when sending to ECS pipelines. Assets and/or files with extensive metadata may exceed the ECS limit for JSON metadata input (8k characters). Future pipeline overhauls will convert metadata input to a file to resolve this.
--   When dealing with hundreds to thousands of files per asset or very large files (TB-size), some API asset/file operations may time-out on the request (after 29 seconds) however the lambda may still be processing the request and successfully complete the operation (up to 15 minutes). This also goes for OpenSearch indexing when there are hundreds of thousands to millions of files to re-index. The re-index may actually not finish after the 15 minute lambda time-out with millions of files and require different re-indexing technique locally or in a container. Asynchronous methods and optional containerized processing are being evaluated for the future for all API requests to prevent this.
+-   With multiple S3 bucket support, identical assetIds across different buckets/prefixes in different databases can cause lookup conflicts in comments and subscriptions. This only occurs with manual S3 changes, as VAMS-generated assetIds use unique GUIDs.
+-   Using the same pipeline ID in both GLOBAL and non-GLOBAL databases causes overlap conflicts.
+-   Pipeline metadata inputs have a size limit when sent to ECS pipelines. Assets or files with extensive metadata may exceed the 8K character ECS JSON input limit. A future pipeline overhaul will convert metadata input to a file-based approach.
+-   For assets with hundreds to thousands of files or very large files (TB-size), some API operations may time out after 29 seconds while the Lambda continues processing (up to 15 minutes). OpenSearch re-indexing with hundreds of thousands to millions of files may not complete within the 15-minute Lambda timeout and may require local or containerized re-indexing. Asynchronous methods and optional containerized processing are being evaluated.
 
 ### Troubleshooting
 
--   If receiving ECS VPC interface endpoint errors during CDK deployment, turn off IsaacSim and Guassian Splat use-case pipelines and re-deploy. Afterwards turn repsective pipelines back on and then re-deploy again. ECS endpoint changes along with AWS CloudFormation logic restrictions between stack changes can cause this issue.
--   If receiving web build or infra CDK errors in existing upgraded projects, make sure to re-run yarn install (web) or npm install (infra) to receive the latest dependencies. Further build errors may additionally need node_modules cache to be reset if not properly reset during install.
+-   If receiving ECS VPC interface endpoint errors during CDK deployment, disable IsaacSim and Gaussian Splat pipelines, re-deploy, then re-enable and deploy again. ECS endpoint changes combined with CloudFormation stack change restrictions can cause this issue.
+-   If receiving web build or infra CDK errors in upgraded projects, re-run `npm install` in web and infra directories. Persistent build errors may require clearing the `node_modules` cache.
 
 ## [2.4.1] (2026-01-30)
 
