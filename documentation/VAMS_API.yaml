@@ -129,7 +129,7 @@ paths:
     /asset-links:
         post:
             summary: "Create a new asset link."
-            description: "Create a new asset link between two assets with relationship type and optional metadata. Supports 'related' and 'parentChild' relationship types with cycle detection."
+            description: "Create a new asset link between two assets with relationship type and optional metadata. Supports 'related' and 'parentChild' relationship types with cycle detection. Assets can be in different databases (cross-database links)."
             requestBody:
                 required: true
                 content:
@@ -2655,7 +2655,7 @@ paths:
 
     /database/{databaseId}/assets/{assetId}/copyFile:
         post:
-            summary: "Copy a file within an asset or to another asset."
+            summary: "Copy a file within an asset, to another asset, or across databases."
             requestBody:
                 required: true
                 content:
@@ -8328,6 +8328,12 @@ components:
                 destinationAssetId:
                     type: string
                     description: "Optional destination asset ID if copying to another asset"
+                destinationDatabaseId:
+                    type: string
+                    description: "Optional destination database ID for cross-database copy. Defaults to the source database if not provided."
+                    minLength: 4
+                    maxLength: 256
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
             required:
                 - sourcePath
                 - destinationPath
@@ -10026,6 +10032,33 @@ components:
                 bool_archived:
                     type: boolean
                     description: "Whether item is archived"
+                str_previewfilekey:
+                    type: string
+                    description: "S3 key of the associated preview file. Empty string if no preview exists. Present on both asset and file index records."
+                str_assetlocationkey:
+                    type: string
+                    description: "S3 key from the asset's assetLocation. Empty string if not set. Only present on asset index records."
+                str_bucketid:
+                    type: string
+                    description: "Bucket ID for the asset"
+                str_bucketname:
+                    type: string
+                    description: "S3 bucket name"
+                str_bucketprefix:
+                    type: string
+                    description: "S3 bucket base prefix"
+                num_filesize:
+                    type: integer
+                    description: "File size in bytes (file index only)"
+                bool_has_asset_children:
+                    type: boolean
+                    description: "Whether asset has child asset links (asset index only)"
+                bool_has_asset_parents:
+                    type: boolean
+                    description: "Whether asset has parent asset links (asset index only)"
+                bool_has_assets_related:
+                    type: boolean
+                    description: "Whether asset has related asset links (asset index only)"
             additionalProperties: true
             required:
                 - _rectype

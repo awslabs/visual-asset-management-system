@@ -153,6 +153,7 @@ export default function ListPage(props) {
                         }
                     />
                 </Grid>
+                <div style={{ paddingBottom: "20px" }} />
             </Box>
             {CreateNewElement && (
                 <CreateNewElement

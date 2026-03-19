@@ -397,10 +397,34 @@ class MoveFileRequestModel(BaseModel, extra='ignore'):
     destinationPath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
 
 class CopyFileRequestModel(BaseModel, extra='ignore'):
-    """Request model for copying files within same database"""
+    """Request model for copying files within or across databases"""
     sourcePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     destinationPath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
-    destinationAssetId: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    destinationAssetId: Optional[str] = Field(None, min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
+    destinationDatabaseId: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+
+    @root_validator
+    def validate_fields(cls, values):
+        logger.info("Validating CopyFileRequestModel parameters")
+        validation_dict = {}
+
+        if values.get('destinationAssetId'):
+            validation_dict['destinationAssetId'] = {
+                'value': values['destinationAssetId'],
+                'validator': 'ASSET_ID'
+            }
+        if values.get('destinationDatabaseId'):
+            validation_dict['destinationDatabaseId'] = {
+                'value': values['destinationDatabaseId'],
+                'validator': 'ID'
+            }
+
+        if validation_dict:
+            (valid, message) = validate(validation_dict)
+            if not valid:
+                raise ValueError(message)
+
+        return values
 
 class ArchiveFileRequestModel(BaseModel, extra='ignore'):
     """Request model for archiving files (soft delete)"""

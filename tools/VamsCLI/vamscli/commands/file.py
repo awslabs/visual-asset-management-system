@@ -1285,20 +1285,24 @@ def move_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
 @click.option('--source', required=True, help='Source file path')
 @click.option('--dest', required=True, help='Destination file path')
 @click.option('--dest-asset', help='Destination asset ID (for cross-asset copy)')
+@click.option('--dest-database', help='Destination database ID (for cross-database copy). Defaults to source database.')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
-def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, dest: str, dest_asset: str, json_input: str, json_output: bool):
-    """Copy a file within an asset or to another asset.
-    
+def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, dest: str, dest_asset: str, dest_database: str, json_input: str, json_output: bool):
+    """Copy a file within an asset, to another asset, or across databases.
+
     Examples:
         # Copy within same asset
         vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/copy.gltf"
-        
-        # Copy to another asset
+
+        # Copy to another asset in the same database
         vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf" --dest-asset other-asset
-        
+
+        # Copy to another asset in a different database
+        vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf" --dest-asset other-asset --dest-database other-db
+
         # Copy with JSON input
         vamscli file copy --json-input '{"database_id": "my-db", "asset_id": "my-asset", "source": "/file.gltf", "dest": "/copy.gltf"}'
     """
@@ -1312,7 +1316,8 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
         source = json_data.get('source', source)
         dest = json_data.get('dest', dest)
         dest_asset = json_data.get('dest_asset', dest_asset)
-        
+        dest_database = json_data.get('dest_database', dest_database)
+
         # Validate required arguments
         if not database_id:
             raise click.ClickException("Database ID is required (-d/--database)")
@@ -1335,7 +1340,9 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
         }
         if dest_asset:
             copy_data["destinationAssetId"] = dest_asset
-        
+        if dest_database:
+            copy_data["destinationDatabaseId"] = dest_database
+
         output_status(f"Copying file from '{source}' to '{dest}'...", json_output)
         
         # Call API
@@ -1348,7 +1355,9 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
             lines.append(f"  To: {dest}")
             if dest_asset:
                 lines.append(f"  Destination Asset: {dest_asset}")
-            
+            if dest_database:
+                lines.append(f"  Destination Database: {dest_database}")
+
             if data.get('affectedFiles'):
                 affected_count = len(data['affectedFiles'])
                 if affected_count > 1:  # More than just the main file

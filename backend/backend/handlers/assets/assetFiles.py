@@ -110,7 +110,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         asset = response.get('Item', {})
         
         if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found in database. Note: Files cannot be moved cross-database.")
+            raise VAMSGeneralErrorResponse("Asset not found in database.")
         
         # Check permissions
         asset["object__type"] = "asset"
@@ -706,23 +706,16 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
     return archived_files
 
 def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claims_and_roles: Dict) -> bool:
-    """Validate permissions for operations involving multiple assets
-    
+    """Validate permissions for operations involving multiple assets (same or cross-database)
+
     Args:
         source_asset: Source asset dictionary
         dest_asset: Destination asset dictionary
         claims_and_roles: The claims and roles from the request
-        
+
     Returns:
         True if user has permissions on both assets, False otherwise
-        
-    Raises:
-        VAMSGeneralErrorResponse: If assets are in different databases
     """
-    # Ensure both assets are in the same database
-    if source_asset['databaseId'] != dest_asset['databaseId']:
-        raise VAMSGeneralErrorResponse("Cross-database operations are not allowed")
-    
     # Check permissions on both assets
     source_asset["object__type"] = "asset"
     dest_asset["object__type"] = "asset"
@@ -784,13 +777,14 @@ def process_preview_files(
     source_asset_id: str = None,
     source_database_id: str = None,
     dest_asset_id: str = None,
-    dest_database_id: str = None
+    dest_database_id: str = None,
+    dest_bucket: str = None
 ) -> List[str]:
     """Process preview files for move, copy, or rename operations
-    
+
     Args:
         operation: Operation type ('move', 'copy', or 'rename')
-        bucket: The S3 bucket
+        bucket: The source S3 bucket
         source_key: Source file key
         dest_key: Destination file key
         base_key: Base key for relative path calculation
@@ -798,10 +792,13 @@ def process_preview_files(
         source_database_id: Source database ID (for copy operations)
         dest_asset_id: Destination asset ID (for copy operations)
         dest_database_id: Destination database ID (for copy operations)
-        
+        dest_bucket: Destination S3 bucket (defaults to source bucket if not provided)
+
     Returns:
         List of affected preview file paths (source and destination for move/rename)
     """
+    if not dest_bucket:
+        dest_bucket = bucket
     affected_preview_files = []
     
     # Find preview files for the source file
@@ -830,7 +827,7 @@ def process_preview_files(
             operation_success = copy_s3_object(
                 bucket,
                 preview_file,
-                bucket,
+                dest_bucket,
                 preview_dest,
                 source_asset_id=source_asset_id,
                 source_database_id=source_database_id,
@@ -1516,11 +1513,14 @@ def _query_file_metadata(databaseId: str, assetId: str, relative_file_path: str)
     Args:
         databaseId: The database ID
         assetId: The asset ID
-        relative_file_path: The relative file path (without leading slash)
+        relative_file_path: The relative file path (with leading slash, e.g. '/folder/file.txt')
 
     Returns:
         Tuple of (metadata_items, attribute_items)
     """
+    # Ensure leading slash — metadata is stored with leading slash in composite key
+    if not relative_file_path.startswith('/'):
+        relative_file_path = '/' + relative_file_path
     composite_key = f"{databaseId}:{assetId}:{relative_file_path}"
     metadata_items = []
     attribute_items = []
@@ -1561,16 +1561,22 @@ def _copy_file_metadata_to_destination(
     Args:
         source_databaseId: Source database ID
         source_assetId: Source asset ID
-        source_relative_path: Source relative file path (no leading slash)
+        source_relative_path: Source relative file path (e.g. '/folder/file.txt' or 'folder/file.txt')
         dest_databaseId: Destination database ID
         dest_assetId: Destination asset ID
-        dest_relative_path: Destination relative file path (no leading slash)
+        dest_relative_path: Destination relative file path (e.g. '/folder/file.txt' or 'folder/file.txt')
 
     Returns:
         Number of metadata/attribute records written to the destination.
     """
     if source_relative_path.endswith('/') or dest_relative_path.endswith('/'):
         return 0
+
+    # Ensure leading slashes — metadata composite keys are stored with leading slash
+    if not source_relative_path.startswith('/'):
+        source_relative_path = '/' + source_relative_path
+    if not dest_relative_path.startswith('/'):
+        dest_relative_path = '/' + dest_relative_path
 
     source_metadata, source_attributes = _query_file_metadata(
         source_databaseId, source_assetId, source_relative_path
@@ -1675,6 +1681,10 @@ def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str)
             logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
             return True
         
+        # Ensure leading slash — metadata is stored with leading slash in composite key
+        if not relative_file_path.startswith('/'):
+            relative_file_path = '/' + relative_file_path
+
         # Construct the composite key for new metadata tables
         # Format: {databaseId}:{assetId}:{relative_file_path}
         composite_key = f"{databaseId}:{assetId}:{relative_file_path}"
@@ -2163,38 +2173,42 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         logger.exception(f"Error unarchiving file: {e}")
         raise VAMSGeneralErrorResponse(f"Error unarchiving file.")
 
-def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, dest_asset_id: Optional[str], claims_and_roles: Dict) -> FileOperationResponseModel:
-    """Copy a file within an asset or between assets in the same database
-    
+def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, dest_asset_id: Optional[str], dest_database_id: Optional[str] = None, claims_and_roles: Dict = {}) -> FileOperationResponseModel:
+    """Copy a file within an asset or between assets (same or cross-database)
+
     Args:
         databaseId: The database ID
         assetId: The source asset ID
         source_path: The source file path
         dest_path: The destination file path
         dest_asset_id: Optional destination asset ID (if different from source)
+        dest_database_id: Optional destination database ID (if different from source)
         claims_and_roles: The claims and roles from the request
-        
+
     Returns:
         FileOperationResponseModel with the result of the operation
     """
+    # Determine effective destination database
+    effective_dest_db = dest_database_id if (dest_database_id and dest_database_id != databaseId) else databaseId
+
     # Validate that source and destination paths are different
-    if source_path == dest_path and (dest_asset_id is None or dest_asset_id == assetId):
+    if source_path == dest_path and (dest_asset_id is None or dest_asset_id == assetId) and effective_dest_db == databaseId:
         raise VAMSGeneralErrorResponse("Source and destination paths must be different for copy operation")
-    
+
     # Get source asset and verify permissions
     source_asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
-    
+
     # Check if this is a preview file - don't allow direct operations on preview files
     if is_preview_file(source_path):
         raise VAMSGeneralErrorResponse(f"Cannot directly copy preview files. Copy the base file instead.")
-    
-    # Determine if this is a cross-asset operation
-    is_cross_asset = dest_asset_id is not None and dest_asset_id != assetId
-    
+
+    # Determine if this is a cross-asset or cross-database operation
+    is_cross_asset = (dest_asset_id is not None and dest_asset_id != assetId) or (dest_database_id is not None and dest_database_id != databaseId)
+
     # Get destination asset if cross-asset operation
     if is_cross_asset:
-        dest_asset = get_asset_with_permissions(databaseId, dest_asset_id, "POST", claims_and_roles)
-        
+        dest_asset = get_asset_with_permissions(effective_dest_db, dest_asset_id or assetId, "POST", claims_and_roles)
+
         # Validate cross-asset permissions
         validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles)
     else:
@@ -2230,12 +2244,12 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         source_asset_id=assetId,
         source_database_id=databaseId,
         dest_asset_id=dest_asset_id if is_cross_asset else assetId,
-        dest_database_id=databaseId
+        dest_database_id=effective_dest_db
     )
-    
+
     if not success:
         raise VAMSGeneralErrorResponse(f"Failed to copy file.")
-    
+
     # Process preview files using centralized helper
     copied_preview_files = process_preview_files(
         operation='copy',
@@ -2246,9 +2260,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         source_asset_id=assetId,
         source_database_id=databaseId,
         dest_asset_id=dest_asset_id if is_cross_asset else assetId,
-        dest_database_id=databaseId
+        dest_database_id=effective_dest_db,
+        dest_bucket=dest_bucket
     )
-    
+
     # Copy auxiliary files if they exist
     copy_auxiliary_files(source_key, dest_key)
 
@@ -2258,11 +2273,11 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     actual_dest_asset = dest_asset_id if is_cross_asset else assetId
     metadata_copied = _copy_file_metadata_to_destination(
         databaseId, assetId, source_rel,
-        databaseId, actual_dest_asset, dest_rel
+        effective_dest_db, actual_dest_asset, dest_rel
     )
 
     # Send email for asset file change
-    send_subscription_email(databaseId, actual_dest_asset)
+    send_subscription_email(effective_dest_db, actual_dest_asset)
 
     # Return response
     affected_files = [dest_path] + copied_preview_files
@@ -3496,9 +3511,9 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
             logger.error("Request body is not a string")
             return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
-        # Parse request model
+        # Parse request model (validates destinationAssetId and destinationDatabaseId via @root_validator)
         request_model = parse(body, model=CopyFileRequestModel)
-        
+
         # Process request
         response = copy_file(
             path_params['databaseId'],
@@ -3506,6 +3521,7 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
             request_model.sourcePath,
             request_model.destinationPath,
             request_model.destinationAssetId,
+            request_model.destinationDatabaseId,
             claims_and_roles
         )
         

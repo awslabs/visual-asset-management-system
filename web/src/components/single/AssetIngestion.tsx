@@ -371,6 +371,7 @@ export default function AssetIngestion() {
                     <div style={{ marginTop: "1em" }}>{statusMessage}</div>
                 </SpaceBetween>
             </Container>
+            <div style={{ paddingBottom: "20px" }} />
         </Box>
     );
 }

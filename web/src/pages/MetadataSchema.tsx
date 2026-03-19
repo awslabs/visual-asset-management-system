@@ -416,6 +416,7 @@ export default function MetadataSchemaPage() {
                         </SpaceBetween>
                     </Container>
                 </SpaceBetween>
+                <div style={{ paddingBottom: "20px" }} />
             </Box>
 
             {/* Modals */}

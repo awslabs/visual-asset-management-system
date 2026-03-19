@@ -184,6 +184,15 @@ export function MoveFilesModal({
                     ? selectedAsset?.assetId
                     : undefined;
 
+            // Extract destinationDatabaseId when copying to a different asset in a different database
+            const destinationDatabaseId =
+                operationMode === "copy" &&
+                copyTarget === "different" &&
+                selectedAsset &&
+                selectedAsset.databaseId !== databaseId
+                    ? selectedAsset.databaseId
+                    : undefined;
+
             // For single file, pass the custom destination filename
             const destFileNames =
                 selectedFiles.length === 1 ? { [filePaths[0]]: destFileName.trim() } : undefined;
@@ -195,7 +204,8 @@ export function MoveFilesModal({
                 selectedFolder!,
                 operationMode,
                 destinationAssetId,
-                destFileNames
+                destFileNames,
+                destinationDatabaseId
             );
 
             // Check if all operations were successful
@@ -268,7 +278,15 @@ export function MoveFilesModal({
                             Files have been {operationMode}d to: {selectedFolder}
                             {operationMode === "copy" &&
                                 copyTarget === "different" &&
-                                selectedAsset && <> in asset: {selectedAsset.assetName}</>}
+                                selectedAsset && (
+                                    <>
+                                        {" "}
+                                        in asset: {selectedAsset.assetName}
+                                        {selectedAsset.databaseId !== databaseId && (
+                                            <> (database: {selectedAsset.databaseId})</>
+                                        )}
+                                    </>
+                                )}
                         </Alert>
                     )}
                 </SpaceBetween>
@@ -388,6 +406,7 @@ export function MoveFilesModal({
                         selectedAsset={selectedAsset}
                         onAssetSelect={handleAssetSelect}
                         onAssetFilesLoad={handleAssetFilesLoad}
+                        restrictToCurrentDatabase={false}
                     />
                 )}
 

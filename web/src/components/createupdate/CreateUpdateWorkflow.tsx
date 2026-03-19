@@ -545,6 +545,7 @@ export default function CreateUpdateWorkflow(props) {
                         </Grid>
                     </Container>
                 </SpaceBetween>
+                <div style={{ paddingBottom: "20px" }} />
             </Box>
             <CreatePipeline
                 open={openCreatePipeline}

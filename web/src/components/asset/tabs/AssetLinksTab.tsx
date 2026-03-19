@@ -37,7 +37,10 @@ function ViewModeAssetLinksTab(props: AssetLinksTabProps) {
     const databaseId = props.databaseId!;
     const isActive = props.isActive!;
 
-    const [state, dispatch] = useReducer(assetLinksReducer, initialAssetLinksState);
+    const [state, dispatch] = useReducer(assetLinksReducer, {
+        ...initialAssetLinksState,
+        currentDatabaseId: databaseId,
+    });
 
     // Modal states
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -573,6 +576,7 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
         searchResults: [],
         isSearching: false,
         restrictMetadataOutsideSchemas: restrictMetadataOutsideSchemas,
+        currentDatabaseId: databaseId,
         // Add metadata change handler to the state so it can be accessed by child components
         onAssetLinkMetadataChange: handleAssetLinkMetadataChange,
     };
