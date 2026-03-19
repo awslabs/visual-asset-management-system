@@ -35,8 +35,8 @@ retry_config = Config(
 )
 
 #Excluded patterns or prefixes from file paths to exclude
-excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads']
-excluded_patterns = ['.previewFile.']
+excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
+excluded_patterns = [] # '.previewFile.' not included here as the fileIndexer processes these in a special way
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 s3_client = boto3.client('s3', config=retry_config)
@@ -570,6 +570,36 @@ def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, 
         logger.exception(f"Error getting S3 file info for {bucket_name}/{s3_key}: {e}")
         return None, False
 
+def find_preview_file_key(bucket_name: str, s3_key: str) -> str:
+    """Check if a .previewFile.* exists for this file in S3.
+
+    Preview files are stored as ``{s3_key}.previewFile.{ext}`` (e.g.
+    ``myasset/photo.e57.previewFile.gif``).
+
+    Args:
+        bucket_name: The S3 bucket name.
+        s3_key: The full S3 key of the source file.
+
+    Returns:
+        The S3 key of the preview file if found, or empty string if not.
+    """
+    try:
+        prefix = s3_key + '.previewFile.'
+        response = s3_client.list_objects_v2(
+            Bucket=bucket_name,
+            Prefix=prefix,
+            MaxKeys=5
+        )
+        for obj in response.get('Contents', []):
+            key = obj.get('Key', '')
+            if key.startswith(prefix):
+                return key
+        return ''
+    except Exception as e:
+        logger.warning(f"Error checking for preview file for {s3_key}: {e}")
+        return ''
+
+
 def extract_file_extension(file_path: str) -> Optional[str]:
     """Extract file extension from file path"""
     if '.' in file_path and not file_path.endswith('/'):
@@ -609,6 +639,13 @@ def build_file_document(request: FileIndexRequest, asset_details: Dict[str, Any]
         doc.date_lastmodified = s3_file_info.get('lastModified')
         doc.str_etag = s3_file_info.get('etag')
         doc.str_s3_version_id = s3_file_info.get('versionId')
+
+    # Check for an associated preview file in S3
+    bucket_name = bucket_details.get('bucketName', '')
+    if bucket_name and request.s3Key:
+        doc.str_previewfilekey = find_preview_file_key(bucket_name, request.s3Key)
+    else:
+        doc.str_previewfilekey = ''
     
     # Add metadata fields with MD_ prefix
     if file_metadata:
@@ -852,7 +889,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
         # These are system/temporary files that should not be indexed
         
         # Check if s3_key contains any excluded patterns
-        if any(pattern in s3_key for pattern in excluded_patterns):
+        if excluded_patterns and any(pattern in s3_key for pattern in excluded_patterns):
             logger.info(f"Ignoring file with excluded pattern from indexing: {s3_key}")
             return IndexOperationResponse(
                 success=True,
@@ -860,7 +897,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 indexName=opensearch_file_index,
                 operation="skip"
             )
-        
+
         # Check if s3_key starts with any excluded prefixes (after any bucket prefix)
         # We need to check the path components, not just the raw key
         path_parts = s3_key.split('/')
@@ -873,9 +910,48 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                     indexName=opensearch_file_index,
                     operation="skip"
                 )
+
+        # Special case: .previewFile. changes should trigger re-indexing of the base file
+        # so the base file's str_previewfilekey field stays in sync.
+        # This covers both creation and deletion of preview files.
+        # Placed after excluded_prefixes check so preview files under excluded
+        # prefixes (e.g. pipelines/) are still ignored.
+        is_preview_rewrite = False
+        if '.previewFile.' in s3_key:
+            base_file_key = s3_key.split('.previewFile.')[0]
+            logger.info(f"Preview file event detected: {s3_key}, checking base file: {base_file_key}")
+
+            # Check if the base file exists in S3
+            try:
+                s3_client.head_object(Bucket=bucket_name, Key=base_file_key)
+                # Base file exists — rewrite s3_key so we re-index the base file instead.
+                # find_preview_file_key() in build_file_document will then correctly
+                # detect whether the preview file is present or absent.
+                logger.info(f"Base file exists, re-indexing base file: {base_file_key}")
+                s3_key = base_file_key
+                is_preview_rewrite = True
+            except ClientError as e:
+                if e.response['Error']['Code'] in ('404', 'NoSuchKey'):
+                    logger.info(f"No base file found for preview file {s3_key}, skipping")
+                    return IndexOperationResponse(
+                        success=True,
+                        message="Preview file with no base file, skipping",
+                        indexName=opensearch_file_index,
+                        operation="skip"
+                    )
+                else:
+                    logger.warning(f"Error checking base file for preview: {e}")
+                    return IndexOperationResponse(
+                        success=False,
+                        message=f"Error checking base file: {str(e)}",
+                        indexName=opensearch_file_index,
+                        operation="error"
+                    )
         
-        # Handle ObjectRemoved:Delete events specially
-        if "Delete" in event_name:
+        # Handle ObjectRemoved:Delete events specially.
+        # Skip this branch when we rewrote a preview file to its base file —
+        # the base file still exists and we just need to re-index it.
+        if "Delete" in event_name and not is_preview_rewrite:
             logger.info(f"Processing delete event for file: {s3_key}")
             
             # For delete events, we need to parse asset ID from S3 key path

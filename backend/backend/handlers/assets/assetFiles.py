@@ -1510,6 +1510,154 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
 # API Handler Functions
 #######################
 
+def _query_file_metadata(databaseId: str, assetId: str, relative_file_path: str) -> Tuple[List[Dict], List[Dict]]:
+    """Query all metadata and attributes for a file.
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        relative_file_path: The relative file path (without leading slash)
+
+    Returns:
+        Tuple of (metadata_items, attribute_items)
+    """
+    composite_key = f"{databaseId}:{assetId}:{relative_file_path}"
+    metadata_items = []
+    attribute_items = []
+
+    if asset_file_metadata_table:
+        try:
+            response = asset_file_metadata_table.query(
+                IndexName='DatabaseIdAssetIdFilePathIndex',
+                KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+            )
+            metadata_items = response.get('Items', [])
+        except Exception as e:
+            logger.warning(f"Error querying file metadata: {e}")
+
+    if file_attribute_table:
+        try:
+            response = file_attribute_table.query(
+                IndexName='DatabaseIdAssetIdFilePathIndex',
+                KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+            )
+            attribute_items = response.get('Items', [])
+        except Exception as e:
+            logger.warning(f"Error querying file attributes: {e}")
+
+    return metadata_items, attribute_items
+
+
+def _copy_file_metadata_to_destination(
+    source_databaseId: str, source_assetId: str, source_relative_path: str,
+    dest_databaseId: str, dest_assetId: str, dest_relative_path: str
+) -> int:
+    """Copy metadata and attributes from one file path to another, merging with
+    existing metadata at the destination.  If a metadata/attribute key already
+    exists at the destination with a *different* value, the incoming record is
+    written under a new key with a ``_copy_<suffix>`` postfix so that no data is
+    lost.
+
+    Args:
+        source_databaseId: Source database ID
+        source_assetId: Source asset ID
+        source_relative_path: Source relative file path (no leading slash)
+        dest_databaseId: Destination database ID
+        dest_assetId: Destination asset ID
+        dest_relative_path: Destination relative file path (no leading slash)
+
+    Returns:
+        Number of metadata/attribute records written to the destination.
+    """
+    if source_relative_path.endswith('/') or dest_relative_path.endswith('/'):
+        return 0
+
+    source_metadata, source_attributes = _query_file_metadata(
+        source_databaseId, source_assetId, source_relative_path
+    )
+
+    if not source_metadata and not source_attributes:
+        return 0
+
+    # Query existing destination metadata/attributes for merge logic
+    dest_metadata, dest_attributes = _query_file_metadata(
+        dest_databaseId, dest_assetId, dest_relative_path
+    )
+
+    # Build lookup of existing destination keys -> values
+    dest_meta_lookup = {
+        item['metadataKey']: item.get('metadataValue') for item in dest_metadata
+    }
+    dest_attr_lookup = {
+        item['attributeKey']: item.get('attributeValue') for item in dest_attributes
+    }
+
+    dest_composite = f"{dest_databaseId}:{dest_assetId}:{dest_relative_path}"
+    dest_asset_composite = f"{dest_databaseId}:{dest_assetId}"
+
+    written = 0
+    import uuid as _uuid
+
+    # Copy metadata records
+    if asset_file_metadata_table and source_metadata:
+        try:
+            for item in source_metadata:
+                key_name = item['metadataKey']
+                value = item.get('metadataValue', '')
+                value_type = item.get('metadataValueType', 'string')
+
+                # Merge logic: if key exists with same value, skip; different value, rename
+                if key_name in dest_meta_lookup:
+                    if dest_meta_lookup[key_name] == value:
+                        continue  # identical – skip
+                    # Different value – create unique key
+                    suffix = _uuid.uuid4().hex[:8]
+                    key_name = f"{key_name}_copy_{suffix}"
+
+                asset_file_metadata_table.put_item(Item={
+                    'metadataKey': key_name,
+                    'databaseId:assetId:filePath': dest_composite,
+                    'databaseId:assetId': dest_asset_composite,
+                    'metadataValue': value,
+                    'metadataValueType': value_type,
+                })
+                written += 1
+        except Exception as e:
+            logger.warning(f"Error copying file metadata to destination: {e}")
+
+    # Copy attribute records
+    if file_attribute_table and source_attributes:
+        try:
+            for item in source_attributes:
+                key_name = item['attributeKey']
+                value = item.get('attributeValue', '')
+                value_type = item.get('attributeValueType', 'string')
+
+                if key_name in dest_attr_lookup:
+                    if dest_attr_lookup[key_name] == value:
+                        continue
+                    suffix = _uuid.uuid4().hex[:8]
+                    key_name = f"{key_name}_copy_{suffix}"
+
+                file_attribute_table.put_item(Item={
+                    'attributeKey': key_name,
+                    'databaseId:assetId:filePath': dest_composite,
+                    'databaseId:assetId': dest_asset_composite,
+                    'attributeValue': value,
+                    'attributeValueType': value_type,
+                })
+                written += 1
+        except Exception as e:
+            logger.warning(f"Error copying file attributes to destination: {e}")
+
+    if written > 0:
+        logger.info(f"Copied {written} metadata/attribute records from "
+                     f"{source_databaseId}:{source_assetId}:{source_relative_path} to "
+                     f"{dest_databaseId}:{dest_assetId}:{dest_relative_path}")
+
+    return written
+
+
 def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str) -> bool:
     """Delete metadata and attributes for a file from new metadata tables
     
@@ -2104,16 +2252,26 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # Copy auxiliary files if they exist
     copy_auxiliary_files(source_key, dest_key)
 
+    # Copy metadata and attributes to the destination (merge with existing)
+    source_rel = source_path.lstrip('/')
+    dest_rel = dest_path.lstrip('/')
+    actual_dest_asset = dest_asset_id if is_cross_asset else assetId
+    metadata_copied = _copy_file_metadata_to_destination(
+        databaseId, assetId, source_rel,
+        databaseId, actual_dest_asset, dest_rel
+    )
+
     # Send email for asset file change
-    send_subscription_email(databaseId, dest_asset_id if is_cross_asset else assetId)
-    
+    send_subscription_email(databaseId, actual_dest_asset)
+
     # Return response
     affected_files = [dest_path] + copied_preview_files
     return FileOperationResponseModel(
         success=True,
-        message=f"Successfully copied file from {source_path} to {dest_path}" + 
+        message=f"Successfully copied file from {source_path} to {dest_path}" +
                 (f" in asset {dest_asset_id}" if is_cross_asset else "") +
-                (f" and {len(copied_preview_files)} associated preview files" if copied_preview_files else ""),
+                (f" and {len(copied_preview_files)} associated preview files" if copied_preview_files else "") +
+                (f" and {metadata_copied} metadata/attribute records" if metadata_copied else ""),
         affectedFiles=affected_files
     )
 
@@ -2221,15 +2379,26 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # Move auxiliary files if they exist
     move_auxiliary_files(source_key, dest_key)
 
+    # Move metadata and attributes: copy to new path (merge), then delete from old path
+    source_rel = source_path.lstrip('/')
+    dest_rel = dest_path.lstrip('/')
+    metadata_moved = _copy_file_metadata_to_destination(
+        databaseId, assetId, source_rel,
+        databaseId, assetId, dest_rel
+    )
+    if metadata_moved > 0:
+        delete_file_metadata(databaseId, assetId, source_rel)
+
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)
-    
+
     # Return response
     affected_files = [source_path, dest_path] + moved_preview_files
     return FileOperationResponseModel(
         success=True,
-        message=f"Successfully moved file from {source_path} to {dest_path}" + 
-                (f" and {len(moved_preview_files) // 2} associated preview files" if moved_preview_files else ""),
+        message=f"Successfully moved file from {source_path} to {dest_path}" +
+                (f" and {len(moved_preview_files) // 2} associated preview files" if moved_preview_files else "") +
+                (f" and {metadata_moved} metadata/attribute records" if metadata_moved else ""),
         affectedFiles=affected_files
     )
 

@@ -75,7 +75,11 @@ export const SubscriptionListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "subscribers",
             header: "Subscribers",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: (props: any) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "subscribers",
         }),
     ],

@@ -1699,12 +1699,18 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
             # Skip invalid versions
             continue
     
+    # Sort by DateModified descending (newest first)
+    authorized_versions.sort(
+        key=lambda v: v.DateModified if v.DateModified else '',
+        reverse=True
+    )
+
     # Determine NextToken from LastEvaluatedKey (base64 encoded)
     next_token = None
     if 'LastEvaluatedKey' in response:
         json_str = json.dumps(response['LastEvaluatedKey'])
         next_token = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
-    
+
     # Return response model
     return AssetVersionsListResponseModel(
         versions=authorized_versions,

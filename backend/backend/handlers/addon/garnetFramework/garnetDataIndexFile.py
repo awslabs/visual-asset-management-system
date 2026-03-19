@@ -46,7 +46,7 @@ sqs = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="GarnetFileIndexer")
 
 # Excluded patterns or prefixes from file paths to exclude
-excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads']
+excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
 excluded_patterns = ['.previewFile.']
 
 # Load environment variables with error handling

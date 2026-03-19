@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file. See [standa
 • New SQS and EventBridge Pipeline Support - Pipelines and workflows now support SQS and EventBridge execution types alongside existing Lambda, enabling integration with external processing systems.
 • New 3D and PointCloud Preview Thumbnail (GIF) Generation Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
 • New Database Metadata and Location Mini-map Support - Database metadata management on the website and location service mini-map display option
+• Website Asset and File Page Refinement - Layout of the asset and file viewing pages are now more refined, added asset preview thumbnail to top asset details
 • Enhanced Asset Versions Functionality - New asset version aliasing, archive/unarchive capabilities, asset version editing, metadata/attribute versioning, and revert functionality with metadata restoration
 • Enhanced File Selector and Download Functionality w/ Asset Versions - Version-aware download APIs with file and asset version query parameters, updated file viewers for file or asset version file retrieval, web asset version selector filtering for files and metadata
 • New Cognito User Management - Web UI, API, and CLI functionality for managing Cognito users without AWS Console access, includes add/update/remove/reset password operations, new admin navigation page, enabled only when Cognito authentication is active
@@ -65,13 +66,18 @@ The website overhaul may cause a high number of merge conflicts for any forked r
 -   Added functionality for asset versions to be archived/unarchived, be able to specify a version alias name, and be able to edit an existing asset version to change the alias name and/or associated comment. Asset versions in dynamoDB now properly store the asset's database id to prevent future system conflicts. This feature added new API routes, web UI, and CLI commands.
     -   Migration scripts are needed for this to update previous asset versions to include the database id needed on asset versions (and asset sub-tables)
 -   Added new API Key system to allow for the creation of API Keys through API, CLI, and the website (`API Key Management`). This will provide the ability to issue upstream or downstream API keys to applications to use VAMS. API Keys are assigned a user ID owner it will impersonate (both for user id used and roles applied). See the `DeveloeprGuide.md` for more information on how to generate these API keys and use them.
+-   Moving or copying files will now also copy/move the associated metadata and attributes of the file with it. If copying/moving to an existing file (where the version roles), the metadata and attributes will be merged with the existing file.
+-   File and asset preview files are now included as a new open-search index field of `str_previewfilekey`. If field is included but field is empty, there is no preview file. If new field is not in the index document record, it means the document hasn't been updated yet using the new logic and backup methods to check preview file existance should be used (API fetch of individual file or asset record). Optionally re-index your data to fix all previous records immediately, if desired.
+-   A new field of `str_assetlocationkey` was added to the asset open search index. This field will only show up in the index once asset modifications are done for existing records. Optionally re-index your data to fix all previous records immediately, if desired.
+    -   **Web** Updated asset and file search page logic to now look at this new field first before conducting additional API calls to fetch previewFile information. This will reduce individual web API calls when preview thumbnail options are toggled.
 -   **Web** Updated the web navigation to split out `Admin - Auth` into its own admin navigation section and all others to `Admin - Data`. Removed "Asset Ingestion" from the admin menus as this web page is now deprecated although still exists for direct navigation, as permissions allow.
 -   **Web** Database listing page updates
     -   Supports viewing/modifying metadata on databases (backend/CLI implemented for databases in v2.4)
     -   Supports mini-map views and display toggle (off by default) when LocationServices is enabled for VAMS, based on database metadata (ie. having a Location or Longitude+Latitude metadata key)
     -   Implemented different filters based on columns that are more likely to be filtered for (S3 buckets, Restrict Metadata, Restrict File Uploads)
 -   **Web** New ability to specify destination file name when copying/moving single files; multiple file move/copy will retain still the original filename
--   **Web** Viewe Asset page has cleaned up asset details component containers and overall layout spacing to help compress
+-   **Web** View Asset page has cleaned up asset details component containers and overall layout spacing to help compress
+-   **Web** View Asset page now shows the asset preview thumbnail in the top details section if a preview file is available.
 -   **Web** View File page has cleaned up component containers and layout to help compress
 
 ### Bug Fixes
@@ -89,6 +95,8 @@ The website overhaul may cause a high number of merge conflicts for any forked r
 -   Fixed bug in assets and files search to show full result counts, have appropriate paging functionality, and correct the backend API for a paging logic bug
 -   Added additional createWorkflow API input validation checks for edge input scenarios and cases where a user creating a workflow does not have authorization access to an underlying pipeline being specified
 -   Fixed typo in reserved S3 prefix list (`piplines`->`pipelines`) which auto-created assets in some cases for reserved prefix folders
+-   Pipelines can no longer be deleted if they currently part of a workflow
+-   Proper error messaging from the API is implemented if you try to unarchive or archive an asset that is not in the proper state (ie you can't unarchive an asset already in a non-archived state)
 -   Attempted to fix edge cases where local web debugging was causing CSP policy errors for some development users
 -   Fixed bug in GenAI MetataLabelinng use-case pipeline where the CDK pathing has a case sensitivity for non-windows builds (caused CDK errors)
 -   Fixed Gaussian Splat use-case pipeline Docker build error with updating to newest version of 3D reconstruction toolkit
@@ -98,6 +106,7 @@ The website overhaul may cause a high number of merge conflicts for any forked r
 
 ### Chores
 
+-   Indexers now are ignoring `workspace` and `workspaces` asset bucket prefixes in preparation for personal workspaces functionality in future releases
 -   **Web** Added a default footer message, changed login page layout based on new refactor
 -   **Web** Refined Assets and Files search UI to support column resizing, shorter and better column names, and some text wrapping
 -   Refactored the Pipelines and Workflows API backend to now have proper request/response models, better input validation, and now follows the new backend standard set in v2.2. This is in prepartion for a larger pipeline/workflow overhaul.

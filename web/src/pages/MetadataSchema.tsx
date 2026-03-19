@@ -327,10 +327,18 @@ export default function MetadataSchemaPage() {
                                     {
                                         id: "fileTypeRestriction",
                                         header: "File Type Restriction",
-                                        cell: (item) =>
-                                            item.fileKeyTypeRestriction || (
-                                                <Box color="text-body-secondary">None</Box>
-                                            ),
+                                        cell: (item) => (
+                                            <span
+                                                style={{
+                                                    whiteSpace: "normal",
+                                                    wordBreak: "break-word",
+                                                }}
+                                            >
+                                                {item.fileKeyTypeRestriction || (
+                                                    <Box color="text-body-secondary">None</Box>
+                                                )}
+                                            </span>
+                                        ),
                                     },
                                     {
                                         id: "enabled",

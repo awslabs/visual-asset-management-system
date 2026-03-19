@@ -54,7 +54,11 @@ export const PipelineListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "description",
         }),
         new ColumnDefinition({
