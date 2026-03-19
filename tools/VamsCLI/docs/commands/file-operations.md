@@ -606,7 +606,7 @@ vamscli file move --json-input '{"database_id": "my-db", "asset_id": "my-asset",
 
 ### `vamscli file copy`
 
-Copy a file within an asset or to another asset.
+Copy a file within an asset, to another asset, or across databases.
 
 **Required Options:**
 
@@ -618,6 +618,7 @@ Copy a file within an asset or to another asset.
 **Options:**
 
 -   `--dest-asset`: Destination asset ID (for cross-asset copy)
+-   `--dest-database`: Destination database ID (for cross-database copy). Defaults to source database.
 -   `--json-input`: JSON input with all parameters
 -   `--json-output`: Output API response as JSON
 
@@ -627,11 +628,17 @@ Copy a file within an asset or to another asset.
 # Copy within same asset
 vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/copy.gltf"
 
-# Copy to another asset
+# Copy to another asset in the same database
 vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf" --dest-asset other-asset
+
+# Copy to another asset in a different database
+vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf" --dest-asset other-asset --dest-database other-db
 
 # Copy with JSON input
 vamscli file copy --json-input '{"database_id": "my-db", "asset_id": "my-asset", "source": "/file.gltf", "dest": "/copy.gltf"}'
+
+# Cross-database copy with JSON input
+vamscli file copy --json-input '{"database_id": "src-db", "asset_id": "src-asset", "source": "/file.gltf", "dest": "/file.gltf", "dest_asset": "dest-asset", "dest_database": "dest-db"}'
 ```
 
 ### `vamscli file archive`
@@ -849,7 +856,7 @@ vamscli file delete-auxiliary --json-input '{"database_id": "my-db", "asset_id":
 -   **Folder Management**: Create and organize files in folder structures
 -   **Path-based Operations**: Use file paths for precise file targeting
 -   **Prefix Operations**: Bulk operations on files under specific prefixes
--   **Cross-asset Operations**: Copy files between assets in the same database
+-   **Cross-asset Operations**: Copy files between assets in the same database or across databases
 
 ### File Lifecycle
 

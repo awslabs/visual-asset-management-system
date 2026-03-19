@@ -78,7 +78,11 @@ export const RoleListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: (props: any) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "description",
         }),
         new ColumnDefinition({

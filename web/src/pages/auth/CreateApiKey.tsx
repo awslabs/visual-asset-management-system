@@ -122,7 +122,8 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
         return (
             formState.name.trim().length >= 1 &&
             formState.userId.trim().length >= 1 &&
-            formState.description.trim().length >= 1
+            formState.description.trim().length >= 1 &&
+            formState.description.length <= 256
         );
     };
 
@@ -240,7 +241,7 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                     </FormField>
                     <FormField
                         label="Description"
-                        constraintText="Required. Enter a description for the API key."
+                        constraintText="Required. Max 256 characters."
                         errorText={descriptionError}
                     >
                         <Textarea
@@ -249,6 +250,10 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                                 setFormState({ ...formState, description: detail.value });
                                 if (!detail.value.trim()) {
                                     setDescriptionError("Description is required");
+                                } else if (detail.value.length > 256) {
+                                    setDescriptionError(
+                                        "Description must be 256 characters or less"
+                                    );
                                 } else {
                                     setDescriptionError("");
                                 }

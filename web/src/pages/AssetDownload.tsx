@@ -667,69 +667,77 @@ export default function AssetDownloadsPage() {
     const allComplete = isAllComplete();
 
     return (
-        <Container header={<Header variant="h2">Downloading Folder ({fileTree.name})</Header>}>
-            <SpaceBetween size="l" direction="vertical">
-                {/* Download Mode Toggle */}
-                <Box>
-                    <SpaceBetween size="m" direction="vertical">
-                        <Toggle
-                            onChange={({ detail }) => setFlattenHierarchy(detail.checked)}
-                            checked={flattenHierarchy}
-                        >
-                            {flattenHierarchy
-                                ? "Flatten Asset Paths on Download"
-                                : "Keep Asset Paths on Download"}
-                        </Toggle>
-
-                        {/* Error Alert for Duplicate Files */}
-                        {flattenHierarchy && hasDuplicates && (
-                            <Alert type="error" header="Duplicate File Names Detected">
-                                The following files have duplicate names and cannot be downloaded in
-                                flatten mode: {duplicateFileNames.join(", ")}. Please switch to
-                                "Keep Asset Paths on Download" mode or rename the conflicting files.
-                            </Alert>
-                        )}
-                    </SpaceBetween>
-                </Box>
-
-                <Box>
-                    <SpaceBetween size="m" direction="vertical">
-                        <SpaceBetween size="xs" direction="horizontal">
-                            <Button
-                                variant="primary"
-                                onClick={handleDownload}
-                                loading={isDownloading}
-                                disabled={isDownloading || (flattenHierarchy && hasDuplicates)}
+        <>
+            <Container header={<Header variant="h2">Downloading Folder ({fileTree.name})</Header>}>
+                <SpaceBetween size="l" direction="vertical">
+                    {/* Download Mode Toggle */}
+                    <Box>
+                        <SpaceBetween size="m" direction="vertical">
+                            <Toggle
+                                onChange={({ detail }) => setFlattenHierarchy(detail.checked)}
+                                checked={flattenHierarchy}
                             >
-                                {resume ? "Start Download" : "Restart Download"}
-                            </Button>
+                                {flattenHierarchy
+                                    ? "Flatten Asset Paths on Download"
+                                    : "Keep Asset Paths on Download"}
+                            </Toggle>
 
-                            {!isDownloading && stats.inProgress > 0 && (
-                                <Button onClick={handleForceComplete}>Mark All as Complete</Button>
-                            )}
-
-                            {allComplete && (
-                                <Button onClick={handleReturnToAsset}>Return to View Asset</Button>
+                            {/* Error Alert for Duplicate Files */}
+                            {flattenHierarchy && hasDuplicates && (
+                                <Alert type="error" header="Duplicate File Names Detected">
+                                    The following files have duplicate names and cannot be
+                                    downloaded in flatten mode: {duplicateFileNames.join(", ")}.
+                                    Please switch to "Keep Asset Paths on Download" mode or rename
+                                    the conflicting files.
+                                </Alert>
                             )}
                         </SpaceBetween>
+                    </Box>
 
-                        <Box>
-                            <StatusIndicator type={allComplete ? "success" : "in-progress"}>
-                                {stats.completed} of {stats.total} files completed
-                                {stats.failed > 0 && `, ${stats.failed} failed`}
-                                {stats.inProgress > 0 && `, ${stats.inProgress} in progress`}
-                            </StatusIndicator>
-                        </Box>
-                    </SpaceBetween>
-                </Box>
+                    <Box>
+                        <SpaceBetween size="m" direction="vertical">
+                            <SpaceBetween size="xs" direction="horizontal">
+                                <Button
+                                    variant="primary"
+                                    onClick={handleDownload}
+                                    loading={isDownloading}
+                                    disabled={isDownloading || (flattenHierarchy && hasDuplicates)}
+                                >
+                                    {resume ? "Start Download" : "Restart Download"}
+                                </Button>
 
-                <FileUploadTable
-                    allItems={updatedTableItems}
-                    resume={resume}
-                    onRetry={handleDownload}
-                    mode={"Download"}
-                />
-            </SpaceBetween>
-        </Container>
+                                {!isDownloading && stats.inProgress > 0 && (
+                                    <Button onClick={handleForceComplete}>
+                                        Mark All as Complete
+                                    </Button>
+                                )}
+
+                                {allComplete && (
+                                    <Button onClick={handleReturnToAsset}>
+                                        Return to View Asset
+                                    </Button>
+                                )}
+                            </SpaceBetween>
+
+                            <Box>
+                                <StatusIndicator type={allComplete ? "success" : "in-progress"}>
+                                    {stats.completed} of {stats.total} files completed
+                                    {stats.failed > 0 && `, ${stats.failed} failed`}
+                                    {stats.inProgress > 0 && `, ${stats.inProgress} in progress`}
+                                </StatusIndicator>
+                            </Box>
+                        </SpaceBetween>
+                    </Box>
+
+                    <FileUploadTable
+                        allItems={updatedTableItems}
+                        resume={resume}
+                        onRetry={handleDownload}
+                        mode={"Download"}
+                    />
+                </SpaceBetween>
+            </Container>
+            <div style={{ paddingBottom: "20px" }} />
+        </>
     );
 }

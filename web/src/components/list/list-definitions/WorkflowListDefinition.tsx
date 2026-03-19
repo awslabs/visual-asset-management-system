@@ -50,7 +50,11 @@ export const WorkflowListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "description",
         }),
         new ColumnDefinition({
@@ -70,7 +74,11 @@ export const WorkflowListDefinition = new ListDefinition({
             header: "Auto-Trigger on File Upload (Extensions)",
             cellWrapper: (props) => {
                 const extensions = props?.item?.autoTriggerOnFileExtensionsUpload || "";
-                return <>{extensions || "-"}</>;
+                return (
+                    <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                        {extensions || "-"}
+                    </span>
+                );
             },
             sortingField: "autoTriggerOnFileExtensionsUpload",
         }),

@@ -22,6 +22,8 @@ interface FilePreviewThumbnailCellProps {
         previewKey: string,
         downloadType?: "assetPreview" | "assetFile"
     ) => void;
+    /** If present in the search index record, skip the fetchFileInfo API call */
+    previewFileKey?: string;
 }
 
 /**
@@ -34,6 +36,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
     fileName,
     fileSize,
     onOpenFullPreview,
+    previewFileKey,
 }) => {
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -89,13 +92,55 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                     // Preview not cached, but we have file details
                     setPreviewKey(filePreviewKey);
                     setDownloadType(currentDownloadType);
+                } else if (previewFileKey !== undefined) {
+                    // previewFileKey from search index record — skip the fetchFileInfo API call
+                    currentDownloadType = "assetFile";
+                    keyToUse = fileKey;
+
+                    if (previewFileKey) {
+                        // Dedicated preview file exists in the index
+                        filePreviewKey = previewFileKey;
+                        keyToUse = filePreviewKey;
+                        setPreviewKey(filePreviewKey);
+                        setDownloadType(currentDownloadType);
+
+                        cacheManager.setFile(fileCacheKey, {
+                            previewKey: filePreviewKey,
+                            downloadType: currentDownloadType,
+                            hasPreview: true,
+                        });
+                    } else {
+                        // No preview file — check if the file itself is a previewable image
+                        const fileExt = fileName.substring(fileName.lastIndexOf(".")).toLowerCase();
+                        const isPreviewFormat = previewFileFormats.includes(fileExt);
+                        const isSizeOk = fileSize !== undefined && fileSize < 5 * 1024 * 1024;
+
+                        if (!isPreviewFormat || !isSizeOk) {
+                            cacheManager.setFile(fileCacheKey, {
+                                previewKey: "",
+                                downloadType: "assetFile",
+                                hasPreview: false,
+                            });
+                            setError(true);
+                            setLoading(false);
+                            return;
+                        }
+
+                        // Use the file itself as the preview
+                        setPreviewKey(fileKey);
+                        setDownloadType("assetFile");
+                        cacheManager.setFile(fileCacheKey, {
+                            previewKey: fileKey,
+                            downloadType: "assetFile",
+                            hasPreview: true,
+                        });
+                    }
                 } else {
-                    // Reset states when we need to fetch
+                    // No previewFileKey on the index record (older document) — fall back to API call
                     setUrl(null);
                     setLoading(true);
                     setError(false);
                     setPreviewKey(null);
-                    // Cache miss - fetch file info from API
                     console.log(`[Cache MISS] File details for ${fileName}`);
                     const [success, fileInfo] = await fetchFileInfo({
                         databaseId,
@@ -117,50 +162,34 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                     keyToUse = fileKey;
 
                     if (filePreviewKey) {
-                        // If there's a dedicated preview file, use it
                         keyToUse = filePreviewKey;
                         currentDownloadType = "assetFile";
                         setPreviewKey(filePreviewKey);
                         setDownloadType(currentDownloadType);
 
-                        // Cache the file details
                         cacheManager.setFile(fileCacheKey, {
                             previewKey: filePreviewKey,
                             downloadType: currentDownloadType,
                             hasPreview: true,
                         });
                     } else {
-                        // If no preview file, check if the file itself is a previewable image
                         const fileExt = fileName.substring(fileName.lastIndexOf(".")).toLowerCase();
-
-                        // Check if file extension is in previewFileFormats
                         const isPreviewFormat = previewFileFormats.includes(fileExt);
-
-                        // Check if file size is less than 5MB
                         const isSizeOk = fileSize !== undefined && fileSize < 5 * 1024 * 1024;
 
                         if (!isPreviewFormat || !isSizeOk) {
-                            console.log(
-                                `File ${fileName} is not previewable (format: ${isPreviewFormat}, size OK: ${isSizeOk})`
-                            );
-
-                            // Cache that this file has no preview
                             cacheManager.setFile(fileCacheKey, {
                                 previewKey: "",
                                 downloadType: "assetFile",
                                 hasPreview: false,
                             });
-
                             setError(true);
                             setLoading(false);
                             return;
                         }
 
-                        // Use the file itself as the preview
                         setPreviewKey(fileKey);
                         setDownloadType("assetFile");
-
-                        // Cache the file details
                         cacheManager.setFile(fileCacheKey, {
                             previewKey: fileKey,
                             downloadType: "assetFile",
@@ -233,7 +262,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
             setError(true);
             setLoading(false);
         }
-    }, [databaseId, assetId, fileKey, fileName, fileSize]);
+    }, [databaseId, assetId, fileKey, fileName, fileSize, previewFileKey]);
 
     // Handle image load error
     const handleImageError = () => {
@@ -242,11 +271,11 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
 
     // If we're not loading and there's an error or no URL, show blank
     if (!loading && (error || !url)) {
-        return <Box padding="s" />;
+        return <div />;
     }
 
     return (
-        <Box padding="s" className="preview-thumbnail-container">
+        <div style={{ padding: "2px 0", height: "auto" }} className="preview-thumbnail-container">
             {loading && (
                 <div className="preview-thumbnail-loading">
                     <Spinner size="normal" />
@@ -272,7 +301,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                     />
                 </div>
             )}
-        </Box>
+        </div>
     );
 };
 
@@ -285,7 +314,8 @@ export const FilePreviewThumbnailCell = React.memo(
             prevProps.assetId === nextProps.assetId &&
             prevProps.fileKey === nextProps.fileKey &&
             prevProps.fileName === nextProps.fileName &&
-            prevProps.fileSize === nextProps.fileSize
+            prevProps.fileSize === nextProps.fileSize &&
+            prevProps.previewFileKey === nextProps.previewFileKey
         );
     }
 );

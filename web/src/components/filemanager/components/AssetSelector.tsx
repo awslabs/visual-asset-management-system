@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { FormField, Box, SpaceBetween } from "@cloudscape-design/components";
+import { FormField, Box, SpaceBetween, Alert } from "@cloudscape-design/components";
 import { AssetSearchTable, AssetSearchItem } from "../../searchSmall/AssetSearchTable";
 import { fetchtagTypes } from "../../../services/APIService";
 
@@ -16,6 +16,7 @@ export interface AssetSelectorProps {
     selectedAsset: Asset | null;
     onAssetSelect: (asset: Asset | null) => void;
     onAssetFilesLoad?: (assetId: string, files: any[]) => void;
+    restrictToCurrentDatabase?: boolean;
 }
 
 export function AssetSelector({
@@ -24,6 +25,7 @@ export function AssetSelector({
     selectedAsset,
     onAssetSelect,
     onAssetFilesLoad,
+    restrictToCurrentDatabase,
 }: AssetSelectorProps) {
     const [tagTypes, setTagTypes] = useState<any[]>([]);
 
@@ -66,18 +68,33 @@ export function AssetSelector({
                 showTagsColumn={true}
                 showSelectedAssets={false}
                 tagTypes={tagTypes}
+                restrictToCurrentDatabase={restrictToCurrentDatabase}
             />
 
             {selectedAsset && (
-                <FormField label="Selected Asset">
-                    <Box>
-                        <strong>{selectedAsset.assetName}</strong>
-                        <br />
-                        <span style={{ color: "var(--vams-text-secondary)", fontSize: "14px" }}>
-                            {selectedAsset.description}
-                        </span>
-                    </Box>
-                </FormField>
+                <SpaceBetween direction="vertical" size="xs">
+                    <FormField label="Selected Asset">
+                        <Box>
+                            <strong>{selectedAsset.assetName}</strong>
+                            <br />
+                            <span style={{ color: "var(--vams-text-secondary)", fontSize: "14px" }}>
+                                {selectedAsset.description}
+                            </span>
+                            <br />
+                            <span style={{ color: "var(--vams-text-secondary)", fontSize: "14px" }}>
+                                Database: <strong>{selectedAsset.databaseId}</strong>
+                            </span>
+                        </Box>
+                    </FormField>
+                    {selectedAsset.databaseId !== currentDatabaseId && (
+                        <Alert type="warning">
+                            Cross-database operation: The selected asset is in database{" "}
+                            <strong>{selectedAsset.databaseId}</strong>, which differs from the
+                            current database <strong>{currentDatabaseId}</strong>. Ensure you have
+                            the required permissions on both databases.
+                        </Alert>
+                    )}
+                </SpaceBetween>
             )}
         </SpaceBetween>
     );

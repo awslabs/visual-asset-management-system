@@ -1054,7 +1054,11 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
             raise VAMSGeneralErrorResponse("Asset not found")
         # If found in original location, check if it's actually archived
         if asset.get('status') != 'archived':
-            raise VAMSGeneralErrorResponse("Asset is not archived")
+            raise VAMSGeneralErrorResponse("Asset is not archived. Only archived assets can be unarchived.")
+    else:
+        # Found via #deleted key — verify it is indeed in archived state
+        if asset.get('status') != 'archived':
+            raise VAMSGeneralErrorResponse("Asset is not in a valid archived state. Cannot unarchive.")
     
     # Check authorization
     asset.update({"object__type": "asset"})

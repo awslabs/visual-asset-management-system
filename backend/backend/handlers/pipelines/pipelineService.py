@@ -34,6 +34,7 @@ lambda_client = boto3.client('lambda')
 # Load environment variables
 try:
     pipeline_database = os.environ.get("PIPELINE_STORAGE_TABLE_NAME")
+    workflow_database = os.environ.get("WORKFLOW_STORAGE_TABLE_NAME")
 
     if not pipeline_database:
         logger.exception("Failed loading environment variables")
@@ -189,6 +190,100 @@ def delete_lambda(function_name):
         logger.exception(e)
 
 
+def _get_workflows_using_pipeline(database_id: str, pipeline_id: str) -> list:
+    """Check if a pipeline is referenced by any active (non-deleted) workflows.
+
+    Args:
+        database_id: The database ID to scan workflows for.
+        pipeline_id: The pipeline ID to look for.
+
+    Returns:
+        List of workflow IDs that reference this pipeline.
+    """
+    if not workflow_database:
+        return []
+
+    workflow_table = dynamodb.Table(workflow_database)
+    referencing_workflows = []
+
+    try:
+        # Query workflows for this database
+        response = workflow_table.query(
+            KeyConditionExpression=Key('databaseId').eq(database_id)
+        )
+
+        for item in response.get('Items', []):
+            specified = item.get('specifiedPipelines', {})
+            functions = specified.get('functions', []) if isinstance(specified, dict) else []
+            for fn in functions:
+                fn_name = fn.get('name', '') if isinstance(fn, dict) else ''
+                if fn_name == pipeline_id:
+                    referencing_workflows.append(item.get('workflowId', 'unknown'))
+                    break
+
+        # Handle pagination
+        while 'LastEvaluatedKey' in response:
+            response = workflow_table.query(
+                KeyConditionExpression=Key('databaseId').eq(database_id),
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            for item in response.get('Items', []):
+                specified = item.get('specifiedPipelines', {})
+                functions = specified.get('functions', []) if isinstance(specified, dict) else []
+                for fn in functions:
+                    fn_name = fn.get('name', '') if isinstance(fn, dict) else ''
+                    if fn_name == pipeline_id:
+                        referencing_workflows.append(item.get('workflowId', 'unknown'))
+                        break
+
+    except Exception as e:
+        logger.warning(f"Error checking workflows for pipeline {pipeline_id}: {e}")
+
+    return referencing_workflows
+
+
+def _scan_all_workflows_for_pipeline(pipeline_id: str) -> list:
+    """Scan all workflows across all databases for references to a GLOBAL pipeline.
+
+    This uses a table scan since GLOBAL pipelines can be referenced by workflows
+    in any database.  Only called for GLOBAL pipeline deletions.
+
+    Args:
+        pipeline_id: The pipeline ID to search for.
+
+    Returns:
+        List of workflow IDs that reference this pipeline.
+    """
+    if not workflow_database:
+        return []
+
+    workflow_table = dynamodb.Table(workflow_database)
+    referencing_workflows = []
+
+    try:
+        scan_kwargs = {}
+        while True:
+            response = workflow_table.scan(**scan_kwargs)
+            for item in response.get('Items', []):
+                # Skip deleted workflows
+                if '#deleted' in item.get('databaseId', ''):
+                    continue
+                specified = item.get('specifiedPipelines', {})
+                functions = specified.get('functions', []) if isinstance(specified, dict) else []
+                for fn in functions:
+                    fn_name = fn.get('name', '') if isinstance(fn, dict) else ''
+                    if fn_name == pipeline_id:
+                        referencing_workflows.append(item.get('workflowId', 'unknown'))
+                        break
+            if 'LastEvaluatedKey' not in response:
+                break
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    except Exception as e:
+        logger.warning(f"Error scanning all workflows for pipeline {pipeline_id}: {e}")
+
+    return referencing_workflows
+
+
 def delete_pipeline(database_id, pipeline_id, claims_and_roles=None):
     """Delete a pipeline, including auto-created Lambda cleanup"""
     table = dynamodb.Table(pipeline_database)
@@ -201,6 +296,21 @@ def delete_pipeline(database_id, pipeline_id, claims_and_roles=None):
 
     if not pipeline:
         return {'statusCode': 404, 'message': 'Record not found'}
+
+    # Check if pipeline is used by any active workflows.
+    # For GLOBAL pipelines, workflows in any database may reference them,
+    # so we scan all non-deleted workflows.
+    referencing_workflows = _get_workflows_using_pipeline(database_id, pipeline_id)
+    if database_id == "GLOBAL" and not referencing_workflows:
+        referencing_workflows = _scan_all_workflows_for_pipeline(pipeline_id)
+    if referencing_workflows:
+        workflow_list = ', '.join(referencing_workflows[:5])
+        suffix = f" and {len(referencing_workflows) - 5} more" if len(referencing_workflows) > 5 else ""
+        return {
+            'statusCode': 400,
+            'message': f'Cannot delete pipeline. It is currently used by workflow(s): {workflow_list}{suffix}. '
+                       f'Remove the pipeline from these workflows before deleting.'
+        }
 
     # Tier 2: Object-level Casbin check
     pipeline.update({"object__type": "pipeline"})

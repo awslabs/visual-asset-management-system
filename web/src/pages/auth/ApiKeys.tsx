@@ -110,7 +110,11 @@ export default function ApiKeys() {
         {
             id: "description",
             header: "Description",
-            cell: (item: any) => item.description || "-",
+            cell: (item: any) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {item.description || "-"}
+                </span>
+            ),
             sortingField: "description",
         },
         {

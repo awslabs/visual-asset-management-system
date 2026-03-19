@@ -504,6 +504,18 @@ def build_asset_document(request: AssetIndexRequest, asset_details: Dict[str, An
         doc.date_asset_version_createdate = version_info.get('createdAt')
         doc.str_asset_version_comment = version_info.get('comment')
     
+    # Add asset location key
+    asset_location = asset_details.get('assetLocation', {})
+    doc.str_assetlocationkey = asset_location.get('Key') or asset_location.get('key') or ''
+
+    # Add preview file key from asset's previewLocation
+    preview_location = asset_details.get('previewLocation', {})
+    if preview_location:
+        preview_key = preview_location.get('Key') or preview_location.get('key') or ''
+        doc.str_previewfilekey = preview_key
+    else:
+        doc.str_previewfilekey = ''
+
     # Add relationship flags
     doc.bool_has_asset_children = relationship_flags.get('has_children', False)
     doc.bool_has_asset_parents = relationship_flags.get('has_parents', False)

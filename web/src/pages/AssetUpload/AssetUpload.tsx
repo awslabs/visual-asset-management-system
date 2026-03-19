@@ -36,6 +36,8 @@ import {
     Form,
     Link,
     Table,
+    Popover,
+    Icon,
 } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import DatabaseSelector from "../../components/selectors/DatabaseSelector";
@@ -522,7 +524,29 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                     />
                 </FormField>
 
-                <FormField label="Is Distributable?">
+                <FormField
+                    label={
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                            Is Distributable?
+                            <Popover
+                                dismissButton={false}
+                                position="top"
+                                size="medium"
+                                triggerType="custom"
+                                content={
+                                    <Box padding="s">
+                                        <strong>Distributable:</strong> Indicates whether the asset
+                                        is enabled to allow file downloads.
+                                    </Box>
+                                }
+                            >
+                                <span style={{ cursor: "help", color: "var(--vams-color-info)" }}>
+                                    <Icon name="status-info" size="small" />
+                                </span>
+                            </Popover>
+                        </span>
+                    }
+                >
                     <Select
                         options={isDistributableOptions}
                         selectedOption={
@@ -1591,6 +1615,7 @@ export default function AssetUploadPage() {
                         <UploadForm />
                     </div>
                 </Grid>
+                <div style={{ paddingBottom: "20px" }} />
             </Box>
         </AssetDetailContext.Provider>
     );

@@ -598,7 +598,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
-                    width: 180,
+                    width: 150,
                     minWidth: 120,
                 };
             }
@@ -631,7 +631,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
-                    width: 180,
+                    width: 150,
                     minWidth: 100,
                 };
             }
@@ -653,8 +653,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
-                    width: 200,
-                    minWidth: 120,
+                    width: 150,
+                    minWidth: 100,
                 };
             }
             // Determine width for common column types
@@ -748,12 +748,17 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                 handleOpenPreview(url, assetName, previewKey, item)
                             }
                             assetName={item.str_assetname}
+                            previewFileKey={
+                                item.str_previewfilekey !== undefined
+                                    ? item.str_previewfilekey
+                                    : undefined
+                            }
                         />
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
-                    width: 100,
-                    minWidth: 80,
+                    width: 150,
+                    minWidth: 100,
                 },
                 ...enhancedColumnDefinitions,
             ];
@@ -773,12 +778,17 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                             onOpenFullPreview={(url, fileName, previewKey, downloadType) =>
                                 handleOpenPreview(url, fileName, previewKey, downloadType, item)
                             }
+                            previewFileKey={
+                                item.str_previewfilekey !== undefined
+                                    ? item.str_previewfilekey
+                                    : undefined
+                            }
                         />
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
-                    width: 100,
-                    minWidth: 80,
+                    width: 150,
+                    minWidth: 100,
                 },
                 ...enhancedColumnDefinitions,
             ];

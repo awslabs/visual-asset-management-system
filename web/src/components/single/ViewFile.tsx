@@ -979,6 +979,7 @@ export default function ViewFile() {
                 </>
             )}
             {pathViewType && <AssetSelectorWithModal pathViewType={pathViewType} />}
+            <div style={{ paddingBottom: "20px" }} />
         </div>
     );
 }

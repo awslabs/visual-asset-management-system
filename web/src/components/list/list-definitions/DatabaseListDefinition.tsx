@@ -35,20 +35,12 @@ export const createDatabaseListDefinition = (options = {}) => {
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "description",
-        }),
-        new ColumnDefinition({
-            id: "bucketName",
-            header: "Bucket Name",
-            cellWrapper: (props) => <>{props.children}</>,
-            sortingField: "bucketName",
-        }),
-        new ColumnDefinition({
-            id: "baseAssetsPrefix",
-            header: "Base Bucket Prefix",
-            cellWrapper: (props) => <>{props.children}</>,
-            sortingField: "baseAssetsPrefix",
         }),
         new ColumnDefinition({
             id: "assetCount",
@@ -120,6 +112,18 @@ export const createDatabaseListDefinition = (options = {}) => {
                 return <>{value && value.trim() !== "" ? value : "No Restrictions"}</>;
             },
             sortingField: "restrictFileUploadsToExtensions",
+        }),
+        new ColumnDefinition({
+            id: "bucketName",
+            header: "Bucket Name",
+            cellWrapper: (props) => <>{props.children}</>,
+            sortingField: "bucketName",
+        }),
+        new ColumnDefinition({
+            id: "baseAssetsPrefix",
+            header: "Base Bucket Prefix",
+            cellWrapper: (props) => <>{props.children}</>,
+            sortingField: "baseAssetsPrefix",
         })
     );
 
@@ -127,12 +131,12 @@ export const createDatabaseListDefinition = (options = {}) => {
         ...(showMapThumbnails && MapThumbnailComponent && mapStyleUrl ? ["mapThumbnail"] : []),
         "databaseId",
         "description",
-        "bucketName",
-        "baseAssetsPrefix",
         "assetCount",
         "metadata",
         "restrictMetadataOutsideSchemas",
         "restrictFileUploadsToExtensions",
+        "bucketName",
+        "baseAssetsPrefix",
     ];
 
     return new ListDefinition({
