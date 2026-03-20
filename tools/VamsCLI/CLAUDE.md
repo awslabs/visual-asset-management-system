@@ -541,10 +541,14 @@ Follow this checklist:
 
 7. **Update user-facing documentation**:
 
-    - Add command documentation to the relevant `docs/commands/*.md` file (e.g., `asset-management.md` for asset/version commands)
+    - Update the Docusaurus CLI reference page at `documentation/docusaurus-site/docs/cli/commands/` for the relevant command group
+    - Update `documentation/docusaurus-site/docs/cli/command-reference.md` index if a new command group was added
+    - Update `documentation/docusaurus-site/sidebars.ts` if a new CLI command page was added
     - Update `README.md` Quick Start examples if the command is commonly used
     - Update `documentation/VAMS_API.yaml` with new/modified API endpoints and schemas
-    - Update `documentation/PermissionsGuide.md` with new API route permissions
+    - Update `documentation/docusaurus-site/docs/concepts/permissions-model.md` with new API route permissions
+
+    **Documentation style**: Follow Docusaurus format with `:::note`/`:::warning` admonitions, escape `\{curly braces\}` outside code blocks, use `bash` language tags on code blocks. See `documentation/CLAUDE.md` for full style guide.
 
 8. **Update CHANGELOG.md** with the new command under the appropriate version section
 

@@ -1,0 +1,25 @@
+stages:
+    - build
+    - deploy
+
+# Documentation build and deploy to GitLab Pages
+pages:
+    stage: deploy
+    image: node:20-slim
+    before_script:
+        - cd documentation/docusaurus-site
+        - npm ci
+    script:
+        - npm run build
+        - mv build ../../public
+    artifacts:
+        paths:
+            - public
+    rules:
+        - if: $CI_COMMIT_BRANCH == "main"
+          changes:
+              - documentation/docusaurus-site/**/*
+        - if: $CI_COMMIT_BRANCH =~ /^release\//
+          changes:
+              - documentation/docusaurus-site/**/*
+        - if: $CI_PIPELINE_SOURCE == "web"
