@@ -622,28 +622,26 @@ When making changes, update the appropriate documentation files:
 
 #### **Documentation File Mapping:**
 
--   **Setup/Auth changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **Asset management changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **File operation changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **Database changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **Tag management changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **... additional command type changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **Global patterns/JSON changes** → Update relevant command guides in `docs/commands/`
--   **Network/SSL issues** → Update relevant troubleshooting guides in `docs/troubleshooting/`
--   **Installation/setup process** → Update `docs/INSTALLATION.md`
--   **Authentication system** → Update `docs/AUTHENTICATION.md`
--   **Development process** → Update `docs/DEVELOPMENT.md`
--   **Major feature additions** → Update main `README.md`
--   **System-wide rule changes** → Update `CLI_DEVELOPMENT_WORKFLOW.md` (this file)
+All CLI documentation lives in the Docusaurus documentation site at `documentation/docusaurus-site/docs/cli/`.
+
+**Docusaurus documentation site** (`documentation/docusaurus-site/docs/cli/`):
+-   **Command changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/commands/`
+-   **New command group** → Create new page in `cli/commands/`, update `cli/command-reference.md`, and add to `sidebars.ts`
+-   **Installation/auth changes** → Update `cli/getting-started.md` and `cli/installation.md`
+-   **Automation patterns** → Update `cli/automation.md`
+-   **API changes** → Update relevant `documentation/docusaurus-site/docs/api/` page and `documentation/VAMS_API.yaml`
+-   **Permission changes** → Update `documentation/docusaurus-site/docs/concepts/permissions-model.md`
+
+**Docusaurus documentation style**: Use `:::note`/`:::warning` admonitions, escape `\{curly braces\}` outside code blocks, `bash` language tags on code blocks. See `documentation/CLAUDE.md` for the full documentation style guide.
 
 #### **Documentation Update Checklist:**
 
--   [ ] **Update Command Documentation**: Add/modify examples in appropriate `docs/commands/` file
--   [ ] **Update Troubleshooting**: Add error scenarios to appropriate `docs/troubleshooting/` file
--   [ ] **Update Supporting Documentation**: Update `docs/INSTALLATION.md`, `docs/AUTHENTICATION.md`, or `docs/DEVELOPMENT.md` if needed
--   [ ] **Update Main README**: Update `tools/VamsCLI/README.md` overview and links if needed
--   [ ] **Update CLI_DEVELOPMENT_WORKFLOW.md**: If system-wide rules, standards, or patterns change
--   [ ] **Cross-Reference Check**: Verify all internal documentation links work across the new structure
+-   [ ] **Update Docusaurus CLI docs**: Add/modify in `documentation/docusaurus-site/docs/cli/commands/`
+-   [ ] **Update CLI command reference index**: Update `documentation/docusaurus-site/docs/cli/command-reference.md` if new command group
+-   [ ] **Update main README**: Update `tools/VamsCLI/README.md` if needed
+-   [ ] **Update sidebars.ts**: If new pages were added to Docusaurus CLI section
+-   [ ] **Build verification**: Run `cd documentation/docusaurus-site && npm run build` to verify
+-   [ ] **Cross-Reference Check**: Verify all internal documentation links work
 -   [ ] **Accuracy Check**: Ensure all documented features actually exist in code
 
 #### **New Documentation Structure:**

@@ -1,0 +1,97 @@
+/*
+ * Custom CSS for VAMS Documentation
+ * Follows AWS documentation styling patterns
+ */
+
+/* Increase readability of body text */
+.md-typeset {
+    font-size: 0.85rem;
+    line-height: 1.7;
+}
+
+/* Style admonition callouts to match AWS doc patterns */
+.md-typeset .admonition {
+    border-radius: 4px;
+}
+
+/* Architecture diagram containers */
+.architecture-diagram {
+    text-align: center;
+    margin: 1.5rem 0;
+}
+
+.architecture-diagram img {
+    max-width: 100%;
+    border: 1px solid var(--md-default-fg-color--lightest);
+    border-radius: 4px;
+    padding: 1rem;
+}
+
+/* Screenshot containers */
+.screenshot {
+    text-align: center;
+    margin: 1rem 0;
+}
+
+.screenshot img {
+    max-width: 90%;
+    border: 1px solid var(--md-default-fg-color--lightest);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.screenshot figcaption {
+    font-size: 0.8rem;
+    color: var(--md-default-fg-color--light);
+    margin-top: 0.5rem;
+    font-style: italic;
+}
+
+/* Feature table styling */
+.feature-table td:first-child {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Version badge */
+.version-badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background-color: var(--md-primary-fg-color);
+    color: var(--md-primary-bg-color);
+}
+
+/* API endpoint styling */
+.api-endpoint {
+    font-family: var(--md-code-font-family);
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    margin: 0.5rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.api-endpoint .method {
+    font-weight: 700;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+}
+
+.api-endpoint .method.get { background: #61affe; color: white; }
+.api-endpoint .method.post { background: #49cc90; color: white; }
+.api-endpoint .method.put { background: #fca130; color: white; }
+.api-endpoint .method.delete { background: #f93e3e; color: white; }
+
+/* Data hierarchy visualization */
+.data-hierarchy {
+    padding: 1rem;
+    border: 1px solid var(--md-default-fg-color--lightest);
+    border-radius: 4px;
+    margin: 1rem 0;
+}

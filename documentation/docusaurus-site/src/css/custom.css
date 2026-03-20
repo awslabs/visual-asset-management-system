@@ -1,0 +1,172 @@
+/**
+ * VAMS Documentation - GitHub Docs inspired theme
+ */
+
+:root {
+  --ifm-color-primary: #0969da;
+  --ifm-color-primary-dark: #0757b5;
+  --ifm-color-primary-darker: #0652ab;
+  --ifm-color-primary-darkest: #05448d;
+  --ifm-color-primary-light: #0b7bf5;
+  --ifm-color-primary-lighter: #1a85f6;
+  --ifm-color-primary-lightest: #3d97f7;
+
+  --ifm-font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+  --ifm-font-family-monospace: SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  --ifm-font-size-base: 16px;
+  --ifm-line-height-base: 1.6;
+
+  --ifm-navbar-background-color: #ffffff;
+  --ifm-navbar-shadow: 0 1px 0 0 #d0d7de;
+  --ifm-footer-background-color: #24292f;
+
+  --ifm-toc-border-color: #d0d7de;
+  --ifm-hr-border-color: #d0d7de;
+
+  --ifm-code-background: #f6f8fa;
+  --ifm-code-border-radius: 6px;
+  --ifm-code-font-size: 85%;
+
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #58a6ff;
+  --ifm-color-primary-dark: #3d97f7;
+  --ifm-color-primary-darker: #1a85f6;
+  --ifm-color-primary-darkest: #0b7bf5;
+  --ifm-color-primary-light: #79b8ff;
+  --ifm-color-primary-lighter: #a5d6ff;
+  --ifm-color-primary-lightest: #cae8ff;
+
+  --ifm-navbar-background-color: #161b22;
+  --ifm-navbar-shadow: 0 1px 0 0 #30363d;
+  --ifm-background-color: #0d1117;
+  --ifm-background-surface-color: #161b22;
+
+  --ifm-toc-border-color: #30363d;
+  --ifm-hr-border-color: #30363d;
+
+  --ifm-code-background: #161b22;
+
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Navbar - GitHub style thin top bar */
+.navbar {
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+  padding: 0.5rem 1rem;
+}
+
+.navbar__title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+/* Sidebar - GitHub Docs style */
+.theme-doc-sidebar-container {
+  border-right: 1px solid var(--ifm-toc-border-color);
+}
+
+.menu__link {
+  font-size: 0.875rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+  background-color: rgba(9, 105, 218, 0.08);
+  font-weight: 600;
+}
+
+[data-theme='dark'] .menu__link--active:not(.menu__link--sublist) {
+  background-color: rgba(88, 166, 255, 0.12);
+}
+
+.menu__list-item-collapsible > .menu__link {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+/* Content area */
+article {
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+/* Headers - GitHub style with bottom border */
+article h1 {
+  font-size: 2rem;
+  font-weight: 600;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+  margin-bottom: 1rem;
+}
+
+article h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+  margin-top: 1.5rem;
+}
+
+article h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+/* Code blocks - GitHub style */
+pre {
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 6px;
+}
+
+code {
+  border-radius: 6px;
+  padding: 0.2em 0.4em;
+}
+
+/* Tables - GitHub style */
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+table th {
+  background-color: var(--ifm-code-background);
+  font-weight: 600;
+}
+
+table td, table th {
+  border: 1px solid var(--ifm-toc-border-color);
+  padding: 0.5rem 0.75rem;
+}
+
+/* Admonitions */
+.alert {
+  border-radius: 6px;
+  border-left-width: 3px;
+}
+
+/* Images */
+article img {
+  border-radius: 6px;
+  border: 1px solid var(--ifm-toc-border-color);
+  max-width: 100%;
+}
+
+/* TOC - right sidebar */
+.table-of-contents {
+  font-size: 0.8125rem;
+}
+
+/* Footer */
+.footer__title {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.footer__link-item {
+  font-size: 0.8125rem;
+}
