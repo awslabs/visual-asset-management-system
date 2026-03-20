@@ -6,7 +6,7 @@ const config: Config = {
     title: "Visual Asset Management System (VAMS)",
     tagline:
         "AWS-native solution for managing, visualizing, and processing 3D assets, point clouds, CAD files, and visual content",
-    favicon: "img/logo.png",
+    favicon: "img/favicon.ico",
 
     url: process.env.DOCS_URL || "https://awslabs.github.io",
     baseUrl: process.env.DOCS_BASE_URL || "/visual-asset-management-system/",
@@ -48,9 +48,9 @@ const config: Config = {
     themeConfig: {
         image: "img/logo.png",
         navbar: {
-            title: "VAMS Documentation",
+            title: "",
             logo: {
-                alt: "VAMS Logo",
+                alt: "VAMS",
                 src: "img/logo_dark.png",
                 srcDark: "img/logo.png",
             },
