@@ -351,7 +351,4 @@ Combined.pem
 
 #Claude
 .claude/settings.local.*
-CLAUDE.md
-web/CLAUDE.md
-infra/CLAUDE.md
 docs/superpowers/

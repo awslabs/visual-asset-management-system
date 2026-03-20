@@ -130,8 +130,8 @@ infra/
 #### **Step 8: Documentation Updates**
 
 -   [ ] **Update VAMS_API.yaml**: Add new endpoints, schemas, and responses
--   [ ] **Update DeveloperGuide.md**: Add architecture and usage information
--   [ ] **Update PermissionsGuide.md**: Add authorization mappings for new endpoints
+-   [ ] **Update Docusaurus developer docs (`documentation/docusaurus-site/docs/developer/`)**: Add architecture and usage information
+-   [ ] **Update Docusaurus permissions docs (`documentation/docusaurus-site/docs/concepts/permissions-model.md`)**: Add authorization mappings for new endpoints
 -   [ ] **Update README**: Update overview if major features added
 -   [ ] **Add Code Examples**: Include usage examples in documentation
 
@@ -729,8 +729,8 @@ When making API changes, update the appropriate documentation files:
 #### **Documentation File Mapping:**
 
 -   **API changes** → Update `VAMS_API.yaml` with new endpoints, schemas, responses
--   **Authorization changes** → Update `PermissionsGuide.md` with new permission mappings
--   **Architecture changes** → Update `DeveloperGuide.md` with component information
+-   **Authorization changes** → Update Docusaurus permissions docs with new permission mappings
+-   **Architecture changes** → Update Docusaurus developer docs with component information
 -   **Major features** → Update main `README.md`
 
 #### **VAMS_API.yaml Update Pattern:**
@@ -1764,8 +1764,8 @@ if __name__ == '__main__':
 -   [ ] Type checking passes with MyPy
 -   [ ] CDK code linted
 -   [ ] VAMS_API.yaml updated with new endpoints and schemas
--   [ ] PermissionsGuide.md updated with authorization mappings
--   [ ] DeveloperGuide.md updated if architecture changes
+-   [ ] Docusaurus permissions docs updated with authorization mappings
+-   [ ] Docusaurus developer docs updated if architecture changes
 -   [ ] Frontend integration tested
 -   [ ] CLI integration tested
 -   [ ] End-to-end testing completed
@@ -2495,8 +2495,8 @@ logger = safeLogger(service_name="[Domain]Models")
 ### **Documentation Development**
 
 1. **Always** update `VAMS_API.yaml` with comprehensive schemas
-2. **Always** update `PermissionsGuide.md` with authorization mappings
-3. **Always** update `DeveloperGuide.md` with architecture changes
+2. **Always** update Docusaurus permissions docs (`documentation/docusaurus-site/docs/concepts/permissions-model.md`) with authorization mappings
+3. **Always** update Docusaurus developer docs (`documentation/docusaurus-site/docs/developer/`) with architecture changes
 4. **Always** include code examples and usage information
 5. **Always** document error responses properly
 6. **Always** maintain consistency with existing documentation
