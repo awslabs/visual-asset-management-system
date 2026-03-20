@@ -6,6 +6,9 @@ stages:
 pages:
     stage: deploy
     image: node:20-slim
+    variables:
+        DOCS_URL: "https://aws-spatial-prototyping.pages.aws.dev"
+        DOCS_BASE_URL: "/vams-govcloud/"
     before_script:
         - cd documentation/docusaurus-site
         - npm ci

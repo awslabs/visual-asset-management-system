@@ -8,8 +8,8 @@ const config: Config = {
         "AWS-native solution for managing, visualizing, and processing 3D assets, point clouds, CAD files, and visual content",
     favicon: "img/logo.png",
 
-    url: "https://awslabs.github.io",
-    baseUrl: "/visual-asset-management-system/",
+    url: process.env.DOCS_URL || "https://awslabs.github.io",
+    baseUrl: process.env.DOCS_BASE_URL || "/visual-asset-management-system/",
 
     organizationName: "awslabs",
     projectName: "visual-asset-management-system",
