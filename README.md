@@ -26,35 +26,35 @@ As an **open-source project** (Apache 2.0), VAMS is designed for extensibility. 
 
 _Use cases include:_
 
-- **Defense and Public Sector** — Digital twins, environment scanning, training and simulation with GovCloud deployment support
-- **Energy and Utilities** — Facility scanning, part replacement tracking, corrosion detection, and maintenance data management at terabyte scale
-- **Construction and AEC** — Live LiDAR scans compared against design plans, BIM management, and build-to-spec verification
-- **Manufacturing** — Digital twins of facilities, equipment fitting analysis, CAD centralization with metadata extraction
-- **Robotics and Physical AI** — Simulation environments, training data management, and reinforcement learning with NVIDIA Isaac Lab
-- **Digital Twins** — Versioned facility scans, BIM models, and point clouds with automated viewer generation and knowledge graph integration
-- **AR/VR/XR and Media** — Optimized 3D content distribution with format conversion, gaussian splatting, and LOD generation
-- **AI and Machine Learning** — Managing and curating training datasets with metadata tagging and automated labeling pipelines
-- **Geospatial** — LiDAR, photogrammetry, and imagery with location-based search and map visualization
+-   **Defense and Public Sector** — Digital twins, environment scanning, training and simulation with GovCloud deployment support
+-   **Energy and Utilities** — Facility scanning, part replacement tracking, corrosion detection, and maintenance data management at terabyte scale
+-   **Construction and AEC** — Live LiDAR scans compared against design plans, BIM management, and build-to-spec verification
+-   **Manufacturing** — Digital twins of facilities, equipment fitting analysis, CAD centralization with metadata extraction
+-   **Robotics and Physical AI** — Simulation environments, training data management, and reinforcement learning with NVIDIA Isaac Lab
+-   **Digital Twins** — Versioned facility scans, BIM models, and point clouds with automated viewer generation and knowledge graph integration
+-   **AR/VR/XR and Media** — Optimized 3D content distribution with format conversion, gaussian splatting, and LOD generation
+-   **AI and Machine Learning** — Managing and curating training datasets with metadata tagging and automated labeling pipelines
+-   **Geospatial** — LiDAR, photogrammetry, and imagery with location-based search and map visualization
 
 ## Overview
 
 ### Key capabilities
 
-- **Centralized storage** — Manage 3D models, point clouds, CAD files, and media in Amazon S3 with versioning and access control
-- **Interactive visualization** — View assets in the browser with 17 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
-- **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge
-- **Intelligent search** — Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views
-- **Fine-grained permissions** — Attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels
-- **Multi-region deployment** — Deploy to AWS commercial regions or AWS GovCloud (US)
+-   **Centralized storage** — Manage 3D models, point clouds, CAD files, and media in Amazon S3 with versioning and access control
+-   **Interactive visualization** — View assets in the browser with 17 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
+-   **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge
+-   **Intelligent search** — Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views
+-   **Fine-grained permissions** — Attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels
+-   **Multi-region deployment** — Deploy to AWS commercial regions or AWS GovCloud (US)
 
 ## Screenshots
 
-| Database Management | Asset Search | 3D Model Viewer |
-|:---:|:---:|:---:|
+|                         Database Management                          |                        Asset Search                        |                        3D Model Viewer                         |
+| :------------------------------------------------------------------: | :--------------------------------------------------------: | :------------------------------------------------------------: |
 | ![Databases](./documentation/diagrams/screenshots/database_view.png) | ![Search](./documentation/diagrams/screenshots/assets.png) | ![Viewer](./documentation/diagrams/screenshots/model_view.png) |
 
-| Asset Details | Metadata | Asset Versioning |
-|:---:|:---:|:---:|
+|                             Asset Details                              |                            Metadata                            |                            Asset Versioning                            |
+| :--------------------------------------------------------------------: | :------------------------------------------------------------: | :--------------------------------------------------------------------: |
 | ![Details](./documentation/diagrams/screenshots/asset_detail_view.png) | ![Metadata](./documentation/diagrams/screenshots/metadata.png) | ![Versions](./documentation/diagrams/screenshots/asset_versioning.png) |
 
 ## Architecture
@@ -67,7 +67,7 @@ VAMS deploys as a serverless architecture using AWS CDK with 10+ nested CloudFor
 
 ### Prerequisites
 
-- Python 3.12+, Docker, Node.js 20+, npm, AWS CLI, AWS CDK CLI
+-   Python 3.12+, Docker, Node.js 20+, npm, AWS CLI, AWS CDK CLI
 
 ### Deploy
 
@@ -108,28 +108,28 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 
 ### Documentation sections
 
-| Section | Description |
-|---------|-------------|
-| [Solution Overview](./documentation/docusaurus-site/docs/overview/solution-overview.md) | What VAMS is and its capabilities |
-| [Core Concepts](./documentation/docusaurus-site/docs/concepts/overview.md) | Databases, Assets, Files, Pipelines, Metadata, Permissions |
-| [Architecture](./documentation/docusaurus-site/docs/architecture/overview.md) | Architecture diagrams, AWS resources, security, networking |
-| [Deployment Guide](./documentation/docusaurus-site/docs/deployment/prerequisites.md) | Prerequisites, configuration, deploy, update, uninstall |
-| [User Guide](./documentation/docusaurus-site/docs/user-guide/getting-started.md) | Web interface, asset management, search, metadata |
-| [CLI Reference](./documentation/docusaurus-site/docs/cli/getting-started.md) | Installation, command reference, automation |
-| [Pipelines](./documentation/docusaurus-site/docs/pipelines/overview.md) | Built-in pipelines and custom pipeline development |
-| [Developer Guide](./documentation/docusaurus-site/docs/developer/setup.md) | Backend, frontend, CDK, and viewer plugin development |
-| [API Reference](./documentation/docusaurus-site/docs/api/overview.md) | Complete REST API documentation |
-| [Troubleshooting](./documentation/docusaurus-site/docs/troubleshooting/common-issues.md) | Common issues, known limitations, FAQ |
+| Section                                                                                  | Description                                                |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [Solution Overview](./documentation/docusaurus-site/docs/overview/solution-overview.md)  | What VAMS is and its capabilities                          |
+| [Core Concepts](./documentation/docusaurus-site/docs/concepts/overview.md)               | Databases, Assets, Files, Pipelines, Metadata, Permissions |
+| [Architecture](./documentation/docusaurus-site/docs/architecture/overview.md)            | Architecture diagrams, AWS resources, security, networking |
+| [Deployment Guide](./documentation/docusaurus-site/docs/deployment/prerequisites.md)     | Prerequisites, configuration, deploy, update, uninstall    |
+| [User Guide](./documentation/docusaurus-site/docs/user-guide/getting-started.md)         | Web interface, asset management, search, metadata          |
+| [CLI Reference](./documentation/docusaurus-site/docs/cli/getting-started.md)             | Installation, command reference, automation                |
+| [Pipelines](./documentation/docusaurus-site/docs/pipelines/overview.md)                  | Built-in pipelines and custom pipeline development         |
+| [Developer Guide](./documentation/docusaurus-site/docs/developer/setup.md)               | Backend, frontend, CDK, and viewer plugin development      |
+| [API Reference](./documentation/docusaurus-site/docs/api/overview.md)                    | Complete REST API documentation                            |
+| [Troubleshooting](./documentation/docusaurus-site/docs/troubleshooting/common-issues.md) | Common issues, known limitations, FAQ                      |
 
 ## Access methods
 
-| | Web Interface | CLI (`vamscli`) | REST API |
-|---|---|---|---|
-| **Best for** | Interactive use, visualization | Automation, scripting | Custom integrations |
-| **Asset management** | Visual interface | Programmatic control | Full programmatic control |
-| **3D viewing** | 17 interactive viewers | N/A | N/A |
-| **Automation** | Manual | Full automation | Complete control |
-| **CI/CD** | Not suitable | Designed for integration | Full flexibility |
+|                      | Web Interface                  | CLI (`vamscli`)          | REST API                  |
+| -------------------- | ------------------------------ | ------------------------ | ------------------------- |
+| **Best for**         | Interactive use, visualization | Automation, scripting    | Custom integrations       |
+| **Asset management** | Visual interface               | Programmatic control     | Full programmatic control |
+| **3D viewing**       | 17 interactive viewers         | N/A                      | N/A                       |
+| **Automation**       | Manual                         | Full automation          | Complete control          |
+| **CI/CD**            | Not suitable                   | Designed for integration | Full flexibility          |
 
 ## Partner integrations
 
@@ -141,8 +141,8 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 
 See the [Configuration Reference](./documentation/docusaurus-site/docs/deployment/configuration-reference.md) for all deployment options, or start with one of the provided templates:
 
-- `infra/config/config.template.commercial.json` — AWS commercial regions
-- `infra/config/config.template.govcloud.json` — AWS GovCloud (US)
+-   `infra/config/config.template.commercial.json` — AWS commercial regions
+-   `infra/config/config.template.govcloud.json` — AWS GovCloud (US)
 
 ## Uninstall
 

@@ -17,15 +17,15 @@ List workflows in a database or all workflows across all databases.
 vamscli workflow list [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | No | Database ID to filter workflows |
-| `--show-deleted` | Flag | No | Include deleted workflows |
-| `--page-size` | INTEGER | No | Items per page |
-| `--max-items` | INTEGER | No | Max items (with `--auto-paginate`) |
-| `--starting-token` | TEXT | No | Pagination token |
-| `--auto-paginate` | Flag | No | Fetch all items automatically |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option                | Type    | Required | Description                        |
+| --------------------- | ------- | -------- | ---------------------------------- |
+| `-d`, `--database-id` | TEXT    | No       | Database ID to filter workflows    |
+| `--show-deleted`      | Flag    | No       | Include deleted workflows          |
+| `--page-size`         | INTEGER | No       | Items per page                     |
+| `--max-items`         | INTEGER | No       | Max items (with `--auto-paginate`) |
+| `--starting-token`    | TEXT    | No       | Pagination token                   |
+| `--auto-paginate`     | Flag    | No       | Fetch all items automatically      |
+| `--json-output`       | Flag    | No       | Output raw JSON response           |
 
 ```bash
 vamscli workflow list
@@ -43,17 +43,17 @@ List workflow executions for a specific asset.
 vamscli workflow list-executions [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | Yes | Database ID containing the asset |
-| `-a`, `--asset-id` | TEXT | Yes | Asset ID |
-| `-w`, `--workflow-id` | TEXT | No | Filter by workflow ID |
-| `--workflow-database-id` | TEXT | No | Workflow's database ID |
-| `--page-size` | INTEGER | No | Items per page (max 50) |
-| `--max-items` | INTEGER | No | Max items (with `--auto-paginate`) |
-| `--starting-token` | TEXT | No | Pagination token |
-| `--auto-paginate` | Flag | No | Fetch all items automatically |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option                   | Type    | Required | Description                        |
+| ------------------------ | ------- | -------- | ---------------------------------- |
+| `-d`, `--database-id`    | TEXT    | Yes      | Database ID containing the asset   |
+| `-a`, `--asset-id`       | TEXT    | Yes      | Asset ID                           |
+| `-w`, `--workflow-id`    | TEXT    | No       | Filter by workflow ID              |
+| `--workflow-database-id` | TEXT    | No       | Workflow's database ID             |
+| `--page-size`            | INTEGER | No       | Items per page (max 50)            |
+| `--max-items`            | INTEGER | No       | Max items (with `--auto-paginate`) |
+| `--starting-token`       | TEXT    | No       | Pagination token                   |
+| `--auto-paginate`        | Flag    | No       | Fetch all items automatically      |
+| `--json-output`          | Flag    | No       | Output raw JSON response           |
 
 :::warning[API Throttling]
 Page size is limited to 50 items per page due to AWS Step Functions API throttling. Use `--auto-paginate` to fetch more items across multiple pages.
@@ -61,14 +61,14 @@ Page size is limited to 50 items per page due to AWS Step Functions API throttli
 
 ### Execution statuses
 
-| Status | Description |
-|---|---|
-| `NEW` | Execution created, not yet started |
-| `RUNNING` | Currently in progress |
-| `SUCCEEDED` | Completed successfully |
-| `FAILED` | Failed with errors |
-| `TIMED_OUT` | Exceeded time limit |
-| `ABORTED` | Manually aborted |
+| Status      | Description                        |
+| ----------- | ---------------------------------- |
+| `NEW`       | Execution created, not yet started |
+| `RUNNING`   | Currently in progress              |
+| `SUCCEEDED` | Completed successfully             |
+| `FAILED`    | Failed with errors                 |
+| `TIMED_OUT` | Exceeded time limit                |
+| `ABORTED`   | Manually aborted                   |
 
 ```bash
 vamscli workflow list-executions -d my-db -a my-asset
@@ -86,14 +86,14 @@ Execute a workflow on an asset.
 vamscli workflow execute [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | Yes | Database ID containing the asset |
-| `-a`, `--asset-id` | TEXT | Yes | Asset ID to execute on |
-| `-w`, `--workflow-id` | TEXT | Yes | Workflow ID to execute |
-| `--workflow-database-id` | TEXT | Yes | Workflow's database ID |
-| `--file-key` | TEXT | No | Specific file key to run workflow on |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option                   | Type | Required | Description                          |
+| ------------------------ | ---- | -------- | ------------------------------------ |
+| `-d`, `--database-id`    | TEXT | Yes      | Database ID containing the asset     |
+| `-a`, `--asset-id`       | TEXT | Yes      | Asset ID to execute on               |
+| `-w`, `--workflow-id`    | TEXT | Yes      | Workflow ID to execute               |
+| `--workflow-database-id` | TEXT | Yes      | Workflow's database ID               |
+| `--file-key`             | TEXT | No       | Specific file key to run workflow on |
+| `--json-output`          | Flag | No       | Output raw JSON response             |
 
 :::note
 The command prevents duplicate executions. If the workflow is already running on the specified file, execution is blocked. All pipelines in the workflow must be enabled and accessible.
@@ -123,6 +123,6 @@ vamscli workflow list-executions -d my-db -a my-asset --json-output | jq '.Items
 
 ## Related Pages
 
-- [Asset Commands](assets.md)
-- [File Commands](files.md)
-- [Database Commands](database.md)
+-   [Asset Commands](assets.md)
+-   [File Commands](files.md)
+-   [Database Commands](database.md)

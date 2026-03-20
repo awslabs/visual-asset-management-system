@@ -6,10 +6,10 @@ VAMS supports connecting to existing Amazon Simple Storage Service (Amazon S3) b
 
 Consider using external S3 buckets in the following scenarios:
 
-- **Existing data** -- You have assets already organized in S3 buckets and want to register them in VAMS without copying data.
-- **Shared buckets** -- Multiple applications or teams share the same S3 bucket and you need VAMS to access a specific prefix.
-- **Cross-account access** -- Assets reside in a different AWS account and must remain there for organizational or billing reasons.
-- **Compliance requirements** -- Data residency or governance policies require assets to stay in specific buckets or accounts.
+-   **Existing data** -- You have assets already organized in S3 buckets and want to register them in VAMS without copying data.
+-   **Shared buckets** -- Multiple applications or teams share the same S3 bucket and you need VAMS to access a specific prefix.
+-   **Cross-account access** -- Assets reside in a different AWS account and must remain there for organizational or billing reasons.
+-   **Compliance requirements** -- Data residency or governance policies require assets to stay in specific buckets or accounts.
 
 ## Architecture overview
 
@@ -47,11 +47,11 @@ External buckets are defined in the VAMS CDK configuration file at `infra/config
 
 Each entry in the `externalAssetBuckets` array requires three fields:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `bucketArn` | String | The full Amazon Resource Name (ARN) of the external S3 bucket. |
-| `baseAssetsPrefix` | String | The S3 key prefix under which VAMS manages assets. Must end with `/` or be `/` for the bucket root. |
-| `defaultSyncDatabaseId` | String | The VAMS database ID that assets discovered in this bucket are assigned to. |
+| Field                   | Type   | Description                                                                                         |
+| ----------------------- | ------ | --------------------------------------------------------------------------------------------------- |
+| `bucketArn`             | String | The full Amazon Resource Name (ARN) of the external S3 bucket.                                      |
+| `baseAssetsPrefix`      | String | The S3 key prefix under which VAMS manages assets. Must end with `/` or be `/` for the bucket root. |
+| `defaultSyncDatabaseId` | String | The VAMS database ID that assets discovered in this bucket are assigned to.                         |
 
 ### Example configuration
 
@@ -82,11 +82,9 @@ Each entry in the `externalAssetBuckets` array requires three fields:
 Use the correct ARN partition for your environment. Commercial AWS uses `arn:aws:s3:::`, AWS GovCloud (US) uses `arn:aws-us-gov:s3:::`.
 :::
 
-
 :::warning[Prefix requirements]
 The `baseAssetsPrefix` must end with a forward slash (`/`) unless it is set to `/` for the bucket root. The CDK deployment validates this requirement and fails with an error if violated.
 :::
-
 
 ## Step-by-step setup
 
@@ -107,10 +105,7 @@ Add a bucket policy to the external S3 bucket that grants the VAMS account acces
                 "AWS": "arn:aws:iam::<VAMS_ACCOUNT_ID>:root"
             },
             "Action": "s3:*",
-            "Resource": [
-                "arn:aws:s3:::<BUCKET_NAME>",
-                "arn:aws:s3:::<BUCKET_NAME>/*"
-            ]
+            "Resource": ["arn:aws:s3:::<BUCKET_NAME>", "arn:aws:s3:::<BUCKET_NAME>/*"]
         }
     ]
 }
@@ -118,8 +113,8 @@ Add a bucket policy to the external S3 bucket that grants the VAMS account acces
 
 Replace the following placeholder values:
 
-- `<VAMS_ACCOUNT_ID>` -- The 12-digit AWS account ID where VAMS is deployed.
-- `<BUCKET_NAME>` -- The name of the external S3 bucket.
+-   `<VAMS_ACCOUNT_ID>` -- The 12-digit AWS account ID where VAMS is deployed.
+-   `<BUCKET_NAME>` -- The name of the external S3 bucket.
 
 :::tip[Restrict access to VAMS roles only]
 For tighter security, add a condition block that limits access to IAM roles created by VAMS. Replace `<APP_NAME>` with the `name` value from your `config.json` (default: `vams`).
@@ -134,8 +129,8 @@ For tighter security, add a condition block that limits access to IAM roles crea
     }
 }
 ```
-:::
 
+:::
 
 ### Step 2: Configure CORS
 
@@ -147,12 +142,7 @@ Apply a Cross-Origin Resource Sharing (CORS) configuration to the external bucke
         "AllowedHeaders": ["*"],
         "AllowedMethods": ["GET", "PUT", "POST", "HEAD", "OPTIONS"],
         "AllowedOrigins": ["https://your-vams-domain.example.com"],
-        "ExposeHeaders": [
-            "ETag",
-            "x-amz-server-side-encryption",
-            "x-amz-request-id",
-            "x-amz-id-2"
-        ],
+        "ExposeHeaders": ["ETag", "x-amz-server-side-encryption", "x-amz-request-id", "x-amz-id-2"],
         "MaxAgeSeconds": 3600
     }
 ]
@@ -170,7 +160,6 @@ aws s3api put-bucket-cors \
 Replace `https://your-vams-domain.example.com` with your actual VAMS Amazon CloudFront distribution domain or Application Load Balancer (ALB) domain. Avoid using `*` in production environments.
 :::
 
-
 ### Step 3: Configure KMS key policy (conditional)
 
 If the external bucket uses an AWS Key Management Service (AWS KMS) customer managed key (CMK) for encryption, the KMS key policy must grant VAMS permissions to decrypt and generate data keys.
@@ -182,11 +171,7 @@ If the external bucket uses an AWS Key Management Service (AWS KMS) customer man
     "Principal": {
         "AWS": "arn:aws:iam::<VAMS_ACCOUNT_ID>:root"
     },
-    "Action": [
-        "kms:Decrypt",
-        "kms:GenerateDataKey",
-        "kms:DescribeKey"
-    ],
+    "Action": ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"],
     "Resource": "*"
 }
 ```
@@ -225,10 +210,7 @@ Attach a policy to the role granting S3 access:
         {
             "Effect": "Allow",
             "Action": ["s3:*"],
-            "Resource": [
-                "arn:aws:s3:::<BUCKET_NAME>",
-                "arn:aws:s3:::<BUCKET_NAME>/*"
-            ]
+            "Resource": ["arn:aws:s3:::<BUCKET_NAME>", "arn:aws:s3:::<BUCKET_NAME>/*"]
         },
         {
             "Effect": "Allow",
@@ -255,10 +237,7 @@ Ensure the IAM identity used to deploy VAMS has permission to access the externa
         {
             "Effect": "Allow",
             "Action": ["s3:*"],
-            "Resource": [
-                "arn:aws:s3:::<BUCKET_NAME>",
-                "arn:aws:s3:::<BUCKET_NAME>/*"
-            ]
+            "Resource": ["arn:aws:s3:::<BUCKET_NAME>", "arn:aws:s3:::<BUCKET_NAME>/*"]
         }
     ]
 }
@@ -278,29 +257,27 @@ Ensure the IAM identity used to deploy VAMS has permission to access the externa
 :::info[What happens during deployment]
 The CDK deployment performs the following actions for external buckets:
 
-- Imports the bucket reference using the provided ARN.
-- Applies TLS enforcement policies to the bucket.
-- Creates Amazon Simple Notification Service (Amazon SNS) topics for S3 event notifications on the bucket.
-- Populates the S3 Asset Buckets DynamoDB table with bucket metadata.
-- Configures Lambda functions with permissions to access the bucket.
-:::
-
+-   Imports the bucket reference using the provided ARN.
+-   Applies TLS enforcement policies to the bucket.
+-   Creates Amazon Simple Notification Service (Amazon SNS) topics for S3 event notifications on the bucket.
+-   Populates the S3 Asset Buckets DynamoDB table with bucket metadata.
+-   Configures Lambda functions with permissions to access the bucket.
+    :::
 
 ## What deployment configures automatically
 
 During CDK deployment, VAMS performs the following actions for each external bucket entry:
 
-- **Bucket import** -- Imports the Amazon S3 bucket reference using the provided ARN.
-- **TLS enforcement** -- Applies a bucket policy statement that denies all `s3:*` actions when `aws:SecureTransport=false`.
-- **Additional bucket policies** -- Applies any custom policy statements from `infra/config/policy/s3AdditionalBucketPolicyConfig.json`.
-- **Event notifications** -- Creates Amazon SNS topics for Amazon S3 event notifications on the bucket to enable automatic file synchronization.
-- **DynamoDB registration** -- Populates the S3 Asset Buckets Amazon DynamoDB table with bucket metadata (ARN, prefix, sync database ID).
-- **Lambda permissions** -- Configures Lambda function IAM roles with permissions to read from and write to the external bucket.
+-   **Bucket import** -- Imports the Amazon S3 bucket reference using the provided ARN.
+-   **TLS enforcement** -- Applies a bucket policy statement that denies all `s3:*` actions when `aws:SecureTransport=false`.
+-   **Additional bucket policies** -- Applies any custom policy statements from `infra/config/policy/s3AdditionalBucketPolicyConfig.json`.
+-   **Event notifications** -- Creates Amazon SNS topics for Amazon S3 event notifications on the bucket to enable automatic file synchronization.
+-   **DynamoDB registration** -- Populates the S3 Asset Buckets Amazon DynamoDB table with bucket metadata (ARN, prefix, sync database ID).
+-   **Lambda permissions** -- Configures Lambda function IAM roles with permissions to read from and write to the external bucket.
 
 :::note
 Assets store which bucket and prefix they are assigned to upon creation. Changes made directly to Amazon S3 buckets (outside of VAMS) are synchronized back to Amazon DynamoDB tables and Amazon OpenSearch indexes through the event notification pipeline.
 :::
-
 
 ## Verification
 
@@ -328,16 +305,16 @@ After deployment, use the following checklist to verify the external bucket inte
 
 ## Troubleshooting
 
-| Issue | Possible cause | Resolution |
-|-------|---------------|------------|
-| CDK deployment fails with `Access Denied` | Bucket policy not applied before deployment. | Apply the bucket policy from [Step 1](#step-1-configure-the-s3-bucket-policy) and redeploy. |
-| CDK deployment fails with `baseAssetsPrefix must end in a slash` | The prefix value does not end with `/`. | Update the prefix in `config.json` to end with `/`. |
-| Presigned URLs return CORS errors | CORS configuration missing or incorrect. | Verify the CORS policy from [Step 2](#step-2-configure-cors) is applied and `AllowedOrigins` matches your VAMS domain. |
-| Files uploaded to bucket do not appear in VAMS | SNS event notifications not configured. | Check that S3 event notifications are publishing to the VAMS SNS topic. Review AWS CloudTrail logs for access denied errors. |
-| `KMS.AccessDeniedException` in Lambda logs | KMS key policy does not grant VAMS access. | Add the KMS key policy statement from [Step 3](#step-3-configure-kms-key-policy-conditional). |
+| Issue                                                            | Possible cause                               | Resolution                                                                                                                   |
+| ---------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| CDK deployment fails with `Access Denied`                        | Bucket policy not applied before deployment. | Apply the bucket policy from [Step 1](#step-1-configure-the-s3-bucket-policy) and redeploy.                                  |
+| CDK deployment fails with `baseAssetsPrefix must end in a slash` | The prefix value does not end with `/`.      | Update the prefix in `config.json` to end with `/`.                                                                          |
+| Presigned URLs return CORS errors                                | CORS configuration missing or incorrect.     | Verify the CORS policy from [Step 2](#step-2-configure-cors) is applied and `AllowedOrigins` matches your VAMS domain.       |
+| Files uploaded to bucket do not appear in VAMS                   | SNS event notifications not configured.      | Check that S3 event notifications are publishing to the VAMS SNS topic. Review AWS CloudTrail logs for access denied errors. |
+| `KMS.AccessDeniedException` in Lambda logs                       | KMS key policy does not grant VAMS access.   | Add the KMS key policy statement from [Step 3](#step-3-configure-kms-key-policy-conditional).                                |
 
 ## Related resources
 
-- [Plan your deployment](plan-your-deployment.md)
-- [Deploy the solution](deploy-the-solution.md)
-- [Configuration reference](configuration-reference.md)
+-   [Plan your deployment](plan-your-deployment.md)
+-   [Deploy the solution](deploy-the-solution.md)
+-   [Configuration reference](configuration-reference.md)

@@ -9,14 +9,14 @@
 
 VAMS documentation is built with **Docusaurus** (React-based static site generator) and lives in `documentation/docusaurus-site/`. The source Markdown files are in `documentation/docusaurus-site/docs/`.
 
-- **Docusaurus config**: `documentation/docusaurus-site/docusaurus.config.ts`
-- **Sidebar config**: `documentation/docusaurus-site/sidebars.ts`
-- **Source pages**: `documentation/docusaurus-site/docs/` (78 Markdown files)
-- **Custom CSS**: `documentation/docusaurus-site/src/css/custom.css`
-- **Static images**: `documentation/docusaurus-site/static/img/`
-- **Architecture diagrams**: `documentation/diagrams/` (source PNGs, JPEGs, draw.io files)
-- **OpenAPI spec**: `documentation/VAMS_API.yaml`
-- **Build output**: `documentation/docusaurus-site/build/`
+-   **Docusaurus config**: `documentation/docusaurus-site/docusaurus.config.ts`
+-   **Sidebar config**: `documentation/docusaurus-site/sidebars.ts`
+-   **Source pages**: `documentation/docusaurus-site/docs/` (78 Markdown files)
+-   **Custom CSS**: `documentation/docusaurus-site/src/css/custom.css`
+-   **Static images**: `documentation/docusaurus-site/static/img/`
+-   **Architecture diagrams**: `documentation/diagrams/` (source PNGs, JPEGs, draw.io files)
+-   **OpenAPI spec**: `documentation/VAMS_API.yaml`
+-   **Build output**: `documentation/docusaurus-site/build/`
 
 ---
 
@@ -49,13 +49,13 @@ Follow AWS documentation standards:
 3. **Paragraphs**: 2-4 sentences, concise
 4. **Headings**: `##` for main sections, `###` for subsections
 5. **Admonitions**: Use Docusaurus admonition syntax:
-   - `:::note` — General information
-   - `:::tip` — Helpful suggestions
-   - `:::warning` — Caution needed
-   - `:::danger` — Critical warnings
-   - `:::info` — Supplementary information
-   - With title: `:::warning[Custom Title]`
-6. **Code blocks**: Always include language tags (```bash, ```python, ```typescript, ```json)
+    - `:::note` — General information
+    - `:::tip` — Helpful suggestions
+    - `:::warning` — Caution needed
+    - `:::danger` — Critical warnings
+    - `:::info` — Supplementary information
+    - With title: `:::warning[Custom Title]`
+6. **Code blocks**: Always include language tags (`bash, `python, `typescript, `json)
 7. **Tables**: For comparisons, feature lists, field references
 8. **Mermaid diagrams**: Use ```mermaid code blocks (supported via @docusaurus/theme-mermaid)
 9. **Cross-references**: Use relative links `[Page Title](../section/page.md)`
@@ -86,49 +86,49 @@ npm run build
 
 ## When to Update Documentation
 
-| Change Type | Documentation to Update |
-|-------------|------------------------|
-| New API endpoint | `api/` relevant page, `VAMS_API.yaml`, `cli/command-reference.md` (if CLI updated) |
-| New config option | `deployment/configuration-reference.md` |
-| New pipeline | `pipelines/` new page + `pipelines/overview.md` table + `overview/features.md` + `sidebars.ts` |
-| New viewer plugin | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`, `overview/features.md` |
-| New DynamoDB table | `architecture/aws-resources.md`, `architecture/data-model.md` |
-| Permission model change | `concepts/permissions-model.md`, `user-guide/permissions.md` |
-| New CLI command | `cli/command-reference.md`, `cli/automation.md` (if new patterns) |
-| UI navigation change | `user-guide/web-interface.md`, `user-guide/getting-started.md` |
-| Breaking change | `additional/revisions.md`, `deployment/update-the-solution.md` |
-| New feature | `overview/features.md`, relevant user guide page |
-| New sidebar page | `sidebars.ts` — add the page to the appropriate category |
+| Change Type             | Documentation to Update                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| New API endpoint        | `api/` relevant page, `VAMS_API.yaml`, `cli/command-reference.md` (if CLI updated)             |
+| New config option       | `deployment/configuration-reference.md`                                                        |
+| New pipeline            | `pipelines/` new page + `pipelines/overview.md` table + `overview/features.md` + `sidebars.ts` |
+| New viewer plugin       | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`, `overview/features.md`          |
+| New DynamoDB table      | `architecture/aws-resources.md`, `architecture/data-model.md`                                  |
+| Permission model change | `concepts/permissions-model.md`, `user-guide/permissions.md`                                   |
+| New CLI command         | `cli/command-reference.md`, `cli/automation.md` (if new patterns)                              |
+| UI navigation change    | `user-guide/web-interface.md`, `user-guide/getting-started.md`                                 |
+| Breaking change         | `additional/revisions.md`, `deployment/update-the-solution.md`                                 |
+| New feature             | `overview/features.md`, relevant user guide page                                               |
+| New sidebar page        | `sidebars.ts` — add the page to the appropriate category                                       |
 
 ---
 
 ## Key Files to Cross-Reference
 
-| Documentation Topic | Source Files |
-|-------------------|-------------|
-| Config options | `infra/config/config.ts` (ConfigPublic interface) |
-| API endpoints | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`, `VAMS_API.yaml` |
-| DynamoDB tables | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts` |
-| Feature flags | `infra/common/vamsAppFeatures.ts` |
-| Backend handlers | `backend/backend/handlers/` |
-| Pydantic models | `backend/backend/models/` |
-| CLI commands | `tools/VamsCLI/vamscli/commands/` |
-| Viewer plugins | `web/src/visualizerPlugin/config/viewerConfig.json` |
-| Lambda builders | `infra/lib/lambdaBuilder/` |
-| Pipeline configs | `infra/lib/nestedStacks/pipelines/` |
+| Documentation Topic | Source Files                                                                  |
+| ------------------- | ----------------------------------------------------------------------------- |
+| Config options      | `infra/config/config.ts` (ConfigPublic interface)                             |
+| API endpoints       | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`, `VAMS_API.yaml` |
+| DynamoDB tables     | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                |
+| Feature flags       | `infra/common/vamsAppFeatures.ts`                                             |
+| Backend handlers    | `backend/backend/handlers/`                                                   |
+| Pydantic models     | `backend/backend/models/`                                                     |
+| CLI commands        | `tools/VamsCLI/vamscli/commands/`                                             |
+| Viewer plugins      | `web/src/visualizerPlugin/config/viewerConfig.json`                           |
+| Lambda builders     | `infra/lib/lambdaBuilder/`                                                    |
+| Pipeline configs    | `infra/lib/nestedStacks/pipelines/`                                           |
 
 ---
 
 ## Documentation Framework
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Static site generator | [Docusaurus 3.x](https://docusaurus.io/) | React-based SSG with MDX support |
-| Language | TypeScript | Config files and custom components |
-| Markdown format | CommonMark (`.md`) with `format: 'detect'` | Standard Markdown (not MDX) for doc pages |
-| Diagrams | [@docusaurus/theme-mermaid](https://docusaurus.io/docs/markdown-features/diagrams) | Mermaid diagrams in code blocks |
-| Theme | GitHub Docs inspired | Custom CSS in `src/css/custom.css` |
-| Deployment | GitLab Pages + GitHub Pages | CI/CD via `.gitlab-ci.yml` and `.github/workflows/docs.yml` |
+| Component             | Technology                                                                         | Purpose                                                     |
+| --------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Static site generator | [Docusaurus 3.x](https://docusaurus.io/)                                           | React-based SSG with MDX support                            |
+| Language              | TypeScript                                                                         | Config files and custom components                          |
+| Markdown format       | CommonMark (`.md`) with `format: 'detect'`                                         | Standard Markdown (not MDX) for doc pages                   |
+| Diagrams              | [@docusaurus/theme-mermaid](https://docusaurus.io/docs/markdown-features/diagrams) | Mermaid diagrams in code blocks                             |
+| Theme                 | GitHub Docs inspired                                                               | Custom CSS in `src/css/custom.css`                          |
+| Deployment            | GitLab Pages + GitHub Pages                                                        | CI/CD via `.gitlab-ci.yml` and `.github/workflows/docs.yml` |
 
 ### Navigation Structure (sidebars.ts)
 
@@ -156,8 +156,8 @@ When adding new pages, always update `sidebars.ts` to include the page in the co
 
 Documentation is deployed automatically via CI/CD when changes are pushed to `main` or `release/*` branches:
 
-- **GitLab**: `.gitlab-ci.yml` → builds with `node:20-slim`, outputs to `public/` for GitLab Pages
-- **GitHub**: `.github/workflows/docs.yml` → builds with `actions/setup-node@v4`, deploys via `actions/deploy-pages@v4`
+-   **GitLab**: `.gitlab-ci.yml` → builds with `node:20-slim`, outputs to `public/` for GitLab Pages
+-   **GitHub**: `.github/workflows/docs.yml` → builds with `actions/setup-node@v4`, deploys via `actions/deploy-pages@v4`
 
 Both pipelines only trigger when files under `documentation/docusaurus-site/` change.
 

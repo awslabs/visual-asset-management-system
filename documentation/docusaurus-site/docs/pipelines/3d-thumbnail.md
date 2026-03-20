@@ -6,42 +6,42 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 
 ### Mesh Formats
 
-| Format | Extension | Library |
-|:---|:---|:---|
-| PLY | `.ply` | Trimesh |
-| STL | `.stl` | Trimesh |
-| OBJ | `.obj` | Trimesh |
-| GLB | `.glb` | Trimesh |
-| GLTF | `.gltf` | Trimesh (with external dependency download) |
-| FBX | `.fbx` | Trimesh |
-| DRC (Draco) | `.drc` | Trimesh |
+| Format      | Extension | Library                                     |
+| :---------- | :-------- | :------------------------------------------ |
+| PLY         | `.ply`    | Trimesh                                     |
+| STL         | `.stl`    | Trimesh                                     |
+| OBJ         | `.obj`    | Trimesh                                     |
+| GLB         | `.glb`    | Trimesh                                     |
+| GLTF        | `.gltf`   | Trimesh (with external dependency download) |
+| FBX         | `.fbx`    | Trimesh                                     |
+| DRC (Draco) | `.drc`    | Trimesh                                     |
 
 ### Point Cloud Formats
 
-| Format | Extension | Library |
-|:---|:---|:---|
-| LAS | `.las` | laspy |
-| LAZ | `.laz` | laspy + laszip |
-| E57 | `.e57` | pye57 |
-| PTX | `.ptx` | Open3D |
-| PCD | `.pcd` | Open3D |
-| FLS | `.fls` | Open3D |
-| FWS | `.fws` | Open3D |
+| Format | Extension | Library        |
+| :----- | :-------- | :------------- |
+| LAS    | `.las`    | laspy          |
+| LAZ    | `.laz`    | laspy + laszip |
+| E57    | `.e57`    | pye57          |
+| PTX    | `.ptx`    | Open3D         |
+| PCD    | `.pcd`    | Open3D         |
+| FLS    | `.fls`    | Open3D         |
+| FWS    | `.fws`    | Open3D         |
 
 ### CAD Formats
 
-| Format | Extension | Library |
-|:---|:---|:---|
-| STEP | `.stp`, `.step` | CadQuery / Open CASCADE |
+| Format | Extension       | Library                 |
+| :----- | :-------------- | :---------------------- |
+| STEP   | `.stp`, `.step` | CadQuery / Open CASCADE |
 
 ### USD Formats
 
-| Format | Extension | Library |
-|:---|:---|:---|
-| USD | `.usd` | OpenUSD (pxr) |
-| USDA | `.usda` | OpenUSD (pxr) |
-| USDC | `.usdc` | OpenUSD (pxr) |
-| USDZ | `.usdz` | OpenUSD (pxr) |
+| Format | Extension | Library       |
+| :----- | :-------- | :------------ |
+| USD    | `.usd`    | OpenUSD (pxr) |
+| USDA   | `.usda`   | OpenUSD (pxr) |
+| USDC   | `.usdc`   | OpenUSD (pxr) |
+| USDZ   | `.usdz`   | OpenUSD (pxr) |
 
 ## Architecture
 
@@ -99,7 +99,6 @@ These files are written to `outputS3AssetFilesPath`, which maps to the asset buc
 If the input file is at `<assetId>/subfolder/model.glb`, the preview is written to `<assetId>/subfolder/model.glb.previewFile.gif`. The `assetId` is threaded through the pipeline from the workflow state to ensure correct path computation.
 :::
 
-
 ## Configuration
 
 Enable this pipeline in `infra/config/config.json`:
@@ -120,23 +119,22 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option | Default | Description |
-|:---|:---|:---|
-| `enabled` | `false` | Deploy the 3D thumbnail pipeline infrastructure. Enables the global VPC. |
-| `autoRegisterWithVAMS` | `false` | Automatically register the pipeline and workflow during CDK deployment. |
+| Option                                | Default | Description                                                              |
+| :------------------------------------ | :------ | :----------------------------------------------------------------------- |
+| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Enables the global VPC. |
+| `autoRegisterWithVAMS`                | `false` | Automatically register the pipeline and workflow during CDK deployment.  |
 | `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when supported 3D files are uploaded. |
 
 :::warning[License Notice]
 This pipeline is disabled by default because it depends on libraries with LGPL licenses (CadQuery/Open CASCADE for STEP file support). Review the `requirements.txt` file in the container directory and consult your legal team before enabling this pipeline. Other format handlers use MIT-licensed or Apache-licensed libraries.
 :::
 
-
 ## Input Parameters
 
 When executing the pipeline manually or via API, you can pass the following input parameters:
 
-| Parameter | Type | Default | Description |
-|:---|:---|:---|:---|
+| Parameter                       | Type    | Default | Description                                                                                                                                               |
+| :------------------------------ | :------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `overwriteExistingPreviewFiles` | boolean | `false` | When `true`, regenerates preview files even if they already exist for the input file. When `false`, the pipeline skips files that already have a preview. |
 
 ### Example Input Parameters
@@ -149,17 +147,16 @@ When executing the pipeline manually or via API, you can pass the following inpu
 
 ## Limits and Constraints
 
-| Constraint | Value |
-|:---|:---|
-| Maximum input file size | 100 GB |
-| Container ephemeral storage | 200 GiB |
-| Point cloud downsampling threshold | 20 million points |
-| Rendering method | CPU-based (no GPU required) |
+| Constraint                         | Value                       |
+| :--------------------------------- | :-------------------------- |
+| Maximum input file size            | 100 GB                      |
+| Container ephemeral storage        | 200 GiB                     |
+| Point cloud downsampling threshold | 20 million points           |
+| Rendering method                   | CPU-based (no GPU required) |
 
 :::tip[Large Point Clouds]
 Point clouds exceeding 20 million points are automatically downsampled for rendering performance. The original file is not modified; only the rendering input is reduced.
 :::
-
 
 ## Prerequisites
 
@@ -171,14 +168,14 @@ This pipeline runs on AWS Batch with AWS Fargate. Enabling it automatically enab
 
 The container image is built during CDK deployment from `backendPipelines/preview/3dThumbnail/container/Dockerfile`. It is based on Python 3.12 slim and includes:
 
-- **PyVista / VTK** -- 3D rendering engine (MIT license)
-- **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, FBX, DRC (MIT license)
-- **laspy** -- LAS/LAZ point cloud reading (BSD license)
-- **pye57** -- E57 point cloud reading (MIT license)
-- **Open3D** -- Additional point cloud formats: PTX, PCD, FLS, FWS (MIT license)
-- **CadQuery** -- STEP/STP CAD file support (LGPL license)
-- **OpenUSD (pxr)** -- USD format support (Modified Apache 2.0 license)
-- **Xvfb** -- Virtual framebuffer for headless rendering
+-   **PyVista / VTK** -- 3D rendering engine (MIT license)
+-   **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, FBX, DRC (MIT license)
+-   **laspy** -- LAS/LAZ point cloud reading (BSD license)
+-   **pye57** -- E57 point cloud reading (MIT license)
+-   **Open3D** -- Additional point cloud formats: PTX, PCD, FLS, FWS (MIT license)
+-   **CadQuery** -- STEP/STP CAD file support (LGPL license)
+-   **OpenUSD (pxr)** -- USD format support (Modified Apache 2.0 license)
+-   **Xvfb** -- Virtual framebuffer for headless rendering
 
 ## How It Works
 
@@ -190,6 +187,6 @@ The container image is built during CDK deployment from `backendPipelines/previe
 
 ## Related Resources
 
-- [Pipeline System Overview](overview.md)
-- [Potree Point Cloud Viewer Pipeline](potree-viewer.md) -- interactive point cloud visualization (complementary to thumbnail previews)
-- [CAD/Mesh Metadata Extraction Pipeline](cad-mesh-extraction.md) -- extracts metadata from similar file formats
+-   [Pipeline System Overview](overview.md)
+-   [Potree Point Cloud Viewer Pipeline](potree-viewer.md) -- interactive point cloud visualization (complementary to thumbnail previews)
+-   [CAD/Mesh Metadata Extraction Pipeline](cad-mesh-extraction.md) -- extracts metadata from similar file formats

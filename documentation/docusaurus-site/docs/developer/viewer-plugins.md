@@ -19,14 +19,14 @@ graph TD
 
 ### Core Components
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| PluginRegistry | `core/PluginRegistry.ts` | Singleton that manages all viewer plugins |
-| viewerConfig.json | `config/viewerConfig.json` | JSON configuration for all plugins |
-| manifest.ts | `viewers/manifest.ts` | Vite static analysis paths for dynamic imports |
-| StylesheetManager | `core/StylesheetManager.ts` | Per-plugin CSS lifecycle management |
-| DynamicViewer | `components/DynamicViewer.tsx` | Main viewer component for rendering |
-| ViewerSelector | `components/ViewerSelector.tsx` | UI for choosing between compatible viewers |
+| Component         | File                            | Purpose                                        |
+| ----------------- | ------------------------------- | ---------------------------------------------- |
+| PluginRegistry    | `core/PluginRegistry.ts`        | Singleton that manages all viewer plugins      |
+| viewerConfig.json | `config/viewerConfig.json`      | JSON configuration for all plugins             |
+| manifest.ts       | `viewers/manifest.ts`           | Vite static analysis paths for dynamic imports |
+| StylesheetManager | `core/StylesheetManager.ts`     | Per-plugin CSS lifecycle management            |
+| DynamicViewer     | `components/DynamicViewer.tsx`  | Main viewer component for rendering            |
+| ViewerSelector    | `components/ViewerSelector.tsx` | UI for choosing between compatible viewers     |
 
 ### How It Works
 
@@ -39,30 +39,29 @@ graph TD
 
 VAMS ships with 17 viewer plugins across five categories.
 
-| ID | Name | Category | Extensions | Status |
-|----|------|----------|------------|--------|
-| `online3d-viewer` | Online 3D Viewer | 3d | .3dm, .amf, .bim, .off, .wrl | Enabled |
-| `potree-viewer` | Potree Viewer | 3d | .e57, .las, .laz, .ply | Enabled |
-| `threejs-viewer` | Three.js Viewer | 3d | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep | Enabled |
-| `gaussian-splat-viewer-babylonjs` | BabylonJS Gaussian Splat | 3d | .ply, .spz | Enabled |
-| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat | 3d | .ply, .sog | Enabled |
-| `needletools-usd-viewer` | Needle USD Viewer | 3d | .usd, .usda, .usdc, .usdz | Enabled |
-| `cesium-viewer` | Cesium 3D Tileset | 3d | .json | Enabled (requires ALLOWUNSAFEEVAL) |
-| `vntana-viewer` | VNTANA 3D Viewer | 3d | .glb | Disabled (licensed) |
-| `veerum-viewer` | VEERUM 3D Viewer | 3d | .e57, .las, .laz, .ply, .json | Disabled (licensed) |
-| `image-viewer` | Image Viewer | media | .png, .jpg, .jpeg, .svg, .gif | Enabled |
-| `video-viewer` | Video Player | media | .mp4, .webm, .mov, .avi, .mkv, .flv, .wmv, .m4v | Enabled |
-| `audio-viewer` | Audio Player | media | .mp3, .wav, .ogg, .aac, .flac, .m4a | Enabled |
-| `pdf-viewer` | PDF Viewer | document | .pdf | Enabled |
-| `html-viewer` | HTML Viewer | document | .html | Enabled |
-| `text-viewer` | Text Viewer | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, and more | Enabled |
-| `columnar-viewer` | Columnar Data Viewer | data | .rds, .fcs, .csv | Enabled |
-| `preview-viewer` | Preview Viewer | preview | * (wildcard) | Enabled |
+| ID                                 | Name                      | Category | Extensions                                                                       | Status                             |
+| ---------------------------------- | ------------------------- | -------- | -------------------------------------------------------------------------------- | ---------------------------------- |
+| `online3d-viewer`                  | Online 3D Viewer          | 3d       | .3dm, .amf, .bim, .off, .wrl                                                     | Enabled                            |
+| `potree-viewer`                    | Potree Viewer             | 3d       | .e57, .las, .laz, .ply                                                           | Enabled                            |
+| `threejs-viewer`                   | Three.js Viewer           | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep | Enabled                            |
+| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat  | 3d       | .ply, .spz                                                                       | Enabled                            |
+| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat | 3d       | .ply, .sog                                                                       | Enabled                            |
+| `needletools-usd-viewer`           | Needle USD Viewer         | 3d       | .usd, .usda, .usdc, .usdz                                                        | Enabled                            |
+| `cesium-viewer`                    | Cesium 3D Tileset         | 3d       | .json                                                                            | Enabled (requires ALLOWUNSAFEEVAL) |
+| `vntana-viewer`                    | VNTANA 3D Viewer          | 3d       | .glb                                                                             | Disabled (licensed)                |
+| `veerum-viewer`                    | VEERUM 3D Viewer          | 3d       | .e57, .las, .laz, .ply, .json                                                    | Disabled (licensed)                |
+| `image-viewer`                     | Image Viewer              | media    | .png, .jpg, .jpeg, .svg, .gif                                                    | Enabled                            |
+| `video-viewer`                     | Video Player              | media    | .mp4, .webm, .mov, .avi, .mkv, .flv, .wmv, .m4v                                  | Enabled                            |
+| `audio-viewer`                     | Audio Player              | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                              | Enabled                            |
+| `pdf-viewer`                       | PDF Viewer                | document | .pdf                                                                             | Enabled                            |
+| `html-viewer`                      | HTML Viewer               | document | .html                                                                            | Enabled                            |
+| `text-viewer`                      | Text Viewer               | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, and more                     | Enabled                            |
+| `columnar-viewer`                  | Columnar Data Viewer      | data     | .rds, .fcs, .csv                                                                 | Enabled                            |
+| `preview-viewer`                   | Preview Viewer            | preview  | \* (wildcard)                                                                    | Enabled                            |
 
 :::info[Priority System]
 When multiple viewers support the same file extension, the viewer with the lowest `priority` number is preferred. For example, `.ply` files match both BabylonJS Gaussian Splat (priority 1) and PlayCanvas Gaussian Splat (priority 2).
 :::
-
 
 ## Creating a New Viewer Plugin
 
@@ -108,7 +107,8 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
             try {
                 setLoading(true);
                 const response = await downloadAsset({
-                    assetId, databaseId,
+                    assetId,
+                    databaseId,
                     key: assetKey,
                     versionId: versionId || "",
                     downloadType: "assetFile",
@@ -146,8 +146,7 @@ Update `src/visualizerPlugin/viewers/manifest.ts` with the component path:
 ```typescript
 export const VIEWER_COMPONENTS = {
     // ... existing entries
-    "./viewers/MyViewerPlugin/MyViewerComponent":
-        "MyViewerPlugin/MyViewerComponent",
+    "./viewers/MyViewerPlugin/MyViewerComponent": "MyViewerPlugin/MyViewerComponent",
 } as const;
 ```
 
@@ -156,8 +155,7 @@ If your viewer has a dependency manager, also add it:
 ```typescript
 export const DEPENDENCY_MANAGERS = {
     // ... existing entries
-    "./viewers/MyViewerPlugin/dependencies":
-        "MyViewerPlugin/dependencies",
+    "./viewers/MyViewerPlugin/dependencies": "MyViewerPlugin/dependencies",
 } as const;
 ```
 
@@ -198,9 +196,7 @@ export class MyDependencyManager {
         if (this.loaded) return;
 
         // Load stylesheets
-        await StylesheetManager.loadStylesheet(
-            this.PLUGIN_ID, "/path/to/styles.css"
-        );
+        await StylesheetManager.loadStylesheet(this.PLUGIN_ID, "/path/to/styles.css");
 
         // Load external libraries
         const MyLib = await import("my-library");
@@ -239,31 +235,30 @@ If your viewer requires build-time dependency installation beyond standard npm p
 Review existing custom install scripts in `web/customInstalls/` for patterns. Viewers like Three.js, CesiumJS, and Potree all have custom install directories.
 :::
 
-
 ## Plugin Configuration Fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | Yes | Unique plugin identifier |
-| `name` | string | Yes | Display name in the viewer selector UI |
-| `description` | string | Yes | Description shown to users |
-| `componentPath` | string | Yes | Path for manifest lookup (must match manifest.ts key) |
-| `supportedExtensions` | string[] | Yes | File extensions this viewer handles (e.g., `[".obj", ".fbx"]`) |
-| `supportsMultiFile` | boolean | Yes | Whether the viewer can handle multiple files simultaneously |
-| `canFullscreen` | boolean | Yes | Whether the viewer supports fullscreen mode |
-| `priority` | number | Yes | Selection priority (lower = preferred when multiple viewers match) |
-| `dependencies` | string[] | Yes | Required library names (informational) |
-| `loadStrategy` | string | Yes | `"lazy"` (load on demand) or `"eager"` (load at startup) |
-| `category` | string | Yes | Viewer category: `3d`, `media`, `document`, `data`, or `preview` |
-| `enabled` | boolean | Yes | Whether the plugin is active |
-| `dependencyManager` | string | No | Path to the dependency manager module |
-| `dependencyManagerClass` | string | No | Class name exported by the dependency module |
-| `dependencyManagerMethod` | string | No | Static method to call for loading dependencies |
-| `dependencyCleanupMethod` | string | No | Static method to call for cleanup |
-| `featuresEnabledRestriction` | string[] | No | Required feature flags (all must be enabled) |
-| `isPreviewViewer` | boolean | No | `true` for the preview-only fallback viewer |
-| `requiresPreprocessing` | boolean | No | `true` if the viewer needs a preprocessing pipeline |
-| `customParameters` | object | No | Viewer-specific configuration passed to the component |
+| Field                        | Type     | Required | Description                                                        |
+| ---------------------------- | -------- | -------- | ------------------------------------------------------------------ |
+| `id`                         | string   | Yes      | Unique plugin identifier                                           |
+| `name`                       | string   | Yes      | Display name in the viewer selector UI                             |
+| `description`                | string   | Yes      | Description shown to users                                         |
+| `componentPath`              | string   | Yes      | Path for manifest lookup (must match manifest.ts key)              |
+| `supportedExtensions`        | string[] | Yes      | File extensions this viewer handles (e.g., `[".obj", ".fbx"]`)     |
+| `supportsMultiFile`          | boolean  | Yes      | Whether the viewer can handle multiple files simultaneously        |
+| `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                        |
+| `priority`                   | number   | Yes      | Selection priority (lower = preferred when multiple viewers match) |
+| `dependencies`               | string[] | Yes      | Required library names (informational)                             |
+| `loadStrategy`               | string   | Yes      | `"lazy"` (load on demand) or `"eager"` (load at startup)           |
+| `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`   |
+| `enabled`                    | boolean  | Yes      | Whether the plugin is active                                       |
+| `dependencyManager`          | string   | No       | Path to the dependency manager module                              |
+| `dependencyManagerClass`     | string   | No       | Class name exported by the dependency module                       |
+| `dependencyManagerMethod`    | string   | No       | Static method to call for loading dependencies                     |
+| `dependencyCleanupMethod`    | string   | No       | Static method to call for cleanup                                  |
+| `featuresEnabledRestriction` | string[] | No       | Required feature flags (all must be enabled)                       |
+| `isPreviewViewer`            | boolean  | No       | `true` for the preview-only fallback viewer                        |
+| `requiresPreprocessing`      | boolean  | No       | `true` if the viewer needs a preprocessing pipeline                |
+| `customParameters`           | object   | No       | Viewer-specific configuration passed to the component              |
 
 ## Dependency Chain Loading
 
@@ -337,10 +332,10 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag | Effect on Viewers |
-|------|------------------|
-| `ALLOWUNSAFEEVAL` | Enables CesiumJS and Needle USD viewers (require `unsafe-eval` CSP directive) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers |
+| Flag               | Effect on Viewers                                                             |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `ALLOWUNSAFEEVAL`  | Enables CesiumJS and Needle USD viewers (require `unsafe-eval` CSP directive) |
+| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                        |
 
 ### Multiple Requirements
 
@@ -358,16 +353,16 @@ All viewer components receive these props:
 
 ```typescript
 interface ViewerPluginProps {
-    assetId: string;              // Asset identifier
-    databaseId: string;           // Database identifier
-    assetKey?: string;            // Single file S3 key
-    multiFileKeys?: string[];     // Multiple file S3 keys
-    versionId?: string;           // File version
-    viewerMode: string;           // Display mode ("wide", "fullscreen")
+    assetId: string; // Asset identifier
+    databaseId: string; // Database identifier
+    assetKey?: string; // Single file S3 key
+    multiFileKeys?: string[]; // Multiple file S3 keys
+    versionId?: string; // File version
+    viewerMode: string; // Display mode ("wide", "fullscreen")
     onViewerModeChange: (mode: string) => void;
     onDeletePreview?: () => void; // Callback to delete preview
-    isPreviewFile?: boolean;      // Whether this is a preview file
-    viewerConfig?: any;           // Plugin-specific customParameters
+    isPreviewFile?: boolean; // Whether this is a preview file
+    viewerConfig?: any; // Plugin-specific customParameters
 }
 ```
 
@@ -396,16 +391,16 @@ import { DynamicViewer } from "./visualizerPlugin";
     databaseId="db-456"
     viewerMode="wide"
     onViewerModeChange={setViewerMode}
-/>
+/>;
 ```
 
 `DynamicViewer` automatically:
 
-- Determines compatible viewers based on file extensions
-- Shows a `ViewerSelector` if multiple viewers are available
-- Loads the selected viewer's component on demand
-- Wraps the viewer in a `ViewerErrorBoundary` for graceful error handling
-- Cleans up resources when switching viewers or unmounting
+-   Determines compatible viewers based on file extensions
+-   Shows a `ViewerSelector` if multiple viewers are available
+-   Loads the selected viewer's component on demand
+-   Wraps the viewer in a `ViewerErrorBoundary` for graceful error handling
+-   Cleans up resources when switching viewers or unmounting
 
 ## Troubleshooting
 
@@ -430,6 +425,6 @@ import { DynamicViewer } from "./visualizerPlugin";
 
 ## Next Steps
 
-- [Frontend Development](frontend.md) -- React component patterns used by viewer plugins
-- [CDK Infrastructure](cdk.md) -- Feature flag configuration for viewer restrictions
-- [Local Development Setup](setup.md) -- Running the dev server with viewer plugins
+-   [Frontend Development](frontend.md) -- React component patterns used by viewer plugins
+-   [CDK Infrastructure](cdk.md) -- Feature flag configuration for viewer restrictions
+-   [Local Development Setup](setup.md) -- Running the dev server with viewer plugins

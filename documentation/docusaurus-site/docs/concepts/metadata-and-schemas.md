@@ -6,12 +6,12 @@ Metadata in VAMS provides a flexible, typed key-value system for attaching struc
 
 Metadata can be attached to four entity types within VAMS. Each entity type has its own Amazon DynamoDB table and API endpoints, but they share a common metadata model.
 
-| Entity Type | Description | API Path |
-|---|---|---|
-| **Database** | Organization-level metadata attached to a database container. | `/database/{databaseId}/metadata` |
-| **Asset** | Metadata attached to an asset within a database. Versioned alongside asset versions. | `/database/{databaseId}/assets/{assetId}/metadata` |
-| **File** | Metadata or attributes attached to individual files within an asset. | `/database/{databaseId}/assets/{assetId}/metadata/file` |
-| **Asset Link** | Metadata attached to a relationship between two assets. | `/asset-links/{assetLinkId}/metadata` |
+| Entity Type    | Description                                                                          | API Path                                                |
+| -------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| **Database**   | Organization-level metadata attached to a database container.                        | `/database/{databaseId}/metadata`                       |
+| **Asset**      | Metadata attached to an asset within a database. Versioned alongside asset versions. | `/database/{databaseId}/assets/{assetId}/metadata`      |
+| **File**       | Metadata or attributes attached to individual files within an asset.                 | `/database/{databaseId}/assets/{assetId}/metadata/file` |
+| **Asset Link** | Metadata attached to a relationship between two assets.                              | `/asset-links/{assetLinkId}/metadata`                   |
 
 ## Metadata items
 
@@ -25,48 +25,46 @@ Each metadata item consists of three components: a key, a value, and a value typ
 }
 ```
 
-- **metadataKey** -- A unique identifier for the metadata field (1-256 characters).
-- **metadataValue** -- The value stored as a string. Complex types such as coordinates and matrices are stored as JSON strings.
-- **metadataValueType** -- The data type that determines validation rules and UI rendering.
+-   **metadataKey** -- A unique identifier for the metadata field (1-256 characters).
+-   **metadataValue** -- The value stored as a string. Complex types such as coordinates and matrices are stored as JSON strings.
+-   **metadataValueType** -- The data type that determines validation rules and UI rendering.
 
 ## Supported value types
 
 VAMS supports 13 metadata value types, ranging from simple strings to geospatial coordinates and transformation matrices.
 
-| Value Type | Description | Example Value |
-|---|---|---|
-| `string` | Single-line text. No additional validation. | `"Building A"` |
-| `multiline_string` | Multi-line text. No additional validation. | `"Line 1\nLine 2"` |
-| `inline_controlled_list` | Value must be one of a predefined set of options defined in the schema. | `"approved"` |
-| `number` | Numeric value (integer or floating point). | `"42.5"` |
-| `boolean` | Boolean value. Must be `"true"` or `"false"`. | `"true"` |
-| `date` | ISO 8601 date/time string. | `"2025-01-15T10:30:00Z"` |
-| `xyz` | 3D coordinate. JSON object with `x`, `y`, `z` numeric keys. | `{"x": 1.0, "y": 2.0, "z": 3.0}` |
-| `wxyz` | Quaternion rotation. JSON object with `w`, `x`, `y`, `z` numeric keys. | `{"w": 1.0, "x": 0, "y": 0, "z": 0}` |
-| `matrix4x4` | 4x4 transformation matrix. JSON array of 4 rows, each containing 4 numbers. | `[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]` |
-| `geopoint` | GeoJSON Point geometry. | `{"type": "Point", "coordinates": [-122.3, 47.6]}` |
-| `geojson` | Any valid GeoJSON geometry or feature. | `{"type": "Polygon", "coordinates": [...]}` |
-| `lla` | Latitude, longitude, altitude coordinate. JSON object with `lat` (-90 to 90), `long` (-180 to 180), and `alt` keys. | `{"lat": 47.6, "long": -122.3, "alt": 56.0}` |
-| `json` | Arbitrary JSON data. Must be valid JSON. | `{"custom": "data"}` |
+| Value Type               | Description                                                                                                         | Example Value                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `string`                 | Single-line text. No additional validation.                                                                         | `"Building A"`                                     |
+| `multiline_string`       | Multi-line text. No additional validation.                                                                          | `"Line 1\nLine 2"`                                 |
+| `inline_controlled_list` | Value must be one of a predefined set of options defined in the schema.                                             | `"approved"`                                       |
+| `number`                 | Numeric value (integer or floating point).                                                                          | `"42.5"`                                           |
+| `boolean`                | Boolean value. Must be `"true"` or `"false"`.                                                                       | `"true"`                                           |
+| `date`                   | ISO 8601 date/time string.                                                                                          | `"2025-01-15T10:30:00Z"`                           |
+| `xyz`                    | 3D coordinate. JSON object with `x`, `y`, `z` numeric keys.                                                         | `{"x": 1.0, "y": 2.0, "z": 3.0}`                   |
+| `wxyz`                   | Quaternion rotation. JSON object with `w`, `x`, `y`, `z` numeric keys.                                              | `{"w": 1.0, "x": 0, "y": 0, "z": 0}`               |
+| `matrix4x4`              | 4x4 transformation matrix. JSON array of 4 rows, each containing 4 numbers.                                         | `[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]`        |
+| `geopoint`               | GeoJSON Point geometry.                                                                                             | `{"type": "Point", "coordinates": [-122.3, 47.6]}` |
+| `geojson`                | Any valid GeoJSON geometry or feature.                                                                              | `{"type": "Polygon", "coordinates": [...]}`        |
+| `lla`                    | Latitude, longitude, altitude coordinate. JSON object with `lat` (-90 to 90), `long` (-180 to 180), and `alt` keys. | `{"lat": 47.6, "long": -122.3, "alt": 56.0}`       |
+| `json`                   | Arbitrary JSON data. Must be valid JSON.                                                                            | `{"custom": "data"}`                               |
 
 :::info[All values stored as strings]
 Regardless of type, all metadata values are stored as strings in Amazon DynamoDB. The `metadataValueType` field drives validation on create and update operations and determines how the VAMS web interface renders the value.
 :::
 
-
 ## File metadata versus file attributes
 
 VAMS distinguishes between two kinds of data that can be attached to individual files.
 
-| Concept | Value Types | Schema Support | Versioned | Use Case |
-|---|---|---|---|---|
-| **File metadata** | All 13 value types | Yes (schema-validated) | Yes (saved with asset versions) | Structured, typed information -- coordinates, measurements, classifications |
-| **File attributes** | `string` only | Yes (schema-validated) | Yes (saved with asset versions) | Simple key-value labels -- processing status, source system identifiers |
+| Concept             | Value Types        | Schema Support         | Versioned                       | Use Case                                                                    |
+| ------------------- | ------------------ | ---------------------- | ------------------------------- | --------------------------------------------------------------------------- |
+| **File metadata**   | All 13 value types | Yes (schema-validated) | Yes (saved with asset versions) | Structured, typed information -- coordinates, measurements, classifications |
+| **File attributes** | `string` only      | Yes (schema-validated) | Yes (saved with asset versions) | Simple key-value labels -- processing status, source system identifiers     |
 
 :::warning[Attribute type restriction]
 File attributes only support the `string` value type. Attempting to create a file attribute with any other type will return a validation error.
 :::
-
 
 Both file metadata and file attributes are managed through the same API endpoint (`/database/{databaseId}/assets/{assetId}/metadata/file`), differentiated by a `type` query parameter set to `metadata` or `attribute`.
 
@@ -78,8 +76,8 @@ Metadata schemas define the expected fields, types, and validation rules for met
 
 Schemas can be scoped to a specific database or declared as `GLOBAL`.
 
-- **Database-specific schemas** apply only to entities within that database.
-- **GLOBAL schemas** apply across all databases and are useful for organization-wide standards.
+-   **Database-specific schemas** apply only to entities within that database.
+-   **GLOBAL schemas** apply across all databases and are useful for organization-wide standards.
 
 When metadata is retrieved, VAMS aggregates all applicable schemas (both database-specific and GLOBAL) and enriches each metadata item with schema information such as field name, required status, display sequence, and default values.
 
@@ -87,27 +85,27 @@ When metadata is retrieved, VAMS aggregates all applicable schemas (both databas
 
 Each schema targets a specific entity type, controlling which kind of metadata it governs.
 
-| Schema Entity Type | Governs |
-|---|---|
-| `databaseMetadata` | Database-level metadata |
-| `assetMetadata` | Asset-level metadata |
-| `fileMetadata` | File-level metadata |
-| `fileAttribute` | File-level attributes |
-| `assetLinkMetadata` | Asset link metadata |
+| Schema Entity Type  | Governs                 |
+| ------------------- | ----------------------- |
+| `databaseMetadata`  | Database-level metadata |
+| `assetMetadata`     | Asset-level metadata    |
+| `fileMetadata`      | File-level metadata     |
+| `fileAttribute`     | File-level attributes   |
+| `assetLinkMetadata` | Asset link metadata     |
 
 ### Schema field definitions
 
 Each schema contains an array of field definitions. A field definition specifies:
 
-| Property | Type | Description |
-|---|---|---|
-| `metadataFieldKeyName` | String | The metadata key this field governs. |
-| `metadataFieldValueType` | MetadataValueType | The expected value type for this field. |
-| `required` | Boolean | Whether this field must be present on the entity. |
-| `sequence` | Integer (optional) | Display order in the UI (lower numbers appear first). |
-| `dependsOnFieldKeyName` | String array (optional) | Other field keys that this field depends on. |
-| `controlledListKeys` | String array (optional) | Allowed values for `inline_controlled_list` fields. Required when the value type is `inline_controlled_list`. |
-| `defaultMetadataFieldValue` | String (optional) | Default value pre-populated when creating new metadata. Validated against the field's value type. |
+| Property                    | Type                    | Description                                                                                                   |
+| --------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `metadataFieldKeyName`      | String                  | The metadata key this field governs.                                                                          |
+| `metadataFieldValueType`    | MetadataValueType       | The expected value type for this field.                                                                       |
+| `required`                  | Boolean                 | Whether this field must be present on the entity.                                                             |
+| `sequence`                  | Integer (optional)      | Display order in the UI (lower numbers appear first).                                                         |
+| `dependsOnFieldKeyName`     | String array (optional) | Other field keys that this field depends on.                                                                  |
+| `controlledListKeys`        | String array (optional) | Allowed values for `inline_controlled_list` fields. Required when the value type is `inline_controlled_list`. |
+| `defaultMetadataFieldValue` | String (optional)       | Default value pre-populated when creating new metadata. Validated against the field's value type.             |
 
 ### Multi-schema overlay
 
@@ -121,7 +119,6 @@ The schema name reported on each metadata item uses the format `SchemaName (data
 Schema validation is enforced when metadata is created or updated through the VAMS API. Metadata written directly to Amazon S3 by pipeline containers or imported through bulk operations is not validated against schemas at write time. Schema enrichment is applied when metadata is subsequently read through the API.
 :::
 
-
 Databases can optionally restrict metadata to schema-defined fields only. When this restriction is enabled and at least one schema exists for the entity type, the API rejects metadata keys that are not defined in any applicable schema.
 
 ## Metadata operations
@@ -134,10 +131,10 @@ Create one or more metadata items on an entity. Each item must include a `metada
 
 Update existing metadata items. VAMS supports two update modes:
 
-| Update Type | Behavior |
-|---|---|
-| `update` (default) | Merge the provided items with existing metadata. Only the specified keys are updated; other keys remain unchanged. |
-| `replace_all` | Replace all existing metadata with the provided items. Keys not included in the request are deleted. Limited to 500 items per operation. |
+| Update Type        | Behavior                                                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `update` (default) | Merge the provided items with existing metadata. Only the specified keys are updated; other keys remain unchanged.                       |
+| `replace_all`      | Replace all existing metadata with the provided items. Keys not included in the request are deleted. Limited to 500 items per operation. |
 
 ### Delete
 
@@ -154,7 +151,7 @@ All create, update, and delete operations support bulk payloads. The response in
     "successCount": 9,
     "failureCount": 1,
     "successfulItems": ["key1", "key2", "..."],
-    "failedItems": [{"key": "badKey", "error": "Validation failed"}],
+    "failedItems": [{ "key": "badKey", "error": "Validation failed" }],
     "message": "Bulk operation completed with 1 failure(s)"
 }
 ```
@@ -173,10 +170,10 @@ This versioning also applies to file metadata and file attributes -- the snapsho
 
 VAMS indexes metadata into Amazon OpenSearch Service to enable full-text and filtered search. Metadata and attributes are stored as flat key-value objects with prefixed keys:
 
-| Prefix | Source | Example Key |
-|---|---|---|
-| `MD_` | Asset and file metadata | `MD_location`, `MD_classification` |
-| `AB_` | File attributes | `AB_source_system`, `AB_processing_status` |
+| Prefix | Source                  | Example Key                                |
+| ------ | ----------------------- | ------------------------------------------ |
+| `MD_`  | Asset and file metadata | `MD_location`, `MD_classification`         |
+| `AB_`  | File attributes         | `AB_source_system`, `AB_processing_status` |
 
 This prefix convention prevents key collisions between metadata and attributes that share the same name, and enables targeted search queries against either metadata or attributes.
 
@@ -186,8 +183,8 @@ The VAMS web interface supports CSV-based bulk metadata operations. You can expo
 
 ## Related topics
 
-- [Databases](databases.md) -- database-level metadata and schema restriction settings
-- [Assets](assets.md) -- asset-level metadata and versioning
-- [Files and Versions](files-and-versions.md) -- file metadata, file attributes, and version snapshots
-- [Permissions Model](permissions-model.md) -- controlling who can read and write metadata
-- [Tags and Subscriptions](tags-and-subscriptions.md) -- tags as an alternative classification mechanism
+-   [Databases](databases.md) -- database-level metadata and schema restriction settings
+-   [Assets](assets.md) -- asset-level metadata and versioning
+-   [Files and Versions](files-and-versions.md) -- file metadata, file attributes, and version snapshots
+-   [Permissions Model](permissions-model.md) -- controlling who can read and write metadata
+-   [Tags and Subscriptions](tags-and-subscriptions.md) -- tags as an alternative classification mechanism

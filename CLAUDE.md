@@ -379,15 +379,15 @@ When you make structural changes to the codebase, **you must update the relevant
 
 **Which CLAUDE.md to update:**
 
-| Change area                            | Update this file                                                                         |
-| -------------------------------------- | ---------------------------------------------------------------------------------------- |
-| New backend handler/model domain       | `backend/CLAUDE.md` (directory structure, handler list)                                  |
-| New CDK nested stack or lambda builder | `infra/CLAUDE.md` (directory structure, stack list)                                      |
-| New frontend component/page/service    | `web/CLAUDE.md` (directory structure, key files)                                         |
-| New CLI command group                  | `tools/VamsCLI/CLAUDE.md` (command list, directory structure)                            |
+| Change area                            | Update this file                                                                                                              |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| New backend handler/model domain       | `backend/CLAUDE.md` (directory structure, handler list)                                                                       |
+| New CDK nested stack or lambda builder | `infra/CLAUDE.md` (directory structure, stack list)                                                                           |
+| New frontend component/page/service    | `web/CLAUDE.md` (directory structure, key files)                                                                              |
+| New CLI command group                  | `tools/VamsCLI/CLAUDE.md` (command list, directory structure)                                                                 |
 | New pipeline                           | `CLAUDE.md` root (pipeline list), `documentation/docusaurus-site/docs/deployment/configuration-reference.md` (config options) |
-| Cross-component pattern change         | `CLAUDE.md` root (cross-component patterns section)                                      |
-| New skill                              | `CLAUDE.md` root (Available Claude Code Skills table)                                    |
+| Cross-component pattern change         | `CLAUDE.md` root (cross-component patterns section)                                                                           |
+| New skill                              | `CLAUDE.md` root (Available Claude Code Skills table)                                                                         |
 
 **What to update:** Update the directory structure tree, key files tables, and any affected rules or patterns. Keep descriptions concise. You can also run `/refresh-steering-docs` for a comprehensive update.
 
@@ -494,12 +494,12 @@ For deep-dive workflows, see the detailed guides in `.clinerules/workflows/`:
 
 For user-facing documentation:
 
-| Document                              | Covers                                       |
-| ------------------------------------- | -------------------------------------------- |
-| `documentation/docusaurus-site/docs/concepts/permissions-model.md`   | Permission system concepts and ABAC/RBAC configuration |
-| `documentation/docusaurus-site/docs/deployment/configuration-reference.md` | CDK deployment configuration reference         |
-| `documentation/docusaurus-site/docs/developer/setup.md`     | Development environment setup and patterns                |
-| `documentation/VAMS_API.yaml`         | OpenAPI specification for all endpoints      |
+| Document                                                                   | Covers                                                 |
+| -------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `documentation/docusaurus-site/docs/concepts/permissions-model.md`         | Permission system concepts and ABAC/RBAC configuration |
+| `documentation/docusaurus-site/docs/deployment/configuration-reference.md` | CDK deployment configuration reference                 |
+| `documentation/docusaurus-site/docs/developer/setup.md`                    | Development environment setup and patterns             |
+| `documentation/VAMS_API.yaml`                                              | OpenAPI specification for all endpoints                |
 
 ---
 

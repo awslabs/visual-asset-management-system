@@ -83,10 +83,22 @@
     text-transform: uppercase;
 }
 
-.api-endpoint .method.get { background: #61affe; color: white; }
-.api-endpoint .method.post { background: #49cc90; color: white; }
-.api-endpoint .method.put { background: #fca130; color: white; }
-.api-endpoint .method.delete { background: #f93e3e; color: white; }
+.api-endpoint .method.get {
+    background: #61affe;
+    color: white;
+}
+.api-endpoint .method.post {
+    background: #49cc90;
+    color: white;
+}
+.api-endpoint .method.put {
+    background: #fca130;
+    color: white;
+}
+.api-endpoint .method.delete {
+    background: #f93e3e;
+    color: white;
+}
 
 /* Data hierarchy visualization */
 .data-hierarchy {

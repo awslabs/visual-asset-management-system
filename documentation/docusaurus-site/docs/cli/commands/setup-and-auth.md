@@ -17,11 +17,11 @@ vamscli setup <BASE_URL> [OPTIONS]
 
 ### Options
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `BASE_URL` | TEXT | Yes | VAMS deployment URL (Amazon CloudFront, ALB, Amazon API Gateway, or custom domain) |
-| `--force`, `-f` | Flag | No | Overwrite existing configuration |
-| `--skip-version-check` | Flag | No | Skip CLI/API version mismatch confirmation prompts |
+| Option                 | Type | Required | Description                                                                        |
+| ---------------------- | ---- | -------- | ---------------------------------------------------------------------------------- |
+| `BASE_URL`             | TEXT | Yes      | VAMS deployment URL (Amazon CloudFront, ALB, Amazon API Gateway, or custom domain) |
+| `--force`, `-f`        | Flag | No       | Overwrite existing configuration                                                   |
+| `--skip-version-check` | Flag | No       | Skip CLI/API version mismatch confirmation prompts                                 |
 
 ### What setup does
 
@@ -72,15 +72,15 @@ vamscli auth login [OPTIONS]
 
 ### Options
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-u`, `--username` | TEXT | Conditional | Username for Amazon Cognito authentication |
-| `-p`, `--password` | TEXT | No | Password (prompts securely if not provided) |
-| `--save-credentials` | Flag | No | Save credentials for automatic re-authentication |
-| `--user-id` | TEXT | Conditional | User ID for token override authentication |
-| `--token-override` | TEXT | Conditional | Override token for external authentication (requires `--user-id`) |
-| `--expires-at` | TEXT | No | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`) |
-| `--skip-version-check` | Flag | No | Skip version mismatch confirmation prompts |
+| Option                 | Type | Required    | Description                                                       |
+| ---------------------- | ---- | ----------- | ----------------------------------------------------------------- |
+| `-u`, `--username`     | TEXT | Conditional | Username for Amazon Cognito authentication                        |
+| `-p`, `--password`     | TEXT | No          | Password (prompts securely if not provided)                       |
+| `--save-credentials`   | Flag | No          | Save credentials for automatic re-authentication                  |
+| `--user-id`            | TEXT | Conditional | User ID for token override authentication                         |
+| `--token-override`     | TEXT | Conditional | Override token for external authentication (requires `--user-id`) |
+| `--expires-at`         | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)   |
+| `--skip-version-check` | Flag | No          | Skip version mismatch confirmation prompts                        |
 
 ### Amazon Cognito examples
 
@@ -100,9 +100,9 @@ vamscli auth login --user-id john.doe@example.com --token-override "token123" --
 
 ### Token override expiration formats
 
-- **Unix timestamp:** `1735689599`
-- **ISO 8601:** `2025-12-31T23:59:59Z`
-- **Relative:** `+3600` (3600 seconds from now)
+-   **Unix timestamp:** `1735689599`
+-   **ISO 8601:** `2025-12-31T23:59:59Z`
+-   **Relative:** `+3600` (3600 seconds from now)
 
 :::note[Authentication Type Detection]
 VamsCLI automatically detects the authentication type based on the Amplify configuration. If `cognitoUserPoolId` is configured, Amazon Cognito authentication is available. If it is not configured, only token override authentication is available.
@@ -114,6 +114,7 @@ If your VAMS deployment uses external authentication (no Amazon Cognito), you mu
 ```bash
 vamscli auth login --user-id user@example.com --token-override "your-external-token"
 ```
+
 :::
 
 ---
@@ -158,11 +159,11 @@ Set an override token for external authentication systems.
 vamscli auth set-override [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-u`, `--user-id` | TEXT | Yes | User ID associated with the override token |
-| `--token` | TEXT | Yes | Override token to use for authentication |
-| `--expires-at` | TEXT | No | Token expiration time |
+| Option            | Type | Required | Description                                |
+| ----------------- | ---- | -------- | ------------------------------------------ |
+| `-u`, `--user-id` | TEXT | Yes      | User ID associated with the override token |
+| `--token`         | TEXT | Yes      | Override token to use for authentication   |
+| `--expires-at`    | TEXT | No       | Token expiration time                      |
 
 ```bash
 vamscli auth set-override -u john.doe@example.com --token "eyJhbGciOiJIUzI1NiIs..."
@@ -193,16 +194,16 @@ Output includes total count, list of enabled feature names, and last updated tim
 
 ### Available feature switches
 
-| Feature | Description |
-|---|---|
-| `GOVCLOUD` | GovCloud-specific functionality |
-| `ALLOWUNSAFEEVAL` | Allow unsafe eval operations |
-| `LOCATIONSERVICES` | Location-based services and mapping |
-| `ALBDEPLOY` | Application Load Balancer deployment mode |
-| `NOOPENSEARCH` | Disable Amazon OpenSearch Service functionality |
-| `AUTHPROVIDER_COGNITO` | Amazon Cognito authentication provider |
-| `AUTHPROVIDER_COGNITO_SAML` | Amazon Cognito SAML authentication provider |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider |
+| Feature                         | Description                                     |
+| ------------------------------- | ----------------------------------------------- |
+| `GOVCLOUD`                      | GovCloud-specific functionality                 |
+| `ALLOWUNSAFEEVAL`               | Allow unsafe eval operations                    |
+| `LOCATIONSERVICES`              | Location-based services and mapping             |
+| `ALBDEPLOY`                     | Application Load Balancer deployment mode       |
+| `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality |
+| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider          |
+| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito SAML authentication provider     |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                |
 
 ---
 
@@ -250,10 +251,10 @@ Delete a profile and all its configuration. The default profile cannot be delete
 vamscli profile delete <PROFILE_NAME> [--force]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `PROFILE_NAME` | TEXT | Yes | Name of the profile to delete |
-| `--force`, `-f` | Flag | No | Force deletion without confirmation |
+| Option          | Type | Required | Description                         |
+| --------------- | ---- | -------- | ----------------------------------- |
+| `PROFILE_NAME`  | TEXT | Yes      | Name of the profile to delete       |
+| `--force`, `-f` | Flag | No       | Force deletion without confirmation |
 
 ---
 
@@ -314,6 +315,6 @@ vamscli auth clear-override
 
 ## Related Pages
 
-- [Installation and Profile Management](../installation.md)
-- [Getting Started](../getting-started.md)
-- [Automation and Scripting](../automation.md)
+-   [Installation and Profile Management](../installation.md)
+-   [Getting Started](../getting-started.md)
+-   [Automation and Scripting](../automation.md)

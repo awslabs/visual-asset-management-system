@@ -6,18 +6,17 @@ VAMS provides built-in user management for deployments that use Amazon Cognito a
 The User Management page is available only when Amazon Cognito authentication is enabled. If your deployment uses an external OAuth identity provider (IdP), user management is handled externally through your IdP's administration interface, and this page is not displayed in the navigation.
 :::
 
-
 ---
 
 ## Overview
 
 The User Management feature allows administrators to perform the following operations:
 
-- List all users in the Amazon Cognito user pool
-- Create new users with email-based credentials
-- Update user attributes (email, phone number)
-- Reset user passwords
-- Delete users from the user pool
+-   List all users in the Amazon Cognito user pool
+-   Create new users with email-based credentials
+-   Update user attributes (email, phone number)
+-   Reset user passwords
+-   Delete users from the user pool
 
 ### Relationship to VAMS roles
 
@@ -26,8 +25,7 @@ Creating a user in Amazon Cognito establishes authentication credentials only. T
 
 1. Create the user (this page)
 2. Assign roles to the user (see [Permissions](permissions.md))
-:::
-
+   :::
 
 ---
 
@@ -42,22 +40,21 @@ Creating a user in Amazon Cognito establishes authentication credentials only. T
 The **User Management** link appears only when Amazon Cognito is the configured authentication provider. If you do not see this link, your deployment likely uses an external identity provider.
 :::
 
-
 ---
 
 ## Listing users
 
 The User Management page displays all users in the Amazon Cognito user pool. The table includes the following columns:
 
-| Column         | Description                                                           |
-| -------------- | --------------------------------------------------------------------- |
-| User ID        | The unique username for the user in Amazon Cognito.                   |
-| Email          | The user's email address.                                             |
-| Phone Number   | The user's phone number in E.164 format (optional).                   |
-| Status         | The current Amazon Cognito user status (for example, `CONFIRMED`, `FORCE_CHANGE_PASSWORD`). |
-| MFA Enabled    | Whether multi-factor authentication is enabled for the user.          |
-| Created At     | The date and time the user was created.                               |
-| Last Modified  | The date and time the user was last modified.                         |
+| Column        | Description                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------------- |
+| User ID       | The unique username for the user in Amazon Cognito.                                         |
+| Email         | The user's email address.                                                                   |
+| Phone Number  | The user's phone number in E.164 format (optional).                                         |
+| Status        | The current Amazon Cognito user status (for example, `CONFIRMED`, `FORCE_CHANGE_PASSWORD`). |
+| MFA Enabled   | Whether multi-factor authentication is enabled for the user.                                |
+| Created At    | The date and time the user was created.                                                     |
+| Last Modified | The date and time the user was last modified.                                               |
 
 Use the filter fields at the top of the table to search by User ID, Email, or Phone Number.
 
@@ -72,11 +69,11 @@ When you create a new user, Amazon Cognito generates a temporary password and se
 1. On the **User Management** page, choose **Create Cognito User**.
 2. Complete the form fields:
 
-| Field        | Description                                                                                      | Required |
-| ------------ | ------------------------------------------------------------------------------------------------ | -------- |
+| Field        | Description                                                                                                                         | Required |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | User ID      | A unique identifier for the user. Must be 3--256 characters. Supports alphanumeric characters and the special characters `. + - @`. | Yes      |
-| Email        | The user's email address. Must be a valid email format. Used for delivering the temporary password. | Yes      |
-| Phone Number | The user's phone number in E.164 format (for example, `+12345678900`).                           | No       |
+| Email        | The user's email address. Must be a valid email format. Used for delivering the temporary password.                                 | Yes      |
+| Phone Number | The user's phone number in E.164 format (for example, `+12345678900`).                                                              | No       |
 
 3. Choose **Create Cognito User**.
 
@@ -86,15 +83,14 @@ When you create a new user, Amazon Cognito generates a temporary password and se
 After creation, the user receives a welcome email from Amazon Cognito containing their User ID and a temporary password. The user must sign in and set a new password before they can access VAMS. Ensure the user's email address is correct and that your Amazon Cognito configuration allows email delivery.
 :::
 
-
 ### User statuses
 
 After creation, the user will be in one of the following Amazon Cognito statuses:
 
-| Status                   | Description                                                        |
-| ------------------------ | ------------------------------------------------------------------ |
-| `FORCE_CHANGE_PASSWORD`  | The user has been created but has not yet signed in and changed their temporary password. |
-| `CONFIRMED`              | The user has signed in and set a permanent password.               |
+| Status                  | Description                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `FORCE_CHANGE_PASSWORD` | The user has been created but has not yet signed in and changed their temporary password. |
+| `CONFIRMED`             | The user has signed in and set a permanent password.                                      |
 
 ---
 
@@ -111,7 +107,6 @@ You can update a user's email address and phone number. The User ID cannot be ch
 When you update a user's email or phone number through the VAMS interface, the new values are automatically marked as verified in Amazon Cognito.
 :::
 
-
 ---
 
 ## Resetting a user password
@@ -126,12 +121,11 @@ Password reset in VAMS recreates the user account in Amazon Cognito with the sam
 :::warning[Password reset effects]
 Resetting a password has the following effects:
 
-- A new temporary password is generated and sent to the user's email address.
-- The user's current password immediately stops working.
-- The user must sign in with the temporary password and set a new permanent password.
-- The user's VAMS role assignments are preserved (roles are stored separately from the Amazon Cognito user record).
-:::
-
+-   A new temporary password is generated and sent to the user's email address.
+-   The user's current password immediately stops working.
+-   The user must sign in with the temporary password and set a new permanent password.
+-   The user's VAMS role assignments are preserved (roles are stored separately from the Amazon Cognito user record).
+    :::
 
 <!-- Screenshot needed: Reset User Password confirmation dialog showing user details and warning -->
 
@@ -149,16 +143,15 @@ Deleting a user removes them from the Amazon Cognito user pool. This action is p
 Deleting a user from Amazon Cognito does not automatically remove their VAMS role assignments. To fully remove a user's access, also remove their entries from the **Users in Roles** page. See [Permissions](permissions.md) for details.
 :::
 
-
 ---
 
 ## External identity provider deployments
 
 When VAMS is configured to use an external OAuth identity provider instead of Amazon Cognito, user management is performed through your IdP's own administration tools. In this configuration:
 
-- The **User Management** page is not displayed in the VAMS navigation.
-- Users are created and managed in the external IdP (for example, Okta, Azure AD, or a SAML-based provider).
-- VAMS still requires role assignments for each user. After a user authenticates through the external IdP, an administrator must add the user to appropriate roles on the **Users in Roles** page.
+-   The **User Management** page is not displayed in the VAMS navigation.
+-   Users are created and managed in the external IdP (for example, Okta, Azure AD, or a SAML-based provider).
+-   VAMS still requires role assignments for each user. After a user authenticates through the external IdP, an administrator must add the user to appropriate roles on the **Users in Roles** page.
 
 For more information on configuring external authentication, see the [Configuration Guide](../deployment/configuration-reference.md).
 

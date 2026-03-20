@@ -18,26 +18,24 @@ When deployed behind CloudFront or an Application Load Balancer (ALB), the base 
 After deployment, retrieve the API endpoint from the CDK stack outputs or from the `/api/amplify-config` endpoint, which returns the full API URL.
 :::
 
-
 ---
 
 ## Authentication
 
 All API endpoints require authentication unless explicitly noted. VAMS supports three authentication methods:
 
-| Method | Header | Description |
-|--------|--------|-------------|
-| Cognito JWT | `Authorization: Bearer {idToken}` | ID token from Amazon Cognito user pool authentication |
-| External OAuth JWT | `Authorization: Bearer {idToken}` | ID token from an external OAuth identity provider |
-| API Key | `Authorization: {apiKey}` | VAMS-issued API key for programmatic access |
+| Method             | Header                            | Description                                           |
+| ------------------ | --------------------------------- | ----------------------------------------------------- |
+| Cognito JWT        | `Authorization: Bearer {idToken}` | ID token from Amazon Cognito user pool authentication |
+| External OAuth JWT | `Authorization: Bearer {idToken}` | ID token from an external OAuth identity provider     |
+| API Key            | `Authorization: {apiKey}`         | VAMS-issued API key for programmatic access           |
 
 :::note[Unauthenticated Endpoints]
 The following endpoints do not require authentication:
 
-- `GET /api/amplify-config` -- Returns client-side authentication configuration
-- `GET /api/version` -- Returns the current VAMS version
-:::
-
+-   `GET /api/amplify-config` -- Returns client-side authentication configuration
+-   `GET /api/version` -- Returns the current VAMS version
+    :::
 
 For detailed authentication information, see the [Authentication](authentication.md) page.
 
@@ -93,15 +91,15 @@ The `body` field contains a JSON-encoded string. When successful, the body conta
 
 VAMS uses standard HTTP status codes to indicate the result of an API request.
 
-| Status Code | Description |
-|-------------|-------------|
-| `200` | The request succeeded. |
-| `400` | Bad request. The request contains invalid parameters or fails validation. |
-| `401` | Unauthorized. The asset is not distributable (download-specific). |
-| `403` | Forbidden. The authenticated user does not have permission for the requested action. |
-| `404` | Not found. The requested resource does not exist. |
-| `500` | Internal server error. An unexpected error occurred on the server. |
-| `503` | Service unavailable. The requested feature is not enabled (e.g., Cognito user management). |
+| Status Code | Description                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| `200`       | The request succeeded.                                                                     |
+| `400`       | Bad request. The request contains invalid parameters or fails validation.                  |
+| `401`       | Unauthorized. The asset is not distributable (download-specific).                          |
+| `403`       | Forbidden. The authenticated user does not have permission for the requested action.       |
+| `404`       | Not found. The requested resource does not exist.                                          |
+| `500`       | Internal server error. An unexpected error occurred on the server.                         |
+| `503`       | Service unavailable. The requested feature is not enabled (e.g., Cognito user management). |
 
 ---
 
@@ -109,11 +107,11 @@ VAMS uses standard HTTP status codes to indicate the result of an API request.
 
 Many list endpoints support pagination using a token-based pattern. The following query parameters control pagination:
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `maxItems` | integer | `100` | Maximum number of items to return in a single response. |
-| `pageSize` | integer | `100` | Number of items per page (equivalent to `maxItems` for most endpoints). |
-| `startingToken` | string | -- | Base64-encoded continuation token from a previous response. |
+| Parameter       | Type    | Default | Description                                                             |
+| --------------- | ------- | ------- | ----------------------------------------------------------------------- |
+| `maxItems`      | integer | `100`   | Maximum number of items to return in a single response.                 |
+| `pageSize`      | integer | `100`   | Number of items per page (equivalent to `maxItems` for most endpoints). |
+| `startingToken` | string  | --      | Base64-encoded continuation token from a previous response.             |
 
 ### Paginated Response
 
@@ -132,17 +130,16 @@ To retrieve the next page, pass the `NextToken` value as the `startingToken` que
 Always check for the presence of `NextToken` in the response. If it is absent, you have retrieved all available results.
 :::
 
-
 ---
 
 ## Rate Limiting
 
 The API Gateway enforces rate limits to protect the system from excessive traffic.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `globalRateLimit` | 50 requests/second | Steady-state request rate across all clients. |
-| `globalBurstLimit` | 100 requests | Maximum burst capacity for short traffic spikes. |
+| Setting            | Default            | Description                                      |
+| ------------------ | ------------------ | ------------------------------------------------ |
+| `globalRateLimit`  | 50 requests/second | Steady-state request rate across all clients.    |
+| `globalBurstLimit` | 100 requests       | Maximum burst capacity for short traffic spikes. |
 
 These values are configurable at deployment time through the `app.api.globalRateLimit` and `app.api.globalBurstLimit` configuration settings.
 
@@ -154,12 +151,12 @@ When rate limits are exceeded, the API returns an HTTP `429 Too Many Requests` r
 
 The API Gateway is configured with permissive CORS settings to support browser-based clients:
 
-| Setting | Value |
-|---------|-------|
-| Allowed Origins | `*` (all origins) |
-| Allowed Methods | `GET`, `POST`, `PUT`, `DELETE`, `HEAD`, `OPTIONS` |
+| Setting         | Value                                                 |
+| --------------- | ----------------------------------------------------- |
+| Allowed Origins | `*` (all origins)                                     |
+| Allowed Methods | `GET`, `POST`, `PUT`, `DELETE`, `HEAD`, `OPTIONS`     |
 | Allowed Headers | `Authorization`, `Content-Type`, and standard headers |
-| Credentials | Not included (`false`) |
+| Credentials     | Not included (`false`)                                |
 
 ---
 
@@ -167,14 +164,13 @@ The API Gateway is configured with permissive CORS settings to support browser-b
 
 Several operations return presigned S3 URLs for direct file access. These include:
 
-- **Asset downloads** (`POST /database/{databaseId}/assets/{assetId}/download`) -- Returns a time-limited presigned URL for downloading a file.
-- **File uploads** (`POST /uploads`) -- Returns presigned URLs for uploading files directly to S3.
-- **Asset streaming** (`GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`) -- Streams file content through the API Gateway with byte-range support.
+-   **Asset downloads** (`POST /database/{databaseId}/assets/{assetId}/download`) -- Returns a time-limited presigned URL for downloading a file.
+-   **File uploads** (`POST /uploads`) -- Returns presigned URLs for uploading files directly to S3.
+-   **Asset streaming** (`GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`) -- Streams file content through the API Gateway with byte-range support.
 
 :::warning[Presigned URL Expiration]
 Presigned URLs have a configurable timeout controlled by the `PRESIGNED_URL_TIMEOUT_SECONDS` environment variable. Plan to use generated URLs promptly after receiving them.
 :::
-
 
 ---
 
@@ -196,12 +192,12 @@ Version information can be retrieved from the `GET /api/version` endpoint:
 
 The VAMS API is organized into the following functional groups:
 
-| Category | Description | Documentation |
-|----------|-------------|---------------|
-| **Authentication** | Auth configuration, route authorization, user management | [Authentication](authentication.md) |
-| **Assets** | Asset CRUD, archive/unarchive, download | [Assets](assets.md) |
-| **Files** | File listing, operations, upload, streaming | [Files](files.md) |
-| **Metadata** | Metadata CRUD for assets, files, databases, and asset links | [Metadata](metadata.md) |
-| **Search** | Full-text and structured search across assets and files | [Search](search.md) |
+| Category           | Description                                                 | Documentation                       |
+| ------------------ | ----------------------------------------------------------- | ----------------------------------- |
+| **Authentication** | Auth configuration, route authorization, user management    | [Authentication](authentication.md) |
+| **Assets**         | Asset CRUD, archive/unarchive, download                     | [Assets](assets.md)                 |
+| **Files**          | File listing, operations, upload, streaming                 | [Files](files.md)                   |
+| **Metadata**       | Metadata CRUD for assets, files, databases, and asset links | [Metadata](metadata.md)             |
+| **Search**         | Full-text and structured search across assets and files     | [Search](search.md)                 |
 
 Additional endpoint groups not covered in detail here include databases, pipelines, workflows, tags, tag types, roles, user roles, comments, subscriptions, and asset links.

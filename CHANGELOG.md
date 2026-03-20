@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
+• Documentation Overhaul - Entire documentation base refactored, implemented as markdown and static website
 • Website Overhaul - Migrated to Vite build framework, AWS Amplify V6 Gen2 SDK, and added dark/light theme support (dark is now the default)
 • New USD Web Viewer - Needle USD 3D WASM viewer with dependency chain loading for .usd, .usda, .usdc, .usdz files
 • New ThreeJS 3D and CAD STP Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading, scene graph support, and optional LGPL-licensed CAD support; now the primary viewer for common mesh types
@@ -13,9 +14,9 @@ All notable changes to this project will be documented in this file. See [standa
 • New 3D/Point Cloud Preview Thumbnail Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
 • New Database Metadata and Location Map Support - Database metadata management on the website with location service mini-map display option
 • Website Asset and File Page Refinement - Refined asset and file viewing page layouts; added asset preview thumbnail to top details section
-• Enhanced Asset Versions - Version aliasing, archive/unarchive, version editing, metadata/attribute versioning, and revert with metadata restoration
+• Enhanced Asset Versions - Version aliasing, archive/unarchive, version details editing, metadata/attribute versioning, and revert with metadata restoration
 • Enhanced File and Download Functionality with Asset Versions - Version-aware download APIs with file and asset version query parameters, updated file viewers for versioned file retrieval, and web version selector filtering for files and metadata
-• Enhanced Cross-Database Support - Cross-database asset linking and file copying
+• Enhanced Cross-Database Support - Cross-database asset linking and file copying capability
 • New Cognito User Management - Web UI, API, and CLI for managing Cognito users without AWS Console access; includes add/update/remove/reset password operations and a new admin navigation page (enabled only when Cognito authentication is active)
 • New API Key Management - Complete API Key system with creation through API/CLI/web UI, user ID impersonation with role assignment, upstream/downstream application integration, and admin web interface for key management
 • New Permission Constraints Templating - Bulk-import permission constraints from JSON templates with server-side variable substitution, pre-built templates for common profiles (database-admin, database-user, database-readonly, global-readonly, deny-tagged-assets), CLI import command, automated deployment tool, and comprehensive Permissions Guide documentation
@@ -30,6 +31,11 @@ The website overhaul may cause a high number of merge conflicts for forked repos
 
 ### Features
 
+-   Overhauled all documentation files in `/documentation` to now implement much more information about VAMS in both markdown and Docusaurus framework website
+    -   Now includes VAMS Core Concepts, User Guides, API documentation, Architecture breakdowns, and more
+    -   CLI documentation is now converted to a combined documentation location
+    -   Primary README overhauled for new documentation and formatting
+    -   New Gitlab and Github workflow to publish documentation static website to pages feature
 -   **Web** Overhauled website to use Vite build framework, AWS Amplify V6 Gen2 SDK, and dark/light theme support (dark is now the default). This required refactoring the API call and cache system across all web files.
     -   Added additional website customization configuration to `config.ts`
     -   Refactored most .js files to .ts or .tsx
@@ -81,6 +87,7 @@ The website overhaul may cause a high number of merge conflicts for forked repos
 -   **Web** View Asset page now displays the asset preview thumbnail in the top details section when a preview file is available
 -   **Web** Refined View File page with cleaner component containers and compressed layout
 -   Added cross-database asset link/relationship and file copy support (requires user access to both databases and assets via the auth asset entity)
+-   Added CLAUDE code steering files and commands
 
 ### Bug Fixes
 

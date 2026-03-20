@@ -625,6 +625,7 @@ When making changes, update the appropriate documentation files:
 All CLI documentation lives in the Docusaurus documentation site at `documentation/docusaurus-site/docs/cli/`.
 
 **Docusaurus documentation site** (`documentation/docusaurus-site/docs/cli/`):
+
 -   **Command changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/commands/`
 -   **New command group** → Create new page in `cli/commands/`, update `cli/command-reference.md`, and add to `sidebars.ts`
 -   **Installation/auth changes** → Update `cli/getting-started.md` and `cli/installation.md`

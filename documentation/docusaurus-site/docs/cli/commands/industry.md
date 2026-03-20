@@ -19,36 +19,40 @@ Assemble GLB geometry from a Bill of Materials (BOM) JSON hierarchy. Parses a BO
 vamscli industry engineering bom bomassemble [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `--json-file`, `-j` | TEXT | Yes | Path to BOM JSON file |
-| `-d`, `--database-id` | TEXT | Yes | Database ID containing the assets |
-| `--local-path` | PATH | No | Local path for temporary files (default: system temp) |
-| `--keep-temp-files` | Flag | No | Keep temporary files after processing |
-| `--asset-create-name` | TEXT | No | Create a new asset with this name and upload results |
-| `--delete-temporary-files` | Flag | No | Delete temp files after upload (default: true, only with `--asset-create-name`) |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option                     | Type | Required | Description                                                                     |
+| -------------------------- | ---- | -------- | ------------------------------------------------------------------------------- |
+| `--json-file`, `-j`        | TEXT | Yes      | Path to BOM JSON file                                                           |
+| `-d`, `--database-id`      | TEXT | Yes      | Database ID containing the assets                                               |
+| `--local-path`             | PATH | No       | Local path for temporary files (default: system temp)                           |
+| `--keep-temp-files`        | Flag | No       | Keep temporary files after processing                                           |
+| `--asset-create-name`      | TEXT | No       | Create a new asset with this name and upload results                            |
+| `--delete-temporary-files` | Flag | No       | Delete temp files after upload (default: true, only with `--asset-create-name`) |
+| `--json-output`            | Flag | No       | Output raw JSON response                                                        |
 
 ### BOM JSON format
 
 ```json
 {
     "sources": [
-        {"source": "component_name_1", "storage": "VAMS"},
-        {"source": "assembly_root", "storage": "no"}
+        { "source": "component_name_1", "storage": "VAMS" },
+        { "source": "assembly_root", "storage": "no" }
     ],
     "scene": {
         "nodes": [
-            {"node": "1", "source": "assembly_root"},
-            {"node": "2", "source": "component_name_1", "parent_node": "1",
-             "matrix": [1, 0, 0, 0.5, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]}
+            { "node": "1", "source": "assembly_root" },
+            {
+                "node": "2",
+                "source": "component_name_1",
+                "parent_node": "1",
+                "matrix": [1, 0, 0, 0.5, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+            }
         ]
     }
 }
 ```
 
-- **sources**: Component definitions. `"VAMS"` for stored assets, `"no"` for virtual assemblies.
-- **scene.nodes**: Hierarchy with node IDs, parent references, and optional 4x4 transform matrices (16 floats, column-major order).
+-   **sources**: Component definitions. `"VAMS"` for stored assets, `"no"` for virtual assemblies.
+-   **scene.nodes**: Hierarchy with node IDs, parent references, and optional 4x4 transform matrices (16 floats, column-major order).
 
 ### Examples
 
@@ -75,13 +79,13 @@ Import Product Lifecycle Management data from PLM XML files into VAMS with paral
 vamscli industry engineering plm plmxml import [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | Yes | Target database ID |
-| `--plmxml-dir` | PATH | Yes | Directory containing PLM XML files |
-| `--max-workers` | INTEGER | No | Maximum parallel workers (default: 15) |
-| `--upload-xml` | Flag | No | Upload source XML files to root assets |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option                | Type    | Required | Description                            |
+| --------------------- | ------- | -------- | -------------------------------------- |
+| `-d`, `--database-id` | TEXT    | Yes      | Target database ID                     |
+| `--plmxml-dir`        | PATH    | Yes      | Directory containing PLM XML files     |
+| `--max-workers`       | INTEGER | No       | Maximum parallel workers (default: 15) |
+| `--upload-xml`        | Flag    | No       | Upload source XML files to root assets |
+| `--json-output`       | Flag    | No       | Output raw JSON response               |
 
 ### Import process
 
@@ -109,10 +113,11 @@ vamscli industry engineering plm plmxml import -d my-database --plmxml-dir /data
 ```
 
 :::tip[Worker Count Guidelines]
-- **Low (5-10)**: Conservative, for limited resources
-- **Medium (15-20)**: Balanced (default: 15)
-- **High (25-30)**: Maximum throughput, requires adequate resources
-:::
+
+-   **Low (5-10)**: Conservative, for limited resources
+-   **Medium (15-20)**: Balanced (default: 15)
+-   **High (25-30)**: Maximum throughput, requires adequate resources
+    :::
 
 ---
 
@@ -126,19 +131,19 @@ Combine multiple GLB files from an asset hierarchy into a single GLB file, apply
 vamscli industry spatial glbassetcombine [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | Yes | Database ID |
-| `-a`, `--asset-id` | TEXT | Yes | Root asset ID |
-| `--include-only-primary-type-files` | Flag | No | Include only files with primaryType set |
-| `--no-file-metadata` | Flag | No | Exclude file metadata from export |
-| `--no-asset-metadata` | Flag | No | Exclude asset metadata |
-| `--fetch-entire-subtrees` | Flag | No | Fetch entire subtrees (default: true) |
-| `--include-parent-relationships` | Flag | No | Include parent relationships |
-| `--local-path` | PATH | No | Local path for temporary files |
-| `--asset-create-name` | TEXT | No | Create new asset with combined GLB |
-| `--delete-temporary-files` | Flag | No | Delete temp files after upload |
-| `--json-output` | Flag | No | Output raw JSON |
+| Option                              | Type | Required | Description                             |
+| ----------------------------------- | ---- | -------- | --------------------------------------- |
+| `-d`, `--database-id`               | TEXT | Yes      | Database ID                             |
+| `-a`, `--asset-id`                  | TEXT | Yes      | Root asset ID                           |
+| `--include-only-primary-type-files` | Flag | No       | Include only files with primaryType set |
+| `--no-file-metadata`                | Flag | No       | Exclude file metadata from export       |
+| `--no-asset-metadata`               | Flag | No       | Exclude asset metadata                  |
+| `--fetch-entire-subtrees`           | Flag | No       | Fetch entire subtrees (default: true)   |
+| `--include-parent-relationships`    | Flag | No       | Include parent relationships            |
+| `--local-path`                      | PATH | No       | Local path for temporary files          |
+| `--asset-create-name`               | TEXT | No       | Create new asset with combined GLB      |
+| `--delete-temporary-files`          | Flag | No       | Delete temp files after upload          |
+| `--json-output`                     | Flag | No       | Output raw JSON                         |
 
 ### Transform priority
 
@@ -176,6 +181,6 @@ glbassetcombine_YYYYMMDD_HHMMSS/
 
 ## Related Pages
 
-- [Asset Commands](assets.md)
-- [File Commands](files.md)
-- [Automation and Scripting](../automation.md)
+-   [Asset Commands](assets.md)
+-   [File Commands](files.md)
+-   [Automation and Scripting](../automation.md)

@@ -8,11 +8,11 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 
 ## Concepts
 
-- **Dual-Index Architecture**: VAMS maintains two separate OpenSearch indexes -- one for assets and one for files. Search queries can target either or both indexes.
-- **Entity Types**: Search results are categorized as either `asset` or `file`. You can filter by entity type.
-- **Metadata Search**: Metadata fields are indexed alongside core fields, enabling search by metadata keys, values, or both.
-- **Field Prefixes**: OpenSearch fields use type prefixes for proper mapping: `str_` (string/keyword), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array).
-- **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database).
+-   **Dual-Index Architecture**: VAMS maintains two separate OpenSearch indexes -- one for assets and one for files. Search queries can target either or both indexes.
+-   **Entity Types**: Search results are categorized as either `asset` or `file`. You can filter by entity type.
+-   **Metadata Search**: Metadata fields are indexed alongside core fields, enabling search by metadata keys, values, or both.
+-   **Field Prefixes**: OpenSearch fields use type prefixes for proper mapping: `str_` (string/keyword), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array).
+-   **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database).
 
 ---
 
@@ -59,28 +59,27 @@ Executes a search query across the asset and file indexes with full control over
 }
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `query` | string | -- | General text search across all fields. Max 5,000 characters. |
-| `tokens` | array | `[]` | Structured search tokens for field-specific queries. See [Search Tokens](#search-tokens). |
-| `filters` | array | `[]` | Additional OpenSearch query_string filters. See [Search Filters](#search-filters). |
-| `sort` | array | `["_score"]` | Sort configuration. See [Sorting](#sorting). |
-| `operation` | string | `"AND"` | Default logical operation for combining tokens (`"AND"` or `"OR"`). |
-| `entityTypes` | array | `null` | Filter by entity type: `["asset"]`, `["file"]`, or `["asset", "file"]`. When `null`, searches both. |
-| `includeArchived` | boolean | `false` | Include archived items in results. |
-| `aggregations` | boolean | `true` | Include aggregation facets in the response. |
-| `metadataQuery` | string | -- | Separate metadata search query. Max 5,000 characters. |
-| `metadataSearchMode` | string | `"both"` | Metadata search scope: `"key"` (search keys only), `"value"` (search values only), or `"both"`. |
-| `includeMetadataInSearch` | boolean | `true` | Include metadata fields in the general `query` search. |
-| `explainResults` | boolean | `false` | Include match explanations in results. |
-| `includeHighlights` | boolean | `true` | Include highlighted matching text in results. |
-| `from` | integer | `0` | Starting offset for pagination (0-10,000). |
-| `size` | integer | `100` | Number of results to return (1-2,000). |
+| Field                     | Type    | Default      | Description                                                                                         |
+| ------------------------- | ------- | ------------ | --------------------------------------------------------------------------------------------------- |
+| `query`                   | string  | --           | General text search across all fields. Max 5,000 characters.                                        |
+| `tokens`                  | array   | `[]`         | Structured search tokens for field-specific queries. See [Search Tokens](#search-tokens).           |
+| `filters`                 | array   | `[]`         | Additional OpenSearch query_string filters. See [Search Filters](#search-filters).                  |
+| `sort`                    | array   | `["_score"]` | Sort configuration. See [Sorting](#sorting).                                                        |
+| `operation`               | string  | `"AND"`      | Default logical operation for combining tokens (`"AND"` or `"OR"`).                                 |
+| `entityTypes`             | array   | `null`       | Filter by entity type: `["asset"]`, `["file"]`, or `["asset", "file"]`. When `null`, searches both. |
+| `includeArchived`         | boolean | `false`      | Include archived items in results.                                                                  |
+| `aggregations`            | boolean | `true`       | Include aggregation facets in the response.                                                         |
+| `metadataQuery`           | string  | --           | Separate metadata search query. Max 5,000 characters.                                               |
+| `metadataSearchMode`      | string  | `"both"`     | Metadata search scope: `"key"` (search keys only), `"value"` (search values only), or `"both"`.     |
+| `includeMetadataInSearch` | boolean | `true`       | Include metadata fields in the general `query` search.                                              |
+| `explainResults`          | boolean | `false`      | Include match explanations in results.                                                              |
+| `includeHighlights`       | boolean | `true`       | Include highlighted matching text in results.                                                       |
+| `from`                    | integer | `0`          | Starting offset for pagination (0-10,000).                                                          |
+| `size`                    | integer | `100`        | Number of results to return (1-2,000).                                                              |
 
 :::warning[Pagination Limits]
 The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearch limitation. For deep pagination, use more specific search criteria to narrow results.
 :::
-
 
 **Response:**
 
@@ -145,22 +144,22 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
     "aggregations": {
         "asset_types": {
             "buckets": [
-                {"key": "ifc", "doc_count": 45},
-                {"key": "obj", "doc_count": 30},
-                {"key": "glb", "doc_count": 25}
+                { "key": "ifc", "doc_count": 45 },
+                { "key": "obj", "doc_count": 30 },
+                { "key": "glb", "doc_count": 25 }
             ]
         },
         "file_extensions": {
             "buckets": [
-                {"key": "ifc", "doc_count": 50},
-                {"key": "jpg", "doc_count": 120},
-                {"key": "png", "doc_count": 80}
+                { "key": "ifc", "doc_count": 50 },
+                { "key": "jpg", "doc_count": 120 },
+                { "key": "png", "doc_count": 80 }
             ]
         },
         "databases": {
             "buckets": [
-                {"key": "my-database", "doc_count": 100},
-                {"key": "other-db", "doc_count": 50}
+                { "key": "my-database", "doc_count": 100 },
+                { "key": "other-db", "doc_count": 50 }
             ]
         }
     },
@@ -170,11 +169,11 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid search parameters. |
-| `403` | Not authorized to access search. |
-| `500` | Internal server error or OpenSearch unavailable. |
+| Status | Description                                      |
+| ------ | ------------------------------------------------ |
+| `400`  | Invalid search parameters.                       |
+| `403`  | Not authorized to access search.                 |
+| `500`  | Internal server error or OpenSearch unavailable. |
 
 ---
 
@@ -202,27 +201,26 @@ Executes a simplified search with basic parameters for easy API integration. The
 }
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `query` | string | -- | General keyword search across all fields. |
-| `entityTypes` | array | -- | Filter by entity type: `["asset"]`, `["file"]`, or both. |
-| `assetName` | string | -- | Search by asset name. |
-| `assetId` | string | -- | Search by asset ID. |
-| `assetType` | string | -- | Filter by asset type. |
-| `fileKey` | string | -- | Search by S3 file key. |
-| `fileExtension` | string | -- | Filter by file extension (e.g., `"ifc"` or `".ifc"`). |
-| `databaseId` | string | -- | Filter by database ID. |
-| `tags` | array[string] | -- | Search by tags. |
-| `metadataKey` | string | -- | Search metadata field names. |
-| `metadataValue` | string | -- | Search metadata field values. |
-| `includeArchived` | boolean | `false` | Include archived items. |
-| `from` | integer | `0` | Starting offset (0-10,000). |
-| `size` | integer | `100` | Number of results (1-2,000). |
+| Field             | Type          | Default | Description                                              |
+| ----------------- | ------------- | ------- | -------------------------------------------------------- |
+| `query`           | string        | --      | General keyword search across all fields.                |
+| `entityTypes`     | array         | --      | Filter by entity type: `["asset"]`, `["file"]`, or both. |
+| `assetName`       | string        | --      | Search by asset name.                                    |
+| `assetId`         | string        | --      | Search by asset ID.                                      |
+| `assetType`       | string        | --      | Filter by asset type.                                    |
+| `fileKey`         | string        | --      | Search by S3 file key.                                   |
+| `fileExtension`   | string        | --      | Filter by file extension (e.g., `"ifc"` or `".ifc"`).    |
+| `databaseId`      | string        | --      | Filter by database ID.                                   |
+| `tags`            | array[string] | --      | Search by tags.                                          |
+| `metadataKey`     | string        | --      | Search metadata field names.                             |
+| `metadataValue`   | string        | --      | Search metadata field values.                            |
+| `includeArchived` | boolean       | `false` | Include archived items.                                  |
+| `from`            | integer       | `0`     | Starting offset (0-10,000).                              |
+| `size`            | integer       | `100`   | Number of results (1-2,000).                             |
 
 :::tip[When to Use Simple Search]
 Use simple search when you need basic filtering by known fields. Use [Advanced Search](#advanced-search) when you need structured tokens, custom filters, or fine-grained control over query behavior.
 :::
-
 
 **Response:**
 
@@ -230,11 +228,11 @@ Same format as [Advanced Search](#advanced-search).
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid search parameters. |
-| `403` | Not authorized to access search. |
-| `500` | Internal server error. |
+| Status | Description                      |
+| ------ | -------------------------------- |
+| `400`  | Invalid search parameters.       |
+| `403`  | Not authorized to access search. |
+| `500`  | Internal server error.           |
 
 ---
 
@@ -270,18 +268,18 @@ None.
             }
         ],
         "properties": {
-            "_rectype": {"type": "keyword"},
-            "str_databaseid": {"type": "keyword"},
-            "str_assetid": {"type": "keyword"},
-            "str_assetname": {"type": "keyword"},
-            "str_assettype": {"type": "keyword"},
-            "str_description": {"type": "keyword"},
-            "str_key": {"type": "keyword"},
-            "str_fileext": {"type": "keyword"},
-            "num_size": {"type": "long"},
-            "date_lastmodified": {"type": "date"},
-            "bool_isdistributable": {"type": "boolean"},
-            "list_tags": {"type": "keyword"}
+            "_rectype": { "type": "keyword" },
+            "str_databaseid": { "type": "keyword" },
+            "str_assetid": { "type": "keyword" },
+            "str_assetname": { "type": "keyword" },
+            "str_assettype": { "type": "keyword" },
+            "str_description": { "type": "keyword" },
+            "str_key": { "type": "keyword" },
+            "str_fileext": { "type": "keyword" },
+            "num_size": { "type": "long" },
+            "date_lastmodified": { "type": "date" },
+            "bool_isdistributable": { "type": "boolean" },
+            "list_tags": { "type": "keyword" }
         }
     }
 }
@@ -289,10 +287,10 @@ None.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to access search. |
-| `500` | Internal server error. |
+| Status | Description                      |
+| ------ | -------------------------------- |
+| `403`  | Not authorized to access search. |
+| `500`  | Internal server error.           |
 
 ---
 
@@ -309,33 +307,37 @@ Search tokens provide structured, field-specific search within the advanced sear
 }
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `operation` | string | `"AND"` | How to combine with other tokens: `"AND"` or `"OR"`. |
-| `operator` | string | `"="` | Comparison operator: `"="` (exact match), `":"` (contains), `"!="` (not equal), `"!:"` (not contains). |
-| `propertyKey` | string | -- | The field to search. Use `null` or `"all"` for multi-field search. |
-| `value` | string | -- | The value to search for. Required, minimum 1 character. |
+| Field         | Type   | Default | Description                                                                                            |
+| ------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------ |
+| `operation`   | string | `"AND"` | How to combine with other tokens: `"AND"` or `"OR"`.                                                   |
+| `operator`    | string | `"="`   | Comparison operator: `"="` (exact match), `":"` (contains), `"!="` (not equal), `"!:"` (not contains). |
+| `propertyKey` | string | --      | The field to search. Use `null` or `"all"` for multi-field search.                                     |
+| `value`       | string | --      | The value to search for. Required, minimum 1 character.                                                |
 
 ### Token Examples
 
 **Exact match on asset type:**
+
 ```json
-{"operator": "=", "propertyKey": "str_assettype", "value": "ifc"}
+{ "operator": "=", "propertyKey": "str_assettype", "value": "ifc" }
 ```
 
 **Contains search on asset name:**
+
 ```json
-{"operator": ":", "propertyKey": "str_assetname", "value": "building"}
+{ "operator": ":", "propertyKey": "str_assetname", "value": "building" }
 ```
 
 **Exclude a database:**
+
 ```json
-{"operator": "!=", "propertyKey": "str_databaseid", "value": "test-database"}
+{ "operator": "!=", "propertyKey": "str_databaseid", "value": "test-database" }
 ```
 
 **Multi-field search:**
+
 ```json
-{"operator": ":", "propertyKey": null, "value": "building"}
+{ "operator": ":", "propertyKey": null, "value": "building" }
 ```
 
 ---
@@ -354,11 +356,11 @@ Filters use OpenSearch query_string syntax for advanced filtering.
 
 The `query` value follows [OpenSearch query_string syntax](https://opensearch.org/docs/latest/query-dsl/full-text/query-string/), supporting:
 
-- Field-specific queries: `str_assettype:ifc`
-- Boolean operators: `AND`, `OR`, `NOT`
-- Wildcards: `str_assetname:build*`
-- Range queries: `num_size:[1000 TO 5000]`
-- Grouping: `(str_assettype:ifc OR str_assettype:obj)`
+-   Field-specific queries: `str_assettype:ifc`
+-   Boolean operators: `AND`, `OR`, `NOT`
+-   Wildcards: `str_assetname:build*`
+-   Range queries: `num_size:[1000 TO 5000]`
+-   Grouping: `(str_assettype:ifc OR str_assettype:obj)`
 
 ---
 
@@ -367,11 +369,13 @@ The `query` value follows [OpenSearch query_string syntax](https://opensearch.or
 The `sort` field accepts an array of sort specifications. Each item can be a string (field name, ascending) or an object with field and order.
 
 **Sort by score (default):**
+
 ```json
 "sort": ["_score"]
 ```
 
 **Sort by field:**
+
 ```json
 "sort": [
     {"str_assetname": {"order": "asc"}},
@@ -383,49 +387,48 @@ The `sort` field accepts an array of sort specifications. Each item can be a str
 When sorting by indexed fields, use the prefixed field names (e.g., `str_assetname`, `date_lastmodified`, `num_size`). Sorting on non-prefixed or text-analyzed fields may produce unexpected results.
 :::
 
-
 ---
 
 ## Available Search Fields
 
 ### Asset Index Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `_rectype` | keyword | Always `"asset"`. |
-| `str_databaseid` | keyword | Database identifier. |
-| `str_assetid` | keyword | Asset identifier. |
-| `str_assetname` | keyword | Asset display name. |
-| `str_assettype` | keyword | File type classification. |
-| `str_description` | keyword | Asset description. |
-| `list_tags` | keyword | Asset tags (array). |
+| Field                  | Type    | Description                      |
+| ---------------------- | ------- | -------------------------------- |
+| `_rectype`             | keyword | Always `"asset"`.                |
+| `str_databaseid`       | keyword | Database identifier.             |
+| `str_assetid`          | keyword | Asset identifier.                |
+| `str_assetname`        | keyword | Asset display name.              |
+| `str_assettype`        | keyword | File type classification.        |
+| `str_description`      | keyword | Asset description.               |
+| `list_tags`            | keyword | Asset tags (array).              |
 | `bool_isdistributable` | boolean | Whether asset can be downloaded. |
-| `date_lastmodified` | date | Last modification date. |
-| `str_asset_version_id` | keyword | Current asset version ID. |
+| `date_lastmodified`    | date    | Last modification date.          |
+| `str_asset_version_id` | keyword | Current asset version ID.        |
 
 ### File Index Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `_rectype` | keyword | Always `"file"`. |
-| `str_databaseid` | keyword | Database identifier. |
-| `str_assetid` | keyword | Parent asset identifier. |
-| `str_assetname` | keyword | Parent asset name. |
-| `str_key` | keyword | S3 object key (relative file path). |
-| `str_fileext` | keyword | File extension. |
-| `num_size` | long | File size in bytes. |
-| `str_etag` | keyword | S3 ETag. |
-| `str_s3_version_id` | keyword | S3 version ID. |
-| `date_lastmodified` | date | Last modification date. |
+| Field               | Type    | Description                         |
+| ------------------- | ------- | ----------------------------------- |
+| `_rectype`          | keyword | Always `"file"`.                    |
+| `str_databaseid`    | keyword | Database identifier.                |
+| `str_assetid`       | keyword | Parent asset identifier.            |
+| `str_assetname`     | keyword | Parent asset name.                  |
+| `str_key`           | keyword | S3 object key (relative file path). |
+| `str_fileext`       | keyword | File extension.                     |
+| `num_size`          | long    | File size in bytes.                 |
+| `str_etag`          | keyword | S3 ETag.                            |
+| `str_s3_version_id` | keyword | S3 version ID.                      |
+| `date_lastmodified` | date    | Last modification date.             |
 
 ### Metadata Fields
 
 Metadata fields are dynamically indexed using the same prefix convention:
 
-- `str_meta_{key}` -- String metadata values
-- `num_meta_{key}` -- Numeric metadata values
-- `date_meta_{key}` -- Date metadata values
-- `bool_meta_{key}` -- Boolean metadata values
+-   `str_meta_{key}` -- String metadata values
+-   `num_meta_{key}` -- Numeric metadata values
+-   `date_meta_{key}` -- Date metadata values
+-   `bool_meta_{key}` -- Boolean metadata values
 
 ---
 
@@ -433,20 +436,20 @@ Metadata fields are dynamically indexed using the same prefix convention:
 
 All search endpoints return the same response structure.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `took` | integer | Time in milliseconds for the search to execute. |
-| `timed_out` | boolean | Whether the search timed out. |
-| `_shards` | object | Shard execution statistics. |
-| `hits.total.value` | integer | Total number of matching documents. |
-| `hits.total.relation` | string | `"eq"` (exact count) or `"gte"` (lower bound). |
-| `hits.max_score` | float | Highest relevance score in results. |
-| `hits.hits` | array | Array of matching documents. |
-| `hits.hits[]._index` | string | OpenSearch index name. |
-| `hits.hits[]._id` | string | Document identifier. |
-| `hits.hits[]._score` | float | Relevance score for this document. |
-| `hits.hits[]._source` | object | The indexed document fields. |
-| `hits.hits[].highlight` | object | Highlighted matching text (if enabled). |
-| `hits.hits[].explanation` | object | Match explanation (if requested). |
-| `aggregations` | object | Faceted aggregation buckets (if requested). |
-| `aggregationTotal` | integer | True total from aggregation bucket sums. |
+| Field                     | Type    | Description                                     |
+| ------------------------- | ------- | ----------------------------------------------- |
+| `took`                    | integer | Time in milliseconds for the search to execute. |
+| `timed_out`               | boolean | Whether the search timed out.                   |
+| `_shards`                 | object  | Shard execution statistics.                     |
+| `hits.total.value`        | integer | Total number of matching documents.             |
+| `hits.total.relation`     | string  | `"eq"` (exact count) or `"gte"` (lower bound).  |
+| `hits.max_score`          | float   | Highest relevance score in results.             |
+| `hits.hits`               | array   | Array of matching documents.                    |
+| `hits.hits[]._index`      | string  | OpenSearch index name.                          |
+| `hits.hits[]._id`         | string  | Document identifier.                            |
+| `hits.hits[]._score`      | float   | Relevance score for this document.              |
+| `hits.hits[]._source`     | object  | The indexed document fields.                    |
+| `hits.hits[].highlight`   | object  | Highlighted matching text (if enabled).         |
+| `hits.hits[].explanation` | object  | Match explanation (if requested).               |
+| `aggregations`            | object  | Faceted aggregation buckets (if requested).     |
+| `aggregationTotal`        | integer | True total from aggregation bucket sums.        |

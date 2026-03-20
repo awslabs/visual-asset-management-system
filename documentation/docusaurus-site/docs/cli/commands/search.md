@@ -21,21 +21,21 @@ Search across all assets with advanced filtering, metadata search, and sorting.
 vamscli search assets [OPTIONS]
 ```
 
-| Option | Type | Description |
-|---|---|---|
-| `-q`, `--query` | TEXT | General text search query |
-| `--filters` | TEXT | Advanced filters (query string or JSON format) |
-| `--metadata-query` | TEXT | Metadata search query (`field:value` format) |
-| `--metadata-mode` | CHOICE | Search mode: `key`, `value`, or `both` (default) |
-| `--include-metadata` / `--no-metadata` | Flag | Include metadata in general search |
-| `--explain-results` | Flag | Include match explanations |
-| `--sort-field` | TEXT | Field to sort by |
-| `--sort-desc` / `--sort-asc` | Flag | Sort direction |
-| `--from` | INTEGER | Pagination start offset |
-| `--size` | INTEGER | Results per page (max 2000) |
-| `--include-archived` | Flag | Include archived assets |
-| `--output-format` | CHOICE | `table`, `json`, or `csv` |
-| `--jsonOutput` | Flag | Raw API response as JSON |
+| Option                                 | Type    | Description                                      |
+| -------------------------------------- | ------- | ------------------------------------------------ |
+| `-q`, `--query`                        | TEXT    | General text search query                        |
+| `--filters`                            | TEXT    | Advanced filters (query string or JSON format)   |
+| `--metadata-query`                     | TEXT    | Metadata search query (`field:value` format)     |
+| `--metadata-mode`                      | CHOICE  | Search mode: `key`, `value`, or `both` (default) |
+| `--include-metadata` / `--no-metadata` | Flag    | Include metadata in general search               |
+| `--explain-results`                    | Flag    | Include match explanations                       |
+| `--sort-field`                         | TEXT    | Field to sort by                                 |
+| `--sort-desc` / `--sort-asc`           | Flag    | Sort direction                                   |
+| `--from`                               | INTEGER | Pagination start offset                          |
+| `--size`                               | INTEGER | Results per page (max 2000)                      |
+| `--include-archived`                   | Flag    | Include archived assets                          |
+| `--output-format`                      | CHOICE  | `table`, `json`, or `csv`                        |
+| `--jsonOutput`                         | Flag    | Raw API response as JSON                         |
 
 ### Filter syntax
 
@@ -104,23 +104,23 @@ Simplified search interface with user-friendly parameters.
 vamscli search simple [OPTIONS]
 ```
 
-| Option | Type | Description |
-|---|---|---|
-| `-q`, `--query` | TEXT | General keyword search |
-| `--asset-name` | TEXT | Search by asset name |
-| `--asset-id` | TEXT | Search by asset ID |
-| `--asset-type` | TEXT | Filter by asset type |
-| `--file-key` | TEXT | Search by file key |
-| `--file-ext` | TEXT | Filter by file extension |
-| `-d`, `--database` | TEXT | Filter by database ID |
-| `--tags` | TEXT | Filter by tags (comma-separated) |
-| `--metadata-key` | TEXT | Search metadata field names |
-| `--metadata-value` | TEXT | Search metadata field values |
-| `--entity-types` | TEXT | `asset`, `file`, or `asset,file` (default) |
-| `--include-archived` | Flag | Include archived items |
-| `--from` | INTEGER | Pagination offset |
-| `--size` | INTEGER | Results per page (max 1000) |
-| `--output-format` | CHOICE | `table`, `json`, or `csv` |
+| Option               | Type    | Description                                |
+| -------------------- | ------- | ------------------------------------------ |
+| `-q`, `--query`      | TEXT    | General keyword search                     |
+| `--asset-name`       | TEXT    | Search by asset name                       |
+| `--asset-id`         | TEXT    | Search by asset ID                         |
+| `--asset-type`       | TEXT    | Filter by asset type                       |
+| `--file-key`         | TEXT    | Search by file key                         |
+| `--file-ext`         | TEXT    | Filter by file extension                   |
+| `-d`, `--database`   | TEXT    | Filter by database ID                      |
+| `--tags`             | TEXT    | Filter by tags (comma-separated)           |
+| `--metadata-key`     | TEXT    | Search metadata field names                |
+| `--metadata-value`   | TEXT    | Search metadata field values               |
+| `--entity-types`     | TEXT    | `asset`, `file`, or `asset,file` (default) |
+| `--include-archived` | Flag    | Include archived items                     |
+| `--from`             | INTEGER | Pagination offset                          |
+| `--size`             | INTEGER | Results per page (max 1000)                |
+| `--output-format`    | CHOICE  | `table`, `json`, or `csv`                  |
 
 ```bash
 vamscli search simple -q "training" --entity-types asset
@@ -145,17 +145,17 @@ Use this to discover available field names and types for building filter queries
 
 ## Search Field Reference
 
-| Prefix | Type | Example Fields |
-|---|---|---|
-| `str_*` | String | `str_assetname`, `str_databaseid`, `str_fileext`, `str_key` |
-| `num_*` | Numeric | `num_filesize` |
-| `date_*` | Date | `date_lastmodified` |
-| `bool_*` | Boolean | `bool_isdistributable`, `bool_archived` |
-| `list_*` | List | `list_tags` |
-| `MD_*` | Metadata | `MD_str_product`, `MD_num_version` |
+| Prefix   | Type     | Example Fields                                              |
+| -------- | -------- | ----------------------------------------------------------- |
+| `str_*`  | String   | `str_assetname`, `str_databaseid`, `str_fileext`, `str_key` |
+| `num_*`  | Numeric  | `num_filesize`                                              |
+| `date_*` | Date     | `date_lastmodified`                                         |
+| `bool_*` | Boolean  | `bool_isdistributable`, `bool_archived`                     |
+| `list_*` | List     | `list_tags`                                                 |
+| `MD_*`   | Metadata | `MD_str_product`, `MD_num_version`                          |
 
 ## Related Pages
 
-- [Asset Commands](assets.md)
-- [File Commands](files.md)
-- [Metadata Commands](metadata.md)
+-   [Asset Commands](assets.md)
+-   [File Commands](files.md)
+-   [Metadata Commands](metadata.md)

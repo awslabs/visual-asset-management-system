@@ -17,14 +17,14 @@ List all databases in the VAMS system.
 vamscli database list [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `--show-deleted` | Flag | No | Include deleted databases |
-| `--page-size` | INTEGER | No | Number of items per page |
-| `--max-items` | INTEGER | No | Maximum total items to fetch (only with `--auto-paginate`, default: 10000) |
-| `--starting-token` | TEXT | No | Token for manual pagination |
-| `--auto-paginate` | Flag | No | Automatically fetch all items |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option             | Type    | Required | Description                                                                |
+| ------------------ | ------- | -------- | -------------------------------------------------------------------------- |
+| `--show-deleted`   | Flag    | No       | Include deleted databases                                                  |
+| `--page-size`      | INTEGER | No       | Number of items per page                                                   |
+| `--max-items`      | INTEGER | No       | Maximum total items to fetch (only with `--auto-paginate`, default: 10000) |
+| `--starting-token` | TEXT    | No       | Token for manual pagination                                                |
+| `--auto-paginate`  | Flag    | No       | Automatically fetch all items                                              |
+| `--json-output`    | Flag    | No       | Output raw JSON response                                                   |
 
 ```bash
 vamscli database list
@@ -44,11 +44,11 @@ Get details for a specific database.
 vamscli database get [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | Yes | Database ID to retrieve |
-| `--show-deleted` | Flag | No | Include deleted databases in search |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option                | Type | Required | Description                         |
+| --------------------- | ---- | -------- | ----------------------------------- |
+| `-d`, `--database-id` | TEXT | Yes      | Database ID to retrieve             |
+| `--show-deleted`      | Flag | No       | Include deleted databases in search |
+| `--json-output`       | Flag | No       | Output raw JSON response            |
 
 Output includes database ID, description, creation date, asset count, default bucket information, metadata restriction status, and file upload extension restrictions.
 
@@ -67,15 +67,15 @@ Create a new database in VAMS.
 vamscli database create [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | Yes | Database ID to create |
-| `--description` | TEXT | Conditional | Database description (required unless using `--json-input`) |
-| `--default-bucket-id` | TEXT | No | Default bucket ID (prompts if not provided) |
-| `--restrict-metadata-outside-schemas` | Flag | No | Restrict metadata to defined schemas only |
-| `--restrict-file-uploads-to-extensions` | TEXT | No | Comma-separated list of allowed file extensions (e.g., `.pdf,.docx,.jpg`) |
-| `--json-input` | TEXT | No | JSON input file path or JSON string |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option                                  | Type | Required    | Description                                                               |
+| --------------------------------------- | ---- | ----------- | ------------------------------------------------------------------------- |
+| `-d`, `--database-id`                   | TEXT | Yes         | Database ID to create                                                     |
+| `--description`                         | TEXT | Conditional | Database description (required unless using `--json-input`)               |
+| `--default-bucket-id`                   | TEXT | No          | Default bucket ID (prompts if not provided)                               |
+| `--restrict-metadata-outside-schemas`   | Flag | No          | Restrict metadata to defined schemas only                                 |
+| `--restrict-file-uploads-to-extensions` | TEXT | No          | Comma-separated list of allowed file extensions (e.g., `.pdf,.docx,.jpg`) |
+| `--json-input`                          | TEXT | No          | JSON input file path or JSON string                                       |
+| `--json-output`                         | Flag | No          | Output raw JSON response                                                  |
 
 ### JSON input format
 
@@ -109,17 +109,17 @@ Update an existing database in VAMS.
 vamscli database update [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | Yes | Database ID to update |
-| `--description` | TEXT | No | New database description |
-| `--default-bucket-id` | TEXT | No | New default bucket ID |
-| `--restrict-metadata-outside-schemas` | Flag | No | Enable metadata restriction |
-| `--no-restrict-metadata-outside-schemas` | Flag | No | Disable metadata restriction |
-| `--restrict-file-uploads-to-extensions` | TEXT | No | Set allowed file extensions |
-| `--clear-file-extensions` | Flag | No | Clear file extension restrictions |
-| `--json-input` | TEXT | No | JSON input file path or JSON string |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option                                   | Type | Required | Description                         |
+| ---------------------------------------- | ---- | -------- | ----------------------------------- |
+| `-d`, `--database-id`                    | TEXT | Yes      | Database ID to update               |
+| `--description`                          | TEXT | No       | New database description            |
+| `--default-bucket-id`                    | TEXT | No       | New default bucket ID               |
+| `--restrict-metadata-outside-schemas`    | Flag | No       | Enable metadata restriction         |
+| `--no-restrict-metadata-outside-schemas` | Flag | No       | Disable metadata restriction        |
+| `--restrict-file-uploads-to-extensions`  | TEXT | No       | Set allowed file extensions         |
+| `--clear-file-extensions`                | Flag | No       | Clear file extension restrictions   |
+| `--json-input`                           | TEXT | No       | JSON input file path or JSON string |
+| `--json-output`                          | Flag | No       | Output raw JSON response            |
 
 :::note
 At least one field must be provided for update. The flags `--restrict-metadata-outside-schemas` and `--no-restrict-metadata-outside-schemas` are mutually exclusive, as are `--restrict-file-uploads-to-extensions` and `--clear-file-extensions`.
@@ -143,11 +143,11 @@ Delete a database from VAMS.
 vamscli database delete [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | Yes | Database ID to delete |
-| `--confirm` | Flag | Yes | Confirm database deletion |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option                | Type | Required | Description               |
+| --------------------- | ---- | -------- | ------------------------- |
+| `-d`, `--database-id` | TEXT | Yes      | Database ID to delete     |
+| `--confirm`           | Flag | Yes      | Confirm database deletion |
+| `--json-output`       | Flag | No       | Output raw JSON response  |
 
 :::warning[Deletion Prerequisites]
 The database must not contain any active assets, workflows, or pipelines. Requires explicit `--confirm` flag and an interactive confirmation prompt.
@@ -167,13 +167,13 @@ List available Amazon S3 bucket configurations for use with databases.
 vamscli database list-buckets [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `--page-size` | INTEGER | No | Number of items per page |
-| `--max-items` | INTEGER | No | Maximum total items to fetch (only with `--auto-paginate`) |
-| `--starting-token` | TEXT | No | Token for manual pagination |
-| `--auto-paginate` | Flag | No | Automatically fetch all items |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option             | Type    | Required | Description                                                |
+| ------------------ | ------- | -------- | ---------------------------------------------------------- |
+| `--page-size`      | INTEGER | No       | Number of items per page                                   |
+| `--max-items`      | INTEGER | No       | Maximum total items to fetch (only with `--auto-paginate`) |
+| `--starting-token` | TEXT    | No       | Token for manual pagination                                |
+| `--auto-paginate`  | Flag    | No       | Automatically fetch all items                              |
+| `--json-output`    | Flag    | No       | Output raw JSON response                                   |
 
 Output includes bucket ID, bucket name, and base assets prefix.
 
@@ -212,6 +212,6 @@ vamscli database list --json-output > current-databases.json
 
 ## Related Pages
 
-- [Asset Commands](assets.md)
-- [File Commands](files.md)
-- [Metadata Commands](metadata.md)
+-   [Asset Commands](assets.md)
+-   [File Commands](files.md)
+-   [Metadata Commands](metadata.md)

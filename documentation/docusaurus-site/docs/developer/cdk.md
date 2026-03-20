@@ -4,14 +4,14 @@ This guide covers development patterns for the VAMS AWS CDK infrastructure, incl
 
 ## Technology Stack
 
-| Component | Details |
-|-----------|---------|
-| Framework | AWS CDK v2 (TypeScript), `aws-cdk-lib` |
-| VAMS Version | Defined in `config.ts` (`VAMS_VERSION`) |
-| Node Lambda Runtime | NODEJS_20_X |
-| Python Lambda Runtime | PYTHON_3_12 |
-| Lambda Memory | 5308 MB (all functions) |
-| Lambda Timeout | 15 minutes (all functions) |
+| Component             | Details                                 |
+| --------------------- | --------------------------------------- |
+| Framework             | AWS CDK v2 (TypeScript), `aws-cdk-lib`  |
+| VAMS Version          | Defined in `config.ts` (`VAMS_VERSION`) |
+| Node Lambda Runtime   | NODEJS_20_X                             |
+| Python Lambda Runtime | PYTHON_3_12                             |
+| Lambda Memory         | 5308 MB (all functions)                 |
+| Lambda Timeout        | 15 minutes (all functions)              |
 
 ## Nested Stack Architecture
 
@@ -49,15 +49,15 @@ graph TD
 
 ### Key Nested Stacks
 
-| Stack | File | Purpose |
-|-------|------|---------|
-| VPCBuilder | `nestedStacks/vpc/vpcBuilder-nestedStack.ts` | VPC, subnets, VPC endpoints |
-| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts` | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, AWS KMS |
-| AuthBuilder | `nestedStacks/auth/authBuilder-nestedStack.ts` | Amazon Cognito, SAML, external OAuth |
-| ApiGatewayV2Amplify | `nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack.ts` | Amazon API Gateway V2, Lambda authorizer |
-| ApiBuilder | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | All API routes and Lambda wiring |
-| StaticWebBuilder | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts` | Amazon S3 + Amazon CloudFront or ALB hosting |
-| PipelineBuilder | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` | Processing pipeline orchestrator |
+| Stack                   | File                                                         | Purpose                                                            |
+| ----------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ |
+| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                 | VPC, subnets, VPC endpoints                                        |
+| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`         | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, AWS KMS |
+| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`               | Amazon Cognito, SAML, external OAuth                               |
+| ApiGatewayV2Amplify     | `nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack.ts` | Amazon API Gateway V2, Lambda authorizer                           |
+| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`           | All API routes and Lambda wiring                                   |
+| StaticWebBuilder        | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`  | Amazon S3 + Amazon CloudFront or ALB hosting                       |
+| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`      | Processing pipeline orchestrator                                   |
 
 ### Cross-Stack Shared Interfaces
 
@@ -85,20 +85,20 @@ export function buildSomeFunction(
 ```typescript
 const name = "functionName";
 const fun = new lambda.Function(scope, name, {
-    code: lambda.Code.fromAsset(
-        path.join(__dirname, "../../../backend/backend")
-    ),
+    code: lambda.Code.fromAsset(path.join(__dirname, "../../../backend/backend")),
     handler: `handlers.{category}.${name}.lambda_handler`,
     runtime: LAMBDA_PYTHON_RUNTIME,
     layers: [lambdaCommonBaseLayer],
     timeout: Duration.minutes(15),
     memorySize: Config.LAMBDA_MEMORY_SIZE,
-    vpc: config.app.useGlobalVpc.enabled &&
-         config.app.useGlobalVpc.useForAllLambdas
-        ? vpc : undefined,
-    vpcSubnets: config.app.useGlobalVpc.enabled &&
-                config.app.useGlobalVpc.useForAllLambdas
-        ? { subnets: subnets } : undefined,
+    vpc:
+        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+            ? vpc
+            : undefined,
+    vpcSubnets:
+        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+            ? { subnets: subnets }
+            : undefined,
     environment: {
         MY_TABLE_NAME: storageResources.dynamo.myTable.tableName,
     },
@@ -111,9 +111,7 @@ Every Lambda builder function must include all four security calls after creatin
 
 ```typescript
 // 1. KMS permissions (if encryption enabled)
-kmsKeyLambdaPermissionAddToResourcePolicy(
-    fun, storageResources.encryption.kmsKey
-);
+kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
 // 2. Auth table access + audit log setup
 setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -129,15 +127,14 @@ suppressCdkNagErrorsByGrantReadWrite(scope);
 Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks authorization checking in Lambda handlers. Missing `kmsKeyLambdaPermissionAddToResourcePolicy` causes access denied errors when AWS KMS encryption is enabled. Always include all four calls.
 :::
 
-
 ### What the Security Helpers Do
 
-| Helper | Actions |
-|--------|---------|
-| `kmsKeyLambdaPermissionAddToResourcePolicy` | Grants AWS KMS Decrypt, Encrypt, GenerateDataKey, ReEncrypt, ListKeys, CreateGrant, ListAliases |
+| Helper                                             | Actions                                                                                                                                                                              |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `kmsKeyLambdaPermissionAddToResourcePolicy`        | Grants AWS KMS Decrypt, Encrypt, GenerateDataKey, ReEncrypt, ListKeys, CreateGrant, ListAliases                                                                                      |
 | `setupSecurityAndLoggingEnvironmentAndPermissions` | Adds env vars for auth tables and 9 audit log groups. Grants DynamoDB read on auth, constraints, userRoles, roles tables. Grants Amazon CloudWatch PutLogEvents on audit log groups. |
-| `globalLambdaEnvironmentsAndPermissions` | Sets `COGNITO_AUTH_ENABLED` based on Amazon Cognito and VPC configuration |
-| `suppressCdkNagErrorsByGrantReadWrite` | Suppresses AwsSolutions-IAM5 for Amazon S3 and resource wildcards |
+| `globalLambdaEnvironmentsAndPermissions`           | Sets `COGNITO_AUTH_ENABLED` based on Amazon Cognito and VPC configuration                                                                                                            |
+| `suppressCdkNagErrorsByGrantReadWrite`             | Suppresses AwsSolutions-IAM5 for Amazon S3 and resource wildcards                                                                                                                    |
 
 ## API Route Wiring
 
@@ -148,8 +145,12 @@ Routes are wired in `apiBuilder-nestedStack.ts` using the `attachFunctionToApi` 
 ```typescript
 // Build the function
 const myFunction = buildMyNewFunction(
-    this, lambdaCommonBaseLayer, storageResources,
-    config, vpc, subnets
+    this,
+    lambdaCommonBaseLayer,
+    storageResources,
+    config,
+    vpc,
+    subnets
 );
 
 // Wire to API Gateway -- one call per route
@@ -200,12 +201,12 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 
 ### Key Constants
 
-| Constant | Value |
-|----------|-------|
-| `VAMS_VERSION` | Current release version (see `config.ts`) |
-| `LAMBDA_PYTHON_RUNTIME` | `Runtime.PYTHON_3_12` |
-| `LAMBDA_NODE_RUNTIME` | `Runtime.NODEJS_20_X` |
-| `LAMBDA_MEMORY_SIZE` | `5308` |
+| Constant                | Value                                     |
+| ----------------------- | ----------------------------------------- |
+| `VAMS_VERSION`          | Current release version (see `config.ts`) |
+| `LAMBDA_PYTHON_RUNTIME` | `Runtime.PYTHON_3_12`                     |
+| `LAMBDA_NODE_RUNTIME`   | `Runtime.NODEJS_20_X`                     |
+| `LAMBDA_MEMORY_SIZE`    | `5308`                                    |
 
 ### Adding a New Configuration Property
 
@@ -230,9 +231,7 @@ if (config.app.myNewFeature == undefined) {
 
 // 3. Add validation if constraints exist
 if (config.app.myNewFeature.enabled && !config.app.myNewFeature.someOption) {
-    throw new Error(
-        "Configuration Error: myNewFeature requires someOption when enabled"
-    );
+    throw new Error("Configuration Error: myNewFeature requires someOption when enabled");
 }
 ```
 
@@ -272,25 +271,24 @@ Partition(); // "aws", "aws-us-gov", etc.
 Never use `arn:aws:` in resource ARNs. This breaks deployments in AWS GovCloud (`arn:aws-us-gov`) and other partitions. Always use the `Service()` helper or `Partition()` for partition-aware values.
 :::
 
-
 ## AWS GovCloud Considerations
 
 When `config.app.govCloud.enabled` is `true`, several constraints apply.
 
 ### Required Configuration
 
-| Setting | Required Value | Reason |
-|---------|---------------|--------|
-| `useGlobalVpc.enabled` | `true` | VPC required for GovCloud |
-| `useCloudFront.enabled` | `false` | Amazon CloudFront not available |
-| `useLocationService.enabled` | `false` | Amazon Location Service not available |
+| Setting                      | Required Value | Reason                                |
+| ---------------------------- | -------------- | ------------------------------------- |
+| `useGlobalVpc.enabled`       | `true`         | VPC required for GovCloud             |
+| `useCloudFront.enabled`      | `false`        | Amazon CloudFront not available       |
+| `useLocationService.enabled` | `false`        | Amazon Location Service not available |
 
 ### GovCloud-Specific Behavior
 
-- FIPS endpoints used via `config.app.useFips`
-- `AwsSolutions-COG3` CDK Nag rule suppressed (AdvancedSecurityMode not available)
-- ALB deployment replaces Amazon CloudFront for static web hosting
-- VPC endpoints are conditional on feature flags
+-   FIPS endpoints used via `config.app.useFips`
+-   `AwsSolutions-COG3` CDK Nag rule suppressed (AdvancedSecurityMode not available)
+-   ALB deployment replaces Amazon CloudFront for static web hosting
+-   VPC endpoints are conditional on feature flags
 
 ## CDK Nag Compliance
 
@@ -308,9 +306,10 @@ NagSuppressions.addResourceSuppressions(
     [
         {
             id: "AwsSolutions-IAM5",
-            reason: "Wildcard permissions required for dynamic S3 object "
-                  + "access within VAMS asset buckets. Scope is limited "
-                  + "to deployment-specific buckets.",
+            reason:
+                "Wildcard permissions required for dynamic S3 object " +
+                "access within VAMS asset buckets. Scope is limited " +
+                "to deployment-specific buckets.",
         },
     ],
     true
@@ -321,14 +320,13 @@ NagSuppressions.addResourceSuppressions(
 Never add a suppression with a generic reason like "Suppressed" or "Not applicable". Explain why the suppression is acceptable in the VAMS security context.
 :::
 
-
 ### Common Suppressions
 
-| Rule | Typical Reason |
-|------|---------------|
+| Rule                | Typical Reason                                                        |
+| ------------------- | --------------------------------------------------------------------- |
 | `AwsSolutions-IAM5` | Amazon S3 `grantRead`/`grantReadWrite` generates IAM wildcard actions |
-| `AwsSolutions-IAM4` | AWS managed policies used for Lambda execution roles |
-| `AwsSolutions-COG3` | Cognito AdvancedSecurityMode not available in GovCloud |
+| `AwsSolutions-IAM4` | AWS managed policies used for Lambda execution roles                  |
+| `AwsSolutions-COG3` | Cognito AdvancedSecurityMode not available in GovCloud                |
 
 ## Feature Flags
 
@@ -385,36 +383,35 @@ Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persi
 Always use `nestedStack.addDependency(otherStack)` when one nested stack depends on another. Implicit ordering through resource references alone is not sufficient.
 :::
 
-
 ## Anti-Patterns
 
-| Anti-Pattern | Correct Approach |
-|-------------|-----------------|
-| Hardcode `arn:aws:` in ARNs | Use `Service()` or `Partition()` |
-| Skip any of the 4 security calls | Include all four in every Lambda builder |
-| Forget VPC conditional on Lambda | Always check `useGlobalVpc.enabled && useForAllLambdas` |
-| Hardcode Lambda runtime or memory | Use `LAMBDA_PYTHON_RUNTIME` and `Config.LAMBDA_MEMORY_SIZE` |
-| Add config without backward compat | Add `undefined` check in `getConfig()` |
-| Forget to call `Service.SetConfig()` | Must be called in `bin/infra.ts` before any `Service()` usage |
-| Create resources without CDK Nag review | Add justified suppressions as needed |
-| Ignore GovCloud constraints | Check feature flags before using CloudFront, Location Service |
+| Anti-Pattern                                 | Correct Approach                                               |
+| -------------------------------------------- | -------------------------------------------------------------- |
+| Hardcode `arn:aws:` in ARNs                  | Use `Service()` or `Partition()`                               |
+| Skip any of the 4 security calls             | Include all four in every Lambda builder                       |
+| Forget VPC conditional on Lambda             | Always check `useGlobalVpc.enabled && useForAllLambdas`        |
+| Hardcode Lambda runtime or memory            | Use `LAMBDA_PYTHON_RUNTIME` and `Config.LAMBDA_MEMORY_SIZE`    |
+| Add config without backward compat           | Add `undefined` check in `getConfig()`                         |
+| Forget to call `Service.SetConfig()`         | Must be called in `bin/infra.ts` before any `Service()` usage  |
+| Create resources without CDK Nag review      | Add justified suppressions as needed                           |
+| Ignore GovCloud constraints                  | Check feature flags before using CloudFront, Location Service  |
 | Use `grantReadWrite` without Nag suppression | Always pair with `suppressCdkNagErrorsByGrantReadWrite(scope)` |
 
 ## Key Files Reference
 
-| Purpose | File |
-|---------|------|
-| CDK entry point | `bin/infra.ts` |
-| Config and constants | `config/config.ts` |
-| Root stack | `lib/core-stack.ts` |
-| Storage resources | `lib/nestedStacks/storage/storageBuilder-nestedStack.ts` |
-| API routes | `lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` |
-| Security helpers | `lib/helper/security.ts` |
-| Service helper | `lib/helper/service-helper.ts` |
-| Feature flags | `common/vamsAppFeatures.ts` |
+| Purpose              | File                                                     |
+| -------------------- | -------------------------------------------------------- |
+| CDK entry point      | `bin/infra.ts`                                           |
+| Config and constants | `config/config.ts`                                       |
+| Root stack           | `lib/core-stack.ts`                                      |
+| Storage resources    | `lib/nestedStacks/storage/storageBuilder-nestedStack.ts` |
+| API routes           | `lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`   |
+| Security helpers     | `lib/helper/security.ts`                                 |
+| Service helper       | `lib/helper/service-helper.ts`                           |
+| Feature flags        | `common/vamsAppFeatures.ts`                              |
 
 ## Next Steps
 
-- [Backend Development](backend.md) -- Lambda handler patterns that consume CDK-provisioned resources
-- [Frontend Development](frontend.md) -- How the frontend reads configuration and feature flags
-- [Local Development Setup](setup.md) -- CDK synthesis and deployment commands
+-   [Backend Development](backend.md) -- Lambda handler patterns that consume CDK-provisioned resources
+-   [Frontend Development](frontend.md) -- How the frontend reads configuration and feature flags
+-   [Local Development Setup](setup.md) -- CDK synthesis and deployment commands

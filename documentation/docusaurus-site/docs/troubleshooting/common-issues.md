@@ -12,8 +12,8 @@ When redeploying with pipeline configuration changes, you may encounter AWS Clou
 
 **Symptoms:**
 
-- CloudFormation stack rollback with VPC endpoint creation failures
-- Errors referencing duplicate interface endpoints for Amazon ECS
+-   CloudFormation stack rollback with VPC endpoint creation failures
+-   Errors referencing duplicate interface endpoints for Amazon ECS
 
 **Resolution:**
 
@@ -26,16 +26,15 @@ When redeploying with pipeline configuration changes, you may encounter AWS Clou
 This issue typically occurs only when toggling multiple pipelines simultaneously. Deploying pipeline changes incrementally can help avoid it.
 :::
 
-
 ### Docker Buildx Container Image Errors
 
 When deploying with AWS CDK, you may encounter errors related to Docker container image builds, particularly `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
 
 **Symptoms:**
 
-- `unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request`
-- `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` errors during Lambda function creation
-- Container images fail to push to Amazon ECR
+-   `unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request`
+-   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` errors during Lambda function creation
+-   Container images fail to push to Amazon ECR
 
 **Resolution:**
 
@@ -65,8 +64,8 @@ After upgrading VAMS or switching branches, stale dependencies can cause build f
 
 **Symptoms:**
 
-- TypeScript compilation errors in `web/` or `infra/`
-- Module resolution failures during `cdk synth`
+-   TypeScript compilation errors in `web/` or `infra/`
+-   Module resolution failures during `cdk synth`
 
 **Resolution:**
 
@@ -82,15 +81,14 @@ cd infra && rm -rf node_modules && npm install
 Always run `npm install` in both the `web/` and `infra/` directories after pulling new code or switching branches.
 :::
 
-
 ### External VPC Import Failures
 
 When importing an external Amazon VPC with subnets, the first deployment attempt may fail because AWS CDK cannot resolve VPC context before stack synthesis.
 
 **Symptoms:**
 
-- VPC or subnet lookup errors during `cdk synth`
-- Stack deployment fails referencing missing VPC context
+-   VPC or subnet lookup errors during `cdk synth`
+-   Stack deployment fails referencing missing VPC context
 
 **Resolution:**
 
@@ -112,17 +110,17 @@ AWS KMS key policy errors can occur when AWS CloudFormation custom resources att
 
 **Symptoms:**
 
-- Custom resource Lambda functions fail with `AccessDeniedException` for AWS KMS operations
-- Stack deployment rolls back during default data population steps
+-   Custom resource Lambda functions fail with `AccessDeniedException` for AWS KMS operations
+-   Stack deployment rolls back during default data population steps
 
 **Resolution:**
 
 Verify that the KMS key policy includes the required principals. If using an external CMK via `app.useKmsCmkEncryption.optionalExternalCmkArn`, ensure the key policy grants the following actions to the AWS CloudFormation service principal and the deployment role:
 
-- `kms:Decrypt`
-- `kms:Encrypt`
-- `kms:GenerateDataKey`
-- `kms:ReEncrypt*`
+-   `kms:Decrypt`
+-   `kms:Encrypt`
+-   `kms:GenerateDataKey`
+-   `kms:ReEncrypt*`
 
 ---
 
@@ -134,9 +132,9 @@ During local development, Content Security Policy (CSP) errors may block certain
 
 **Symptoms:**
 
-- Browser console errors mentioning `Content-Security-Policy`
-- Viewers fail to load external resources
-- WebAssembly modules blocked
+-   Browser console errors mentioning `Content-Security-Policy`
+-   Viewers fail to load external resources
+-   WebAssembly modules blocked
 
 **Resolution:**
 
@@ -150,22 +148,21 @@ VAMS includes a service worker that sets the required cross-origin isolation hea
 The Vite development server proxy handles most CSP issues automatically. If problems persist, clear your browser cache and service worker registrations.
 :::
 
-
 ### WASM-Based Viewers Not Loading
 
 Viewers that use WebAssembly (Needle USD Viewer, Three.js CAD Viewer, Cesium 3D Tileset Viewer) require specific HTTP headers to function.
 
 **Symptoms:**
 
-- Viewer shows a loading spinner indefinitely
-- Browser console errors mentioning `SharedArrayBuffer` or `Cross-Origin-Opener-Policy`
+-   Viewer shows a loading spinner indefinitely
+-   Browser console errors mentioning `SharedArrayBuffer` or `Cross-Origin-Opener-Policy`
 
 **Resolution:**
 
 WASM-based viewers require Cross-Origin Isolation headers (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`). These are provided in two ways:
 
-- **Amazon CloudFront deployment:** Headers are set automatically by the CloudFront distribution.
-- **Application Load Balancer (ALB) deployment:** A front-end service worker attempts to set the headers. If your organization's security policy blocks service workers, WASM viewers will not function.
+-   **Amazon CloudFront deployment:** Headers are set automatically by the CloudFront distribution.
+-   **Application Load Balancer (ALB) deployment:** A front-end service worker attempts to set the headers. If your organization's security policy blocks service workers, WASM viewers will not function.
 
 For the Cesium 3D Tileset Viewer, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because CesiumJS requires runtime code generation for its rendering engine.
 
@@ -175,8 +172,8 @@ Safari does not fully support the cross-origin isolation requirements needed by 
 
 **Symptoms:**
 
-- Needle USD Viewer, Three.js CAD formats (.stp, .step, .iges, .brep), and Cesium Viewer fail to load in Safari
-- Standard mesh formats (.gltf, .glb, .obj, .stl) in the Three.js Viewer work correctly
+-   Needle USD Viewer, Three.js CAD formats (.stp, .step, .iges, .brep), and Cesium Viewer fail to load in Safari
+-   Standard mesh formats (.gltf, .glb, .obj, .stl) in the Three.js Viewer work correctly
 
 **Resolution:**
 
@@ -188,8 +185,8 @@ Users may experience a login loop where the application repeatedly redirects to 
 
 **Symptoms:**
 
-- Page refreshes continuously after successful authentication
-- Browser console shows errors fetching `/api/amplify-config` or `/api/secure-config`
+-   Page refreshes continuously after successful authentication
+-   Browser console shows errors fetching `/api/amplify-config` or `/api/secure-config`
 
 **Resolution:**
 
@@ -208,8 +205,8 @@ VAMS applies API rate limiting through Amazon API Gateway throttling.
 
 **Symptoms:**
 
-- API responses return HTTP 429 (Too Many Requests)
-- Bulk operations fail intermittently
+-   API responses return HTTP 429 (Too Many Requests)
+-   Bulk operations fail intermittently
 
 **Resolution:**
 
@@ -232,21 +229,20 @@ The default values are `globalRateLimit: 50` requests per second and `globalBurs
 Increasing rate limits raises the potential cost of Amazon API Gateway usage and may affect downstream service limits. Monitor your Amazon CloudWatch metrics after adjustments.
 :::
 
-
 ### Timeout on Large Operations
 
 Amazon API Gateway imposes a 29-second timeout on HTTP responses, while the underlying AWS Lambda function continues processing for up to 15 minutes.
 
 **Symptoms:**
 
-- API returns a 504 Gateway Timeout
-- The operation actually completes successfully in the background
+-   API returns a 504 Gateway Timeout
+-   The operation actually completes successfully in the background
 
 **Affected operations:**
 
-- Listing or exporting assets with thousands of files
-- Amazon OpenSearch re-indexing for large datasets
-- Bulk metadata operations
+-   Listing or exporting assets with thousands of files
+-   Amazon OpenSearch re-indexing for large datasets
+-   Bulk metadata operations
 
 **Resolution:**
 
@@ -258,8 +254,8 @@ After uploading many files or performing bulk metadata changes, search results m
 
 **Symptoms:**
 
-- Newly uploaded assets do not appear in search results
-- Metadata changes are not reflected in search filters
+-   Newly uploaded assets do not appear in search results
+-   Metadata changes are not reflected in search filters
 
 **Resolution:**
 
@@ -279,8 +275,8 @@ Pipeline containers running on AWS Batch with AWS Fargate may fail to pull conta
 
 **Symptoms:**
 
-- AWS Batch job fails with `CannotPullContainerError`
-- Timeout errors during image pull
+-   AWS Batch job fails with `CannotPullContainerError`
+-   Timeout errors during image pull
 
 **Resolution:**
 
@@ -296,8 +292,8 @@ Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox) require GPU instance
 
 **Symptoms:**
 
-- AWS Batch jobs remain in `RUNNABLE` state indefinitely
-- No compute environment instances are launched
+-   AWS Batch jobs remain in `RUNNABLE` state indefinitely
+-   No compute environment instances are launched
 
 **Resolution:**
 
@@ -311,8 +307,8 @@ Pipeline step timeouts and overall workflow timeouts are configured separately. 
 
 **Symptoms:**
 
-- Workflow execution fails but logs show the container was still processing
-- AWS Step Functions execution history shows a timeout error on a specific state
+-   Workflow execution fails but logs show the container was still processing
+-   AWS Step Functions execution history shows a timeout error on a specific state
 
 **Resolution:**
 

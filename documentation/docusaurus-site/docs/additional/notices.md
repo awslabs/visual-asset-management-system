@@ -10,7 +10,6 @@ This page contains important legal notices, disclaimers, and licensing informati
 Visual Asset Management System (VAMS) is a solution that is near-production-grade at its default configuration. Consult with your organizational security team prior to production use. You are responsible for testing, securing, and optimizing the solution as appropriate for production-grade use based on your specific quality control practices and standards.
 :::
 
-
 Deploying VAMS may incur AWS charges for creating or using AWS chargeable resources, such as running Amazon EC2 instances, using Amazon S3 storage, Amazon DynamoDB tables, Amazon OpenSearch domains, and other services. You are responsible for the cost of AWS services used while running this solution.
 
 ---
@@ -33,7 +32,6 @@ VAMS includes third-party software subject to their respective licenses. This so
 This solution allows you to interact with third-party software libraries and generative AI (GAI) models from third-party providers. Your use of the software libraries and third-party GAI models is governed by the terms provided to you by the third-party software library and GAI model providers when you acquired your license to use them (for example, their terms of service, license agreement, acceptable use policy, and privacy policy).
 :::
 
-
 You are responsible for ensuring that your use of the third-party software libraries and GAI models comply with the terms governing them, and any laws, rules, regulations, policies, or standards that apply to you.
 
 You are also responsible for making your own independent assessment of the third-party software libraries and GAI models that you use, including their outputs and how third-party software library GAI model providers use any data that might be transmitted to them based on your deployment configuration. AWS does not make any representations, warranties, or guarantees regarding the third-party software libraries and GAI models, which are "Third-Party Content" under your agreement with AWS.
@@ -42,36 +40,35 @@ You are also responsible for making your own independent assessment of the third
 
 The complete list of third-party dependencies and their licenses is maintained in the project's `NOTICE.md` file. Key categories include:
 
-| Category | Notable Libraries | Licenses |
-|---|---|---|
-| Web application | React, Vite, Cloudscape Design System, Amplify | MIT, Apache-2.0 |
+| Category         | Notable Libraries                                                | Licenses                      |
+| ---------------- | ---------------------------------------------------------------- | ----------------------------- |
+| Web application  | React, Vite, Cloudscape Design System, Amplify                   | MIT, Apache-2.0               |
 | 3D visualization | Three.js, BabylonJS, CesiumJS, Potree, PlayCanvas, Needle Engine | MIT, Apache-2.0, BSD-2-Clause |
-| Backend | Pydantic, Casbin, boto3, aws-lambda-powertools | MIT, Apache-2.0, MIT-0 |
-| Infrastructure | AWS CDK, cdk-nag, constructs | Apache-2.0 |
-| CLI | Click, requests, boto3, pycognito | BSD-3-Clause, Apache-2.0 |
+| Backend          | Pydantic, Casbin, boto3, aws-lambda-powertools                   | MIT, Apache-2.0, MIT-0        |
+| Infrastructure   | AWS CDK, cdk-nag, constructs                                     | Apache-2.0                    |
+| CLI              | Click, requests, boto3, pycognito                                | BSD-3-Clause, Apache-2.0      |
 
 ### Optional LGPL-Licensed Components
 
 Certain optional components use LGPL-2.1 licensed libraries:
 
-- **OpenCascade.js** -- Dynamically loaded for CAD format support in the Three.js Viewer (STEP, IGES, BREP). Disabled by default and loaded on-demand from a CDN only when explicitly enabled.
-- **CadQuery** -- Used in the CAD/Mesh Metadata Extraction pipeline and the 3D Preview Thumbnail pipeline for STEP/STP file tessellation.
+-   **OpenCascade.js** -- Dynamically loaded for CAD format support in the Three.js Viewer (STEP, IGES, BREP). Disabled by default and loaded on-demand from a CDN only when explicitly enabled.
+-   **CadQuery** -- Used in the CAD/Mesh Metadata Extraction pipeline and the 3D Preview Thumbnail pipeline for STEP/STP file tessellation.
 
 :::note
 LGPL-2.1 license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
 :::
 
-
 ### Commercial Licensed Components
 
 Some viewer plugins and processing pipelines require separate commercial licenses:
 
-| Component | Vendor | License |
-|---|---|---|
-| VNTANA 3D Model Viewer | [VNTANA](https://www.vntana.com/) | Commercial |
-| VNTANA 3D Optimization Engine | VNTANA (AWS Marketplace) | Commercial EULA |
-| Veerum 3D Viewer | [Veerum](https://veerum.com/) | Commercial |
-| RapidPipeline 3D Processor | [RapidPipeline](https://rapidpipeline.com/) (AWS Marketplace) | Commercial |
+| Component                     | Vendor                                                        | License         |
+| ----------------------------- | ------------------------------------------------------------- | --------------- |
+| VNTANA 3D Model Viewer        | [VNTANA](https://www.vntana.com/)                             | Commercial      |
+| VNTANA 3D Optimization Engine | VNTANA (AWS Marketplace)                                      | Commercial EULA |
+| Veerum 3D Viewer              | [Veerum](https://veerum.com/)                                 | Commercial      |
+| RapidPipeline 3D Processor    | [RapidPipeline](https://rapidpipeline.com/) (AWS Marketplace) | Commercial      |
 
 ### NVIDIA License Notice
 

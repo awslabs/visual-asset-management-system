@@ -61,35 +61,35 @@ vamscli assets --help
 
 ## Available Command Groups
 
-| Command | Description |
-|---------|-------------|
-| `setup` | Configure CLI with VAMS URL |
-| `auth` | Authentication and session management |
-| `database` | Database CRUD operations |
-| `assets` | Asset management and export |
-| `asset-version` | Version management (create, archive, revert) |
-| `asset-links` | Asset relationship management |
-| `file` | File upload, download, copy, move, delete |
-| `metadata` | Metadata for assets, files, databases, links |
-| `metadata-schema` | Schema management |
-| `search` | OpenSearch-powered search |
-| `workflow` | Workflow execution and monitoring |
-| `tag` / `tag-type` | Tag and tag type management |
-| `role` | Roles, constraints, user-role assignments |
-| `api-key` | API key management |
-| `user` | Cognito user management |
-| `features` | Feature flag inspection |
-| `profile` | Multi-environment profile management |
-| `industry` | Industry commands (BOM, PLM, spatial GLB) |
+| Command            | Description                                  |
+| ------------------ | -------------------------------------------- |
+| `setup`            | Configure CLI with VAMS URL                  |
+| `auth`             | Authentication and session management        |
+| `database`         | Database CRUD operations                     |
+| `assets`           | Asset management and export                  |
+| `asset-version`    | Version management (create, archive, revert) |
+| `asset-links`      | Asset relationship management                |
+| `file`             | File upload, download, copy, move, delete    |
+| `metadata`         | Metadata for assets, files, databases, links |
+| `metadata-schema`  | Schema management                            |
+| `search`           | OpenSearch-powered search                    |
+| `workflow`         | Workflow execution and monitoring            |
+| `tag` / `tag-type` | Tag and tag type management                  |
+| `role`             | Roles, constraints, user-role assignments    |
+| `api-key`          | API key management                           |
+| `user`             | Cognito user management                      |
+| `features`         | Feature flag inspection                      |
+| `profile`          | Multi-environment profile management         |
+| `industry`         | Industry commands (BOM, PLM, spatial GLB)    |
 
 ## Global Options
 
-| Option | Description |
-|--------|-------------|
-| `--version` | Show version |
-| `--verbose` | Detailed output with API request/response logging |
-| `--profile NAME` | Use a specific profile |
-| `--token-override TOKEN` | Authenticate with API key or external token |
+| Option                   | Description                                       |
+| ------------------------ | ------------------------------------------------- |
+| `--version`              | Show version                                      |
+| `--verbose`              | Detailed output with API request/response logging |
+| `--profile NAME`         | Use a specific profile                            |
+| `--token-override TOKEN` | Authenticate with API key or external token       |
 
 ## Documentation
 

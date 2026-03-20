@@ -8,19 +8,19 @@ Each file in VAMS corresponds to a single Amazon S3 object stored within an asse
 
 ### File properties
 
-| Property | Description |
-|---|---|
-| `fileName` | The name of the file (last segment of the key). |
-| `key` | The full Amazon S3 object key. |
-| `relativePath` | The path relative to the asset root. |
-| `isFolder` | Whether this entry represents a virtual folder. |
-| `size` | File size in bytes. |
-| `dateCreatedCurrentVersion` | Timestamp of the current Amazon S3 version. |
-| `versionId` | The Amazon S3 version ID of the current version. |
-| `storageClass` | The Amazon S3 storage class (e.g., `STANDARD`). |
-| `isArchived` | Whether the file is currently archived (has a delete marker). |
-| `primaryType` | The file's primary type designation (see [Primary file type](#primary-file-type)). |
-| `previewFile` | Path to a preview image for this specific file. |
+| Property                    | Description                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------- |
+| `fileName`                  | The name of the file (last segment of the key).                                    |
+| `key`                       | The full Amazon S3 object key.                                                     |
+| `relativePath`              | The path relative to the asset root.                                               |
+| `isFolder`                  | Whether this entry represents a virtual folder.                                    |
+| `size`                      | File size in bytes.                                                                |
+| `dateCreatedCurrentVersion` | Timestamp of the current Amazon S3 version.                                        |
+| `versionId`                 | The Amazon S3 version ID of the current version.                                   |
+| `storageClass`              | The Amazon S3 storage class (e.g., `STANDARD`).                                    |
+| `isArchived`                | Whether the file is currently archived (has a delete marker).                      |
+| `primaryType`               | The file's primary type designation (see [Primary file type](#primary-file-type)). |
+| `previewFile`               | Path to a preview image for this specific file.                                    |
 
 ## File operations
 
@@ -38,19 +38,17 @@ VAMS supports uploading up to 1,000 files per request, with a maximum of 5,000 t
 Two upload types are supported: `assetFile` for regular asset files, and `assetPreview` for asset-level preview images. Preview uploads accept exactly one file.
 :::
 
-
 ### Download
 
 File downloads are served through pre-signed Amazon S3 URLs that expire after a configurable timeout (default: 24 hours). Downloads can target:
 
-- A specific file by key.
-- A specific Amazon S3 version by `versionId`.
-- A file as it existed in a particular asset version by `assetVersionId` or `assetVersionIdAlias`.
+-   A specific file by key.
+-   A specific Amazon S3 version by `versionId`.
+-   A file as it existed in a particular asset version by `assetVersionId` or `assetVersionIdAlias`.
 
 :::warning[isDistributable flag]
 Downloads are only available when the parent asset's `isDistributable` flag is set to `true`. See [Assets -- The isDistributable flag](assets.md#the-isdistributable-flag).
 :::
-
 
 ### Move and rename
 
@@ -67,17 +65,16 @@ Moving or renaming a file creates a copy at the destination path and archives (s
 
 Files can be copied within the same asset, to a different asset in the same database, or across databases entirely. When copying across databases, file metadata is merged into the destination.
 
-| Parameter | Required | Description |
-|---|---|---|
-| `sourcePath` | Yes | Relative path of the source file within the current asset. |
-| `destinationPath` | Yes | Relative path for the copy in the destination asset. |
-| `destinationAssetId` | No | Target asset ID. If omitted, copies within the same asset. |
-| `destinationDatabaseId` | No | Target database ID. If omitted, uses the same database. |
+| Parameter               | Required | Description                                                |
+| ----------------------- | -------- | ---------------------------------------------------------- |
+| `sourcePath`            | Yes      | Relative path of the source file within the current asset. |
+| `destinationPath`       | Yes      | Relative path for the copy in the destination asset.       |
+| `destinationAssetId`    | No       | Target asset ID. If omitted, copies within the same asset. |
+| `destinationDatabaseId` | No       | Target database ID. If omitted, uses the same database.    |
 
 :::tip[Cross-database copy]
 When copying a file to a different database, the operation copies the Amazon S3 object from the source bucket to the destination bucket. File metadata is also copied to the destination asset's metadata tables.
 :::
-
 
 ### Create folder
 
@@ -93,8 +90,8 @@ Virtual folders can be created within an asset by specifying a relative key endi
 
 Archiving a file creates an Amazon S3 delete marker on the object, which hides the file from normal listing operations without removing any version history. Archived files can be restored later.
 
-- Single files can be archived by path.
-- All files under a prefix can be archived at once by setting `isPrefix: true`.
+-   Single files can be archived by path.
+-   All files under a prefix can be archived at once by setting `isPrefix: true`.
 
 ### Unarchive (restore)
 
@@ -104,8 +101,8 @@ Unarchiving removes the Amazon S3 delete marker from a file, restoring the most 
 
 Permanent deletion removes a file and all of its Amazon S3 versions irreversibly. This operation requires explicit confirmation via `confirmPermanentDelete: true`.
 
-- Single files or entire prefixes can be permanently deleted.
-- All Amazon S3 object versions are removed -- the data cannot be recovered.
+-   Single files or entire prefixes can be permanently deleted.
+-   All Amazon S3 object versions are removed -- the data cannot be recovered.
 
 ### Revert file version
 
@@ -150,47 +147,46 @@ graph TB
 
 File versions are managed automatically by Amazon S3 versioning on the asset bucket:
 
-- Every upload or modification to a file creates a new Amazon S3 version.
-- Each version has a unique `versionId` assigned by Amazon S3.
-- Previous versions are retained and accessible by version ID.
-- Archiving a file creates a delete marker (a special version) rather than removing data.
-- Permanent deletion of a specific version removes only that version from Amazon S3.
+-   Every upload or modification to a file creates a new Amazon S3 version.
+-   Each version has a unique `versionId` assigned by Amazon S3.
+-   Previous versions are retained and accessible by version ID.
+-   Archiving a file creates a delete marker (a special version) rather than removing data.
+-   Permanent deletion of a specific version removes only that version from Amazon S3.
 
 When viewing file details with `includeVersions: true`, the response lists all Amazon S3 versions including:
 
-| Property | Description |
-|---|---|
-| `versionId` | The Amazon S3 version identifier. |
-| `lastModified` | When this version was created. |
-| `size` | Size of this version in bytes. |
-| `isLatest` | Whether this is the current version. |
-| `storageClass` | Amazon S3 storage class for this version. |
-| `isArchived` | Whether this version is a delete marker. |
+| Property          | Description                                       |
+| ----------------- | ------------------------------------------------- |
+| `versionId`       | The Amazon S3 version identifier.                 |
+| `lastModified`    | When this version was created.                    |
+| `size`            | Size of this version in bytes.                    |
+| `isLatest`        | Whether this is the current version.              |
+| `storageClass`    | Amazon S3 storage class for this version.         |
+| `isArchived`      | Whether this version is a delete marker.          |
 | `assetVersionIds` | Which asset versions reference this file version. |
 
 ### Asset versions (VAMS snapshots)
 
 Asset versions are higher-level snapshots managed by VAMS in Amazon DynamoDB:
 
-- Each asset version records the exact Amazon S3 `versionId` of every file at the time the snapshot was created.
-- Creating an asset version does not duplicate any Amazon S3 data -- it only records references.
-- Asset versions can include versioned metadata snapshots (metadata and attribute values at the time of the snapshot).
-- Reverting to an asset version creates new Amazon S3 versions of files to restore the recorded state.
+-   Each asset version records the exact Amazon S3 `versionId` of every file at the time the snapshot was created.
+-   Creating an asset version does not duplicate any Amazon S3 data -- it only records references.
+-   Asset versions can include versioned metadata snapshots (metadata and attribute values at the time of the snapshot).
+-   Reverting to an asset version creates new Amazon S3 versions of files to restore the recorded state.
 
 ### How they work together
 
-| Scenario | File Version (Amazon S3) | Asset Version (VAMS) |
-|---|---|---|
-| Upload a new file | New Amazon S3 version created automatically | No asset version created automatically |
-| Modify an existing file | New Amazon S3 version created automatically | No asset version created automatically |
-| Create asset version | No change to Amazon S3 | Snapshot records current Amazon S3 version IDs |
+| Scenario                | File Version (Amazon S3)                              | Asset Version (VAMS)                           |
+| ----------------------- | ----------------------------------------------------- | ---------------------------------------------- |
+| Upload a new file       | New Amazon S3 version created automatically           | No asset version created automatically         |
+| Modify an existing file | New Amazon S3 version created automatically           | No asset version created automatically         |
+| Create asset version    | No change to Amazon S3                                | Snapshot records current Amazon S3 version IDs |
 | Revert to asset version | New Amazon S3 versions created by copying old content | New asset version created as the revert target |
-| Archive a file | Delete marker created in Amazon S3 | No change to existing asset versions |
+| Archive a file          | Delete marker created in Amazon S3                    | No change to existing asset versions           |
 
 :::tip[When to create asset versions]
 Asset versions are most useful at milestone points: after completing a round of edits, before sharing with a client, or when a processing pipeline produces final outputs. They let you return to a known-good state across all files simultaneously.
 :::
-
 
 ## File metadata and file attributes
 
@@ -212,7 +208,6 @@ File attributes are stored in a separate Amazon DynamoDB table from metadata, ke
 Use **metadata** when you need typed values, schema validation, or versioning with asset snapshots. Use **attributes** for simple string-only annotations that do not need schema governance.
 :::
 
-
 ## Preview files
 
 Individual files within an asset can have associated preview images. Preview files follow a naming convention:
@@ -229,17 +224,16 @@ Preview files are typically generated by processing pipelines (such as the 3D th
 **Asset previews** are single representative images for the entire asset, stored at the `previewLocation`. **File previews** are per-file thumbnail images stored alongside the files using the `.previewFile.{ext}` naming pattern. These are separate concepts.
 :::
 
-
 ## Primary file type
 
 Each file can be assigned a `primaryType` designation that indicates its role within the asset:
 
-| Value | Description |
-|---|---|
-| `primary` | The main/primary file in the asset. |
-| `lod1` through `lod5` | Level-of-detail variants, from highest (lod1) to lowest (lod5). |
-| `other` | A custom type. Requires a `primaryTypeOther` string (up to 30 characters) to describe the type. |
-| *(empty string)* | Clears any previously set primary type. |
+| Value                 | Description                                                                                     |
+| --------------------- | ----------------------------------------------------------------------------------------------- |
+| `primary`             | The main/primary file in the asset.                                                             |
+| `lod1` through `lod5` | Level-of-detail variants, from highest (lod1) to lowest (lod5).                                 |
+| `other`               | A custom type. Requires a `primaryTypeOther` string (up to 30 characters) to describe the type. |
+| _(empty string)_      | Clears any previously set primary type.                                                         |
 
 Primary type metadata is stored as Amazon S3 object metadata on the file itself, making it accessible even when reading the file directly from Amazon S3.
 
@@ -284,9 +278,8 @@ When copying a file from one database to another, VAMS performs the following:
 If the destination file already has metadata with the same keys, the copy operation updates those keys with the source values. Metadata keys that exist only in the destination are preserved.
 :::
 
-
 ## What's next
 
-- Learn about the parent data model: [Assets](assets.md)
-- Understand metadata and schema governance: [Metadata and Schemas](metadata-and-schemas.md)
-- Explore how pipelines process files: [Pipelines and Workflows](pipelines-and-workflows.md)
+-   Learn about the parent data model: [Assets](assets.md)
+-   Understand metadata and schema governance: [Metadata and Schemas](metadata-and-schemas.md)
+-   Explore how pipelines process files: [Pipelines and Workflows](pipelines-and-workflows.md)

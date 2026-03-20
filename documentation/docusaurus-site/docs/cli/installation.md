@@ -8,11 +8,11 @@ This page covers detailed installation steps, multi-profile configuration, confi
 
 Ensure your system meets the following requirements:
 
-| Requirement | Version | Notes |
-|---|---|---|
-| Python | 3.13+ | Required for CLI runtime |
-| pip | Latest | Python package installer |
-| Git | Any | For cloning the repository |
+| Requirement | Version | Notes                      |
+| ----------- | ------- | -------------------------- |
+| Python      | 3.13+   | Required for CLI runtime   |
+| pip         | Latest  | Python package installer   |
+| Git         | Any     | For cloning the repository |
 
 ### Install from Source
 
@@ -44,8 +44,8 @@ source venv/bin/activate    # Linux/macOS
 venv\Scripts\activate       # Windows
 pip install -e .
 ```
-:::
 
+:::
 
 ### Install from Pre-built Wheel
 
@@ -159,9 +159,9 @@ vamscli profile delete test-profile --force    # Skip confirmation prompt
 
 Profile names must satisfy the following constraints:
 
-- Between 3 and 50 characters in length
-- Alphanumeric characters, hyphens (`-`), and underscores (`_`) only
-- Cannot be a reserved word: `help`, `version`, or `list`
+-   Between 3 and 50 characters in length
+-   Alphanumeric characters, hyphens (`-`), and underscores (`_`) only
+-   Cannot be a reserved word: `help`, `version`, or `list`
 
 ## Configuration File Locations
 
@@ -169,11 +169,11 @@ VamsCLI stores configuration files in platform-specific directories.
 
 ### Storage Paths
 
-| Platform | Base Directory |
-|---|---|
-| Windows | `%APPDATA%\vamscli\` |
-| macOS | `~/Library/Application Support/vamscli/` |
-| Linux | `~/.config/vamscli/` |
+| Platform | Base Directory                           |
+| -------- | ---------------------------------------- |
+| Windows  | `%APPDATA%\vamscli\`                     |
+| macOS    | `~/Library/Application Support/vamscli/` |
+| Linux    | `~/.config/vamscli/`                     |
 
 ### Directory Structure
 
@@ -198,26 +198,25 @@ vamscli/
 
 ### Configuration Files
 
-| File | Purpose | Created By |
-|---|---|---|
-| `config.json` | API Gateway URL, Amplify configuration, AWS Region, Amazon Cognito User Pool and Client ID, CLI version, setup timestamp | `vamscli setup` |
-| `auth_profile.json` | ID token, access token, refresh token, user ID, token type (Cognito or override), expiration, feature switches | `vamscli auth login` or `vamscli auth set-override` |
-| `credentials.json` | Saved username and password for automatic re-authentication | `vamscli auth login --save-credentials` |
+| File                | Purpose                                                                                                                  | Created By                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| `config.json`       | API Gateway URL, Amplify configuration, AWS Region, Amazon Cognito User Pool and Client ID, CLI version, setup timestamp | `vamscli setup`                                     |
+| `auth_profile.json` | ID token, access token, refresh token, user ID, token type (Cognito or override), expiration, feature switches           | `vamscli auth login` or `vamscli auth set-override` |
+| `credentials.json`  | Saved username and password for automatic re-authentication                                                              | `vamscli auth login --save-credentials`             |
 
 :::warning[Credential Security]
 The `credentials.json` file stores passwords in plain text on your filesystem. Only use `--save-credentials` on secure workstations. Consider using token override authentication with short-lived tokens for CI/CD environments instead.
 :::
 
-
 ## Environment Variable Overrides
 
 VamsCLI reads the following environment variables to override default retry behavior for API throttling (HTTP 429 responses):
 
-| Environment Variable | Default | Description |
-|---|---|---|
-| `VAMS_CLI_MAX_RETRY_ATTEMPTS` | `5` | Maximum number of retry attempts for throttled requests |
-| `VAMS_CLI_INITIAL_RETRY_DELAY` | `1.0` (seconds) | Initial delay before the first retry |
-| `VAMS_CLI_MAX_RETRY_DELAY` | `60.0` (seconds) | Maximum delay between retries |
+| Environment Variable           | Default          | Description                                             |
+| ------------------------------ | ---------------- | ------------------------------------------------------- |
+| `VAMS_CLI_MAX_RETRY_ATTEMPTS`  | `5`              | Maximum number of retry attempts for throttled requests |
+| `VAMS_CLI_INITIAL_RETRY_DELAY` | `1.0` (seconds)  | Initial delay before the first retry                    |
+| `VAMS_CLI_MAX_RETRY_DELAY`     | `60.0` (seconds) | Maximum delay between retries                           |
 
 Example:
 
@@ -235,9 +234,9 @@ VamsCLI uses Unicode characters for status indicators in CLI output. If you see 
 
 Use one of the following approaches:
 
-- **Windows Terminal** (recommended) -- UTF-8 by default
-- **VS Code integrated terminal** -- UTF-8 by default
-- **Legacy Command Prompt** -- Set the environment variable before running VamsCLI:
+-   **Windows Terminal** (recommended) -- UTF-8 by default
+-   **VS Code integrated terminal** -- UTF-8 by default
+-   **Legacy Command Prompt** -- Set the environment variable before running VamsCLI:
 
     ```bash
     set PYTHONIOENCODING=utf-8
@@ -249,6 +248,6 @@ Most terminal emulators on macOS and Linux use UTF-8 encoding by default. No add
 
 ## Next Steps
 
-- [Getting Started](getting-started.md) -- Quick setup and first commands
-- [Command Reference](command-reference.md) -- Complete reference for all commands
-- [Automation and Scripting](automation.md) -- CI/CD integration, scripting patterns, and JSON output
+-   [Getting Started](getting-started.md) -- Quick setup and first commands
+-   [Command Reference](command-reference.md) -- Complete reference for all commands
+-   [Automation and Scripting](automation.md) -- CI/CD integration, scripting patterns, and JSON output

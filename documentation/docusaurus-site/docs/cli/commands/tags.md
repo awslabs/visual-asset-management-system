@@ -17,10 +17,10 @@ List all tags, optionally filtered by tag type.
 vamscli tag list [--tag-type <TYPE>] [--json-output]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `--tag-type` | TEXT | No | Filter tags by tag type name |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option          | Type | Required | Description                  |
+| --------------- | ---- | -------- | ---------------------------- |
+| `--tag-type`    | TEXT | No       | Filter tags by tag type name |
+| `--json-output` | Flag | No       | Output raw JSON response     |
 
 ---
 
@@ -32,21 +32,21 @@ Create a new tag or multiple tags.
 vamscli tag create [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `--tag-name` | TEXT | Conditional | Tag name (required unless using `--json-input`) |
-| `--description` | TEXT | Conditional | Tag description |
-| `--tag-type-name` | TEXT | Conditional | Tag type name |
-| `--json-input` | TEXT | No | JSON input for batch creation |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option            | Type | Required    | Description                                     |
+| ----------------- | ---- | ----------- | ----------------------------------------------- |
+| `--tag-name`      | TEXT | Conditional | Tag name (required unless using `--json-input`) |
+| `--description`   | TEXT | Conditional | Tag description                                 |
+| `--tag-type-name` | TEXT | Conditional | Tag type name                                   |
+| `--json-input`    | TEXT | No          | JSON input for batch creation                   |
+| `--json-output`   | Flag | No          | Output raw JSON response                        |
 
 ### JSON input format (batch creation)
 
 ```json
 {
     "tags": [
-        {"tagName": "urgent", "description": "Urgent priority", "tagTypeName": "priority"},
-        {"tagName": "low", "description": "Low priority", "tagTypeName": "priority"}
+        { "tagName": "urgent", "description": "Urgent priority", "tagTypeName": "priority" },
+        { "tagName": "low", "description": "Low priority", "tagTypeName": "priority" }
     ]
 }
 ```
@@ -97,21 +97,21 @@ Create a new tag type or multiple tag types.
 vamscli tag-type create [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `--tag-type-name` | TEXT | Conditional | Tag type name |
-| `--description` | TEXT | Conditional | Tag type description |
-| `--required` | Flag | No | Mark as required for asset classification |
-| `--json-input` | TEXT | No | JSON input for batch creation |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option            | Type | Required    | Description                               |
+| ----------------- | ---- | ----------- | ----------------------------------------- |
+| `--tag-type-name` | TEXT | Conditional | Tag type name                             |
+| `--description`   | TEXT | Conditional | Tag type description                      |
+| `--required`      | Flag | No          | Mark as required for asset classification |
+| `--json-input`    | TEXT | No          | JSON input for batch creation             |
+| `--json-output`   | Flag | No          | Output raw JSON response                  |
 
 ### JSON input format
 
 ```json
 {
     "tagTypes": [
-        {"tagTypeName": "priority", "description": "Priority levels", "required": "True"},
-        {"tagTypeName": "category", "description": "Asset categories", "required": "False"}
+        { "tagTypeName": "priority", "description": "Priority levels", "required": "True" },
+        { "tagTypeName": "category", "description": "Asset categories", "required": "False" }
     ]
 }
 ```
@@ -158,5 +158,5 @@ vamscli tag list --tag-type priority
 
 ## Related Pages
 
-- [Asset Commands](assets.md)
-- [Search Commands](search.md)
+-   [Asset Commands](assets.md)
+-   [Search Commands](search.md)

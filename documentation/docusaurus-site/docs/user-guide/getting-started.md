@@ -12,7 +12,6 @@ When your administrator creates your account, you will receive an email from Ama
 If your organization uses an external identity provider (such as SAML or OIDC federation), you will not receive an Amazon Cognito email. Instead, you will authenticate through your organization's single sign-on (SSO) portal. Contact your administrator for the correct login URL.
 :::
 
-
 ---
 
 ## First Login and Password Change
@@ -55,11 +54,11 @@ After signing in, VAMS presents a layout with three main areas: the **top naviga
 
 The top navigation bar appears at the top of every page and contains:
 
-| Element | Description |
-|---------|-------------|
-| **Application logo** | Displays the VAMS logo. Select it to return to the home page. |
-| **Settings dropdown** | Provides theme selection (Light Theme or Dark Theme). The active theme is indicated with a checkmark. |
-| **User profile dropdown** | Displays your username and provides a **Sign out** option. |
+| Element                   | Description                                                                                           |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **Application logo**      | Displays the VAMS logo. Select it to return to the home page.                                         |
+| **Settings dropdown**     | Provides theme selection (Light Theme or Dark Theme). The active theme is indicated with a checkmark. |
+| **User profile dropdown** | Displays your username and provides a **Sign out** option.                                            |
 
 <!-- Screenshot needed: Top navigation bar showing logo, settings, and user profile -->
 
@@ -71,47 +70,46 @@ The navigation panel is divided into the following sections:
 
 #### Home
 
-| Navigation Item | Description |
-|----------------|-------------|
-| **Home** | Landing page with an overview of VAMS and quick-start information. |
+| Navigation Item | Description                                                        |
+| --------------- | ------------------------------------------------------------------ |
+| **Home**        | Landing page with an overview of VAMS and quick-start information. |
 
 #### Manage
 
-| Navigation Item | Description |
-|----------------|-------------|
-| **Databases** | View, create, and manage databases that organize your assets. |
-| **Assets and Files** | Search, browse, and manage assets across all databases. |
-| **Create Asset** | Upload a new asset with files, metadata, tags, and relationships. |
+| Navigation Item      | Description                                                       |
+| -------------------- | ----------------------------------------------------------------- |
+| **Databases**        | View, create, and manage databases that organize your assets.     |
+| **Assets and Files** | Search, browse, and manage assets across all databases.           |
+| **Create Asset**     | Upload a new asset with files, metadata, tags, and relationships. |
 
 #### Orchestrate and Automate
 
-| Navigation Item | Description |
-|----------------|-------------|
-| **Pipelines** | View and manage processing pipelines (3D conversion, preview generation, and more). |
-| **Workflows** | Create and manage workflows that chain pipelines together for automated processing. |
+| Navigation Item | Description                                                                         |
+| --------------- | ----------------------------------------------------------------------------------- |
+| **Pipelines**   | View and manage processing pipelines (3D conversion, preview generation, and more). |
+| **Workflows**   | Create and manage workflows that chain pipelines together for automated processing. |
 
 #### Admin - Data
 
-| Navigation Item | Description |
-|----------------|-------------|
-| **Metadata Schema** | Define and manage metadata schemas that enforce consistent metadata fields across assets. |
-| **Tags Management** | Create and manage tags and tag types for organizing and classifying assets. |
-| **Subscription Management** | Manage notification subscriptions for asset change events. |
+| Navigation Item             | Description                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| **Metadata Schema**         | Define and manage metadata schemas that enforce consistent metadata fields across assets. |
+| **Tags Management**         | Create and manage tags and tag types for organizing and classifying assets.               |
+| **Subscription Management** | Manage notification subscriptions for asset change events.                                |
 
 #### Admin - Auth
 
-| Navigation Item | Description |
-|----------------|-------------|
-| **Access Control Constraints** | Define fine-grained access control constraints that determine what resources roles can access. |
-| **Roles** | Create and manage roles that group sets of permissions. |
-| **Users in Roles** | Assign users to roles to grant them the associated permissions. |
-| **User Management** | Manage Amazon Cognito user accounts (create, disable, reset passwords). This item is only visible when Amazon Cognito authentication is enabled. |
-| **API Key Management** | Create and manage API keys for programmatic access to VAMS. |
+| Navigation Item                | Description                                                                                                                                      |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Access Control Constraints** | Define fine-grained access control constraints that determine what resources roles can access.                                                   |
+| **Roles**                      | Create and manage roles that group sets of permissions.                                                                                          |
+| **Users in Roles**             | Assign users to roles to grant them the associated permissions.                                                                                  |
+| **User Management**            | Manage Amazon Cognito user accounts (create, disable, reset passwords). This item is only visible when Amazon Cognito authentication is enabled. |
+| **API Key Management**         | Create and manage API keys for programmatic access to VAMS.                                                                                      |
 
 :::info
 The navigation items visible to you depend on your assigned role and permissions. If you do not see a particular item, contact your administrator to request the necessary access.
 :::
-
 
 <!-- Screenshot needed: Full side navigation panel expanded showing all sections -->
 
@@ -131,7 +129,6 @@ Your theme preference is saved in your browser and persists across sessions.
 The dark theme reduces eye strain in low-light environments and is the default. The light theme may be preferable in bright environments or for accessibility needs.
 :::
 
-
 ---
 
 ## Understanding the Header and Footer
@@ -150,9 +147,9 @@ The footer appears at the bottom of every page. If configured by your administra
 
 VAMS uses hash-based routing, which means URLs follow the format `https://your-vams-url/#/path`. For example:
 
-- `https://your-vams-url/#/databases/` -- Databases listing page
-- `https://your-vams-url/#/assets/` -- Asset search page
-- `https://your-vams-url/#/upload/` -- Asset upload page
+-   `https://your-vams-url/#/databases/` -- Databases listing page
+-   `https://your-vams-url/#/assets/` -- Asset search page
+-   `https://your-vams-url/#/upload/` -- Asset upload page
 
 You can bookmark these URLs and share them with colleagues who have appropriate access.
 
@@ -162,6 +159,6 @@ You can bookmark these URLs and share them with colleagues who have appropriate 
 
 Now that you are familiar with the interface, proceed to:
 
-- [Web Interface Overview](web-interface.md) for a detailed tour of each page
-- [Upload Your First Asset](upload-first-asset.md) for a step-by-step tutorial on creating your first database and asset
-- [Asset Management](asset-management.md) for comprehensive guidance on managing assets, files, and versions
+-   [Web Interface Overview](web-interface.md) for a detailed tour of each page
+-   [Upload Your First Asset](upload-first-asset.md) for a step-by-step tutorial on creating your first database and asset
+-   [Asset Management](asset-management.md) for comprehensive guidance on managing assets, files, and versions

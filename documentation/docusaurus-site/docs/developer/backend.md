@@ -4,20 +4,19 @@ This guide covers development patterns for the VAMS Python Lambda backend, inclu
 
 ## Technology Stack
 
-| Component | Details |
-|-----------|---------|
-| Runtime | Python 3.12 (AWS Lambda) |
-| Validation | Pydantic 1.10.7 (v1 only) via `aws-lambda-powertools` |
-| Authorization | Casbin ABAC/RBAC with Amazon DynamoDB policy storage |
-| AWS SDK | boto3 1.34.84 |
-| Search | OpenSearch (opensearch-py 2.5.0) |
-| Logging | AWS Lambda Powertools Logger with custom redaction |
-| Testing | pytest 8.3.4, moto 5.1.0 |
+| Component     | Details                                               |
+| ------------- | ----------------------------------------------------- |
+| Runtime       | Python 3.12 (AWS Lambda)                              |
+| Validation    | Pydantic 1.10.7 (v1 only) via `aws-lambda-powertools` |
+| Authorization | Casbin ABAC/RBAC with Amazon DynamoDB policy storage  |
+| AWS SDK       | boto3 1.34.84                                         |
+| Search        | OpenSearch (opensearch-py 2.5.0)                      |
+| Logging       | AWS Lambda Powertools Logger with custom redaction    |
+| Testing       | pytest 8.3.4, moto 5.1.0                              |
 
 :::warning[Pydantic v1 Only]
 VAMS uses Pydantic **1.10.7**. Never use Pydantic v2 syntax (`model_validator`, `model_dump`, `ConfigDict`). Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from `pydantic` directly. Violations cause import failures in Lambda.
 :::
-
 
 ## Project Structure
 
@@ -98,7 +97,6 @@ your_table = dynamodb.Table(your_table_name)
 :::note[Environment Variable Loading]
 All environment variables must be loaded at module level inside a `try/except` block. Use `os.environ["KEY"]` for required variables and `os.environ.get("KEY")` for optional ones. Never load environment variables inside handler functions.
 :::
-
 
 ### 2. Lambda Handler Entry Point
 
@@ -188,12 +186,12 @@ def get_single_item(event, item_id):
 
 ### 5. Error Handling Hierarchy
 
-| Exception | Response Function | HTTP Status |
-|-----------|------------------|-------------|
-| `ValidationError` (Pydantic) | `validation_error()` | 400 |
-| `VAMSGeneralErrorResponse` | `general_error()` | 400 |
-| Authorization failure | `authorization_error()` | 403 |
-| `Exception` (catch-all) | `internal_error()` | 500 |
+| Exception                    | Response Function       | HTTP Status |
+| ---------------------------- | ----------------------- | ----------- |
+| `ValidationError` (Pydantic) | `validation_error()`    | 400         |
+| `VAMSGeneralErrorResponse`   | `general_error()`       | 400         |
+| Authorization failure        | `authorization_error()` | 403         |
+| `Exception` (catch-all)      | `internal_error()`      | 500         |
 
 All response functions accept an optional `event=` parameter for audit logging. Always pass the event when available.
 
@@ -227,13 +225,12 @@ if not casbin_enforcer.enforce(event, item):
 You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types include: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`.
 :::
 
-
 ### Key Authorization Concepts
 
-- **CasbinEnforcer** uses a 60-second policy cache TTL per user
-- Policy is stored in Amazon DynamoDB (`ConstraintsStorageTable`)
-- Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, and MFA status
-- Roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims
+-   **CasbinEnforcer** uses a 60-second policy cache TTL per user
+-   Policy is stored in Amazon DynamoDB (`ConstraintsStorageTable`)
+-   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, and MFA status
+-   Roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims
 
 ## Pydantic v1 Model Patterns
 
@@ -408,18 +405,18 @@ if not valid:
 
 ### Available Validators
 
-| Validator | Pattern | Use For |
-|-----------|---------|---------|
-| `ID` | `^[-_a-zA-Z0-9]{3,63}$` | databaseId, pipelineId |
-| `ASSET_ID` | filename pattern, max 256 | assetId |
-| `UUID` | Standard UUID format | Unique identifiers |
-| `OBJECT_NAME` | `^[a-zA-Z0-9\-._\s]{1,256}$` | assetName, dbName |
-| `EMAIL` | Email regex | Email addresses |
-| `USERID` | `^[\w\-\.\+\@]{3,256}$` | User identifiers |
-| `FILE_NAME` | No special characters | File names |
-| `STRING_256` | Max 256 chars | Medium strings |
-| `ID_ARRAY` | Array of IDs | Multiple IDs |
-| `STRING_256_ARRAY` | Array of max-256 strings | Tags, lists |
+| Validator          | Pattern                      | Use For                |
+| ------------------ | ---------------------------- | ---------------------- |
+| `ID`               | `^[-_a-zA-Z0-9]{3,63}$`      | databaseId, pipelineId |
+| `ASSET_ID`         | filename pattern, max 256    | assetId                |
+| `UUID`             | Standard UUID format         | Unique identifiers     |
+| `OBJECT_NAME`      | `^[a-zA-Z0-9\-._\s]{1,256}$` | assetName, dbName      |
+| `EMAIL`            | Email regex                  | Email addresses        |
+| `USERID`           | `^[\w\-\.\+\@]{3,256}$`      | User identifiers       |
+| `FILE_NAME`        | No special characters        | File names             |
+| `STRING_256`       | Max 256 chars                | Medium strings         |
+| `ID_ARRAY`         | Array of IDs                 | Multiple IDs           |
+| `STRING_256_ARRAY` | Array of max-256 strings     | Tags, lists            |
 
 ### Regex Patterns for Pydantic Fields
 
@@ -451,9 +448,9 @@ logger.warning(f"Potential issue: {details}")
 
 The logger automatically redacts sensitive fields at all nesting levels:
 
-- `authorization`
-- `idJwtToken`
-- `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
+-   `authorization`
+-   `idJwtToken`
+-   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
 
 ### Audit Logging
 
@@ -487,18 +484,17 @@ Adding a new endpoint requires coordinated changes across multiple files.
 
 ### Checklist
 
-| Step | File | Action |
-|------|------|--------|
-| 1 | `backend/backend/handlers/{domain}/{handler}.py` | Implement Lambda handler |
-| 2 | `backend/backend/models/{domain}.py` | Define Pydantic v1 models |
-| 3 | `infra/lib/lambdaBuilder/{domain}Functions.ts` | Build Lambda with env vars and permissions |
-| 4 | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Attach Lambda to API Gateway route |
-| 5 | `web/src/services/APIService.ts` | Add API call function |
+| Step | File                                                         | Action                                     |
+| ---- | ------------------------------------------------------------ | ------------------------------------------ |
+| 1    | `backend/backend/handlers/{domain}/{handler}.py`             | Implement Lambda handler                   |
+| 2    | `backend/backend/models/{domain}.py`                         | Define Pydantic v1 models                  |
+| 3    | `infra/lib/lambdaBuilder/{domain}Functions.ts`               | Build Lambda with env vars and permissions |
+| 4    | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Attach Lambda to API Gateway route         |
+| 5    | `web/src/services/APIService.ts`                             | Add API call function                      |
 
 :::warning[All Steps Required]
 A handler without an API Gateway route is dead code. A route without a handler returns HTTP 500. Always complete all steps when adding a new endpoint.
 :::
-
 
 ### Handler Template
 
@@ -582,9 +578,9 @@ The file `customAuthLoginProfile.py` controls how user profile information is up
 
 **Common customizations:**
 
-- Fetching additional user attributes from an external identity provider API
-- Populating the `name` field from directory services
-- Enriching the profile with organizational metadata
+-   Fetching additional user attributes from an external identity provider API
+-   Populating the `name` field from directory services
+-   Enriching the profile with organizational metadata
 
 ```python
 # backend/backend/customConfigCommon/customAuthLoginProfile.py
@@ -632,19 +628,19 @@ The `customAuthClaimsCheck` functions are called frequently during VAMS API auth
 
 Avoid these common mistakes in backend development.
 
-| Anti-Pattern | Correct Approach |
-|-------------|-----------------|
-| `from pydantic import BaseModel` | `from aws_lambda_powertools.utilities.parser import BaseModel` |
-| Raw dict responses `{'statusCode': 200, ...}` | Use `success()`, `validation_error()`, etc. |
-| `print()` for logging | Use `logger.info()`, `logger.error()` |
-| Creating boto3 clients inside functions | Create at module level with `retry_config` |
-| Skipping `enforceAPI()` in handler | Always check both auth tiers |
-| Missing `object__type` before `enforce()` | Annotate item before object-level auth |
-| Inline regex validation | Use `validate()` dispatcher |
-| Swallowing exceptions with bare `except: pass` | Log errors and raise `VAMSGeneralErrorResponse` |
+| Anti-Pattern                                   | Correct Approach                                               |
+| ---------------------------------------------- | -------------------------------------------------------------- |
+| `from pydantic import BaseModel`               | `from aws_lambda_powertools.utilities.parser import BaseModel` |
+| Raw dict responses `{'statusCode': 200, ...}`  | Use `success()`, `validation_error()`, etc.                    |
+| `print()` for logging                          | Use `logger.info()`, `logger.error()`                          |
+| Creating boto3 clients inside functions        | Create at module level with `retry_config`                     |
+| Skipping `enforceAPI()` in handler             | Always check both auth tiers                                   |
+| Missing `object__type` before `enforce()`      | Annotate item before object-level auth                         |
+| Inline regex validation                        | Use `validate()` dispatcher                                    |
+| Swallowing exceptions with bare `except: pass` | Log errors and raise `VAMSGeneralErrorResponse`                |
 
 ## Next Steps
 
-- [CDK Infrastructure](cdk.md) -- Lambda builder patterns and API route wiring
-- [Frontend Development](frontend.md) -- Consuming backend APIs from the React frontend
-- [Audit Logging](audit-logging.md) -- Understanding the audit trail system
+-   [CDK Infrastructure](cdk.md) -- Lambda builder patterns and API route wiring
+-   [Frontend Development](frontend.md) -- Consuming backend APIs from the React frontend
+-   [Audit Logging](audit-logging.md) -- Understanding the audit trail system

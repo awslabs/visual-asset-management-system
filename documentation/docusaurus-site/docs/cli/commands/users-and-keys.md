@@ -23,13 +23,13 @@ List all Amazon Cognito users with pagination support.
 vamscli user cognito list [OPTIONS]
 ```
 
-| Option | Type | Description |
-|---|---|---|
-| `--page-size` | INTEGER | Items per page |
-| `--max-items` | INTEGER | Max items (with `--auto-paginate`) |
-| `--starting-token` | TEXT | Pagination token |
-| `--auto-paginate` | Flag | Fetch all items |
-| `--json-output` | Flag | Raw JSON response |
+| Option             | Type    | Description                        |
+| ------------------ | ------- | ---------------------------------- |
+| `--page-size`      | INTEGER | Items per page                     |
+| `--max-items`      | INTEGER | Max items (with `--auto-paginate`) |
+| `--starting-token` | TEXT    | Pagination token                   |
+| `--auto-paginate`  | Flag    | Fetch all items                    |
+| `--json-output`    | Flag    | Raw JSON response                  |
 
 ### user cognito create
 
@@ -39,11 +39,11 @@ Create a new user. Amazon Cognito generates a temporary password returned in the
 vamscli user cognito create -u <USER_ID> -e <EMAIL> [-p <PHONE>] [--json-output]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-u`, `--user-id` | TEXT | Yes | User ID (must be email format) |
-| `-e`, `--email` | TEXT | Yes | Email address |
-| `-p`, `--phone` | TEXT | No | Phone number in E.164 format (e.g., `+12345678900`) |
+| Option            | Type | Required | Description                                         |
+| ----------------- | ---- | -------- | --------------------------------------------------- |
+| `-u`, `--user-id` | TEXT | Yes      | User ID (must be email format)                      |
+| `-e`, `--email`   | TEXT | Yes      | Email address                                       |
+| `-p`, `--phone`   | TEXT | No       | Phone number in E.164 format (e.g., `+12345678900`) |
 
 :::tip[Phone Number Format]
 Phone numbers must be in E.164 format: `+` followed by country code and number with no spaces or dashes. Examples: `+12345678900` (US), `+442071234567` (UK).
@@ -104,13 +104,13 @@ Create a new API key.
 vamscli api-key create [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `--name` | TEXT | Yes | Name for the API key (immutable after creation) |
-| `--user-id` | TEXT | Yes | VAMS user ID this key acts as (must have roles assigned) |
-| `--description` | TEXT | Yes | Description |
-| `--expires-at` | TEXT | No | Expiration date in ISO 8601 format |
-| `--json-output` | Flag | No | Raw JSON response |
+| Option          | Type | Required | Description                                              |
+| --------------- | ---- | -------- | -------------------------------------------------------- |
+| `--name`        | TEXT | Yes      | Name for the API key (immutable after creation)          |
+| `--user-id`     | TEXT | Yes      | VAMS user ID this key acts as (must have roles assigned) |
+| `--description` | TEXT | Yes      | Description                                              |
+| `--expires-at`  | TEXT | No       | Expiration date in ISO 8601 format                       |
+| `--json-output` | Flag | No       | Raw JSON response                                        |
 
 ```bash
 vamscli api-key create --name "CI Pipeline" --user-id ci-bot@example.com --description "CI/CD access"
@@ -125,12 +125,12 @@ Update description, expiration, or active status. At least one field must be pro
 vamscli api-key update --api-key-id <UUID> [OPTIONS]
 ```
 
-| Option | Type | Description |
-|---|---|---|
-| `--api-key-id` | TEXT | API key ID (required) |
-| `--description` | TEXT | New description |
-| `--expires-at` | TEXT | New expiration (empty string `""` to clear) |
-| `--is-active` | CHOICE | `true` or `false` |
+| Option          | Type   | Description                                 |
+| --------------- | ------ | ------------------------------------------- |
+| `--api-key-id`  | TEXT   | API key ID (required)                       |
+| `--description` | TEXT   | New description                             |
+| `--expires-at`  | TEXT   | New expiration (empty string `""` to clear) |
+| `--is-active`   | CHOICE | `true` or `false`                           |
 
 ```bash
 vamscli api-key update --api-key-id UUID --description "Updated description"
@@ -186,6 +186,6 @@ vamscli api-key delete --api-key-id OLD_KEY_ID
 
 ## Related Pages
 
-- [Setup and Authentication](setup-and-auth.md)
-- [Permission Commands](permissions.md)
-- [API Keys User Guide](../../user-guide/api-keys.md)
+-   [Setup and Authentication](setup-and-auth.md)
+-   [Permission Commands](permissions.md)
+-   [API Keys User Guide](../../user-guide/api-keys.md)

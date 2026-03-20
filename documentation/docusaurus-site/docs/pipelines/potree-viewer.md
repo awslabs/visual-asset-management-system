@@ -4,17 +4,16 @@ The Potree Point Cloud Viewer pipeline converts point cloud files into the Potre
 
 ## Supported Formats
 
-| Format | Extension | Notes |
-|:---|:---|:---|
-| E57 | `.e57` | ASTM standard for 3D imaging data. Requires PDAL pre-processing to LAZ before octree conversion. |
-| PLY | `.ply` | Polygon File Format. Requires PDAL pre-processing to LAZ before octree conversion. |
-| LAS | `.las` | ASPRS LiDAR data exchange format. Directly processed by PotreeConverter. |
-| LAZ | `.laz` | Compressed LAS format. Directly processed by PotreeConverter. |
+| Format | Extension | Notes                                                                                            |
+| :----- | :-------- | :----------------------------------------------------------------------------------------------- |
+| E57    | `.e57`    | ASTM standard for 3D imaging data. Requires PDAL pre-processing to LAZ before octree conversion. |
+| PLY    | `.ply`    | Polygon File Format. Requires PDAL pre-processing to LAZ before octree conversion.               |
+| LAS    | `.las`    | ASPRS LiDAR data exchange format. Directly processed by PotreeConverter.                         |
+| LAZ    | `.laz`    | Compressed LAS format. Directly processed by PotreeConverter.                                    |
 
 :::info[Two-Stage Processing]
 E57 and PLY files require a two-stage pipeline: first, PDAL converts the file to LAZ format, then PotreeConverter generates the octree. LAS and LAZ files skip the PDAL stage and go directly to PotreeConverter.
 :::
-
 
 ## Architecture
 
@@ -48,8 +47,8 @@ flowchart LR
 
 The `constructPipeline` Lambda function inspects the input file extension and builds a pipeline definition with either one or two stages:
 
-- **E57 and PLY files**: Two stages -- PDAL converts the file to LAZ, then PotreeConverter generates the octree from the intermediate LAZ file.
-- **LAS and LAZ files**: Single stage -- PotreeConverter processes the file directly into the octree format.
+-   **E57 and PLY files**: Two stages -- PDAL converts the file to LAZ, then PotreeConverter generates the octree from the intermediate LAZ file.
+-   **LAS and LAZ files**: Single stage -- PotreeConverter processes the file directly into the octree format.
 
 ### Output Location
 
@@ -81,11 +80,11 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option | Default | Description |
-|:---|:---|:---|
-| `enabled` | `false` | Deploy the Potree viewer pipeline infrastructure. Enables the global VPC. |
-| `autoRegisterWithVAMS` | `false` | Automatically register the pipeline and workflow in the global VAMS database during CDK deployment. |
-| `autoRegisterAutoTriggerOnFileUpload` | `true` | Automatically trigger the pipeline when E57, PLY, LAS, or LAZ files are uploaded. Requires `autoRegisterWithVAMS` to be enabled. |
+| Option                                | Default | Description                                                                                                                      |
+| :------------------------------------ | :------ | :------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                             | `false` | Deploy the Potree viewer pipeline infrastructure. Enables the global VPC.                                                        |
+| `autoRegisterWithVAMS`                | `false` | Automatically register the pipeline and workflow in the global VAMS database during CDK deployment.                              |
+| `autoRegisterAutoTriggerOnFileUpload` | `true`  | Automatically trigger the pipeline when E57, PLY, LAS, or LAZ files are uploaded. Requires `autoRegisterWithVAMS` to be enabled. |
 
 ## Prerequisites
 
@@ -97,13 +96,12 @@ This pipeline runs on AWS Batch with AWS Fargate compute. Enabling it automatica
 
 The pipeline container image is built from the Dockerfile located at `backendPipelines/preview/pcPotreeViewer/container/Dockerfile` during CDK deployment and stored in Amazon ECR. The container includes:
 
-- **PDAL** -- Point Data Abstraction Library for format translation
-- **PotreeConverter** -- Generates the octree structure for web-based viewing
+-   **PDAL** -- Point Data Abstraction Library for format translation
+-   **PotreeConverter** -- Generates the octree structure for web-based viewing
 
 :::warning[License Notice]
 This pipeline uses a third-party open-source library with a GPL license. Refer to your legal team before enabling this pipeline in production. See the NOTICE file in the pipeline directory for details.
 :::
-
 
 ## How It Works
 
@@ -117,18 +115,18 @@ This pipeline uses a third-party open-source library with a GPL license. Refer t
 
 The following AWS resources are created when this pipeline is enabled:
 
-| Resource | Service | Purpose |
-|:---|:---|:---|
-| Fargate Compute Environment | AWS Batch | Serverless container execution |
-| Job Queue | AWS Batch | Job scheduling and prioritization |
-| Job Definition | AWS Batch | Container configuration and resource limits |
-| Container Image | Amazon ECR | PDAL + PotreeConverter container |
-| Step Functions State Machine | AWS Step Functions | Workflow orchestration |
-| Lambda Functions (5) | AWS Lambda | Pipeline coordination (vamsExecute, constructPipeline, openPipeline, sqsExecute, pipelineEnd) |
-| SQS Queue | Amazon SQS | Event-driven pipeline triggering |
+| Resource                     | Service            | Purpose                                                                                       |
+| :--------------------------- | :----------------- | :-------------------------------------------------------------------------------------------- |
+| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                                |
+| Job Queue                    | AWS Batch          | Job scheduling and prioritization                                                             |
+| Job Definition               | AWS Batch          | Container configuration and resource limits                                                   |
+| Container Image              | Amazon ECR         | PDAL + PotreeConverter container                                                              |
+| Step Functions State Machine | AWS Step Functions | Workflow orchestration                                                                        |
+| Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, constructPipeline, openPipeline, sqsExecute, pipelineEnd) |
+| SQS Queue                    | Amazon SQS         | Event-driven pipeline triggering                                                              |
 
 ## Related Resources
 
-- [Pipeline System Overview](overview.md)
-- [3D Preview Thumbnail Pipeline](3d-thumbnail.md) -- generates static and animated previews for point clouds and other 3D formats
-![Pipeline Architecture](/img/pipeline_usecase_previewPotreeViewer.png)
+-   [Pipeline System Overview](overview.md)
+-   [3D Preview Thumbnail Pipeline](3d-thumbnail.md) -- generates static and animated previews for point clouds and other 3D formats
+    ![Pipeline Architecture](/img/pipeline_usecase_previewPotreeViewer.png)

@@ -35,10 +35,10 @@ graph LR
 
 In this mode:
 
-- Amazon CloudFront serves the React web application from an Amazon S3 origin bucket
-- API requests are proxied through Amazon CloudFront to Amazon API Gateway V2
-- An optional AWS WAF Web ACL (deployed in `us-east-1`) protects the distribution
-- Custom domain names are supported via `useCloudFront.customDomain` configuration with an AWS Certificate Manager certificate and optional Amazon Route 53 hosted zone
+-   Amazon CloudFront serves the React web application from an Amazon S3 origin bucket
+-   API requests are proxied through Amazon CloudFront to Amazon API Gateway V2
+-   An optional AWS WAF Web ACL (deployed in `us-east-1`) protects the distribution
+-   Custom domain names are supported via `useCloudFront.customDomain` configuration with an AWS Certificate Manager certificate and optional Amazon Route 53 hosted zone
 
 ### Application Load Balancer Deployment (GovCloud / ALB Mode)
 
@@ -71,11 +71,11 @@ graph LR
 
 In this mode:
 
-- An Application Load Balancer serves the web application and proxies API requests
-- The ALB requires a domain host name and an AWS Certificate Manager certificate ARN
-- The ALB can be deployed in public or private subnets (`useAlb.usePublicSubnet`)
-- An optional AWS WAF Web ACL (regional) protects the ALB
-- VPC is required (`useGlobalVpc.enabled = true`)
+-   An Application Load Balancer serves the web application and proxies API requests
+-   The ALB requires a domain host name and an AWS Certificate Manager certificate ARN
+-   The ALB can be deployed in public or private subnets (`useAlb.usePublicSubnet`)
+-   An optional AWS WAF Web ACL (regional) protects the ALB
+-   VPC is required (`useGlobalVpc.enabled = true`)
 
 ### VPC-Isolated Deployment (GovCloud)
 
@@ -128,55 +128,54 @@ graph TD
 
 VAMS supports three VPC modes:
 
-| Mode | Configuration | Description |
-|---|---|---|
-| **No VPC** | `useGlobalVpc.enabled = false` | Default for commercial. Lambda functions run outside VPC. |
-| **VAMS-Managed VPC** | `useGlobalVpc.enabled = true`, no `optionalExternalVpcId` | VAMS creates a new VPC with configured CIDR range. |
-| **External VPC Import** | `useGlobalVpc.enabled = true` + `optionalExternalVpcId` | VAMS imports an existing VPC and specified subnets. |
+| Mode                    | Configuration                                             | Description                                               |
+| ----------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| **No VPC**              | `useGlobalVpc.enabled = false`                            | Default for commercial. Lambda functions run outside VPC. |
+| **VAMS-Managed VPC**    | `useGlobalVpc.enabled = true`, no `optionalExternalVpcId` | VAMS creates a new VPC with configured CIDR range.        |
+| **External VPC Import** | `useGlobalVpc.enabled = true` + `optionalExternalVpcId`   | VAMS imports an existing VPC and specified subnets.       |
 
 ### VAMS-Managed VPC Configuration
 
 When VAMS creates its own VPC, the following subnet types are provisioned:
 
-| Subnet Type | CIDR Mask | Purpose | Always Created |
-|---|---|---|---|
-| **Isolated** (`PRIVATE_ISOLATED`) | /23 (510 usable IPs) | Lambda functions, VPC endpoints | Yes |
-| **Private** (`PRIVATE_WITH_EGRESS`) | /26 (62 usable IPs) | Pipeline compute (AWS Batch with NAT Gateway) | Conditional |
-| **Public** | /26 (62 usable IPs) | ALB, pipeline compute requiring internet | Conditional |
+| Subnet Type                         | CIDR Mask            | Purpose                                       | Always Created |
+| ----------------------------------- | -------------------- | --------------------------------------------- | -------------- |
+| **Isolated** (`PRIVATE_ISOLATED`)   | /23 (510 usable IPs) | Lambda functions, VPC endpoints               | Yes            |
+| **Private** (`PRIVATE_WITH_EGRESS`) | /26 (62 usable IPs)  | Pipeline compute (AWS Batch with NAT Gateway) | Conditional    |
+| **Public**                          | /26 (62 usable IPs)  | ALB, pipeline compute requiring internet      | Conditional    |
 
 Private and public subnets are created when any of the following are enabled:
 
-- ALB with public subnet (`useAlb.usePublicSubnet`)
-- RapidPipeline ECS or EKS
-- ModelOps pipeline
-- Splat Toolbox pipeline
-- Isaac Lab Training pipeline
+-   ALB with public subnet (`useAlb.usePublicSubnet`)
+-   RapidPipeline ECS or EKS
+-   ModelOps pipeline
+-   Splat Toolbox pipeline
+-   Isaac Lab Training pipeline
 
 ### Availability Zone Configuration
 
 The number of availability zones is determined by the deployment configuration:
 
-| Condition | AZ Count |
-|---|---|
-| Amazon OpenSearch Service (Provisioned) | 3 AZs |
-| ALB enabled, or all Lambdas in VPC, or RapidPipeline EKS | 2 AZs |
-| Pipeline-only (no ALB, no all-Lambda VPC) | 1 AZ |
+| Condition                                                | AZ Count |
+| -------------------------------------------------------- | -------- |
+| Amazon OpenSearch Service (Provisioned)                  | 3 AZs    |
+| ALB enabled, or all Lambdas in VPC, or RapidPipeline EKS | 2 AZs    |
+| Pipeline-only (no ALB, no all-Lambda VPC)                | 1 AZ     |
 
 ### External VPC Import
 
 When importing an existing VPC, subnet IDs must be provided for each subnet type:
 
-| Configuration | Description |
-|---|---|
-| `optionalExternalVpcId` | VPC ID to import |
+| Configuration                       | Description                         |
+| ----------------------------------- | ----------------------------------- |
+| `optionalExternalVpcId`             | VPC ID to import                    |
 | `optionalExternalIsolatedSubnetIds` | Comma-separated isolated subnet IDs |
-| `optionalExternalPrivateSubnetIds` | Comma-separated private subnet IDs |
-| `optionalExternalPublicSubnetIds` | Comma-separated public subnet IDs |
+| `optionalExternalPrivateSubnetIds`  | Comma-separated private subnet IDs  |
+| `optionalExternalPublicSubnetIds`   | Comma-separated public subnet IDs   |
 
 :::warning[Context Loading]
 When importing a VPC, you may need to run an initial `cdk synth` with `loadContextIgnoreVPCStacks = true` to populate the CDK context with VPC metadata before the full deployment.
 :::
-
 
 ## VPC Endpoints
 
@@ -186,55 +185,54 @@ When `useGlobalVpc.addVpcEndpoints = true`, VAMS creates VPC endpoints to enable
 
 These gateway endpoints are always created when VPC endpoints are enabled:
 
-| Endpoint | Service | Subnets |
-|---|---|---|
-| Amazon S3 | `GatewayVpcEndpointAwsService.S3` | Isolated |
+| Endpoint        | Service                                 | Subnets  |
+| --------------- | --------------------------------------- | -------- |
+| Amazon S3       | `GatewayVpcEndpointAwsService.S3`       | Isolated |
 | Amazon DynamoDB | `GatewayVpcEndpointAwsService.DYNAMODB` | Isolated |
 
 ### Common Interface Endpoints
 
 These interface endpoints are always created when VPC endpoints are enabled:
 
-| Endpoint | Service | Purpose |
-|---|---|---|
-| Amazon API Gateway | `APIGATEWAY` | API Gateway invocations |
-| AWS Systems Manager (SSM) | `SSM` | Parameter Store access |
-| AWS Lambda | `LAMBDA` | Lambda-to-Lambda invocations |
-| AWS STS | `STS` | Credential federation |
-| Amazon CloudWatch Logs | `CLOUDWATCH_LOGS` | Log delivery |
-| AWS Step Functions | `STEP_FUNCTIONS` | Workflow execution |
-| Amazon SNS | `SNS` | Event notifications |
-| Amazon SQS | `SQS` | Queue operations |
+| Endpoint                  | Service           | Purpose                      |
+| ------------------------- | ----------------- | ---------------------------- |
+| Amazon API Gateway        | `APIGATEWAY`      | API Gateway invocations      |
+| AWS Systems Manager (SSM) | `SSM`             | Parameter Store access       |
+| AWS Lambda                | `LAMBDA`          | Lambda-to-Lambda invocations |
+| AWS STS                   | `STS`             | Credential federation        |
+| Amazon CloudWatch Logs    | `CLOUDWATCH_LOGS` | Log delivery                 |
+| AWS Step Functions        | `STEP_FUNCTIONS`  | Workflow execution           |
+| Amazon SNS                | `SNS`             | Event notifications          |
+| Amazon SQS                | `SQS`             | Queue operations             |
 
 ### Conditional Interface Endpoints
 
 These endpoints are created based on the deployment configuration:
 
-| Endpoint | Condition | Purpose |
-|---|---|---|
-| AWS KMS | `useKmsCmkEncryption.enabled` | KMS key operations |
-| AWS KMS (FIPS) | `useKmsCmkEncryption.enabled` + `useFips` | FIPS-compliant KMS |
-| AWS Batch | Any pipeline enabled | Pipeline job submission |
-| Amazon ECR API | Any pipeline enabled | Container image registry |
-| Amazon ECR Docker | Any pipeline enabled | Container image pulls |
-| Amazon ECS | Pipeline with compute needs | Container orchestration |
-| Amazon ECS Agent | Isaac Lab Training | ECS agent communication |
-| Amazon ECS Telemetry | Isaac Lab Training | ECS telemetry |
-| Amazon Bedrock Runtime | GenAI Metadata + all Lambdas in VPC | AI model invocation |
-| Amazon Rekognition | GenAI Metadata + all Lambdas in VPC | Image analysis |
+| Endpoint               | Condition                                 | Purpose                  |
+| ---------------------- | ----------------------------------------- | ------------------------ |
+| AWS KMS                | `useKmsCmkEncryption.enabled`             | KMS key operations       |
+| AWS KMS (FIPS)         | `useKmsCmkEncryption.enabled` + `useFips` | FIPS-compliant KMS       |
+| AWS Batch              | Any pipeline enabled                      | Pipeline job submission  |
+| Amazon ECR API         | Any pipeline enabled                      | Container image registry |
+| Amazon ECR Docker      | Any pipeline enabled                      | Container image pulls    |
+| Amazon ECS             | Pipeline with compute needs               | Container orchestration  |
+| Amazon ECS Agent       | Isaac Lab Training                        | ECS agent communication  |
+| Amazon ECS Telemetry   | Isaac Lab Training                        | ECS telemetry            |
+| Amazon Bedrock Runtime | GenAI Metadata + all Lambdas in VPC       | AI model invocation      |
+| Amazon Rekognition     | GenAI Metadata + all Lambdas in VPC       | Image analysis           |
 
 ### Pipeline-Required Endpoints
 
 The following endpoints are created when any of these pipelines are enabled: Point Cloud Potree Viewer, 3D Preview Thumbnail, GenAI Metadata Labeling, RapidPipeline (ECS/EKS), ModelOps, Splat Toolbox, or Isaac Lab Training.
 
-- AWS Batch
-- Amazon ECR API
-- Amazon ECR Docker
+-   AWS Batch
+-   Amazon ECR API
+-   Amazon ECR Docker
 
 :::info[ECS Endpoint Consolidation]
 Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled. VAMS consolidates ECS endpoint subnets across pipeline types, with private subnets taking priority over isolated subnets when both are needed.
 :::
-
 
 ## Security Groups
 
@@ -242,12 +240,12 @@ Only one Amazon ECS interface endpoint can exist per VPC when private DNS is ena
 
 A single security group is created for all VPC endpoints with the following rules:
 
-| Direction | Protocol | Port | Source | Purpose |
-|---|---|---|---|---|
-| Ingress | TCP | 443 | VPC CIDR | HTTPS access to endpoints |
-| Ingress | TCP | 53 | VPC CIDR | DNS resolution for ECR |
-| Ingress | UDP | 53 | VPC CIDR | DNS resolution for ECR |
-| Egress | All | All | 0.0.0.0/0 | Allow all outbound |
+| Direction | Protocol | Port | Source    | Purpose                   |
+| --------- | -------- | ---- | --------- | ------------------------- |
+| Ingress   | TCP      | 443  | VPC CIDR  | HTTPS access to endpoints |
+| Ingress   | TCP      | 53   | VPC CIDR  | DNS resolution for ECR    |
+| Ingress   | UDP      | 53   | VPC CIDR  | DNS resolution for ECR    |
+| Egress    | All      | All  | 0.0.0.0/0 | Allow all outbound        |
 
 ### Pipeline Security Groups
 
@@ -257,12 +255,12 @@ Each pipeline construct creates its own security group with VPC CIDR-based ingre
 
 When VAMS creates a managed VPC, VPC flow logs are automatically enabled:
 
-| Setting | Value |
-|---|---|
-| Destination | Amazon CloudWatch Logs |
-| Traffic Type | ALL |
-| Log Group | `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` |
-| Retention | 10 years |
+| Setting      | Value                                          |
+| ------------ | ---------------------------------------------- |
+| Destination  | Amazon CloudWatch Logs                         |
+| Traffic Type | ALL                                            |
+| Log Group    | `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` |
+| Retention    | 10 years                                       |
 
 ## DNS Configuration
 
@@ -270,8 +268,8 @@ All interface VPC endpoints are created with `privateDnsEnabled: true`. This all
 
 VAMS VPCs are created with:
 
-- `enableDnsHostnames: true`
-- `enableDnsSupport: true`
+-   `enableDnsHostnames: true`
+-   `enableDnsSupport: true`
 
 ## FIPS Endpoint Usage
 
@@ -279,19 +277,18 @@ When `useFips = true`, the partition-aware service helper (`service-helper.ts`) 
 
 For example:
 
-| Service | Standard Hostname | FIPS Hostname |
-|---|---|---|
-| Amazon S3 | `s3.{region}.amazonaws.com` | `s3-fips.{region}.amazonaws.com` |
+| Service         | Standard Hostname                 | FIPS Hostname                          |
+| --------------- | --------------------------------- | -------------------------------------- |
+| Amazon S3       | `s3.{region}.amazonaws.com`       | `s3-fips.{region}.amazonaws.com`       |
 | Amazon DynamoDB | `dynamodb.{region}.amazonaws.com` | `dynamodb-fips.{region}.amazonaws.com` |
-| AWS STS | `sts.{region}.amazonaws.com` | `sts-fips.{region}.amazonaws.com` |
+| AWS STS         | `sts.{region}.amazonaws.com`      | `sts-fips.{region}.amazonaws.com`      |
 
 :::note[GovCloud FIPS]
 In AWS GovCloud, all endpoints are inherently FIPS-compliant. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
 :::
 
-
 ## Next Steps
 
-- [Security Architecture](security.md) -- Encryption, authorization, and compliance
-- [AWS Resources](aws-resources.md) -- Complete resource inventory
-- [Architecture Overview](overview.md) -- High-level system design
+-   [Security Architecture](security.md) -- Encryption, authorization, and compliance
+-   [AWS Resources](aws-resources.md) -- Complete resource inventory
+-   [Architecture Overview](overview.md) -- High-level system design

@@ -16,11 +16,11 @@ VAMS centralizes manufacturing visual assets in Amazon S3 with metadata-rich org
 
 **Key features used:**
 
-- Three.js viewer with CAD format support (STEP, IGES, BREP via WebAssembly)
-- CAD/Mesh Metadata Extraction pipeline for automated property extraction
-- Asset versioning with alias naming for engineering revision tracking
-- Metadata schemas for standardized part number and BOM (Bill of Materials) tracking
-- Fine-grained access control to separate product lines and restrict access by team
+-   Three.js viewer with CAD format support (STEP, IGES, BREP via WebAssembly)
+-   CAD/Mesh Metadata Extraction pipeline for automated property extraction
+-   Asset versioning with alias naming for engineering revision tracking
+-   Metadata schemas for standardized part number and BOM (Bill of Materials) tracking
+-   Fine-grained access control to separate product lines and restrict access by team
 
 ---
 
@@ -36,12 +36,12 @@ VAMS ingests point cloud data (E57, LAS, LAZ) and processes it through the Potre
 
 **Key features used:**
 
-- Potree viewer and pipeline for point cloud streaming and visualization
-- CesiumJS viewer for 3D tileset viewing with geospatial context
-- Online 3D Viewer for BIM format support (.bim)
-- Amazon Location Service integration for project site mapping on database pages
-- Cross-database asset linking for multi-site project relationships
-- Subscription and comment system for stakeholder review workflows
+-   Potree viewer and pipeline for point cloud streaming and visualization
+-   CesiumJS viewer for 3D tileset viewing with geospatial context
+-   Online 3D Viewer for BIM format support (.bim)
+-   Amazon Location Service integration for project site mapping on database pages
+-   Cross-database asset linking for multi-site project relationships
+-   Subscription and comment system for stakeholder review workflows
 
 ---
 
@@ -53,16 +53,16 @@ Energy companies maintain large inventories of facility scans, infrastructure mo
 
 ### How VAMS Solves It
 
-VAMS deploys within the customer's AWS account, supporting AWS GovCloud (US)  for data residency and compliance. Point cloud scans from facility inspections are processed through the Potree pipeline for web-based viewing. The two-tier ABAC/RBAC permission system enables precise access control by site, region, or organizational role.
+VAMS deploys within the customer's AWS account, supporting AWS GovCloud (US) for data residency and compliance. Point cloud scans from facility inspections are processed through the Potree pipeline for web-based viewing. The two-tier ABAC/RBAC permission system enables precise access control by site, region, or organizational role.
 
 **Key features used:**
 
-- AWS GovCloud (US) deployment with FIPS endpoint support
-- VPC-isolated deployment support for restricted environments
-- Potree pipeline for facility scan processing and visualization
-- Permission templates for role-based access by facility or region
-- AWS KMS CMK encryption for all data at rest
-- Tag-based asset classification for regulatory and inspection categorization
+-   AWS GovCloud (US) deployment with FIPS endpoint support
+-   VPC-isolated deployment support for restricted environments
+-   Potree pipeline for facility scan processing and visualization
+-   Permission templates for role-based access by facility or region
+-   AWS KMS CMK encryption for all data at rest
+-   Tag-based asset classification for regulatory and inspection categorization
 
 ---
 
@@ -78,12 +78,12 @@ VAMS provides CesiumJS integration for viewing 3D tilesets with full geospatial 
 
 **Key features used:**
 
-- CesiumJS viewer for 3D tileset visualization with geospatial context
-- Potree viewer and pipeline for point cloud streaming
-- Amazon OpenSearch Service for full-text and attribute-based asset search
-- Database-level metadata with location coordinates for spatial organization
-- External Amazon S3 bucket support for integrating existing geospatial data stores
-- API access for integration with GIS platforms and downstream processing systems
+-   CesiumJS viewer for 3D tileset visualization with geospatial context
+-   Potree viewer and pipeline for point cloud streaming
+-   Amazon OpenSearch Service for full-text and attribute-based asset search
+-   Database-level metadata with location coordinates for spatial organization
+-   External Amazon S3 bucket support for integrating existing geospatial data stores
+-   API access for integration with GIS platforms and downstream processing systems
 
 ---
 
@@ -99,12 +99,12 @@ VAMS provides centralized management of simulation assets with the NVIDIA Isaac 
 
 **Key features used:**
 
-- NVIDIA Isaac Lab Training pipeline for reinforcement learning training and evaluation
-- Needle USD Viewer for Universal Scene Description file visualization
-- Gaussian Splat pipelines (BabylonJS and PlayCanvas viewers, 3D Reconstruction Toolkit pipeline)
-- Workflow system for chaining asset processing steps
-- API and CLI access for CI/CD integration with robotics development pipelines
-- Metadata schemas for tracking simulation parameters and training configurations
+-   NVIDIA Isaac Lab Training pipeline for reinforcement learning training and evaluation
+-   Needle USD Viewer for Universal Scene Description file visualization
+-   Gaussian Splat pipelines (BabylonJS and PlayCanvas viewers, 3D Reconstruction Toolkit pipeline)
+-   Workflow system for chaining asset processing steps
+-   API and CLI access for CI/CD integration with robotics development pipelines
+-   Metadata schemas for tracking simulation parameters and training configurations
 
 ---
 
@@ -120,12 +120,12 @@ VAMS serves as the central asset repository for digital twin 3D models, with the
 
 **Key features used:**
 
-- Garnet Framework addon for NGSI-LD digital twin knowledge graph synchronization
-- Asset versioning with alias naming for tracking as-built model revisions
-- Cross-database asset linking for connecting related twin representations
-- Multiple viewer plugins for visualizing different aspects of the digital twin
-- Automated pipeline processing for updating derived representations on asset change
-- REST API for integration with IoT platforms and operational data systems
+-   Garnet Framework addon for NGSI-LD digital twin knowledge graph synchronization
+-   Asset versioning with alias naming for tracking as-built model revisions
+-   Cross-database asset linking for connecting related twin representations
+-   Multiple viewer plugins for visualizing different aspects of the digital twin
+-   Automated pipeline processing for updating derived representations on asset change
+-   REST API for integration with IoT platforms and operational data systems
 
 ---
 
@@ -141,12 +141,12 @@ VAMS provides a unified library for all visual and media assets with dedicated v
 
 **Key features used:**
 
-- 17 viewer plugins covering 3D, video, audio, image, document, and data formats
-- 3D Preview Thumbnail pipeline for generating animated GIF previews of 3D assets
-- Comment system with rich text for collaborative asset review
-- Permission templates for external collaborator access (database-readonly, database-user)
-- Asset versioning for tracking production iterations
-- Bulk upload and download with the VamsCLI for production asset pipelines
+-   17 viewer plugins covering 3D, video, audio, image, document, and data formats
+-   3D Preview Thumbnail pipeline for generating animated GIF previews of 3D assets
+-   Comment system with rich text for collaborative asset review
+-   Permission templates for external collaborator access (database-readonly, database-user)
+-   Asset versioning for tracking production iterations
+-   Bulk upload and download with the VamsCLI for production asset pipelines
 
 ---
 
@@ -162,13 +162,13 @@ VAMS provides automated 3D format conversion through the 3D Conversion Basic pip
 
 **Key features used:**
 
-- Three.js viewer for game asset inspection (GLTF, GLB, OBJ, FBX, STL, and more)
-- 3D Conversion Basic pipeline for automated format conversion
-- RapidPipeline integration for asset optimization (licensed)
-- VNTANA ModelOps for advanced spatial data optimization (licensed)
-- Gaussian Splat viewers and pipeline for photogrammetry-based environment capture
-- Workflow system for chaining conversion, optimization, and quality validation steps
-- VamsCLI for automated asset ingestion from build pipelines
+-   Three.js viewer for game asset inspection (GLTF, GLB, OBJ, FBX, STL, and more)
+-   3D Conversion Basic pipeline for automated format conversion
+-   RapidPipeline integration for asset optimization (licensed)
+-   VNTANA ModelOps for advanced spatial data optimization (licensed)
+-   Gaussian Splat viewers and pipeline for photogrammetry-based environment capture
+-   Workflow system for chaining conversion, optimization, and quality validation steps
+-   VamsCLI for automated asset ingestion from build pipelines
 
 ---
 
@@ -184,13 +184,13 @@ VAMS deploys entirely within your AWS account, including AWS GovCloud (US) regio
 
 **Key features used:**
 
-- AWS GovCloud (US) deployment with FIPS endpoint support
-- Two-tier ABAC/RBAC authorization for fine-grained access control
-- VPC isolation with VPC endpoints for restricted environments
-- NVIDIA Isaac Lab pipeline for simulation training and evaluation
-- Potree pipeline for point cloud web visualization of facility scans
-- Asset versioning with lineage tracking
-- Custom pipeline extensibility for specialized processing requirements
+-   AWS GovCloud (US) deployment with FIPS endpoint support
+-   Two-tier ABAC/RBAC authorization for fine-grained access control
+-   VPC isolation with VPC endpoints for restricted environments
+-   NVIDIA Isaac Lab pipeline for simulation training and evaluation
+-   Potree pipeline for point cloud web visualization of facility scans
+-   Asset versioning with lineage tracking
+-   Custom pipeline extensibility for specialized processing requirements
 
 ---
 
@@ -206,12 +206,12 @@ VAMS provides structured dataset management with metadata schemas, versioning, a
 
 **Key features used:**
 
-- GenAI Metadata Labeling pipeline for automated asset tagging via Amazon Bedrock
-- Metadata schemas with typed fields for structured dataset annotation
-- Asset versioning for tracking dataset iterations
-- OpenSearch-powered search for dataset discovery and curation
-- VamsCLI for bulk dataset ingestion and metadata export
-- REST API for integration with training pipelines
+-   GenAI Metadata Labeling pipeline for automated asset tagging via Amazon Bedrock
+-   Metadata schemas with typed fields for structured dataset annotation
+-   Asset versioning for tracking dataset iterations
+-   OpenSearch-powered search for dataset discovery and curation
+-   VamsCLI for bulk dataset ingestion and metadata export
+-   REST API for integration with training pipelines
 
 ---
 
@@ -227,12 +227,12 @@ VAMS centralizes both design models and as-built scan data in a versioned, searc
 
 **Key features used:**
 
-- Potree pipeline for automated point cloud web viewing
-- Asset versioning for tracking design iterations and as-built captures
-- Metadata schemas for build compliance tracking
-- 3D Preview Thumbnail pipeline for visual overview of scans
-- Cross-database asset linking for relating design models to as-built scans
-- Tag-based organization for tracking construction phases and zones
+-   Potree pipeline for automated point cloud web viewing
+-   Asset versioning for tracking design iterations and as-built captures
+-   Metadata schemas for build compliance tracking
+-   3D Preview Thumbnail pipeline for visual overview of scans
+-   Cross-database asset linking for relating design models to as-built scans
+-   Tag-based organization for tracking construction phases and zones
 
 :::tip[Pipeline Extensibility]
 If your use case requires processing capabilities beyond the built-in pipelines, VAMS supports custom pipelines using AWS Lambda, Amazon SQS, or Amazon EventBridge execution types. See the [Developer Guide](../developer/setup.md) for instructions on writing custom pipelines.

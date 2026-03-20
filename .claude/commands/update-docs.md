@@ -15,18 +15,20 @@ Update VAMS documentation based on recent code changes.
 11. Report what was updated and any pages that may need manual review (e.g., screenshots)
 
 ## Important Docusaurus syntax notes:
-- Admonitions use `:::note` / `:::warning` / `:::tip` / `:::danger` / `:::info` (NOT MkDocs `!!!`)
-- Curly braces in text must be escaped as `\{variable\}` outside code blocks
-- Images reference `/img/` path (maps to `static/img/`)
-- New pages must be added to `sidebars.ts`
+
+-   Admonitions use `:::note` / `:::warning` / `:::tip` / `:::danger` / `:::info` (NOT MkDocs `!!!`)
+-   Curly braces in text must be escaped as `\{variable\}` outside code blocks
+-   Images reference `/img/` path (maps to `static/img/`)
+-   New pages must be added to `sidebars.ts`
 
 ## Key source-to-doc mappings:
-- `backend/backend/handlers/` → `docs/api/` pages
-- `backend/backend/models/` → `docs/api/` pages (request/response models)
-- `infra/config/config.ts` → `docs/deployment/configuration-reference.md`
-- `infra/lib/lambdaBuilder/` → `docs/architecture/aws-resources.md`
-- `infra/lib/nestedStacks/storage/` → `docs/architecture/data-model.md`
-- `web/src/visualizerPlugin/config/viewerConfig.json` → `docs/additional/viewer-plugins.md`, `docs/developer/viewer-plugins.md`
-- `tools/VamsCLI/vamscli/commands/` → `docs/cli/command-reference.md`
-- `CHANGELOG.md` → `docs/additional/revisions.md`
-- `backendPipelines/` → `docs/pipelines/` pages
+
+-   `backend/backend/handlers/` → `docs/api/` pages
+-   `backend/backend/models/` → `docs/api/` pages (request/response models)
+-   `infra/config/config.ts` → `docs/deployment/configuration-reference.md`
+-   `infra/lib/lambdaBuilder/` → `docs/architecture/aws-resources.md`
+-   `infra/lib/nestedStacks/storage/` → `docs/architecture/data-model.md`
+-   `web/src/visualizerPlugin/config/viewerConfig.json` → `docs/additional/viewer-plugins.md`, `docs/developer/viewer-plugins.md`
+-   `tools/VamsCLI/vamscli/commands/` → `docs/cli/command-reference.md`
+-   `CHANGELOG.md` → `docs/additional/revisions.md`
+-   `backendPipelines/` → `docs/pipelines/` pages

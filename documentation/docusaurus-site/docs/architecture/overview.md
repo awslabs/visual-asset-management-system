@@ -81,7 +81,6 @@ sequenceDiagram
 Every request is authorized at two levels. **Tier 1** checks whether the user's role grants access to the API route itself. **Tier 2** checks whether the user has permission to access the specific data entity being requested. Both tiers must allow for the request to succeed. This defense-in-depth model is enforced by the Casbin policy engine in every Lambda handler.
 :::
 
-
 ## Key Architectural Principles
 
 ### Serverless-First Design
@@ -108,15 +107,14 @@ A centralized configuration system (`config.json`) controls which features, pipe
 
 VAMS supports two deployment modes to accommodate different compliance and network isolation requirements.
 
-| Deployment Mode | Web Distribution | API Access | VPC | Notes |
-|---|---|---|---|---|
-| **Commercial AWS** | Amazon CloudFront + Amazon S3 | Amazon API Gateway V2 | Optional | Default mode. Supports optional Amazon Location Service. |
+| Deployment Mode       | Web Distribution                      | API Access            | VPC      | Notes                                                                                                                      |
+| --------------------- | ------------------------------------- | --------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**    | Amazon CloudFront + Amazon S3         | Amazon API Gateway V2 | Optional | Default mode. Supports optional Amazon Location Service.                                                                   |
 | **AWS GovCloud (US)** | Application Load Balancer + Amazon S3 | Amazon API Gateway V2 | Required | No Amazon CloudFront. FIPS endpoints. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
 
 :::note[GovCloud Requirements]
 When deploying to AWS GovCloud, the VPC must be enabled, Amazon CloudFront must be disabled, and Amazon Location Service must be disabled.
 :::
-
 
 ## Architecture Diagram
 
@@ -162,11 +160,10 @@ graph TD
 All nested stacks that consume `storageResources` declare an explicit dependency on the `StorageResourcesBuilder` stack using `addDependency()`. This ensures correct deployment ordering regardless of how AWS CloudFormation resolves implicit references.
 :::
 
-
 ## Next Steps
 
-- [Detailed Architecture](details.md) -- Authentication flow, data indexing, pipeline execution, and configuration flow
-- [AWS Resources](aws-resources.md) -- Complete inventory of deployed AWS resources
-- [Security Architecture](security.md) -- Encryption, authorization, CSP, and compliance
-- [Network Architecture](networking.md) -- VPC configuration, endpoints, and deployment modes
-- [Data Model](data-model.md) -- DynamoDB schemas, S3 organization, and OpenSearch indexes
+-   [Detailed Architecture](details.md) -- Authentication flow, data indexing, pipeline execution, and configuration flow
+-   [AWS Resources](aws-resources.md) -- Complete inventory of deployed AWS resources
+-   [Security Architecture](security.md) -- Encryption, authorization, CSP, and compliance
+-   [Network Architecture](networking.md) -- VPC configuration, endpoints, and deployment modes
+-   [Data Model](data-model.md) -- DynamoDB schemas, S3 organization, and OpenSearch indexes

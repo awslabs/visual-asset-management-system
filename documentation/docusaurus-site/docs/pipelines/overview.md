@@ -12,16 +12,15 @@ A pipeline is a registered processing unit that accepts input files from Amazon 
 
 VAMS supports three pipeline execution types, each suited for different processing patterns:
 
-| Execution Type | Invocation | Callback | Best For |
-|:---|:---|:---|:---|
-| **Lambda** | Synchronous or asynchronous invocation of an AWS Lambda function | Immediate response | Lightweight operations under 15 minutes |
-| **SQS** | Asynchronous message to an Amazon SQS queue | AWS Step Functions Task Token | Decoupled, long-running workloads |
-| **EventBridge** | Asynchronous event to an Amazon EventBridge bus | AWS Step Functions Task Token | Event-driven architectures and fan-out |
+| Execution Type  | Invocation                                                       | Callback                      | Best For                                |
+| :-------------- | :--------------------------------------------------------------- | :---------------------------- | :-------------------------------------- |
+| **Lambda**      | Synchronous or asynchronous invocation of an AWS Lambda function | Immediate response            | Lightweight operations under 15 minutes |
+| **SQS**         | Asynchronous message to an Amazon SQS queue                      | AWS Step Functions Task Token | Decoupled, long-running workloads       |
+| **EventBridge** | Asynchronous event to an Amazon EventBridge bus                  | AWS Step Functions Task Token | Event-driven architectures and fan-out  |
 
 :::info[Task Token Callbacks]
 SQS and EventBridge pipelines are always asynchronous. They use AWS Step Functions Task Tokens to signal completion back to the orchestrating workflow. The workflow pauses until the pipeline sends a success or failure callback.
 :::
-
 
 ### Pipeline Lifecycle
 
@@ -75,14 +74,14 @@ sequenceDiagram
 
 VAMS includes the following built-in pipelines, each controlled by a configuration flag in `config.json`:
 
-| Pipeline | Config Flag | Description | Supported Formats | Execution Type | VPC Required |
-|:---|:---|:---|:---|:---|:---|
-| [3D Basic Conversion](3d-conversion.md) | `useConversion3dBasic` | Convert 3D mesh files between formats | STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ | Lambda | No |
-| [CAD/Mesh Metadata Extraction](cad-mesh-extraction.md) | `useConversionCadMeshMetadataExtraction` | Extract metadata from CAD and mesh files | STEP, STP, DXF, STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ | Lambda | No |
-| [Potree Point Cloud Viewer](potree-viewer.md) | `usePreviewPcPotreeViewer` | Convert point clouds to Potree octree format | E57, PLY, LAS, LAZ | AWS Batch (Fargate) | Yes |
-| [3D Preview Thumbnail](3d-thumbnail.md) | `usePreview3dThumbnail` | Generate animated GIF/static image previews | PLY, STL, OBJ, GLB, GLTF, FBX, DRC, LAS, LAZ, E57, PTX, PCD, FLS, FWS, STP, STEP, USD, USDA, USDC, USDZ | AWS Batch (Fargate) | Yes |
-| [Gaussian Splatting](gaussian-splatting.md) | `useSplatToolbox` | Generate 3D Gaussian splats from images/video | ZIP (images), MP4, MOV | AWS Batch (GPU) | Yes |
-| [GenAI Metadata Labeling](genai-labeling.md) | `useGenAiMetadata3dLabeling` | AI-powered metadata labeling for 3D files | GLB, FBX, OBJ | AWS Batch (Fargate) | Yes |
+| Pipeline                                               | Config Flag                              | Description                                   | Supported Formats                                                                                       | Execution Type      | VPC Required |
+| :----------------------------------------------------- | :--------------------------------------- | :-------------------------------------------- | :------------------------------------------------------------------------------------------------------ | :------------------ | :----------- |
+| [3D Basic Conversion](3d-conversion.md)                | `useConversion3dBasic`                   | Convert 3D mesh files between formats         | STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ                                                    | Lambda              | No           |
+| [CAD/Mesh Metadata Extraction](cad-mesh-extraction.md) | `useConversionCadMeshMetadataExtraction` | Extract metadata from CAD and mesh files      | STEP, STP, DXF, STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ                                    | Lambda              | No           |
+| [Potree Point Cloud Viewer](potree-viewer.md)          | `usePreviewPcPotreeViewer`               | Convert point clouds to Potree octree format  | E57, PLY, LAS, LAZ                                                                                      | AWS Batch (Fargate) | Yes          |
+| [3D Preview Thumbnail](3d-thumbnail.md)                | `usePreview3dThumbnail`                  | Generate animated GIF/static image previews   | PLY, STL, OBJ, GLB, GLTF, FBX, DRC, LAS, LAZ, E57, PTX, PCD, FLS, FWS, STP, STEP, USD, USDA, USDC, USDZ | AWS Batch (Fargate) | Yes          |
+| [Gaussian Splatting](gaussian-splatting.md)            | `useSplatToolbox`                        | Generate 3D Gaussian splats from images/video | ZIP (images), MP4, MOV                                                                                  | AWS Batch (GPU)     | Yes          |
+| [GenAI Metadata Labeling](genai-labeling.md)           | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling for 3D files     | GLB, FBX, OBJ                                                                                           | AWS Batch (Fargate) | Yes          |
 
 ## Pipeline Configuration
 
@@ -92,16 +91,15 @@ All built-in pipelines are configured through the CDK deployment configuration f
 
 Every built-in pipeline supports the following configuration options:
 
-| Option | Type | Description |
-|:---|:---|:---|
-| `enabled` | boolean | Whether to deploy this pipeline's infrastructure during CDK deployment. |
-| `autoRegisterWithVAMS` | boolean | Automatically register the pipeline and its workflow in the global VAMS database during deployment. When enabled, the pipeline is available immediately without manual registration. |
-| `autoRegisterAutoTriggerOnFileUpload` | boolean | Automatically trigger the pipeline when matching files are uploaded to VAMS. Requires `autoRegisterWithVAMS` to also be enabled. |
+| Option                                | Type    | Description                                                                                                                                                                          |
+| :------------------------------------ | :------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                             | boolean | Whether to deploy this pipeline's infrastructure during CDK deployment.                                                                                                              |
+| `autoRegisterWithVAMS`                | boolean | Automatically register the pipeline and its workflow in the global VAMS database during deployment. When enabled, the pipeline is available immediately without manual registration. |
+| `autoRegisterAutoTriggerOnFileUpload` | boolean | Automatically trigger the pipeline when matching files are uploaded to VAMS. Requires `autoRegisterWithVAMS` to also be enabled.                                                     |
 
 :::tip[Auto-Registration]
 When `autoRegisterWithVAMS` is enabled, the CDK deployment creates a custom resource that invokes the pipeline's registration Lambda function. This registers both the pipeline definition and an associated workflow in the global VAMS database so that users can execute the pipeline immediately after deployment.
 :::
-
 
 ### Example Configuration
 
@@ -131,24 +129,22 @@ Pipelines that use AWS Batch (Fargate or GPU) require a VPC. When any VPC-requir
 Enabling VPC-required pipelines creates several VPC Interface Endpoints, each of which incurs hourly charges. Review the [Configuration Guide](../deployment/configuration-reference.md) for details on VPC endpoint management.
 :::
 
-
 ## Pipeline S3 Output Paths
 
 ![Asset Auxiliary Pipeline Flow](/img/asset_auxiliary_pipeline.jpeg)
 
 The workflow orchestrator generates specific S3 paths for each pipeline step. Understanding these paths is important for custom pipeline development and troubleshooting.
 
-| Path Variable | Target Bucket | Purpose | Versioned |
-|:---|:---|:---|:---|
-| `outputS3AssetFilesPath` | Asset bucket | File-level outputs: new files, file previews (`.previewFile.*`) | Yes |
-| `outputS3AssetPreviewPath` | Asset bucket | Asset-level preview images (whole-asset representative image) | Yes |
-| `outputS3AssetMetadataPath` | Asset bucket | Metadata files produced by the pipeline | Yes |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data | No |
+| Path Variable                          | Target Bucket    | Purpose                                                         | Versioned |
+| :------------------------------------- | :--------------- | :-------------------------------------------------------------- | :-------- |
+| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.*`) | Yes       |
+| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images (whole-asset representative image)   | Yes       |
+| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                         | Yes       |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data    | No        |
 
 :::note[Output Path Distinction]
 `outputS3AssetFilesPath` is for file-level outputs, including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is reserved for asset-level preview images that represent the asset as a whole. Most pipelines producing per-file previews write to `outputS3AssetFilesPath`. The auxiliary path is used only for temporary files or special non-versioned data such as Potree octree viewer files.
 :::
-
 
 ## Custom Pipelines
 

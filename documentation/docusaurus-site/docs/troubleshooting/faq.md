@@ -10,13 +10,12 @@ This page answers common questions about using, configuring, and extending the V
 
 The password reset process depends on your authentication provider:
 
-- **Amazon Cognito (default):** An administrator can reset your password through the VAMS web interface under **Admin - Auth > User Management**, or by using the VamsCLI command `vamscli user cognito reset-password`. You will receive an email with a temporary password.
-- **External OAuth Identity Provider:** Password management is handled by your external identity provider. Contact your organization's identity administrator.
+-   **Amazon Cognito (default):** An administrator can reset your password through the VAMS web interface under **Admin - Auth > User Management**, or by using the VamsCLI command `vamscli user cognito reset-password`. You will receive an email with a temporary password.
+-   **External OAuth Identity Provider:** Password management is handled by your external identity provider. Contact your organization's identity administrator.
 
 :::note
 The User Management page is only visible when Amazon Cognito authentication is active.
 :::
-
 
 ### How do I add a new user?
 
@@ -49,7 +48,6 @@ VAMS uses a two-tier permission system. Navigation pages are filtered based on y
 If no navigation items appear at all, a message will display indicating that your user does not have permissions to view any web navigation pages.
 :::
 
-
 ---
 
 ## Asset Management
@@ -70,14 +68,13 @@ VAMS can register assets from existing Amazon S3 buckets in two ways:
 When importing from external buckets, ensure asset IDs do not conflict with existing assets in other databases. See [Known Limitations](known-limitations.md#asset-id-conflicts-across-databases-with-multiple-amazon-s3-buckets) for details.
 :::
 
-
 ### How do I back up VAMS data?
 
 VAMS data is stored across Amazon DynamoDB tables and Amazon S3 buckets. To back up your data:
 
-- **Amazon DynamoDB:** Enable point-in-time recovery (PITR) on VAMS DynamoDB tables, or use AWS Backup to create scheduled backups.
-- **Amazon S3:** Enable versioning on asset buckets (enabled by default) and configure Amazon S3 Lifecycle rules or AWS Backup for cross-region replication if needed.
-- **Amazon OpenSearch:** Use OpenSearch snapshot and restore for search index backups, though indexes can be rebuilt from DynamoDB data using the re-index tool.
+-   **Amazon DynamoDB:** Enable point-in-time recovery (PITR) on VAMS DynamoDB tables, or use AWS Backup to create scheduled backups.
+-   **Amazon S3:** Enable versioning on asset buckets (enabled by default) and configure Amazon S3 Lifecycle rules or AWS Backup for cross-region replication if needed.
+-   **Amazon OpenSearch:** Use OpenSearch snapshot and restore for search index backups, though indexes can be rebuilt from DynamoDB data using the re-index tool.
 
 For full environment migration, use the data migration scripts provided in `infra/deploymentDataMigration/`.
 
@@ -89,10 +86,10 @@ For full environment migration, use the data migration scripts provided in `infr
 
 Yes. Amazon OpenSearch is optional. When neither OpenSearch Serverless nor OpenSearch Provisioned is enabled:
 
-- The `NOOPENSEARCH` feature flag is set automatically.
-- The web application hides search-specific UI elements.
-- Asset and file listing uses Amazon DynamoDB queries with pagination instead of full-text search.
-- Advanced search features (full-text search, metadata field filtering, relevance ranking) are not available.
+-   The `NOOPENSEARCH` feature flag is set automatically.
+-   The web application hides search-specific UI elements.
+-   Asset and file listing uses Amazon DynamoDB queries with pagination instead of full-text search.
+-   Advanced search features (full-text search, metadata field filtering, relevance ranking) are not available.
 
 ---
 
@@ -123,7 +120,6 @@ Additionally, the following MIME types are blocked:
 :::info
 These restrictions apply only to the upload API. Files placed directly into Amazon S3 buckets bypass these checks.
 :::
-
 
 ### How do I connect VAMS to my existing authentication system?
 

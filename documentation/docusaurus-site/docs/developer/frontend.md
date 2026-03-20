@@ -4,20 +4,19 @@ This guide covers development patterns for the VAMS React frontend, including pr
 
 ## Technology Stack
 
-| Technology | Version | Purpose |
-|-----------|---------|---------|
-| React | 17.0.2 | UI framework (not React 18) |
-| TypeScript | 4.4.4 | Type system |
-| Vite | 6.x | Build tooling |
-| Cloudscape Design System | 3.x | AWS UI component library |
-| AWS Amplify | v6 | Authentication integration |
-| React Router | v6 | Client-side routing (HashRouter) |
-| `@badgateway/oauth2-client` | 2.4.2 | External OAuth2 PKCE flow |
+| Technology                  | Version | Purpose                          |
+| --------------------------- | ------- | -------------------------------- |
+| React                       | 17.0.2  | UI framework (not React 18)      |
+| TypeScript                  | 4.4.4   | Type system                      |
+| Vite                        | 6.x     | Build tooling                    |
+| Cloudscape Design System    | 3.x     | AWS UI component library         |
+| AWS Amplify                 | v6      | Authentication integration       |
+| React Router                | v6      | Client-side routing (HashRouter) |
+| `@badgateway/oauth2-client` | 2.4.2   | External OAuth2 PKCE flow        |
 
 :::info[React 17]
 This project uses React 17, not React 18. Do not use React 18 APIs such as `createRoot`, `useId`, `useSyncExternalStore`, `useTransition`, or `useDeferredValue`. The app uses `ReactDOM.render`.
 :::
-
 
 ## Project Structure
 
@@ -74,14 +73,14 @@ const response = await fetch("/api/databases");
 
 The following service files are the only files that may import `apiClient`:
 
-| Service File | Responsibility |
-|-------------|---------------|
-| `APIService.ts` | General CRUD, auth, search, subscriptions, tags |
-| `AssetUploadService.ts` | Amazon S3 multipart upload operations |
-| `AssetVersionService.ts` | Version management |
-| `FileOperationsService.ts` | File operations |
-| `MetadataService.ts` | Metadata CRUD |
-| `MetadataSchemaService.ts` | Schema management |
+| Service File               | Responsibility                                  |
+| -------------------------- | ----------------------------------------------- |
+| `APIService.ts`            | General CRUD, auth, search, subscriptions, tags |
+| `AssetUploadService.ts`    | Amazon S3 multipart upload operations           |
+| `AssetVersionService.ts`   | Version management                              |
+| `FileOperationsService.ts` | File operations                                 |
+| `MetadataService.ts`       | Metadata CRUD                                   |
+| `MetadataSchemaService.ts` | Schema management                               |
 
 ### Rule 2: Cloudscape Individual Imports
 
@@ -182,7 +181,6 @@ const data = result[1];
 The API service functions can return `false`, `[false, errorMessage]`, or `[true, data]`. Always check the result before processing.
 :::
 
-
 ### Pagination
 
 The backend uses `NextToken`-based pagination:
@@ -221,19 +219,16 @@ graph TD
 
 The auth orchestrator in `src/FedAuth/Auth.tsx` selects the mode based on runtime configuration:
 
-- `window.DISABLE_COGNITO === true` -- External OAuth2 mode
-- `window.COGNITO_FEDERATED === true` -- Federated Cognito mode
-- Otherwise -- Standard Amazon Cognito mode
+-   `window.DISABLE_COGNITO === true` -- External OAuth2 mode
+-   `window.COGNITO_FEDERATED === true` -- Federated Cognito mode
+-   Otherwise -- Standard Amazon Cognito mode
 
 ### Token Utilities
 
 Always use the dual-mode token utilities for authentication. Never access Amplify Auth directly.
 
 ```typescript
-import {
-    getDualValidAccessToken,
-    getDualAuthorizationHeader
-} from "../utils/authTokenUtils";
+import { getDualValidAccessToken, getDualAuthorizationHeader } from "../utils/authTokenUtils";
 
 // Gets valid access token from whichever auth mode is active
 const token = await getDualValidAccessToken();
@@ -275,16 +270,15 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 
 ### Existing Contexts
 
-| Context | File | Purpose |
-|---------|------|---------|
-| `AssetContext` | `context/AssetContext.ts` | Asset list state |
+| Context              | File                            | Purpose             |
+| -------------------- | ------------------------------- | ------------------- |
+| `AssetContext`       | `context/AssetContext.ts`       | Asset list state    |
 | `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail |
-| `WorkflowContext` | `context/WorkflowContext.ts` | Workflow state |
+| `WorkflowContext`    | `context/WorkflowContext.ts`    | Workflow state      |
 
 :::note[Intentional Typos]
 The filenames `AssetContex.ts` and `WorkflowContex.ts` are intentional legacy names. Never rename them.
 :::
-
 
 ## Theme System
 
@@ -292,11 +286,11 @@ VAMS supports dark and light themes. The default theme is dark mode.
 
 ### How Theming Works
 
-- **`src/styles/theme.css`** defines CSS custom properties with dark/light variants
-- The `.awsui-dark-mode` class on `<body>` activates dark mode values
-- Cloudscape's `applyMode()` toggles the Cloudscape component dark mode
-- Users switch themes via the Settings dropdown in the top navigation
-- Theme preference is persisted to `localStorage`
+-   **`src/styles/theme.css`** defines CSS custom properties with dark/light variants
+-   The `.awsui-dark-mode` class on `<body>` activates dark mode values
+-   Cloudscape's `applyMode()` toggles the Cloudscape component dark mode
+-   Users switch themes via the Settings dropdown in the top navigation
+-   Theme preference is persisted to `localStorage`
 
 ### Using Theme-Aware Styles
 
@@ -315,7 +309,6 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 Never hardcode colors or spacing that Cloudscape provides as design tokens. Use CSS custom properties from `theme.css` or Cloudscape tokens to ensure dark mode compatibility.
 :::
 
-
 ## Configuration System
 
 ### Static Configuration
@@ -324,21 +317,21 @@ Never hardcode colors or spacing that Cloudscape provides as design tokens. Use 
 
 ```typescript
 interface VAMSConfig {
-    APP_TITLE: string;        // Browser tab title
-    APP_NAME: string;         // Short name in footer and UI references
+    APP_TITLE: string; // Browser tab title
+    APP_NAME: string; // Short name in footer and UI references
     FOOTER_COPYRIGHT: string; // Footer copyright text (empty string hides footer)
-    CUSTOMER_LOGO?: string;   // Optional custom logo URL for sidebar navigation
+    CUSTOMER_LOGO?: string; // Optional custom logo URL for sidebar navigation
     DEV_API_ENDPOINT: string; // API endpoint for local development
 }
 ```
 
-| Field | Default | Description |
-|---|---|---|
-| `APP_TITLE` | `"VAMS - Visual Asset Management System"` | Displayed in the browser tab and login pages |
-| `APP_NAME` | `"Visual Asset Management System"` | Short name used in the footer and logo alt text |
-| `FOOTER_COPYRIGHT` | `"(c) 2026, Amazon Web Services..."` | Copyright text in the page footer. Set to empty string to hide the footer entirely. |
-| `CUSTOMER_LOGO` | `undefined` | URL to a custom logo for the sidebar navigation header. Supports relative paths or absolute URLs. Leave undefined for the default VAMS logo. |
-| `DEV_API_ENDPOINT` | `""` | API endpoint for local development. Empty string uses same origin (production default). Set to an API Gateway URL or `http://localhost:8002/` for development. |
+| Field              | Default                                   | Description                                                                                                                                                    |
+| ------------------ | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_TITLE`        | `"VAMS - Visual Asset Management System"` | Displayed in the browser tab and login pages                                                                                                                   |
+| `APP_NAME`         | `"Visual Asset Management System"`        | Short name used in the footer and logo alt text                                                                                                                |
+| `FOOTER_COPYRIGHT` | `"(c) 2026, Amazon Web Services..."`      | Copyright text in the page footer. Set to empty string to hide the footer entirely.                                                                            |
+| `CUSTOMER_LOGO`    | `undefined`                               | URL to a custom logo for the sidebar navigation header. Supports relative paths or absolute URLs. Leave undefined for the default VAMS logo.                   |
+| `DEV_API_ENDPOINT` | `""`                                      | API endpoint for local development. Empty string uses same origin (production default). Set to an API Gateway URL or `http://localhost:8002/` for development. |
 
 **Example customization:**
 
@@ -380,11 +373,11 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 
 Known feature flags:
 
-| Flag | Purpose |
-|------|---------|
-| `LOCATIONSERVICES` | Map and geospatial features |
-| `NOOPENSEARCH` | Disable OpenSearch-dependent features |
-| `ALLOWUNSAFEEVAL` | Required for CesiumJS and Needle USD viewers |
+| Flag               | Purpose                                      |
+| ------------------ | -------------------------------------------- |
+| `LOCATIONSERVICES` | Map and geospatial features                  |
+| `NOOPENSEARCH`     | Disable OpenSearch-dependent features        |
+| `ALLOWUNSAFEEVAL`  | Required for CesiumJS and Needle USD viewers |
 
 ### Display Name Customization
 
@@ -458,7 +451,9 @@ const MyComponent: React.FC = () => {
         }
     }, [databaseId]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        fetchData();
+    }, [fetchData]);
 
     return (
         <SpaceBetween size="l">
@@ -473,20 +468,20 @@ export default MyComponent;
 
 ## Anti-Patterns
 
-| Anti-Pattern | Correct Approach |
-|-------------|-----------------|
-| Import `apiClient` in components | Import from `APIService.ts` or other service files |
-| Barrel import from `@cloudscape-design/components` | Use individual subpath imports |
-| Use `BrowserRouter` | Use `HashRouter` |
-| Eagerly import page components | Use `React.lazy()` in `routes.tsx` |
-| Add Redux, Zustand, or MobX | Use React Context + `useReducer` |
-| Use `Amplify Cache` | Use `appCache` from `src/services/appCache.ts` |
-| Access Amplify Auth directly | Use `getDualValidAccessToken()` from `authTokenUtils.ts` |
-| Hardcode "Asset" or "Database" strings | Use `Synonyms` from `src/synonyms.tsx` |
-| Use `console.error` for logging | Use `console.log` (match existing convention) |
+| Anti-Pattern                                       | Correct Approach                                         |
+| -------------------------------------------------- | -------------------------------------------------------- |
+| Import `apiClient` in components                   | Import from `APIService.ts` or other service files       |
+| Barrel import from `@cloudscape-design/components` | Use individual subpath imports                           |
+| Use `BrowserRouter`                                | Use `HashRouter`                                         |
+| Eagerly import page components                     | Use `React.lazy()` in `routes.tsx`                       |
+| Add Redux, Zustand, or MobX                        | Use React Context + `useReducer`                         |
+| Use `Amplify Cache`                                | Use `appCache` from `src/services/appCache.ts`           |
+| Access Amplify Auth directly                       | Use `getDualValidAccessToken()` from `authTokenUtils.ts` |
+| Hardcode "Asset" or "Database" strings             | Use `Synonyms` from `src/synonyms.tsx`                   |
+| Use `console.error` for logging                    | Use `console.log` (match existing convention)            |
 
 ## Next Steps
 
-- [Viewer Plugin Development](viewer-plugins.md) -- Building custom file viewers
-- [Backend Development](backend.md) -- API handler patterns
-- [CDK Infrastructure](cdk.md) -- Frontend deployment configuration
+-   [Viewer Plugin Development](viewer-plugins.md) -- Building custom file viewers
+-   [Backend Development](backend.md) -- API handler patterns
+-   [CDK Infrastructure](cdk.md) -- Frontend deployment configuration

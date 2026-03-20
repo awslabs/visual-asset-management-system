@@ -5,31 +5,31 @@ This page provides an overview of all VamsCLI command groups with links to detai
 :::info[Common Options]
 The following options appear on nearly every command and are not repeated in individual pages:
 
-- `--json-output` -- Output raw JSON response instead of formatted CLI display
-- `--json-input` -- Provide parameters as a JSON string or file path (where supported)
-- `--auto-paginate` -- Automatically fetch all pages of results
-- `--page-size` -- Number of items per API page
-- `--max-items` -- Maximum total items to fetch (used with `--auto-paginate`, default: 10,000)
-- `--starting-token` -- Pagination token for manual page navigation
-:::
+-   `--json-output` -- Output raw JSON response instead of formatted CLI display
+-   `--json-input` -- Provide parameters as a JSON string or file path (where supported)
+-   `--auto-paginate` -- Automatically fetch all pages of results
+-   `--page-size` -- Number of items per API page
+-   `--max-items` -- Maximum total items to fetch (used with `--auto-paginate`, default: 10,000)
+-   `--starting-token` -- Pagination token for manual page navigation
+    :::
 
 ---
 
 ## Command Groups
 
-| Command Group | Description | Detailed Reference |
-|---|---|---|
-| `setup`, `auth`, `features`, `profile` | Initial configuration, authentication, feature switches, and profile management | [Setup and Authentication](commands/setup-and-auth.md) |
-| `database` | Create, update, delete, and list databases and bucket configurations | [Database](commands/database.md) |
-| `assets`, `asset-version`, `asset-links`, `assets export`, `assets download` | Asset CRUD, version management, relationship links, export, and download | [Assets](commands/assets.md) |
-| `file` | Upload, list, info, create-folder, move, copy, archive, unarchive, delete, revert, set-primary | [Files](commands/files.md) |
-| `tag`, `tag-type` | Tag and tag type management for asset categorization | [Tags](commands/tags.md) |
-| `metadata`, `metadata-schema` | Metadata CRUD for assets, files, links, and databases; schema inspection | [Metadata](commands/metadata.md) |
-| `search` | Search assets and files using Amazon OpenSearch Service | [Search](commands/search.md) |
-| `workflow` | List, execute, and monitor processing workflows | [Workflows](commands/workflows.md) |
-| `role`, `role constraint`, `role user` | Role management, permission constraints, user-role assignments, and template import | [Permissions](commands/permissions.md) |
-| `user cognito`, `api-key` | Amazon Cognito user management and API key management | [Users and API Keys](commands/users-and-keys.md) |
-| `industry engineering bom`, `industry engineering plm`, `industry spatial` | BOM assembly, PLM XML import, and spatial GLB combination | [Industry](commands/industry.md) |
+| Command Group                                                                | Description                                                                                    | Detailed Reference                                     |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `setup`, `auth`, `features`, `profile`                                       | Initial configuration, authentication, feature switches, and profile management                | [Setup and Authentication](commands/setup-and-auth.md) |
+| `database`                                                                   | Create, update, delete, and list databases and bucket configurations                           | [Database](commands/database.md)                       |
+| `assets`, `asset-version`, `asset-links`, `assets export`, `assets download` | Asset CRUD, version management, relationship links, export, and download                       | [Assets](commands/assets.md)                           |
+| `file`                                                                       | Upload, list, info, create-folder, move, copy, archive, unarchive, delete, revert, set-primary | [Files](commands/files.md)                             |
+| `tag`, `tag-type`                                                            | Tag and tag type management for asset categorization                                           | [Tags](commands/tags.md)                               |
+| `metadata`, `metadata-schema`                                                | Metadata CRUD for assets, files, links, and databases; schema inspection                       | [Metadata](commands/metadata.md)                       |
+| `search`                                                                     | Search assets and files using Amazon OpenSearch Service                                        | [Search](commands/search.md)                           |
+| `workflow`                                                                   | List, execute, and monitor processing workflows                                                | [Workflows](commands/workflows.md)                     |
+| `role`, `role constraint`, `role user`                                       | Role management, permission constraints, user-role assignments, and template import            | [Permissions](commands/permissions.md)                 |
+| `user cognito`, `api-key`                                                    | Amazon Cognito user management and API key management                                          | [Users and API Keys](commands/users-and-keys.md)       |
+| `industry engineering bom`, `industry engineering plm`, `industry spatial`   | BOM assembly, PLM XML import, and spatial GLB combination                                      | [Industry](commands/industry.md)                       |
 
 ---
 
@@ -97,6 +97,6 @@ vamscli industry spatial glbassetcombine -d my-db -a root-asset-id
 
 ## Additional Resources
 
-- [Getting Started](getting-started.md) -- First-time setup and authentication
-- [Installation and Profile Management](installation.md) -- Detailed installation and profiles
-- [Automation and Scripting](automation.md) -- JSON output, scripting patterns, and CI/CD integration
+-   [Getting Started](getting-started.md) -- First-time setup and authentication
+-   [Installation and Profile Management](installation.md) -- Detailed installation and profiles
+-   [Automation and Scripting](automation.md) -- JSON output, scripting patterns, and CI/CD integration

@@ -4,21 +4,20 @@ The RapidPipeline pipeline integrates the DGG RapidPipeline 3D processing engine
 
 ## Overview
 
-| Property | Value |
-|---|---|
-| **Pipeline IDs** | `rapid-pipeline-to-glb`, `rapid-pipeline-to-gltf` |
-| **Configuration flag** | `app.pipelines.useRapidPipeline.useEcs.enabled` or `app.pipelines.useRapidPipeline.useEks.enabled` |
-| **Execution type** | Lambda (asynchronous with callback) |
-| **Compute (ECS)** | Amazon ECS on AWS Fargate (2 vCPU, 16 GB memory) |
-| **Compute (EKS)** | Amazon EKS with Kubernetes |
-| **Supported input formats** | `.glb`, `.gltf`, `.fbx`, `.obj`, `.stl`, `.ply`, `.usd`, `.usdz`, `.dae`, `.abc` |
-| **Supported output formats** | `.glb`, `.gltf` |
-| **Timeout** | 5 hours |
+| Property                     | Value                                                                                              |
+| ---------------------------- | -------------------------------------------------------------------------------------------------- |
+| **Pipeline IDs**             | `rapid-pipeline-to-glb`, `rapid-pipeline-to-gltf`                                                  |
+| **Configuration flag**       | `app.pipelines.useRapidPipeline.useEcs.enabled` or `app.pipelines.useRapidPipeline.useEks.enabled` |
+| **Execution type**           | Lambda (asynchronous with callback)                                                                |
+| **Compute (ECS)**            | Amazon ECS on AWS Fargate (2 vCPU, 16 GB memory)                                                   |
+| **Compute (EKS)**            | Amazon EKS with Kubernetes                                                                         |
+| **Supported input formats**  | `.glb`, `.gltf`, `.fbx`, `.obj`, `.stl`, `.ply`, `.usd`, `.usdz`, `.dae`, `.abc`                   |
+| **Supported output formats** | `.glb`, `.gltf`                                                                                    |
+| **Timeout**                  | 5 hours                                                                                            |
 
 :::warning[Licensed product]
 RapidPipeline is a commercial product by DGG that requires a valid subscription. The container image must be obtained through AWS Marketplace or provided as a private Amazon ECR image URI. Contact DGG for licensing information.
 :::
-
 
 ## Architecture
 
@@ -48,74 +47,73 @@ The EKS deployment runs the RapidPipeline container on a Kubernetes cluster. Thi
 
 ```json
 {
-  "app": {
-    "pipelines": {
-      "useRapidPipeline": {
-        "useEcs": {
-          "enabled": true,
-          "ecrContainerImageURI": "your-ecr-image-uri",
-          "autoRegisterWithVAMS": true
+    "app": {
+        "pipelines": {
+            "useRapidPipeline": {
+                "useEcs": {
+                    "enabled": true,
+                    "ecrContainerImageURI": "your-ecr-image-uri",
+                    "autoRegisterWithVAMS": true
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `useEcs.enabled` | `false` | Enable the Amazon ECS on AWS Fargate deployment. |
+| Option                        | Default    | Description                                                                                                                 |
+| ----------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `useEcs.enabled`              | `false`    | Enable the Amazon ECS on AWS Fargate deployment.                                                                            |
 | `useEcs.ecrContainerImageURI` | (required) | The Amazon ECR container image URI for the RapidPipeline container. Obtained from AWS Marketplace or your private registry. |
-| `useEcs.autoRegisterWithVAMS` | `true` | Automatically register conversion pipelines and workflows with VAMS at deploy time. |
+| `useEcs.autoRegisterWithVAMS` | `true`     | Automatically register conversion pipelines and workflows with VAMS at deploy time.                                         |
 
 ### Amazon EKS mode
 
 ```json
 {
-  "app": {
-    "pipelines": {
-      "useRapidPipeline": {
-        "useEks": {
-          "enabled": true,
-          "ecrContainerImageURI": "your-ecr-image-uri",
-          "eksCluster": {
-            "roleArn": "arn:aws:iam::123456789012:role/eks-cluster-role",
-            "kubectlRoleArn": "arn:aws:iam::123456789012:role/eks-kubectl-role"
-          }
+    "app": {
+        "pipelines": {
+            "useRapidPipeline": {
+                "useEks": {
+                    "enabled": true,
+                    "ecrContainerImageURI": "your-ecr-image-uri",
+                    "eksCluster": {
+                        "roleArn": "arn:aws:iam::123456789012:role/eks-cluster-role",
+                        "kubectlRoleArn": "arn:aws:iam::123456789012:role/eks-kubectl-role"
+                    }
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `useEks.enabled` | `false` | Enable the Amazon EKS deployment. |
-| `useEks.ecrContainerImageURI` | (required) | The Amazon ECR container image URI for the RapidPipeline container. |
-| `useEks.eksCluster.roleArn` | (required) | The IAM role ARN for the Amazon EKS cluster. |
+| Option                             | Default    | Description                                                           |
+| ---------------------------------- | ---------- | --------------------------------------------------------------------- |
+| `useEks.enabled`                   | `false`    | Enable the Amazon EKS deployment.                                     |
+| `useEks.ecrContainerImageURI`      | (required) | The Amazon ECR container image URI for the RapidPipeline container.   |
+| `useEks.eksCluster.roleArn`        | (required) | The IAM role ARN for the Amazon EKS cluster.                          |
 | `useEks.eksCluster.kubectlRoleArn` | (required) | The IAM role ARN with `kubectl` permissions for managing the cluster. |
 
 :::note[Choose one deployment mode]
 Enable either `useEcs` or `useEks`, not both. The ECS mode is simpler to operate and recommended for most deployments. The EKS mode provides a Kubernetes-based pipeline pattern that can be adapted for other container workloads.
 :::
 
-
 ## Prerequisites
 
-- **RapidPipeline license** -- A valid DGG RapidPipeline subscription is required. The container image is available through AWS Marketplace.
-- **Internet access** -- The container requires internet access to communicate with the AWS Marketplace metering API. The ECS cluster runs in private subnets with a NAT Gateway for egress.
-- **VPC with private subnets** -- Both ECS and EKS modes require private subnets with internet egress. When using an external VPC, you must provide private subnet IDs in the VPC configuration.
-- **Container image** -- The `ecrContainerImageURI` must point to a valid container image accessible from your AWS account.
+-   **RapidPipeline license** -- A valid DGG RapidPipeline subscription is required. The container image is available through AWS Marketplace.
+-   **Internet access** -- The container requires internet access to communicate with the AWS Marketplace metering API. The ECS cluster runs in private subnets with a NAT Gateway for egress.
+-   **VPC with private subnets** -- Both ECS and EKS modes require private subnets with internet egress. When using an external VPC, you must provide private subnet IDs in the VPC configuration.
+-   **Container image** -- The `ecrContainerImageURI` must point to a valid container image accessible from your AWS account.
 
 ## Registered workflows
 
 When `autoRegisterWithVAMS` is `true`, the following pipelines and workflows are automatically registered at deploy time:
 
-| Pipeline ID | Output format | Description |
-|---|---|---|
-| `rapid-pipeline-to-glb` | `.glb` | Optimize and convert 3D models to GLB (GL Transmission Format Binary) |
-| `rapid-pipeline-to-gltf` | `.gltf` | Optimize and convert 3D models to GLTF (GL Transmission Format) |
+| Pipeline ID              | Output format | Description                                                           |
+| ------------------------ | ------------- | --------------------------------------------------------------------- |
+| `rapid-pipeline-to-glb`  | `.glb`        | Optimize and convert 3D models to GLB (GL Transmission Format Binary) |
+| `rapid-pipeline-to-gltf` | `.gltf`       | Optimize and convert 3D models to GLTF (GL Transmission Format)       |
 
 All registered pipelines accept any supported input file format (`.all`) and operate as asynchronous pipelines with callback enabled.
 
@@ -132,7 +130,7 @@ The RapidPipeline container integrates with AWS Marketplace for usage tracking. 
 
 ## Related pages
 
-- [Pipeline overview](overview.md)
-- [ModelOps pipeline](model-ops.md)
-- [Custom pipelines](custom-pipelines.md)
-- [Deployment configuration](../deployment/configuration-reference.md)
+-   [Pipeline overview](overview.md)
+-   [ModelOps pipeline](model-ops.md)
+-   [Custom pipelines](custom-pipelines.md)
+-   [Deployment configuration](../deployment/configuration-reference.md)

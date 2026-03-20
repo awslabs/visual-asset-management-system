@@ -6,16 +6,16 @@ VAMS provides a flexible pipeline framework that supports three execution types 
 
 VAMS supports three pipeline execution types. Each type determines how the pipeline receives work and reports completion.
 
-| Execution type | Transport | Sync/Async | Best for |
-|---|---|---|---|
-| **Lambda** | AWS Lambda invoke | Both | Quick processing tasks, internal pipelines, container orchestration |
-| **SQS** | Amazon SQS message | Async only | External systems that poll for work, fan-out patterns |
-| **EventBridge** | Amazon EventBridge event | Async only | Loosely coupled integrations, cross-account pipelines |
+| Execution type  | Transport                | Sync/Async | Best for                                                            |
+| --------------- | ------------------------ | ---------- | ------------------------------------------------------------------- |
+| **Lambda**      | AWS Lambda invoke        | Both       | Quick processing tasks, internal pipelines, container orchestration |
+| **SQS**         | Amazon SQS message       | Async only | External systems that poll for work, fan-out patterns               |
+| **EventBridge** | Amazon EventBridge event | Async only | Loosely coupled integrations, cross-account pipelines               |
 
 ### Synchronous vs. asynchronous execution
 
-- **Synchronous (Lambda only)** -- The VAMS workflow invokes the Lambda function and waits for a response. Suitable for operations that complete within the Lambda timeout (15 minutes).
-- **Asynchronous (all types)** -- The VAMS workflow sends work and waits for a callback via an AWS Step Functions task token. The pipeline must call `SendTaskSuccess` or `SendTaskFailure` when processing is complete. Set `waitForCallback` to `"Enabled"` when registering the pipeline.
+-   **Synchronous (Lambda only)** -- The VAMS workflow invokes the Lambda function and waits for a response. Suitable for operations that complete within the Lambda timeout (15 minutes).
+-   **Asynchronous (all types)** -- The VAMS workflow sends work and waits for a callback via an AWS Step Functions task token. The pipeline must call `SendTaskSuccess` or `SendTaskFailure` when processing is complete. Set `waitForCallback` to `"Enabled"` when registering the pipeline.
 
 ```mermaid
 flowchart TD
@@ -106,7 +106,6 @@ def lambda_handler(event, context):
 The `vamsExecute` Lambda must forward all output paths (`outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, `outputS3AssetMetadataPath`, `inputOutputS3AssetAuxiliaryFilesPath`) from the workflow payload. Never hardcode empty strings. The workflow's process-output step relies on finding files at these locations.
 :::
 
-
 #### constructPipeline Lambda
 
 Builds the pipeline definition that tells the container what to process and where to write output.
@@ -163,11 +162,11 @@ infra/lib/nestedStacks/pipelines/
 
 The construct file creates:
 
-- AWS Batch or Amazon ECS compute resources (if using containers)
-- Lambda functions for pipeline orchestration
-- AWS Step Functions state machine
-- IAM roles and policies
-- Amazon CloudWatch log groups
+-   AWS Batch or Amazon ECS compute resources (if using containers)
+-   Lambda functions for pipeline orchestration
+-   AWS Step Functions state machine
+-   IAM roles and policies
+-   Amazon CloudWatch log groups
 
 ### Step 3: Create the Lambda builder functions
 
@@ -186,7 +185,10 @@ export function buildVamsExecuteYourPipelineFunction(
 ): lambda.Function {
     const fun = new lambda.Function(scope, "vamsExecuteYourPipeline", {
         code: lambda.Code.fromAsset(
-            path.join(__dirname, "../../../../../../../backendPipelines/yourCategory/yourPipeline/lambda")
+            path.join(
+                __dirname,
+                "../../../../../../../backendPipelines/yourCategory/yourPipeline/lambda"
+            )
         ),
         handler: "vamsExecuteYourPipeline.lambda_handler",
         runtime: Config.LAMBDA_PYTHON_RUNTIME,
@@ -212,7 +214,7 @@ Add your pipeline configuration to the `ConfigPublic` interface in `infra/config
 useYourPipeline: {
     enabled: boolean;
     autoRegisterWithVAMS: boolean;
-};
+}
 ```
 
 Add backward-compatibility defaults in `getConfig()`:
@@ -232,19 +234,16 @@ Add your pipeline to `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedSta
 
 ```typescript
 if (props.config.app.pipelines.useYourPipeline.enabled) {
-    const yourPipelineNestedStack = new YourPipelineNestedStack(
-        this, "YourPipelineNestedStack", {
-            ...props,
-            config: props.config,
-            storageResources: props.storageResources,
-            vpc: props.vpc,
-            pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
-            pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-            lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-            importGlobalPipelineWorkflowFunctionName:
-                props.importGlobalPipelineWorkflowFunctionName,
-        }
-    );
+    const yourPipelineNestedStack = new YourPipelineNestedStack(this, "YourPipelineNestedStack", {
+        ...props,
+        config: props.config,
+        storageResources: props.storageResources,
+        vpc: props.vpc,
+        pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+        importGlobalPipelineWorkflowFunctionName: props.importGlobalPipelineWorkflowFunctionName,
+    });
     this.pipelineVamsLambdaFunctionNames.push(
         yourPipelineNestedStack.pipelineVamsLambdaFunctionName
     );
@@ -261,24 +260,23 @@ Pipelines that require internet access (for example, AWS Marketplace integration
 
 The VAMS workflow generates several Amazon S3 paths that are passed to each pipeline step. Using the correct path for each output type is critical for the workflow's process-output step to function correctly.
 
-| Path variable | Bucket | Purpose | Versioned |
-|---|---|---|---|
-| `outputS3AssetFilesPath` | Asset bucket | File-level outputs: new files, file previews (`.previewFile.X`) | Yes |
-| `outputS3AssetPreviewPath` | Asset bucket | Asset-level preview images only (whole-asset representative image) | Yes |
-| `outputS3AssetMetadataPath` | Asset bucket | Metadata files produced by the pipeline | Yes |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data | No |
+| Path variable                          | Bucket           | Purpose                                                            | Versioned |
+| -------------------------------------- | ---------------- | ------------------------------------------------------------------ | --------- |
+| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.X`)    | Yes       |
+| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images only (whole-asset representative image) | Yes       |
+| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                            | Yes       |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data       | No        |
 
 :::note[Key distinction]
 `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the entire asset. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
 :::
 
-
 ### When to use each path
 
-- **`outputS3AssetFilesPath`** -- Use for all standard pipeline outputs: converted files, generated thumbnails (`.previewFile.X`), and any new files that should be tracked as part of the asset.
-- **`outputS3AssetPreviewPath`** -- Use only for a single representative preview image of the entire asset. Do not use for file-level previews.
-- **`outputS3AssetMetadataPath`** -- Use for metadata JSON files (for example, `asset.metadata.json`) that the process-output step reads to update asset metadata in VAMS.
-- **`inputOutputS3AssetAuxiliaryFilesPath`** -- Use for temporary files during processing or for special non-versioned data that the frontend reads directly (for example, Potree octree viewer files).
+-   **`outputS3AssetFilesPath`** -- Use for all standard pipeline outputs: converted files, generated thumbnails (`.previewFile.X`), and any new files that should be tracked as part of the asset.
+-   **`outputS3AssetPreviewPath`** -- Use only for a single representative preview image of the entire asset. Do not use for file-level previews.
+-   **`outputS3AssetMetadataPath`** -- Use for metadata JSON files (for example, `asset.metadata.json`) that the process-output step reads to update asset metadata in VAMS.
+-   **`inputOutputS3AssetAuxiliaryFilesPath`** -- Use for temporary files during processing or for special non-versioned data that the frontend reads directly (for example, Potree octree viewer files).
 
 ## Preserving relative paths in output
 
@@ -459,25 +457,25 @@ event = {
 
 Use this checklist when building a new pipeline:
 
-- [ ] Pipeline handler code created under `backendPipelines/`
-- [ ] `vamsExecute` Lambda passes through all Amazon S3 output paths (never hardcodes empty strings)
-- [ ] `constructPipeline` Lambda uses the correct output path for the pipeline's output type
-- [ ] Container preserves relative paths when writing asset-adjacent files
-- [ ] `assetId` is threaded through the entire chain (vamsExecute -> constructPipeline -> container)
-- [ ] CDK nested stack created with Lambda builders, AWS Step Functions, and compute resources
-- [ ] All Lambda builders follow the standard security pattern (4 required security calls)
-- [ ] Configuration flag added to `ConfigPublic` with backward-compatibility defaults in `getConfig()`
-- [ ] Validation added in `getConfig()` for any required sub-options
-- [ ] Pipeline registered in `pipelineBuilder-nestedStack.ts`
-- [ ] VPC endpoint conditions updated if pipeline uses AWS Batch, Amazon ECS, or Amazon ECR
-- [ ] CDK Nag suppressions added with detailed justification
-- [ ] Configuration documented in the [Configuration Reference](../deployment/configuration-reference.md)
+-   [ ] Pipeline handler code created under `backendPipelines/`
+-   [ ] `vamsExecute` Lambda passes through all Amazon S3 output paths (never hardcodes empty strings)
+-   [ ] `constructPipeline` Lambda uses the correct output path for the pipeline's output type
+-   [ ] Container preserves relative paths when writing asset-adjacent files
+-   [ ] `assetId` is threaded through the entire chain (vamsExecute -> constructPipeline -> container)
+-   [ ] CDK nested stack created with Lambda builders, AWS Step Functions, and compute resources
+-   [ ] All Lambda builders follow the standard security pattern (4 required security calls)
+-   [ ] Configuration flag added to `ConfigPublic` with backward-compatibility defaults in `getConfig()`
+-   [ ] Validation added in `getConfig()` for any required sub-options
+-   [ ] Pipeline registered in `pipelineBuilder-nestedStack.ts`
+-   [ ] VPC endpoint conditions updated if pipeline uses AWS Batch, Amazon ECS, or Amazon ECR
+-   [ ] CDK Nag suppressions added with detailed justification
+-   [ ] Configuration documented in the [Configuration Reference](../deployment/configuration-reference.md)
 
 ## Related pages
 
-- [Pipeline overview](overview.md)
-- [GenAI labeling pipeline](genai-labeling.md)
-- [Isaac Lab pipeline](isaac-lab.md)
-- [RapidPipeline](rapidpipeline.md)
-- [ModelOps pipeline](model-ops.md)
-- [Deployment configuration](../deployment/configuration-reference.md)
+-   [Pipeline overview](overview.md)
+-   [GenAI labeling pipeline](genai-labeling.md)
+-   [Isaac Lab pipeline](isaac-lab.md)
+-   [RapidPipeline](rapidpipeline.md)
+-   [ModelOps pipeline](model-ops.md)
+-   [Deployment configuration](../deployment/configuration-reference.md)

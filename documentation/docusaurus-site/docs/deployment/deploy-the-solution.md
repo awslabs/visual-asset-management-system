@@ -6,7 +6,6 @@ This page provides step-by-step instructions for deploying Visual Asset Manageme
 A first-time deployment typically takes **30 to 45 minutes**, depending on the features enabled. Deployments that include Amazon OpenSearch Provisioned or container-based pipelines may take longer.
 :::
 
-
 ## Step 1: Clone the repository
 
 Clone the VAMS repository and check out a stable release tag.
@@ -29,7 +28,6 @@ Replace `TAG_NAME` with the version you want to deploy (for example, the latest 
 :::tip[Production deployments]
 Always deploy from a tagged release rather than a development branch. The `main` branch may contain in-progress changes.
 :::
-
 
 ## Step 2: Build the frontend
 
@@ -74,17 +72,16 @@ cdk bootstrap aws://ACCOUNT_ID/us-gov-west-1
 You must set the `AWS_REGION` environment variable when bootstrapping AWS GovCloud accounts. The AWS SDK requires this to resolve GovCloud service endpoints correctly.
 :::
 
-
 Replace `ACCOUNT_ID` with your 12-digit AWS account ID and `REGION` with your target deployment Region.
 
 ## Step 5: Configure the deployment
 
 Edit the configuration file at `infra/config/config.json` to set your deployment parameters. Template files are provided as starting points:
 
-| Template | File |
-|---|---|
+| Template       | File                                           |
+| -------------- | ---------------------------------------------- |
 | Commercial AWS | `infra/config/config.template.commercial.json` |
-| AWS GovCloud | `infra/config/config.template.govcloud.json` |
+| AWS GovCloud   | `infra/config/config.template.govcloud.json`   |
 
 Copy the appropriate template to `config.json` and customize it:
 
@@ -94,19 +91,18 @@ cp config/config.template.commercial.json config/config.json
 
 **Minimum required fields to update:**
 
-| Field | Description | Example |
-|---|---|---|
-| `env.region` | Target AWS Region | `us-east-1` |
+| Field                   | Description                                                       | Example             |
+| ----------------------- | ----------------------------------------------------------------- | ------------------- |
+| `env.region`            | Target AWS Region                                                 | `us-east-1`         |
 | `app.adminEmailAddress` | Email for the initial admin account (receives temporary password) | `admin@example.com` |
-| `app.adminUserId` | Username for the initial admin account | `administrator` |
-| `app.baseStackName` | Stack environment name (appended to resource names) | `prod` |
+| `app.adminUserId`       | Username for the initial admin account                            | `administrator`     |
+| `app.baseStackName`     | Stack environment name (appended to resource names)               | `prod`              |
 
 For a complete list of configuration options, see the [Configuration Reference](configuration-reference.md).
 
 :::note[Configuration templates]
 The GovCloud template pre-configures settings required for AWS GovCloud: VPC enabled, CloudFront disabled, ALB enabled, Location Service disabled, FIPS enabled, and KMS CMK encryption enabled.
 :::
-
 
 ## Step 6: Set environment variables (optional)
 
@@ -131,7 +127,6 @@ export AWS_USE_FIPS_ENDPOINT=true
 This step is only required if you are importing an existing VPC by setting `app.useGlobalVpc.optionalExternalVpcId` in `config.json`. If you are creating a new VPC or not using a VPC, proceed to [Step 8](#step-8-deploy).
 :::
 
-
 When importing an external VPC, a two-phase deployment is required. The first phase imports VPC context and deploys non-VPC-dependent stacks:
 
 ```bash
@@ -144,13 +139,11 @@ After this command completes successfully, proceed to Step 8 to deploy all remai
 Skipping this step when importing an external VPC will cause the deployment to fail with VPC or subnet lookup errors. The `loadContextIgnoreVPCStacks` context flag instructs CDK to skip VPC-dependent nested stacks during the initial synthesis.
 :::
 
-
 ## Step 8: Deploy
 
 :::danger[Docker must be running]
 Ensure the Docker daemon is running before deploying. CDK builds container images for AWS Lambda layers and pipeline containers during synthesis. The deployment will fail if Docker is not available.
 :::
-
 
 Run the CDK deploy command from the `infra/` directory:
 
@@ -235,27 +228,25 @@ A CloudFormation changeset is created and applied to your existing stack. Only m
 Depending on the scope of changes, VAMS may experience partial or full downtime during the deployment. Review the [CHANGELOG](https://github.com/awslabs/visual-asset-management-system/blob/main/CHANGELOG.md) carefully and test changes in a non-production environment first.
 :::
 
-
 :::tip[Major version upgrades]
 For major version changes, significant configuration changes (such as switching from CloudFront to ALB, or changing KMS CMK settings), or redeployments to a different Region, use the A/B deployment path with the data migration utility. See `infra/deploymentDataMigration/README.md` for instructions.
 :::
 
-
 ## Common deployment errors
 
-| Error | Cause | Resolution |
-|---|---|---|
-| `Docker daemon not running` | Docker is not started. | Start Docker Desktop or the Docker daemon and retry. |
-| `Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId` | Missing required configuration field. | Set `app.assetBuckets.defaultNewBucketSyncDatabaseId` in `config.json` (default: `"default"`). |
-| `Cannot use ALB deployment without specifying a valid domain hostname and ACM Certificate ARN` | ALB enabled without domain or certificate. | Provide `app.useAlb.domainHost` and `app.useAlb.certificateArn`. |
-| `Must specify an initial admin email address` | Admin email not configured. | Set `app.adminEmailAddress` to a valid email. |
-| `Must specify either none or one openSearch method` | Both OpenSearch Serverless and Provisioned enabled. | Enable only one OpenSearch option or disable both. |
-| `Must specify only one authentication method` | Both Cognito and External OAuth IdP enabled. | Enable only one authentication provider. |
-| `GovCloud must have useGlobalVpc.enabled set to true` | GovCloud enabled without VPC. | Set `app.useGlobalVpc.enabled: true` for GovCloud deployments. |
-| `Must define either a global VPC Cidr Range or an External VPC ID` | VPC enabled without network configuration. | Provide either `vpcCidrRange` or `optionalExternalVpcId`. |
-| `route table already has a route with destination-prefix-list-id` | Imported VPC already has VPC endpoints. | Set `app.useGlobalVpc.addVpcEndpoints: false` and manually add missing endpoints. |
-| `Invalid request provided: Before you can proceed, you must enable a service-linked role` | OpenSearch Provisioned service-linked role not yet propagated. | Wait 5 minutes and redeploy. If the issue persists, manually create the roles: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com` and `aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com`. |
-| `Properties validation failed ... array items are not unique` (ALB target group) | Rare CloudFormation issue with ALB VPC endpoint IP resolution. | No configuration change needed. Redeploy to resolve. |
+| Error                                                                                          | Cause                                                          | Resolution                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Docker daemon not running`                                                                    | Docker is not started.                                         | Start Docker Desktop or the Docker daemon and retry.                                                                                                                                                                                                 |
+| `Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId`                                | Missing required configuration field.                          | Set `app.assetBuckets.defaultNewBucketSyncDatabaseId` in `config.json` (default: `"default"`).                                                                                                                                                       |
+| `Cannot use ALB deployment without specifying a valid domain hostname and ACM Certificate ARN` | ALB enabled without domain or certificate.                     | Provide `app.useAlb.domainHost` and `app.useAlb.certificateArn`.                                                                                                                                                                                     |
+| `Must specify an initial admin email address`                                                  | Admin email not configured.                                    | Set `app.adminEmailAddress` to a valid email.                                                                                                                                                                                                        |
+| `Must specify either none or one openSearch method`                                            | Both OpenSearch Serverless and Provisioned enabled.            | Enable only one OpenSearch option or disable both.                                                                                                                                                                                                   |
+| `Must specify only one authentication method`                                                  | Both Cognito and External OAuth IdP enabled.                   | Enable only one authentication provider.                                                                                                                                                                                                             |
+| `GovCloud must have useGlobalVpc.enabled set to true`                                          | GovCloud enabled without VPC.                                  | Set `app.useGlobalVpc.enabled: true` for GovCloud deployments.                                                                                                                                                                                       |
+| `Must define either a global VPC Cidr Range or an External VPC ID`                             | VPC enabled without network configuration.                     | Provide either `vpcCidrRange` or `optionalExternalVpcId`.                                                                                                                                                                                            |
+| `route table already has a route with destination-prefix-list-id`                              | Imported VPC already has VPC endpoints.                        | Set `app.useGlobalVpc.addVpcEndpoints: false` and manually add missing endpoints.                                                                                                                                                                    |
+| `Invalid request provided: Before you can proceed, you must enable a service-linked role`      | OpenSearch Provisioned service-linked role not yet propagated. | Wait 5 minutes and redeploy. If the issue persists, manually create the roles: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com` and `aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com`. |
+| `Properties validation failed ... array items are not unique` (ALB target group)               | Rare CloudFormation issue with ALB VPC endpoint IP resolution. | No configuration change needed. Redeploy to resolve.                                                                                                                                                                                                 |
 
 ## Uninstalling
 
@@ -270,6 +261,6 @@ Some resources (Amazon S3 buckets, Amazon DynamoDB tables, pipeline stacks) may 
 
 ## Next steps
 
-- [Configuration Reference](configuration-reference.md) -- Comprehensive list of all configuration options.
-- [Permissions Guide](../user-guide/permissions.md) -- Set up roles and access control.
-- [Developer Guide](../developer/setup.md) -- Architecture details and custom development.
+-   [Configuration Reference](configuration-reference.md) -- Comprehensive list of all configuration options.
+-   [Permissions Guide](../user-guide/permissions.md) -- Set up roles and access control.
+-   [Developer Guide](../developer/setup.md) -- Architecture details and custom development.

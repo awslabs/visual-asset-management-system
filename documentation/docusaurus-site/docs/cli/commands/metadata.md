@@ -13,18 +13,18 @@ Manage metadata for assets, files, asset links, and databases through a unified 
 
 All metadata operations use a consistent format with bulk support and two update modes:
 
-- **update** (default): Upsert mode -- creates or updates provided metadata, keeps unlisted keys.
-- **replace_all**: Replace mode -- deletes unlisted keys, upserts provided metadata (with rollback on failure).
+-   **update** (default): Upsert mode -- creates or updates provided metadata, keeps unlisted keys.
+-   **replace_all**: Replace mode -- deletes unlisted keys, upserts provided metadata (with rollback on failure).
 
 ### Supported value types
 
-| Type | Description | Example |
-|---|---|---|
-| `string` | Text values | `"My Asset"` |
-| `number` | Numeric values | `42`, `3.14` |
-| `boolean` | True/false | `"true"`, `"false"` |
-| `object` | JSON objects (stored as string) | `"\{\"key\": \"value\"\}"` |
-| `array` | JSON arrays (stored as string) | `"[\"a\", \"b\"]"` |
+| Type      | Description                     | Example                    |
+| --------- | ------------------------------- | -------------------------- |
+| `string`  | Text values                     | `"My Asset"`               |
+| `number`  | Numeric values                  | `42`, `3.14`               |
+| `boolean` | True/false                      | `"true"`, `"false"`        |
+| `object`  | JSON objects (stored as string) | `"\{\"key\": \"value\"\}"` |
+| `array`   | JSON arrays (stored as string)  | `"[\"a\", \"b\"]"`         |
 
 ---
 
@@ -50,9 +50,9 @@ vamscli metadata asset update -d <DB> -a <ASSET> --json-input <JSON> [--update-t
 
 ```json
 [
-    {"metadataKey": "title", "metadataValue": "My 3D Model", "metadataValueType": "string"},
-    {"metadataKey": "priority", "metadataValue": "1", "metadataValueType": "number"},
-    {"metadataKey": "active", "metadataValue": "true", "metadataValueType": "boolean"}
+    { "metadataKey": "title", "metadataValue": "My 3D Model", "metadataValueType": "string" },
+    { "metadataKey": "priority", "metadataValue": "1", "metadataValueType": "number" },
+    { "metadataKey": "active", "metadataValue": "true", "metadataValueType": "boolean" }
 ]
 ```
 
@@ -81,12 +81,12 @@ List metadata or attributes for a specific file.
 vamscli metadata file list -d <DB> -a <ASSET> --file-path "models/file.gltf" --type metadata [--asset-version-id <VER>] [--json-output]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | Yes | Database ID |
-| `-a`, `--asset-id` | TEXT | Yes | Asset ID |
-| `--file-path` | TEXT | Yes | Relative file path |
-| `--type` | CHOICE | Yes | `metadata` or `attribute` |
+| Option                | Type   | Required | Description               |
+| --------------------- | ------ | -------- | ------------------------- |
+| `-d`, `--database-id` | TEXT   | Yes      | Database ID               |
+| `-a`, `--asset-id`    | TEXT   | Yes      | Asset ID                  |
+| `--file-path`         | TEXT   | Yes      | Relative file path        |
+| `--type`              | CHOICE | Yes      | `metadata` or `attribute` |
 
 ---
 
@@ -178,14 +178,14 @@ List metadata schemas with optional filters.
 vamscli metadata-schema list [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database-id` | TEXT | No | Filter by database ID |
-| `-e`, `--entity-type` | CHOICE | No | Filter: `databaseMetadata`, `assetMetadata`, `fileMetadata`, `fileAttribute`, `assetLinkMetadata` |
-| `--page-size` | INTEGER | No | Items per page |
-| `--max-items` | INTEGER | No | Maximum items (default: 1000) |
-| `--starting-token` | TEXT | No | Pagination token |
-| `--json-output` | Flag | No | Output raw JSON |
+| Option                | Type    | Required | Description                                                                                       |
+| --------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `-d`, `--database-id` | TEXT    | No       | Filter by database ID                                                                             |
+| `-e`, `--entity-type` | CHOICE  | No       | Filter: `databaseMetadata`, `assetMetadata`, `fileMetadata`, `fileAttribute`, `assetLinkMetadata` |
+| `--page-size`         | INTEGER | No       | Items per page                                                                                    |
+| `--max-items`         | INTEGER | No       | Maximum items (default: 1000)                                                                     |
+| `--starting-token`    | TEXT    | No       | Pagination token                                                                                  |
+| `--json-output`       | Flag    | No       | Output raw JSON                                                                                   |
 
 ```bash
 vamscli metadata-schema list
@@ -231,6 +231,6 @@ vamscli metadata asset delete -d my-db -a my-asset --json-input '["old_field"]'
 
 ## Related Pages
 
-- [Asset Commands](assets.md)
-- [File Commands](files.md)
-- [Database Commands](database.md)
+-   [Asset Commands](assets.md)
+-   [File Commands](files.md)
+-   [Database Commands](database.md)

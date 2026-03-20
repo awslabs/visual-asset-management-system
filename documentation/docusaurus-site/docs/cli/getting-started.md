@@ -6,17 +6,16 @@ Use VamsCLI when you need to automate asset management workflows, integrate VAMS
 
 ## System Requirements
 
-| Requirement | Version |
-|---|---|
-| Python | 3.13 or later |
-| pip | Latest recommended |
-| Operating System | Windows, macOS, or Linux |
-| Terminal | UTF-8 capable (Windows Terminal, VS Code terminal) |
+| Requirement      | Version                                            |
+| ---------------- | -------------------------------------------------- |
+| Python           | 3.13 or later                                      |
+| pip              | Latest recommended                                 |
+| Operating System | Windows, macOS, or Linux                           |
+| Terminal         | UTF-8 capable (Windows Terminal, VS Code terminal) |
 
 :::note[Windows Terminal Encoding]
 On Windows, use Windows Terminal or VS Code's integrated terminal. If you encounter encoding errors with Unicode characters, set the environment variable `PYTHONIOENCODING=utf-8` before running VamsCLI.
 :::
-
 
 ## Quick Install
 
@@ -57,8 +56,8 @@ Use the `--profile` flag to configure separate profiles for different environmen
 vamscli --profile production setup https://prod-vams.example.com
 vamscli --profile staging setup https://staging-vams.example.com
 ```
-:::
 
+:::
 
 ## Authentication
 
@@ -99,7 +98,6 @@ vamscli auth set-override -u user@example.com --token "token..." --expires-at "2
 Override tokens do not support automatic refresh. When an override token expires, you must set a new one manually.
 :::
 
-
 ### API Key Authentication
 
 If you have a VAMS API key (created through the web UI or API), you can use it directly without a separate login step. Pass the API key as a token override on any command:
@@ -130,12 +128,12 @@ This displays your user ID, token type, expiration time, and enabled feature swi
 
 Every VamsCLI command supports the following global options:
 
-| Option | Description |
-|---|---|
-| `--profile <name>` | Use a named profile instead of the default profile |
-| `--verbose` | Enable verbose output with detailed error information, API request/response logging, and timing |
-| `--version` | Display the VamsCLI version |
-| `--help` | Display help for any command or subcommand |
+| Option             | Description                                                                                     |
+| ------------------ | ----------------------------------------------------------------------------------------------- |
+| `--profile <name>` | Use a named profile instead of the default profile                                              |
+| `--verbose`        | Enable verbose output with detailed error information, API request/response logging, and timing |
+| `--version`        | Display the VamsCLI version                                                                     |
+| `--help`           | Display help for any command or subcommand                                                      |
 
 The `--profile` option must appear before the command name:
 
@@ -166,7 +164,7 @@ vamscli file list -d my-database -a my-asset-id
 
 ## Next Steps
 
-- [Installation and Profile Management](installation.md) -- Detailed installation, profile configuration, and environment variable overrides
-- [Command Reference](command-reference.md) -- Overview and index of all VamsCLI command groups
-- [Detailed Command Pages](commands/setup-and-auth.md) -- Full option tables, JSON examples, and workflow guides for each command group
-- [Automation and Scripting](automation.md) -- Using VamsCLI in scripts, CI/CD pipelines, and bulk operations
+-   [Installation and Profile Management](installation.md) -- Detailed installation, profile configuration, and environment variable overrides
+-   [Command Reference](command-reference.md) -- Overview and index of all VamsCLI command groups
+-   [Detailed Command Pages](commands/setup-and-auth.md) -- Full option tables, JSON examples, and workflow guides for each command group
+-   [Automation and Scripting](automation.md) -- Using VamsCLI in scripts, CI/CD pipelines, and bulk operations

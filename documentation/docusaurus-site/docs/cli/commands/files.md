@@ -17,21 +17,21 @@ Upload files to an asset with intelligent chunking, progress monitoring, and ret
 vamscli file upload [FILES_OR_DIRECTORY] [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `FILES_OR_DIRECTORY` | PATH | Conditional | File paths or single directory (optional if using `--directory` or `--json-input`) |
-| `-d`, `--database` | TEXT | Yes | Database ID |
-| `-a`, `--asset` | TEXT | Yes | Asset ID |
-| `--directory` | PATH | No | Directory to upload (mutually exclusive with file arguments) |
-| `--asset-preview` | Flag | No | Upload as asset preview (single file only) |
-| `--asset-location` | TEXT | No | Base asset location (default: `/`) |
-| `--recursive` | Flag | No | Include subdirectories when uploading a directory |
-| `--parallel-uploads` | INTEGER | No | Max parallel uploads (default: 10) |
-| `--retry-attempts` | INTEGER | No | Retry attempts per part (default: 3) |
-| `--force-skip` | Flag | No | Auto-skip failed parts after retries |
-| `--hide-progress` | Flag | No | Hide upload progress display |
-| `--json-input` | TEXT | No | JSON input with all parameters |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option               | Type    | Required    | Description                                                                        |
+| -------------------- | ------- | ----------- | ---------------------------------------------------------------------------------- |
+| `FILES_OR_DIRECTORY` | PATH    | Conditional | File paths or single directory (optional if using `--directory` or `--json-input`) |
+| `-d`, `--database`   | TEXT    | Yes         | Database ID                                                                        |
+| `-a`, `--asset`      | TEXT    | Yes         | Asset ID                                                                           |
+| `--directory`        | PATH    | No          | Directory to upload (mutually exclusive with file arguments)                       |
+| `--asset-preview`    | Flag    | No          | Upload as asset preview (single file only)                                         |
+| `--asset-location`   | TEXT    | No          | Base asset location (default: `/`)                                                 |
+| `--recursive`        | Flag    | No          | Include subdirectories when uploading a directory                                  |
+| `--parallel-uploads` | INTEGER | No          | Max parallel uploads (default: 10)                                                 |
+| `--retry-attempts`   | INTEGER | No          | Retry attempts per part (default: 3)                                               |
+| `--force-skip`       | Flag    | No          | Auto-skip failed parts after retries                                               |
+| `--hide-progress`    | Flag    | No          | Hide upload progress display                                                       |
+| `--json-input`       | TEXT    | No          | JSON input with all parameters                                                     |
+| `--json-output`      | Flag    | No          | Output raw JSON response                                                           |
 
 ### Examples
 
@@ -70,19 +70,19 @@ List files in an asset with filtering, pagination, and performance optimization.
 vamscli file list [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database` | TEXT | Yes | Database ID |
-| `-a`, `--asset` | TEXT | Yes | Asset ID |
-| `--prefix` | TEXT | No | Filter files by prefix |
-| `--include-archived` | Flag | No | Include archived files |
-| `--asset-version-id` | TEXT | No | Filter by specific asset version |
-| `--basic` | Flag | No | Skip expensive lookups for faster listing |
-| `--page-size` | INTEGER | No | Items per page |
-| `--max-items` | INTEGER | No | Max total items (with `--auto-paginate`) |
-| `--starting-token` | TEXT | No | Pagination token |
-| `--auto-paginate` | Flag | No | Fetch all items automatically |
-| `--json-output` | Flag | No | Output raw JSON response |
+| Option               | Type    | Required | Description                               |
+| -------------------- | ------- | -------- | ----------------------------------------- |
+| `-d`, `--database`   | TEXT    | Yes      | Database ID                               |
+| `-a`, `--asset`      | TEXT    | Yes      | Asset ID                                  |
+| `--prefix`           | TEXT    | No       | Filter files by prefix                    |
+| `--include-archived` | Flag    | No       | Include archived files                    |
+| `--asset-version-id` | TEXT    | No       | Filter by specific asset version          |
+| `--basic`            | Flag    | No       | Skip expensive lookups for faster listing |
+| `--page-size`        | INTEGER | No       | Items per page                            |
+| `--max-items`        | INTEGER | No       | Max total items (with `--auto-paginate`)  |
+| `--starting-token`   | TEXT    | No       | Pagination token                          |
+| `--auto-paginate`    | Flag    | No       | Fetch all items automatically             |
+| `--json-output`      | Flag    | No       | Output raw JSON response                  |
 
 ```bash
 vamscli file list -d my-db -a my-asset
@@ -135,14 +135,14 @@ Copy a file within an asset, to another asset, or across databases.
 vamscli file copy [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database` | TEXT | Yes | Source database ID |
-| `-a`, `--asset` | TEXT | Yes | Source asset ID |
-| `--source` | TEXT | Yes | Source file path |
-| `--dest` | TEXT | Yes | Destination file path |
-| `--dest-asset` | TEXT | No | Destination asset ID (for cross-asset copy) |
-| `--dest-database` | TEXT | No | Destination database ID (for cross-database copy) |
+| Option             | Type | Required | Description                                       |
+| ------------------ | ---- | -------- | ------------------------------------------------- |
+| `-d`, `--database` | TEXT | Yes      | Source database ID                                |
+| `-a`, `--asset`    | TEXT | Yes      | Source asset ID                                   |
+| `--source`         | TEXT | Yes      | Source file path                                  |
+| `--dest`           | TEXT | Yes      | Destination file path                             |
+| `--dest-asset`     | TEXT | No       | Destination asset ID (for cross-asset copy)       |
+| `--dest-database`  | TEXT | No       | Destination database ID (for cross-database copy) |
 
 ```bash
 vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/copy.gltf"
@@ -206,13 +206,13 @@ Set or remove primary type metadata for a file.
 vamscli file set-primary [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-d`, `--database` | TEXT | Yes | Database ID |
-| `-a`, `--asset` | TEXT | Yes | Asset ID |
-| `-p`, `--path` | TEXT | Yes | File path |
-| `--type` | TEXT | Yes | Primary type: `primary`, `lod1`-`lod5`, `other`, or empty to remove |
-| `--type-other` | TEXT | No | Custom type when type is `other` |
+| Option             | Type | Required | Description                                                         |
+| ------------------ | ---- | -------- | ------------------------------------------------------------------- |
+| `-d`, `--database` | TEXT | Yes      | Database ID                                                         |
+| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                            |
+| `-p`, `--path`     | TEXT | Yes      | File path                                                           |
+| `--type`           | TEXT | Yes      | Primary type: `primary`, `lod1`-`lod5`, `other`, or empty to remove |
+| `--type-other`     | TEXT | No       | Custom type when type is `other`                                    |
 
 ```bash
 vamscli file set-primary -d my-db -a my-asset -p "/model.gltf" --type "primary"
@@ -244,6 +244,6 @@ vamscli file delete-auxiliary -d my-db -a my-asset -p "/file.gltf"
 
 ## Related Pages
 
-- [Asset Commands](assets.md)
-- [Metadata Commands](metadata.md)
-- [Automation and Scripting](../automation.md)
+-   [Asset Commands](assets.md)
+-   [Metadata Commands](metadata.md)
+-   [Automation and Scripting](../automation.md)

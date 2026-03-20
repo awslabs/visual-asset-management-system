@@ -38,7 +38,6 @@ Authorization: vams_ak_abc123...
 When using Cognito or external OAuth, tokens expire after a configured period. The frontend client automatically refreshes tokens using the refresh token grant. API key tokens do not expire but can be revoked through the API key management endpoints.
 :::
 
-
 ---
 
 ## Authorization Model
@@ -63,7 +62,6 @@ Returns the client-side authentication and application configuration. This endpo
 :::note[No Authentication Required]
 This endpoint does not require an `Authorization` header.
 :::
-
 
 **Request Parameters:**
 
@@ -102,9 +100,9 @@ None.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `500` | Internal server error generating configuration. |
+| Status | Description                                     |
+| ------ | ----------------------------------------------- |
+| `500`  | Internal server error generating configuration. |
 
 ---
 
@@ -117,7 +115,6 @@ Returns the current VAMS version. This endpoint is **unauthenticated** and can b
 :::note[No Authentication Required]
 This endpoint does not require an `Authorization` header.
 :::
-
 
 **Request Parameters:**
 
@@ -133,9 +130,9 @@ None.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `500` | Internal server error. |
+| Status | Description            |
+| ------ | ---------------------- |
+| `500`  | Internal server error. |
 
 ---
 
@@ -153,11 +150,7 @@ None.
 
 ```json
 {
-    "featuresEnabled": [
-        "CLOUDFRONTDEPLOY",
-        "LOCATIONSERVICES",
-        "AUTHPROVIDER_COGNITO"
-    ],
+    "featuresEnabled": ["CLOUDFRONTDEPLOY", "LOCATIONSERVICES", "AUTHPROVIDER_COGNITO"],
     "config": {
         "region": "us-east-1"
     }
@@ -166,10 +159,10 @@ None.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized. |
-| `500` | Internal server error. |
+| Status | Description            |
+| ------ | ---------------------- |
+| `403`  | Not authorized.        |
+| `500`  | Internal server error. |
 
 ---
 
@@ -183,14 +176,7 @@ Returns the list of web application routes that the current user is authorized t
 
 ```json
 {
-    "routes": [
-        "/databases",
-        "/assets",
-        "/pipelines",
-        "/workflows",
-        "/admin/roles",
-        "/admin/users"
-    ]
+    "routes": ["/databases", "/assets", "/pipelines", "/workflows", "/admin/roles", "/admin/users"]
 }
 ```
 
@@ -198,21 +184,16 @@ Returns the list of web application routes that the current user is authorized t
 
 ```json
 {
-    "allowedRoutes": [
-        "/databases",
-        "/assets",
-        "/pipelines",
-        "/workflows"
-    ]
+    "allowedRoutes": ["/databases", "/assets", "/pipelines", "/workflows"]
 }
 ```
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid request parameters. |
-| `500` | Internal server error. |
+| Status | Description                 |
+| ------ | --------------------------- |
+| `400`  | Invalid request parameters. |
+| `500`  | Internal server error.      |
 
 ---
 
@@ -224,9 +205,9 @@ Retrieves the login profile for the specified user, including role assignments a
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `userId` | path | string | Yes | User identifier. Pattern: `^[\w\-\.\+\@]{3,256}$` |
+| Parameter | Location | Type   | Required | Description                                       |
+| --------- | -------- | ------ | -------- | ------------------------------------------------- |
+| `userId`  | path     | string | Yes      | User identifier. Pattern: `^[\w\-\.\+\@]{3,256}$` |
 
 **Response:**
 
@@ -240,10 +221,10 @@ Retrieves the login profile for the specified user, including role assignments a
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to view this user's profile. |
-| `500` | Internal server error. |
+| Status | Description                                 |
+| ------ | ------------------------------------------- |
+| `403`  | Not authorized to view this user's profile. |
+| `500`  | Internal server error.                      |
 
 ---
 
@@ -255,9 +236,9 @@ Updates the login profile for a user. This is the primary endpoint for refreshin
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `userId` | path | string | Yes | User identifier. Pattern: `^[\w\-\.\+\@]{3,256}$` |
+| Parameter | Location | Type   | Required | Description                                       |
+| --------- | -------- | ------ | -------- | ------------------------------------------------- |
+| `userId`  | path     | string | Yes      | User identifier. Pattern: `^[\w\-\.\+\@]{3,256}$` |
 
 **Request Body:**
 
@@ -273,10 +254,10 @@ Optional. Body contents may be overridden by internal organizational profile log
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to update this user's profile. |
-| `500` | Internal server error. |
+| Status | Description                                   |
+| ------ | --------------------------------------------- |
+| `403`  | Not authorized to update this user's profile. |
+| `500`  | Internal server error.                        |
 
 ---
 
@@ -292,11 +273,11 @@ Retrieves a paginated list of all users in the Cognito user pool.
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `maxItems` | query | integer | No | Maximum number of users to return (1-60, default: 60). |
-| `pageSize` | query | integer | No | Number of users per page (1-60, default: 60). |
-| `startingToken` | query | string | No | Pagination token from a previous response. |
+| Parameter       | Location | Type    | Required | Description                                            |
+| --------------- | -------- | ------- | -------- | ------------------------------------------------------ |
+| `maxItems`      | query    | integer | No       | Maximum number of users to return (1-60, default: 60). |
+| `pageSize`      | query    | integer | No       | Number of users per page (1-60, default: 60).          |
+| `startingToken` | query    | string  | No       | Pagination token from a previous response.             |
 
 **Response:**
 
@@ -320,12 +301,12 @@ Retrieves a paginated list of all users in the Cognito user pool.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid pagination parameters. |
-| `403` | Not authorized to list users. |
-| `500` | Internal server error. |
-| `503` | Cognito user management is not available. |
+| Status | Description                               |
+| ------ | ----------------------------------------- |
+| `400`  | Invalid pagination parameters.            |
+| `403`  | Not authorized to list users.             |
+| `500`  | Internal server error.                    |
+| `503`  | Cognito user management is not available. |
 
 ---
 
@@ -344,10 +325,10 @@ Creates a new user in the Cognito user pool. Cognito auto-generates a temporary 
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `email` | string | Yes | User's email address (auto-verified). |
-| `phone` | string | No | User's phone number in E.164 format. |
+| Field   | Type   | Required | Description                           |
+| ------- | ------ | -------- | ------------------------------------- |
+| `email` | string | Yes      | User's email address (auto-verified). |
+| `phone` | string | No       | User's phone number in E.164 format.  |
 
 **Response:**
 
@@ -360,12 +341,12 @@ Creates a new user in the Cognito user pool. Cognito auto-generates a temporary 
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or user already exists. |
-| `403` | Not authorized to create users. |
-| `500` | Internal server error. |
-| `503` | Cognito user management is not available. |
+| Status | Description                                |
+| ------ | ------------------------------------------ |
+| `400`  | Invalid parameters or user already exists. |
+| `403`  | Not authorized to create users.            |
+| `500`  | Internal server error.                     |
+| `503`  | Cognito user management is not available.  |
 
 ---
 
@@ -377,9 +358,9 @@ Updates an existing Cognito user's email and/or phone number. Updated attributes
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `userId` | path | string | Yes | User ID (username) to update. |
+| Parameter | Location | Type   | Required | Description                   |
+| --------- | -------- | ------ | -------- | ----------------------------- |
+| `userId`  | path     | string | Yes      | User ID (username) to update. |
 
 **Request Body:**
 
@@ -403,13 +384,13 @@ At least one field (`email` or `phone`) must be provided.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or no fields provided. |
-| `403` | Not authorized to update users. |
-| `404` | User not found. |
-| `500` | Internal server error. |
-| `503` | Cognito user management is not available. |
+| Status | Description                               |
+| ------ | ----------------------------------------- |
+| `400`  | Invalid parameters or no fields provided. |
+| `403`  | Not authorized to update users.           |
+| `404`  | User not found.                           |
+| `500`  | Internal server error.                    |
+| `503`  | Cognito user management is not available. |
 
 ---
 
@@ -423,12 +404,11 @@ Permanently deletes a user from the Cognito user pool.
 This operation cannot be undone. The user will be permanently removed from the Cognito user pool.
 :::
 
-
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `userId` | path | string | Yes | User ID (username) to delete. |
+| Parameter | Location | Type   | Required | Description                   |
+| --------- | -------- | ------ | -------- | ----------------------------- |
+| `userId`  | path     | string | Yes      | User ID (username) to delete. |
 
 **Response:**
 
@@ -441,13 +421,13 @@ This operation cannot be undone. The user will be permanently removed from the C
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid userId parameter. |
-| `403` | Not authorized to delete users. |
-| `404` | User not found. |
-| `500` | Internal server error. |
-| `503` | Cognito user management is not available. |
+| Status | Description                               |
+| ------ | ----------------------------------------- |
+| `400`  | Invalid userId parameter.                 |
+| `403`  | Not authorized to delete users.           |
+| `404`  | User not found.                           |
+| `500`  | Internal server error.                    |
+| `503`  | Cognito user management is not available. |
 
 ---
 
@@ -459,9 +439,9 @@ Resets a user's password using Cognito's built-in password reset. Cognito auto-g
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `userId` | path | string | Yes | User ID (username) to reset password for. |
+| Parameter | Location | Type   | Required | Description                               |
+| --------- | -------- | ------ | -------- | ----------------------------------------- |
+| `userId`  | path     | string | Yes      | User ID (username) to reset password for. |
 
 **Request Body:**
 
@@ -471,9 +451,9 @@ Resets a user's password using Cognito's built-in password reset. Cognito auto-g
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `confirmed` | boolean | No | Confirmation flag for the reset operation. |
+| Field       | Type    | Required | Description                                |
+| ----------- | ------- | -------- | ------------------------------------------ |
+| `confirmed` | boolean | No       | Confirmation flag for the reset operation. |
 
 **Response:**
 
@@ -486,13 +466,13 @@ Resets a user's password using Cognito's built-in password reset. Cognito auto-g
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or confirmation not provided. |
-| `403` | Not authorized to reset passwords. |
-| `404` | User not found. |
-| `500` | Internal server error. |
-| `503` | Cognito user management is not available. |
+| Status | Description                                      |
+| ------ | ------------------------------------------------ |
+| `400`  | Invalid parameters or confirmation not provided. |
+| `403`  | Not authorized to reset passwords.               |
+| `404`  | User not found.                                  |
+| `500`  | Internal server error.                           |
+| `503`  | Cognito user management is not available.        |
 
 ---
 
@@ -529,10 +509,10 @@ None.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to list API keys. |
-| `500` | Internal server error. |
+| Status | Description                      |
+| ------ | -------------------------------- |
+| `403`  | Not authorized to list API keys. |
+| `500`  | Internal server error.           |
 
 ---
 
@@ -566,14 +546,13 @@ Creates a new API key for programmatic access.
 The full API key value is only returned once at creation time. It cannot be retrieved again.
 :::
 
-
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters. |
-| `403` | Not authorized to create API keys. |
-| `500` | Internal server error. |
+| Status | Description                        |
+| ------ | ---------------------------------- |
+| `400`  | Invalid parameters.                |
+| `403`  | Not authorized to create API keys. |
+| `500`  | Internal server error.             |
 
 ---
 
@@ -585,9 +564,9 @@ Retrieves details of a specific API key. The full key value is not returned.
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `apiKeyId` | path | string | Yes | The API key identifier. |
+| Parameter  | Location | Type   | Required | Description             |
+| ---------- | -------- | ------ | -------- | ----------------------- |
+| `apiKeyId` | path     | string | Yes      | The API key identifier. |
 
 **Response:**
 
@@ -604,11 +583,11 @@ Retrieves details of a specific API key. The full key value is not returned.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to view this API key. |
-| `404` | API key not found. |
-| `500` | Internal server error. |
+| Status | Description                          |
+| ------ | ------------------------------------ |
+| `403`  | Not authorized to view this API key. |
+| `404`  | API key not found.                   |
+| `500`  | Internal server error.               |
 
 ---
 
@@ -620,9 +599,9 @@ Updates an API key's properties such as name or enabled status.
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `apiKeyId` | path | string | Yes | The API key identifier. |
+| Parameter  | Location | Type   | Required | Description             |
+| ---------- | -------- | ------ | -------- | ----------------------- |
+| `apiKeyId` | path     | string | Yes      | The API key identifier. |
 
 **Request Body:**
 
@@ -644,12 +623,12 @@ Updates an API key's properties such as name or enabled status.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters. |
-| `403` | Not authorized to update this API key. |
-| `404` | API key not found. |
-| `500` | Internal server error. |
+| Status | Description                            |
+| ------ | -------------------------------------- |
+| `400`  | Invalid parameters.                    |
+| `403`  | Not authorized to update this API key. |
+| `404`  | API key not found.                     |
+| `500`  | Internal server error.                 |
 
 ---
 
@@ -661,9 +640,9 @@ Permanently deletes an API key, revoking all access associated with it.
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `apiKeyId` | path | string | Yes | The API key identifier. |
+| Parameter  | Location | Type   | Required | Description             |
+| ---------- | -------- | ------ | -------- | ----------------------- |
+| `apiKeyId` | path     | string | Yes      | The API key identifier. |
 
 **Response:**
 
@@ -676,9 +655,9 @@ Permanently deletes an API key, revoking all access associated with it.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters. |
-| `403` | Not authorized to delete this API key. |
-| `404` | API key not found. |
-| `500` | Internal server error. |
+| Status | Description                            |
+| ------ | -------------------------------------- |
+| `400`  | Invalid parameters.                    |
+| `403`  | Not authorized to delete this API key. |
+| `404`  | API key not found.                     |
+| `500`  | Internal server error.                 |

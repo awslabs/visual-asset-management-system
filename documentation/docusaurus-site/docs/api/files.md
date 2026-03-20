@@ -8,11 +8,11 @@ For asset-level operations, see [Assets](assets.md). For file metadata, see [Met
 
 ## Concepts
 
-- **File**: An individual object stored in S3 within an asset's directory structure. Files can be organized in folders.
-- **File Version**: S3 object versions tracked through bucket versioning. VAMS also tracks file versions within asset version snapshots.
-- **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
-- **Preview File**: A generated preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file.
-- **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
+-   **File**: An individual object stored in S3 within an asset's directory structure. Files can be organized in folders.
+-   **File Version**: S3 object versions tracked through bucket versioning. VAMS also tracks file versions within asset version snapshots.
+-   **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
+-   **Preview File**: A generated preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file.
+-   **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
 
 ---
 
@@ -26,13 +26,13 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
-| `maxItems` | query | integer | No | Maximum number of files to return. |
-| `pageSize` | query | integer | No | Page size for pagination. |
-| `startingToken` | query | string | No | Continuation token from a previous response. |
+| Parameter       | Location | Type    | Required | Description                                  |
+| --------------- | -------- | ------- | -------- | -------------------------------------------- |
+| `databaseId`    | path     | string  | Yes      | Database identifier.                         |
+| `assetId`       | path     | string  | Yes      | Asset identifier.                            |
+| `maxItems`      | query    | integer | No       | Maximum number of files to return.           |
+| `pageSize`      | query    | integer | No       | Page size for pagination.                    |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response. |
 
 **Response:**
 
@@ -64,12 +64,12 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters. |
-| `403` | Not authorized to list files in this asset. |
-| `404` | Database or asset not found. |
-| `500` | Internal server error. |
+| Status | Description                                 |
+| ------ | ------------------------------------------- |
+| `400`  | Invalid parameters.                         |
+| `403`  | Not authorized to list files in this asset. |
+| `404`  | Database or asset not found.                |
+| `500`  | Internal server error.                      |
 
 ---
 
@@ -81,11 +81,11 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
-| `key` | query | string | Yes | The relative file path (e.g., `/models/building.ifc`). |
+| Parameter    | Location | Type   | Required | Description                                            |
+| ------------ | -------- | ------ | -------- | ------------------------------------------------------ |
+| `databaseId` | path     | string | Yes      | Database identifier.                                   |
+| `assetId`    | path     | string | Yes      | Asset identifier.                                      |
+| `key`        | query    | string | Yes      | The relative file path (e.g., `/models/building.ifc`). |
 
 **Response:**
 
@@ -111,12 +111,12 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or missing `key` parameter. |
-| `403` | Not authorized to view this file. |
-| `404` | File not found. |
-| `500` | Internal server error. |
+| Status | Description                                    |
+| ------ | ---------------------------------------------- |
+| `400`  | Invalid parameters or missing `key` parameter. |
+| `403`  | Not authorized to view this file.              |
+| `404`  | File not found.                                |
+| `500`  | Internal server error.                         |
 
 ---
 
@@ -128,10 +128,10 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Request Body:**
 
@@ -142,10 +142,10 @@ Moves or renames a file within the asset. This copies the file to the new locati
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `sourcePath` | string | Yes | Current relative file path. |
-| `destinationPath` | string | Yes | New relative file path. |
+| Field             | Type   | Required | Description                 |
+| ----------------- | ------ | -------- | --------------------------- |
+| `sourcePath`      | string | Yes      | Current relative file path. |
+| `destinationPath` | string | Yes      | New relative file path.     |
 
 **Response:**
 
@@ -159,11 +159,11 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters, source file not found, or destination already exists. |
-| `403` | Not authorized to modify files in this asset. |
-| `500` | Internal server error. |
+| Status | Description                                                               |
+| ------ | ------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, or destination already exists. |
+| `403`  | Not authorized to modify files in this asset.                             |
+| `500`  | Internal server error.                                                    |
 
 ---
 
@@ -175,10 +175,10 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Source database identifier. |
-| `assetId` | path | string | Yes | Source asset identifier. |
+| Parameter    | Location | Type   | Required | Description                 |
+| ------------ | -------- | ------ | -------- | --------------------------- |
+| `databaseId` | path     | string | Yes      | Source database identifier. |
+| `assetId`    | path     | string | Yes      | Source asset identifier.    |
 
 **Request Body:**
 
@@ -191,12 +191,12 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `sourcePath` | string | Yes | Source file relative path. |
-| `destinationPath` | string | Yes | Destination file relative path. |
-| `destinationAssetId` | string | No | Target asset ID (defaults to same asset). |
-| `destinationDatabaseId` | string | No | Target database ID for cross-database copy. |
+| Field                   | Type   | Required | Description                                 |
+| ----------------------- | ------ | -------- | ------------------------------------------- |
+| `sourcePath`            | string | Yes      | Source file relative path.                  |
+| `destinationPath`       | string | Yes      | Destination file relative path.             |
+| `destinationAssetId`    | string | No       | Target asset ID (defaults to same asset).   |
+| `destinationDatabaseId` | string | No       | Target database ID for cross-database copy. |
 
 **Response:**
 
@@ -210,11 +210,11 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or source file not found. |
-| `403` | Not authorized to copy files. |
-| `500` | Internal server error. |
+| Status | Description                                  |
+| ------ | -------------------------------------------- |
+| `400`  | Invalid parameters or source file not found. |
+| `403`  | Not authorized to copy files.                |
+| `500`  | Internal server error.                       |
 
 ---
 
@@ -228,14 +228,13 @@ Permanently deletes a file from the asset. This removes all versions of the file
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
 :::
 
-
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
-| `key` | query | string | Yes | Relative file path to delete. |
+| Parameter    | Location | Type   | Required | Description                   |
+| ------------ | -------- | ------ | -------- | ----------------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier.          |
+| `assetId`    | path     | string | Yes      | Asset identifier.             |
+| `key`        | query    | string | Yes      | Relative file path to delete. |
 
 **Response:**
 
@@ -247,12 +246,12 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or missing `key`. |
-| `403` | Not authorized to delete files in this asset. |
-| `404` | File not found. |
-| `500` | Internal server error. |
+| Status | Description                                   |
+| ------ | --------------------------------------------- |
+| `400`  | Invalid parameters or missing `key`.          |
+| `403`  | Not authorized to delete files in this asset. |
+| `404`  | File not found.                               |
+| `500`  | Internal server error.                        |
 
 ---
 
@@ -264,11 +263,11 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
-| `key` | query | string | Yes | Relative file path to archive. |
+| Parameter    | Location | Type   | Required | Description                    |
+| ------------ | -------- | ------ | -------- | ------------------------------ |
+| `databaseId` | path     | string | Yes      | Database identifier.           |
+| `assetId`    | path     | string | Yes      | Asset identifier.              |
+| `key`        | query    | string | Yes      | Relative file path to archive. |
 
 **Response:**
 
@@ -280,12 +279,12 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters. |
-| `403` | Not authorized to archive files in this asset. |
-| `404` | File not found. |
-| `500` | Internal server error. |
+| Status | Description                                    |
+| ------ | ---------------------------------------------- |
+| `400`  | Invalid parameters.                            |
+| `403`  | Not authorized to archive files in this asset. |
+| `404`  | File not found.                                |
+| `500`  | Internal server error.                         |
 
 ---
 
@@ -297,10 +296,10 @@ Restores a previously archived file by removing the S3 delete marker.
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Request Body:**
 
@@ -310,9 +309,9 @@ Restores a previously archived file by removing the S3 delete marker.
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `key` | string | Yes | Relative file path to unarchive. |
+| Field | Type   | Required | Description                      |
+| ----- | ------ | -------- | -------------------------------- |
+| `key` | string | Yes      | Relative file path to unarchive. |
 
 **Response:**
 
@@ -324,12 +323,12 @@ Restores a previously archived file by removing the S3 delete marker.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters. |
-| `403` | Not authorized to unarchive files in this asset. |
-| `404` | File not found or not archived. |
-| `500` | Internal server error. |
+| Status | Description                                      |
+| ------ | ------------------------------------------------ |
+| `400`  | Invalid parameters.                              |
+| `403`  | Not authorized to unarchive files in this asset. |
+| `404`  | File not found or not archived.                  |
+| `500`  | Internal server error.                           |
 
 ---
 
@@ -341,10 +340,10 @@ Creates a new folder (zero-byte S3 object with trailing slash) within the asset'
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Request Body:**
 
@@ -354,9 +353,9 @@ Creates a new folder (zero-byte S3 object with trailing slash) within the asset'
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `folderPath` | string | Yes | The folder path to create (must end with `/`). |
+| Field        | Type   | Required | Description                                    |
+| ------------ | ------ | -------- | ---------------------------------------------- |
+| `folderPath` | string | Yes      | The folder path to create (must end with `/`). |
 
 **Response:**
 
@@ -369,11 +368,11 @@ Creates a new folder (zero-byte S3 object with trailing slash) within the asset'
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or folder already exists. |
-| `403` | Not authorized to create folders in this asset. |
-| `500` | Internal server error. |
+| Status | Description                                     |
+| ------ | ----------------------------------------------- |
+| `400`  | Invalid parameters or folder already exists.    |
+| `403`  | Not authorized to create folders in this asset. |
+| `500`  | Internal server error.                          |
 
 ---
 
@@ -385,11 +384,11 @@ Reverts a file to a specific previous S3 version by copying the old version as t
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
-| `versionId` | path | string | Yes | The S3 version ID to revert to. |
+| Parameter    | Location | Type   | Required | Description                     |
+| ------------ | -------- | ------ | -------- | ------------------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier.            |
+| `assetId`    | path     | string | Yes      | Asset identifier.               |
+| `versionId`  | path     | string | Yes      | The S3 version ID to revert to. |
 
 **Request Body:**
 
@@ -399,9 +398,9 @@ Reverts a file to a specific previous S3 version by copying the old version as t
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `key` | string | Yes | Relative file path to revert. |
+| Field | Type   | Required | Description                   |
+| ----- | ------ | -------- | ----------------------------- |
+| `key` | string | Yes      | Relative file path to revert. |
 
 **Response:**
 
@@ -415,12 +414,12 @@ Reverts a file to a specific previous S3 version by copying the old version as t
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or version not found. |
-| `403` | Not authorized to revert file versions. |
-| `404` | File or version not found. |
-| `500` | Internal server error. |
+| Status | Description                              |
+| ------ | ---------------------------------------- |
+| `400`  | Invalid parameters or version not found. |
+| `403`  | Not authorized to revert file versions.  |
+| `404`  | File or version not found.               |
+| `500`  | Internal server error.                   |
 
 ---
 
@@ -432,10 +431,10 @@ Designates a file as the primary representative of its file type within the asse
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Request Body:**
 
@@ -446,10 +445,10 @@ Designates a file as the primary representative of its file type within the asse
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `key` | string | Yes | Relative file path. |
-| `primaryType` | string | Yes | The file type designation. |
+| Field         | Type   | Required | Description                |
+| ------------- | ------ | -------- | -------------------------- |
+| `key`         | string | Yes      | Relative file path.        |
+| `primaryType` | string | Yes      | The file type designation. |
 
 **Response:**
 
@@ -463,12 +462,12 @@ Designates a file as the primary representative of its file type within the asse
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters. |
-| `403` | Not authorized to modify file attributes. |
-| `404` | File not found. |
-| `500` | Internal server error. |
+| Status | Description                               |
+| ------ | ----------------------------------------- |
+| `400`  | Invalid parameters.                       |
+| `403`  | Not authorized to modify file attributes. |
+| `404`  | File not found.                           |
+| `500`  | Internal server error.                    |
 
 ---
 
@@ -493,39 +492,36 @@ Initiates a file upload by returning presigned S3 URLs. For small files, a singl
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `databaseId` | string | Yes | Target database identifier. |
-| `assetId` | string | Yes | Target asset identifier. |
-| `key` | string | Yes | Relative file path for the upload. |
-| `contentType` | string | No | MIME type of the file. |
-| `fileSize` | integer | No | File size in bytes. |
-| `numParts` | integer | No | Number of multipart upload parts (for large files, max 10,000). |
+| Field         | Type    | Required | Description                                                     |
+| ------------- | ------- | -------- | --------------------------------------------------------------- |
+| `databaseId`  | string  | Yes      | Target database identifier.                                     |
+| `assetId`     | string  | Yes      | Target asset identifier.                                        |
+| `key`         | string  | Yes      | Relative file path for the upload.                              |
+| `contentType` | string  | No       | MIME type of the file.                                          |
+| `fileSize`    | integer | No       | File size in bytes.                                             |
+| `numParts`    | integer | No       | Number of multipart upload parts (for large files, max 10,000). |
 
 **Response:**
 
 ```json
 {
     "uploadId": "upload-12345",
-    "presignedUrls": [
-        "https://bucket.s3.amazonaws.com/...?X-Amz-..."
-    ],
+    "presignedUrls": ["https://bucket.s3.amazonaws.com/...?X-Amz-..."],
     "s3UploadId": "multipart-upload-id"
 }
 ```
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters, blocked file extension, or blocked MIME type. |
-| `403` | Not authorized to upload files to this asset. |
-| `500` | Internal server error. |
+| Status | Description                                                       |
+| ------ | ----------------------------------------------------------------- |
+| `400`  | Invalid parameters, blocked file extension, or blocked MIME type. |
+| `403`  | Not authorized to upload files to this asset.                     |
+| `500`  | Internal server error.                                            |
 
 :::info[Blocked File Types]
 For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked.
 :::
-
 
 ---
 
@@ -537,9 +533,9 @@ Completes a multipart file upload by signaling that all parts have been uploaded
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `uploadId` | path | string | Yes | The upload identifier from the initial upload request. |
+| Parameter  | Location | Type   | Required | Description                                            |
+| ---------- | -------- | ------ | -------- | ------------------------------------------------------ |
+| `uploadId` | path     | string | Yes      | The upload identifier from the initial upload request. |
 
 **Request Body:**
 
@@ -564,10 +560,10 @@ Completes a multipart file upload by signaling that all parts have been uploaded
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid upload ID or missing parts. |
-| `500` | Internal server error. |
+| Status | Description                         |
+| ------ | ----------------------------------- |
+| `400`  | Invalid upload ID or missing parts. |
+| `500`  | Internal server error.              |
 
 ---
 
@@ -585,13 +581,13 @@ Returns file metadata (size, content type) without the file body.
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
-| `{proxy+}` | path | string | Yes | The relative file path within the asset. |
-| `v` | query | string | No | S3 version ID for a specific file version. |
-| `avid` | query | string | No | VAMS asset version ID. |
+| Parameter    | Location | Type   | Required | Description                                |
+| ------------ | -------- | ------ | -------- | ------------------------------------------ |
+| `databaseId` | path     | string | Yes      | Database identifier.                       |
+| `assetId`    | path     | string | Yes      | Asset identifier.                          |
+| `{proxy+}`   | path     | string | Yes      | The relative file path within the asset.   |
+| `v`          | query    | string | No       | S3 version ID for a specific file version. |
+| `avid`       | query    | string | No       | VAMS asset version ID.                     |
 
 **Response:**
 
@@ -599,11 +595,11 @@ Returns the raw file content with appropriate `Content-Type` and `Content-Length
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to stream this file. |
-| `404` | File not found. |
-| `500` | Internal server error. |
+| Status | Description                         |
+| ------ | ----------------------------------- |
+| `403`  | Not authorized to stream this file. |
+| `404`  | File not found.                     |
+| `500`  | Internal server error.              |
 
 ---
 
@@ -619,11 +615,11 @@ Returns file metadata without the file body.
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
-| `{proxy+}` | path | string | Yes | The relative file path within the auxiliary bucket. |
+| Parameter    | Location | Type   | Required | Description                                         |
+| ------------ | -------- | ------ | -------- | --------------------------------------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier.                                |
+| `assetId`    | path     | string | Yes      | Asset identifier.                                   |
+| `{proxy+}`   | path     | string | Yes      | The relative file path within the auxiliary bucket. |
 
 **Response:**
 
@@ -631,11 +627,11 @@ Returns the raw file content with appropriate headers.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to stream this file. |
-| `404` | File not found. |
-| `500` | Internal server error. |
+| Status | Description                         |
+| ------ | ----------------------------------- |
+| `403`  | Not authorized to stream this file. |
+| `404`  | File not found.                     |
+| `500`  | Internal server error.              |
 
 ---
 
@@ -649,10 +645,10 @@ Deletes the asset-level preview image.
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Response:**
 
@@ -664,11 +660,11 @@ Deletes the asset-level preview image.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized. |
-| `404` | Asset or preview not found. |
-| `500` | Internal server error. |
+| Status | Description                 |
+| ------ | --------------------------- |
+| `403`  | Not authorized.             |
+| `404`  | Asset or preview not found. |
+| `500`  | Internal server error.      |
 
 ---
 
@@ -680,10 +676,10 @@ Deletes auxiliary preview files (e.g., Potree viewer data) from the auxiliary bu
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Response:**
 
@@ -695,8 +691,8 @@ Deletes auxiliary preview files (e.g., Potree viewer data) from the auxiliary bu
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized. |
-| `404` | Asset not found. |
-| `500` | Internal server error. |
+| Status | Description            |
+| ------ | ---------------------- |
+| `403`  | Not authorized.        |
+| `404`  | Asset not found.       |
+| `500`  | Internal server error. |

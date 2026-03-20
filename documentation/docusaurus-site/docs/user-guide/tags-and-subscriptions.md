@@ -12,16 +12,15 @@ Tags are labels that you assign to assets to classify and organize them. Every t
 
 A tag type defines a named category for grouping related tags. Tag types have the following properties:
 
-| Property    | Description                                                                                                 | Required |
-| ----------- | ----------------------------------------------------------------------------------------------------------- | -------- |
-| Name        | A unique identifier for the tag type. Must be 3--64 characters, alphanumeric with `-` and `_` allowed.      | Yes      |
-| Description | A human-readable description of the tag type's purpose. Must be 4--256 characters.                          | Yes      |
-| Required    | When enabled, assets must have at least one tag of this type assigned during creation or modification.       | No       |
+| Property    | Description                                                                                            | Required |
+| ----------- | ------------------------------------------------------------------------------------------------------ | -------- |
+| Name        | A unique identifier for the tag type. Must be 3--64 characters, alphanumeric with `-` and `_` allowed. | Yes      |
+| Description | A human-readable description of the tag type's purpose. Must be 4--256 characters.                     | Yes      |
+| Required    | When enabled, assets must have at least one tag of this type assigned during creation or modification. | No       |
 
 :::info[Required tag types]
 When a tag type is marked as **Required**, it appears with an `[R]` indicator in the Tags list. Users are expected to assign at least one tag from each required tag type when creating or modifying assets.
 :::
-
 
 #### Creating a tag type
 
@@ -54,23 +53,21 @@ A tag type can only be deleted if no tags are currently assigned to it. Remove a
 You cannot delete a tag type that has tags associated with it. Delete or reassign all tags under the tag type first.
 :::
 
-
 ---
 
 ### Tags
 
 Tags are individual labels that belong to a tag type. Each tag has the following properties:
 
-| Property      | Description                                                                                       | Required |
-| ------------- | ------------------------------------------------------------------------------------------------- | -------- |
-| Name          | A unique identifier across all tag types. Must be 3--64 characters, alphanumeric with `-` and `_`. | Yes      |
-| Description   | A human-readable description of the tag. Must be 4--256 characters.                               | Yes      |
-| Tag Type      | The tag type category this tag belongs to.                                                        | Yes      |
+| Property    | Description                                                                                        | Required |
+| ----------- | -------------------------------------------------------------------------------------------------- | -------- |
+| Name        | A unique identifier across all tag types. Must be 3--64 characters, alphanumeric with `-` and `_`. | Yes      |
+| Description | A human-readable description of the tag. Must be 4--256 characters.                                | Yes      |
+| Tag Type    | The tag type category this tag belongs to.                                                         | Yes      |
 
 :::note[Tag names are globally unique]
 Tag names must be unique across all tag types. You cannot create two tags with the same name, even if they belong to different tag types.
 :::
-
 
 #### Creating a tag
 
@@ -134,7 +131,6 @@ Subscriptions operate through the following mechanism:
 After being added as a subscriber, check your email for a confirmation message from Amazon SNS. You must confirm the subscription before you will receive notifications.
 :::
 
-
 ### Subscribing to an asset
 
 1. Navigate to **Admin - Tags** in the left sidebar, then choose **Subscription Management**.
@@ -152,17 +148,16 @@ After being added as a subscriber, check your email for a confirmation message f
 VAMS resolves subscriber user IDs to email addresses using the user's profile. If a user ID does not have an associated email, the user ID itself is used as the email address (it must be in valid email format). You can also enter direct email addresses for non-user recipients such as resource accounts.
 :::
 
-
 ### Managing subscriptions
 
 The **Subscription Management** page displays all subscriptions you have permission to view. The table shows the following columns:
 
-| Column       | Description                                              |
-| ------------ | -------------------------------------------------------- |
-| Entity Name  | The name of the subscribed asset, linked to its detail page. |
-| Entity Type  | The type of entity (currently **Asset**).                |
-| Event Name   | The type of event being monitored (currently **Asset Version Change**). |
-| Subscribers  | The list of subscribed user IDs or email addresses.      |
+| Column      | Description                                                             |
+| ----------- | ----------------------------------------------------------------------- |
+| Entity Name | The name of the subscribed asset, linked to its detail page.            |
+| Entity Type | The type of entity (currently **Asset**).                               |
+| Event Name  | The type of event being monitored (currently **Asset Version Change**). |
+| Subscribers | The list of subscribed user IDs or email addresses.                     |
 
 You can edit a subscription to add or remove subscribers. When subscribers are removed, their Amazon SNS subscriptions are also removed.
 

@@ -6,7 +6,6 @@ This page describes how to completely remove VAMS from your AWS account, includi
 Uninstalling VAMS permanently deletes all managed resources, including Amazon DynamoDB tables, Amazon Simple Storage Service (Amazon S3) bucket configurations, AWS Lambda functions, and Amazon API Gateway endpoints. This action cannot be undone. Ensure you have backed up all data you intend to keep before proceeding.
 :::
 
-
 ## Pre-uninstall backup
 
 Complete the following backup steps before beginning the uninstall process.
@@ -50,8 +49,8 @@ for TABLE in $(aws dynamodb list-tables \
         --export-format DYNAMODB_JSON
 done
 ```
-:::
 
+:::
 
 ### Back up S3 buckets
 
@@ -69,7 +68,6 @@ aws s3 sync s3://<AUXILIARY_BUCKET> s3://<BACKUP_BUCKET>/vams-backup/auxiliary-b
 :::note[External S3 buckets]
 External S3 buckets configured via `externalAssetBuckets` in `config.json` are not deleted by VAMS uninstall. Only the VAMS-managed bucket policies and event notifications are removed. Your data in external buckets remains intact.
 :::
-
 
 ### Record stack resource identifiers
 
@@ -99,19 +97,18 @@ npx cdk destroy --all
 The `cdk destroy` command prompts for confirmation before proceeding. Type `y` to confirm. To skip the prompt, append `--force` to the command.
 :::
 
-
 The destroy operation typically takes 15-30 minutes depending on the number of resources and enabled features. Monitor progress in the AWS CloudFormation console.
 
 ### Common destroy failures
 
 If the stack destroy fails, check for the following common causes:
 
-| Failure reason | Resolution |
-|---------------|------------|
-| S3 bucket not empty | Empty the bucket first (see [Step 2](#step-2-delete-s3-buckets)). |
-| DynamoDB table deletion protection | Disable deletion protection in the DynamoDB console, then retry. |
-| Resource in use by another stack | Identify and remove the dependent stack first. |
-| Nested stack deletion failed | Delete the failed nested stack manually in CloudFormation, then retry the parent stack deletion. |
+| Failure reason                     | Resolution                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------ |
+| S3 bucket not empty                | Empty the bucket first (see [Step 2](#step-2-delete-s3-buckets)).                                |
+| DynamoDB table deletion protection | Disable deletion protection in the DynamoDB console, then retry.                                 |
+| Resource in use by another stack   | Identify and remove the dependent stack first.                                                   |
+| Nested stack deletion failed       | Delete the failed nested stack manually in CloudFormation, then retry the parent stack deletion. |
 
 If the stack is stuck in `DELETE_FAILED` state, you can force-delete it with specific resources excluded:
 
@@ -159,13 +156,13 @@ done
 
 VAMS creates the following S3 buckets that may require manual deletion:
 
-| Bucket | Description |
-|--------|-------------|
-| Asset bucket(s) | Stores uploaded asset files. One bucket per configuration (new bucket and/or external). |
-| Auxiliary bucket | Stores auto-generated previews, pipeline working files, and viewer data. |
-| Artefacts bucket | Stores CDK deployment artefacts. |
-| Access logs bucket | Stores S3 server access logs. |
-| Web app bucket | Stores the built frontend static files (for both CloudFront and ALB deployments). |
+| Bucket             | Description                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| Asset bucket(s)    | Stores uploaded asset files. One bucket per configuration (new bucket and/or external). |
+| Auxiliary bucket   | Stores auto-generated previews, pipeline working files, and viewer data.                |
+| Artefacts bucket   | Stores CDK deployment artefacts.                                                        |
+| Access logs bucket | Stores S3 server access logs.                                                           |
+| Web app bucket     | Stores the built frontend static files (for both CloudFront and ALB deployments).       |
 
 ## Step 3: Delete DynamoDB tables
 
@@ -244,11 +241,9 @@ aws kms schedule-key-deletion \
 AWS KMS enforces a minimum 7-day and maximum 30-day waiting period before a key is permanently deleted. During this period, the key is disabled but can be canceled. Use a 30-day window to allow time for discovering any remaining encrypted resources.
 :::
 
-
 :::danger[External KMS keys]
 If you provided an external KMS key via `app.useKmsCmkEncryption.optionalExternalCmkArn`, do **not** delete that key. It may be in use by other applications. Only remove the VAMS-specific key policy statements.
 :::
-
 
 ## Step 6: Delete the Amazon Cognito user pool
 
@@ -330,7 +325,6 @@ done
 If you imported an external VPC via `app.useGlobalVpc.optionalExternalVpcId`, do **not** delete the VPC or its subnets. Only remove VAMS-created VPC endpoints and security groups.
 :::
 
-
 ## Verification
 
 After completing all cleanup steps, verify that no VAMS resources remain.
@@ -365,28 +359,27 @@ All of the above commands should return empty results when the uninstall is comp
 
 The following table describes what stops incurring charges immediately after stack deletion versus resources that continue to incur charges until manually cleaned up.
 
-| Resource | Charges stop after `cdk destroy` | Charges continue until manual cleanup |
-|----------|:------:|:------:|
-| AWS Lambda functions | Yes | -- |
-| Amazon API Gateway | Yes | -- |
-| Amazon CloudFront distribution | Yes | -- |
-| Application Load Balancer | Yes | -- |
-| Amazon DynamoDB tables (if deleted) | Yes | -- |
-| Amazon S3 buckets (data storage) | -- | Yes, until buckets are emptied and deleted. |
-| Amazon CloudWatch log groups (storage) | -- | Yes, until log groups are deleted. |
-| AWS KMS keys | -- | Yes, until keys are scheduled for and complete deletion. |
-| Amazon OpenSearch Service | -- | Yes, until collections or domains are deleted. |
-| Amazon Cognito user pool | -- | Minimal, but remains until deleted. |
-| VPC endpoints | -- | Yes, hourly charges until endpoints are deleted. |
-| Elastic IP addresses (if ALB) | -- | Yes, if allocated and not released. |
+| Resource                               | Charges stop after `cdk destroy` |          Charges continue until manual cleanup           |
+| -------------------------------------- | :------------------------------: | :------------------------------------------------------: |
+| AWS Lambda functions                   |               Yes                |                            --                            |
+| Amazon API Gateway                     |               Yes                |                            --                            |
+| Amazon CloudFront distribution         |               Yes                |                            --                            |
+| Application Load Balancer              |               Yes                |                            --                            |
+| Amazon DynamoDB tables (if deleted)    |               Yes                |                            --                            |
+| Amazon S3 buckets (data storage)       |                --                |       Yes, until buckets are emptied and deleted.        |
+| Amazon CloudWatch log groups (storage) |                --                |            Yes, until log groups are deleted.            |
+| AWS KMS keys                           |                --                | Yes, until keys are scheduled for and complete deletion. |
+| Amazon OpenSearch Service              |                --                |      Yes, until collections or domains are deleted.      |
+| Amazon Cognito user pool               |                --                |           Minimal, but remains until deleted.            |
+| VPC endpoints                          |                --                |     Yes, hourly charges until endpoints are deleted.     |
+| Elastic IP addresses (if ALB)          |                --                |           Yes, if allocated and not released.            |
 
 :::tip[Cost verification]
 After completing the uninstall, monitor your AWS billing dashboard for 24-48 hours to confirm that charges from VAMS resources have stopped. Use AWS Cost Explorer to filter costs by the VAMS CloudFormation stack tag if tags were applied during deployment.
 :::
 
-
 ## Related resources
 
-- [Deploy the solution](deploy-the-solution.md)
-- [Update the solution](update-the-solution.md)
-- [External S3 setup](external-s3-setup.md)
+-   [Deploy the solution](deploy-the-solution.md)
+-   [Update the solution](update-the-solution.md)
+-   [External S3 setup](external-s3-setup.md)

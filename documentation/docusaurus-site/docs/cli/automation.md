@@ -13,12 +13,11 @@ vamscli database list --json-output
 :::note[Behavior Differences in JSON Mode]
 When `--json-output` is enabled:
 
-- Status messages and progress indicators are suppressed
-- Interactive confirmation prompts are skipped (use `--confirm` flags instead)
-- Errors are returned as JSON objects to stderr with a non-zero exit code
-- Password prompts are disabled (provide `--password` explicitly)
-:::
-
+-   Status messages and progress indicators are suppressed
+-   Interactive confirmation prompts are skipped (use `--confirm` flags instead)
+-   Errors are returned as JSON objects to stderr with a non-zero exit code
+-   Password prompts are disabled (provide `--password` explicitly)
+    :::
 
 ## Scripting Patterns
 
@@ -156,7 +155,6 @@ vamscli auth login -u "$VAMS_USERNAME" -p "$VAMS_PASSWORD" --save-credentials
 Never store passwords in CI/CD pipeline definitions or version control. Use your CI/CD platform's secrets management to inject credentials as environment variables.
 :::
 
-
 ### Profile-Based Multi-Environment Configuration
 
 Configure profiles for each environment during your pipeline setup stage:
@@ -183,86 +181,86 @@ vamscli --profile staging file upload ./dist/ \
 ```yaml
 name: Upload Assets to VAMS
 on:
-  push:
-    branches: [main]
+    push:
+        branches: [main]
 
 jobs:
-  upload:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    upload:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.13"
 
-      - name: Install VamsCLI
-        run: |
-          cd tools/VamsCLI
-          pip install -e .
+            - name: Install VamsCLI
+              run: |
+                  cd tools/VamsCLI
+                  pip install -e .
 
-      - name: Configure VamsCLI
-        run: |
-          vamscli setup ${{ secrets.VAMS_URL }} --skip-version-check
-          vamscli auth login \
-            --user-id ${{ secrets.VAMS_USER }} \
-            --token-override "${{ secrets.VAMS_TOKEN }}"
+            - name: Configure VamsCLI
+              run: |
+                  vamscli setup ${{ secrets.VAMS_URL }} --skip-version-check
+                  vamscli auth login \
+                    --user-id ${{ secrets.VAMS_USER }} \
+                    --token-override "${{ secrets.VAMS_TOKEN }}"
 
-      - name: Upload Build Artifacts
-        run: |
-          ASSET_RESULT=$(vamscli assets create \
-            -d "${{ vars.VAMS_DATABASE }}" \
-            --name "Release ${{ github.sha }}" \
-            --description "Build from commit ${{ github.sha }}" \
-            --distributable \
-            --json-output)
+            - name: Upload Build Artifacts
+              run: |
+                  ASSET_RESULT=$(vamscli assets create \
+                    -d "${{ vars.VAMS_DATABASE }}" \
+                    --name "Release ${{ github.sha }}" \
+                    --description "Build from commit ${{ github.sha }}" \
+                    --distributable \
+                    --json-output)
 
-          ASSET_ID=$(echo "$ASSET_RESULT" | jq -r '.assetId')
+                  ASSET_ID=$(echo "$ASSET_RESULT" | jq -r '.assetId')
 
-          vamscli file upload ./dist/ \
-            -d "${{ vars.VAMS_DATABASE }}" \
-            -a "$ASSET_ID" \
-            --recursive --json-output
+                  vamscli file upload ./dist/ \
+                    -d "${{ vars.VAMS_DATABASE }}" \
+                    -a "$ASSET_ID" \
+                    --recursive --json-output
 ```
 
 ### Example GitLab CI Pipeline
 
 ```yaml
 stages:
-  - upload
+    - upload
 
 upload-to-vams:
-  stage: upload
-  image: python:3.13
-  script:
-    - cd tools/VamsCLI && pip install -e . && cd ../..
-    - vamscli setup "$VAMS_URL" --skip-version-check
-    - vamscli auth login --user-id "$VAMS_USER" --token-override "$VAMS_TOKEN"
-    - |
-      ASSET_ID=$(vamscli assets create \
-        -d "$VAMS_DATABASE" \
-        --name "Pipeline $CI_PIPELINE_ID" \
-        --description "GitLab pipeline build" \
-        --distributable \
-        --json-output | jq -r '.assetId')
-    - vamscli file upload ./artifacts/ -d "$VAMS_DATABASE" -a "$ASSET_ID" --recursive --json-output
-  variables:
-    VAMS_URL: $VAMS_PROD_URL
-    VAMS_USER: $VAMS_CI_USER
-    VAMS_TOKEN: $VAMS_CI_TOKEN
-    VAMS_DATABASE: $VAMS_PROD_DATABASE
+    stage: upload
+    image: python:3.13
+    script:
+        - cd tools/VamsCLI && pip install -e . && cd ../..
+        - vamscli setup "$VAMS_URL" --skip-version-check
+        - vamscli auth login --user-id "$VAMS_USER" --token-override "$VAMS_TOKEN"
+        - |
+            ASSET_ID=$(vamscli assets create \
+              -d "$VAMS_DATABASE" \
+              --name "Pipeline $CI_PIPELINE_ID" \
+              --description "GitLab pipeline build" \
+              --distributable \
+              --json-output | jq -r '.assetId')
+        - vamscli file upload ./artifacts/ -d "$VAMS_DATABASE" -a "$ASSET_ID" --recursive --json-output
+    variables:
+        VAMS_URL: $VAMS_PROD_URL
+        VAMS_USER: $VAMS_CI_USER
+        VAMS_TOKEN: $VAMS_CI_TOKEN
+        VAMS_DATABASE: $VAMS_PROD_DATABASE
 ```
 
 ## Retry Configuration
 
 VamsCLI automatically retries requests that receive HTTP 429 (Too Many Requests) responses using exponential backoff with jitter. Customize retry behavior through environment variables:
 
-| Environment Variable | Default | Description |
-|---|---|---|
-| `VAMS_CLI_MAX_RETRY_ATTEMPTS` | `5` | Maximum retry attempts per request |
-| `VAMS_CLI_INITIAL_RETRY_DELAY` | `1.0` | Initial delay in seconds before first retry |
-| `VAMS_CLI_MAX_RETRY_DELAY` | `60.0` | Maximum delay in seconds between retries |
+| Environment Variable           | Default | Description                                 |
+| ------------------------------ | ------- | ------------------------------------------- |
+| `VAMS_CLI_MAX_RETRY_ATTEMPTS`  | `5`     | Maximum retry attempts per request          |
+| `VAMS_CLI_INITIAL_RETRY_DELAY` | `1.0`   | Initial delay in seconds before first retry |
+| `VAMS_CLI_MAX_RETRY_DELAY`     | `60.0`  | Maximum delay in seconds between retries    |
 
 For bulk operations that may trigger throttling, increase retry limits:
 
@@ -316,7 +314,6 @@ fi
 `--auto-paginate` and `--starting-token` are mutually exclusive. Use one or the other, not both.
 :::
 
-
 ## JSON Input Files
 
 Several commands accept complex input through `--json-input`. This parameter accepts either an inline JSON string or a file path.
@@ -345,12 +342,11 @@ vamscli assets create -d my-db --json-input create-asset.json
 :::tip[Complex Operations]
 JSON input is particularly useful for:
 
-- Creating assets with tags and complex metadata
-- Bulk metadata updates with many fields
-- Importing permission constraint templates
-- Specifying exact file versions for asset version creation
-:::
-
+-   Creating assets with tags and complex metadata
+-   Bulk metadata updates with many fields
+-   Importing permission constraint templates
+-   Specifying exact file versions for asset version creation
+    :::
 
 ## Error Handling
 
@@ -358,11 +354,11 @@ JSON input is particularly useful for:
 
 VamsCLI uses standard exit codes:
 
-| Exit Code | Meaning |
-|---|---|
-| `0` | Command completed successfully |
-| `1` | Command failed (business logic error, invalid input, API error) |
-| `2` | Invalid command usage (missing required options, unknown commands) |
+| Exit Code | Meaning                                                            |
+| --------- | ------------------------------------------------------------------ |
+| `0`       | Command completed successfully                                     |
+| `1`       | Command failed (business logic error, invalid input, API error)    |
+| `2`       | Invalid command usage (missing required options, unknown commands) |
 
 ### JSON Error Format
 
@@ -370,9 +366,9 @@ When `--json-output` is enabled, errors are output as JSON to stderr:
 
 ```json
 {
-  "error_type": "Asset Not Found",
-  "message": "Asset 'my-asset' not found in database 'my-db'",
-  "helpful_message": "Use 'vamscli assets list -d my-db' to see available assets."
+    "error_type": "Asset Not Found",
+    "message": "Asset 'my-asset' not found in database 'my-db'",
+    "helpful_message": "Use 'vamscli assets list -d my-db' to see available assets."
 }
 ```
 
@@ -422,10 +418,10 @@ vamscli auth refresh --json-output 2>/dev/null || \
 
 Enable `--verbose` for debugging scripts and troubleshooting API issues. Verbose mode outputs detailed information including:
 
-- API request URLs and headers
-- Response status codes and timing
-- Token validation details
-- Retry attempt logs
+-   API request URLs and headers
+-   Response status codes and timing
+-   Token validation details
+-   Retry attempt logs
 
 ```bash
 vamscli --verbose assets list -d my-database
@@ -435,9 +431,8 @@ vamscli --verbose assets list -d my-database
 Verbose log messages are written to a rotating log file and do not interfere with `--json-output`. You can safely use both flags together in scripts where you need clean JSON output but also want log files for debugging.
 :::
 
-
 ## Additional Resources
 
-- [Getting Started](getting-started.md) -- First-time setup and authentication
-- [Installation and Profile Management](installation.md) -- Profiles and configuration files
-- [Command Reference](command-reference.md) -- Complete reference for all commands
+-   [Getting Started](getting-started.md) -- First-time setup and authentication
+-   [Installation and Profile Management](installation.md) -- Profiles and configuration files
+-   [Command Reference](command-reference.md) -- Complete reference for all commands

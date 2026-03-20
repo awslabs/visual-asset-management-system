@@ -6,21 +6,20 @@ This guide covers how to set up a local development environment for all VAMS com
 
 Before starting, ensure you have the following installed on your development machine.
 
-| Tool | Minimum Version | Purpose |
-|------|----------------|---------|
-| Python | 3.13+ | Backend Lambda handlers, CLI tool |
-| Node.js | 20.18.1+ | Frontend build, CDK infrastructure |
-| npm | Included with Node | Package management (never use yarn) |
-| Docker | Latest | CDK deployment, container pipelines |
-| AWS CLI | v2 | AWS account access |
-| AWS CDK CLI | Latest | Infrastructure deployment |
-| Git | Latest | Version control |
-| nvm | Latest | Node version management |
+| Tool        | Minimum Version    | Purpose                             |
+| ----------- | ------------------ | ----------------------------------- |
+| Python      | 3.13+              | Backend Lambda handlers, CLI tool   |
+| Node.js     | 20.18.1+           | Frontend build, CDK infrastructure  |
+| npm         | Included with Node | Package management (never use yarn) |
+| Docker      | Latest             | CDK deployment, container pipelines |
+| AWS CLI     | v2                 | AWS account access                  |
+| AWS CDK CLI | Latest             | Infrastructure deployment           |
+| Git         | Latest             | Version control                     |
+| nvm         | Latest             | Node version management             |
 
 :::info[Python Version Note]
 While AWS Lambda functions run on Python 3.12, local development and testing use Python 3.13+. The `backend/requirements.txt` file targets Python 3.13+ for development dependencies.
 :::
-
 
 ## Frontend Setup
 
@@ -39,7 +38,6 @@ The `npm install` command triggers a `postinstall` script that runs custom viewe
 :::warning[Postinstall Failures]
 If `npm install` fails during the postinstall phase, check the individual viewer install scripts in `web/customInstalls/`. Each viewer has its own installation directory with a `README.md` explaining specific requirements.
 :::
-
 
 ### Start the Development Server
 
@@ -97,7 +95,6 @@ npm run build    # Output: web/dist/
 Vite outputs to `web/dist/` (not `web/build/`). The CDK infrastructure references `../web/dist` when deploying static web assets.
 :::
 
-
 ## Backend Setup
 
 The VAMS backend consists of Python Lambda handlers that run behind Amazon API Gateway.
@@ -116,19 +113,18 @@ pip install -r requirements-dev.txt
 
 ### Key Dependencies
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| `aws-lambda-powertools` | 2.36.0 | Logger, Parser, BaseModel |
-| `boto3` | 1.34.84 | AWS SDK |
-| `pydantic` | 1.10.7 | Data validation (v1 only) |
-| `casbin` | 1.33.0 | ABAC/RBAC authorization |
-| `moto` | 5.1.0 | AWS service mocking (dev) |
-| `pytest` | 8.3.4 | Test framework (dev) |
+| Package                 | Version | Purpose                   |
+| ----------------------- | ------- | ------------------------- |
+| `aws-lambda-powertools` | 2.36.0  | Logger, Parser, BaseModel |
+| `boto3`                 | 1.34.84 | AWS SDK                   |
+| `pydantic`              | 1.10.7  | Data validation (v1 only) |
+| `casbin`                | 1.33.0  | ABAC/RBAC authorization   |
+| `moto`                  | 5.1.0   | AWS service mocking (dev) |
+| `pytest`                | 8.3.4   | Test framework (dev)      |
 
 :::warning[Pydantic Version]
 VAMS uses Pydantic **v1** (1.10.7). Never install or use Pydantic v2 APIs such as `model_validator`, `model_dump`, or `ConfigDict`. These will fail at Lambda import time. See the [Backend Development](backend.md) guide for correct patterns.
 :::
-
 
 ## Infrastructure Setup
 
@@ -166,14 +162,13 @@ npx cdk deploy --all --require-approval never
 Docker must be running before deployment. CDK builds container images for Lambda layers and processing pipeline containers during synthesis.
 :::
 
-
 ### Configuration
 
 Deployment parameters are defined in `infra/config/config.json`. At minimum, update:
 
-- `region` -- the target AWS Region
-- `adminEmailAddress` -- receives the initial Cognito password
-- `baseStackName` -- the CloudFormation stack name prefix
+-   `region` -- the target AWS Region
+-   `adminEmailAddress` -- receives the initial Cognito password
+-   `baseStackName` -- the CloudFormation stack name prefix
 
 See the [Configuration Guide](../deployment/prerequisites.md) for all available options.
 
@@ -225,30 +220,29 @@ npm run prettier-fix      # Auto-fix formatting
 Do not run lint or prettier commands from individual subdirectories. The root-level scripts are configured to cover all relevant source paths.
 :::
 
-
 ## Environment Variables for Local Development
 
 ### Frontend
 
-| Variable | Description | Default |
-|----------|-------------|---------|
+| Variable           | Description                              | Default            |
+| ------------------ | ---------------------------------------- | ------------------ |
 | `DEV_API_ENDPOINT` | Backend API URL (in `web/src/config.ts`) | `""` (same origin) |
-| `PORT` | Dev server port | `3001` |
+| `PORT`             | Dev server port                          | `3001`             |
 
 ### Backend (Local Mock Server)
 
-| Variable | Description |
-|----------|-------------|
-| `USE_LOCAL_MOCKS` | Enable local mock mode (`true`) |
+| Variable               | Description                         |
+| ---------------------- | ----------------------------------- |
+| `USE_LOCAL_MOCKS`      | Enable local mock mode (`true`)     |
 | `COGNITO_AUTH_ENABLED` | Enable/disable Cognito auth locally |
 
 ### Infrastructure
 
-| Variable | Description |
-|----------|-------------|
-| `AWS_REGION` | Target deployment region |
-| `STACK_NAME` | CloudFormation stack name override |
-| `AWS_USE_FIPS_ENDPOINT` | Enable FIPS endpoints (`true`) |
+| Variable                         | Description                                  |
+| -------------------------------- | -------------------------------------------- |
+| `AWS_REGION`                     | Target deployment region                     |
+| `STACK_NAME`                     | CloudFormation stack name override           |
+| `AWS_USE_FIPS_ENDPOINT`          | Enable FIPS endpoints (`true`)               |
 | `BUILDX_NO_DEFAULT_ATTESTATIONS` | Workaround for Docker/CDK build issues (`1`) |
 
 ## Docker Requirements
@@ -305,7 +299,7 @@ docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
 ## Next Steps
 
-- [Backend Development](backend.md) -- Lambda handler patterns and authorization
-- [Frontend Development](frontend.md) -- React component patterns and API integration
-- [CDK Infrastructure](cdk.md) -- Infrastructure patterns and deployment
-- [Viewer Plugin Development](viewer-plugins.md) -- Building custom file viewers
+-   [Backend Development](backend.md) -- Lambda handler patterns and authorization
+-   [Frontend Development](frontend.md) -- React component patterns and API integration
+-   [CDK Infrastructure](cdk.md) -- Infrastructure patterns and deployment
+-   [Viewer Plugin Development](viewer-plugins.md) -- Building custom file viewers

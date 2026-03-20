@@ -27,15 +27,15 @@ Create a new role.
 vamscli role create [OPTIONS]
 ```
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `-r`, `--role-name` | TEXT | Yes | Role name |
-| `--description` | TEXT | Conditional | Role description (required unless using `--json-input`) |
-| `--source` | TEXT | No | Role source (e.g., `LDAP`) |
-| `--source-identifier` | TEXT | No | Source identifier |
-| `--mfa-required` | Flag | No | Enable MFA requirement |
-| `--json-input` | TEXT | No | JSON input |
-| `--json-output` | Flag | No | Output raw JSON |
+| Option                | Type | Required    | Description                                             |
+| --------------------- | ---- | ----------- | ------------------------------------------------------- |
+| `-r`, `--role-name`   | TEXT | Yes         | Role name                                               |
+| `--description`       | TEXT | Conditional | Role description (required unless using `--json-input`) |
+| `--source`            | TEXT | No          | Role source (e.g., `LDAP`)                              |
+| `--source-identifier` | TEXT | No          | Source identifier                                       |
+| `--mfa-required`      | Flag | No          | Enable MFA requirement                                  |
+| `--json-input`        | TEXT | No          | JSON input                                              |
+| `--json-output`       | Flag | No          | Output raw JSON                                         |
 
 ```bash
 vamscli role create -r admin --description "Administrator role"
@@ -137,31 +137,25 @@ vamscli role constraint create -c my-constraint --json-input constraint.json
     "name": "Constraint Name",
     "description": "Constraint description",
     "objectType": "asset",
-    "criteriaAnd": [
-        {"field": "databaseId", "operator": "equals", "value": "db1"}
-    ],
-    "criteriaOr": [
-        {"field": "tags", "operator": "in", "value": ["tag1", "tag2"]}
-    ],
-    "groupPermissions": [
-        {"groupId": "admin", "permission": "read", "permissionType": "allow"}
-    ],
+    "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "db1" }],
+    "criteriaOr": [{ "field": "tags", "operator": "in", "value": ["tag1", "tag2"] }],
+    "groupPermissions": [{ "groupId": "admin", "permission": "read", "permissionType": "allow" }],
     "userPermissions": [
-        {"userId": "user@example.com", "permission": "write", "permissionType": "allow"}
+        { "userId": "user@example.com", "permission": "write", "permissionType": "allow" }
     ]
 }
 ```
 
 #### Criteria operators
 
-| Operator | Description |
-|---|---|
-| `equals` | Exact match |
-| `contains` | Substring match |
-| `in` | Value in array |
-| `startsWith` | Prefix match |
-| `endsWith` | Suffix match |
-| `regex` | Regular expression match |
+| Operator     | Description              |
+| ------------ | ------------------------ |
+| `equals`     | Exact match              |
+| `contains`   | Substring match          |
+| `in`         | Value in array           |
+| `startsWith` | Prefix match             |
+| `endsWith`   | Suffix match             |
+| `regex`      | Regular expression match |
 
 ### role constraint update
 
@@ -193,13 +187,13 @@ vamscli role constraint template import -j ./database-admin.json
 
 Pre-built templates are available in `documentation/permissionsTemplates/`:
 
-| Template | Description |
-|---|---|
-| `database-admin.json` | Full admin access to a specific database |
-| `database-user.json` | Standard user access (create, edit, view) |
-| `database-readonly.json` | Read-only access to a specific database |
-| `global-readonly.json` | Read-only access across all databases |
-| `deny-tagged-assets.json` | Deny access to assets with specific tags |
+| Template                  | Description                               |
+| ------------------------- | ----------------------------------------- |
+| `database-admin.json`     | Full admin access to a specific database  |
+| `database-user.json`      | Standard user access (create, edit, view) |
+| `database-readonly.json`  | Read-only access to a specific database   |
+| `global-readonly.json`    | Read-only access across all databases     |
+| `deny-tagged-assets.json` | Deny access to assets with specific tags  |
 
 ### Template JSON format
 
@@ -220,11 +214,9 @@ Pre-built templates are available in `documentation/permissionsTemplates/`:
             "description": "Allow asset access in {{DATABASE_ID}}",
             "objectType": "asset",
             "criteriaAnd": [
-                {"field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}"}
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
-            "groupPermissions": [
-                {"action": "GET", "type": "allow"}
-            ]
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }
     ]
 }
@@ -248,6 +240,6 @@ vamscli role constraint list --json-output
 
 ## Related Pages
 
-- [Users and API Keys](users-and-keys.md)
-- [Setup and Authentication](setup-and-auth.md)
-- [Permissions User Guide](../../user-guide/permissions.md)
+-   [Users and API Keys](users-and-keys.md)
+-   [Setup and Authentication](setup-and-auth.md)
+-   [Permissions User Guide](../../user-guide/permissions.md)

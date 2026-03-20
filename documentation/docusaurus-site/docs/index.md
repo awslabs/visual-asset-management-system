@@ -20,21 +20,21 @@ VAMS empowers users with a web browser, command-line interface, or direct API ac
 
 ![VAMS Architecture Overview](/img/Commercial-GovCloud-VAMS_Architecture.png)
 
-*VAMS deploys as a serverless architecture on AWS, supporting both commercial and GovCloud regions.*
+_VAMS deploys as a serverless architecture on AWS, supporting both commercial and GovCloud regions._
 
 ---
 
 ## Key capabilities
 
-| Capability | Description |
-|-----------|-------------|
-| **Centralized asset storage** | Store and organize 3D models, point clouds, CAD files, and media in Amazon S3 with versioning and access control |
-| **Interactive visualization** | View assets directly in the browser with 17 built-in viewer plugins for 3D, point cloud, CAD, media, and document formats |
-| **Automated processing** | Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge |
-| **Metadata management** | Attach, search, and validate metadata with schema enforcement across databases, assets, and files |
-| **Fine-grained access control** | Control access with attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels |
-| **Search and discovery** | Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views |
-| **Multi-region deployment** | Deploy to AWS commercial regions or AWS GovCloud (US) |
+| Capability                      | Description                                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **Centralized asset storage**   | Store and organize 3D models, point clouds, CAD files, and media in Amazon S3 with versioning and access control          |
+| **Interactive visualization**   | View assets directly in the browser with 17 built-in viewer plugins for 3D, point cloud, CAD, media, and document formats |
+| **Automated processing**        | Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge                     |
+| **Metadata management**         | Attach, search, and validate metadata with schema enforcement across databases, assets, and files                         |
+| **Fine-grained access control** | Control access with attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels          |
+| **Search and discovery**        | Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views                                |
+| **Multi-region deployment**     | Deploy to AWS commercial regions or AWS GovCloud (US)                                                                     |
 
 ---
 
@@ -42,20 +42,20 @@ VAMS empowers users with a web browser, command-line interface, or direct API ac
 
 VAMS provides three primary methods for interacting with your visual assets:
 
-- **Web Interface** — Browser-based interface for visual asset browsing, interactive 3D viewing, drag-and-drop uploads, and workflow management.
-- **Command Line Interface** — Python CLI tool (`vamscli`) for scripted operations, CI/CD integration, bulk management, and headless environments.
-- **REST API** — Direct API access for custom application development, third-party integrations, and advanced workflow automation.
+-   **Web Interface** — Browser-based interface for visual asset browsing, interactive 3D viewing, drag-and-drop uploads, and workflow management.
+-   **Command Line Interface** — Python CLI tool (`vamscli`) for scripted operations, CI/CD integration, bulk management, and headless environments.
+-   **REST API** — Direct API access for custom application development, third-party integrations, and advanced workflow automation.
 
 ---
 
 ## Get started
 
-| | Guide | Description |
-|---|---|---|
-| 📖 | [**Core Concepts**](concepts/overview.md) | Understand how VAMS organizes data using Databases, Assets, and Files |
-| 🚀 | [**Deploy VAMS**](deployment/prerequisites.md) | Prerequisites, configuration, and step-by-step deployment instructions |
-| 📤 | [**Upload Your First Asset**](user-guide/upload-first-asset.md) | Walk through creating a database, uploading files, and viewing assets |
-| 🔌 | [**API Reference**](api/overview.md) | Complete REST API documentation with request and response examples |
+|     | Guide                                                           | Description                                                            |
+| --- | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 📖  | [**Core Concepts**](concepts/overview.md)                       | Understand how VAMS organizes data using Databases, Assets, and Files  |
+| 🚀  | [**Deploy VAMS**](deployment/prerequisites.md)                  | Prerequisites, configuration, and step-by-step deployment instructions |
+| 📤  | [**Upload Your First Asset**](user-guide/upload-first-asset.md) | Walk through creating a database, uploading files, and viewing assets  |
+| 🔌  | [**API Reference**](api/overview.md)                            | Complete REST API documentation with request and response examples     |
 
 ---
 
@@ -85,8 +85,8 @@ graph TD
     style F5 fill:#e8f5e9,stroke:#388e3c,color:#1b5e20
 ```
 
-- **Databases** are the top-level organizational boundary. Each database maps to an Amazon S3 bucket and defines access control, metadata schemas, and file upload restrictions.
-- **Assets** are versioned collections of files representing a logical unit of spatial data (such as a 3D scan, a building model, or a simulation environment).
-- **Files** are individual data items within an asset, stored with full version history and optional metadata and attributes.
+-   **Databases** are the top-level organizational boundary. Each database maps to an Amazon S3 bucket and defines access control, metadata schemas, and file upload restrictions.
+-   **Assets** are versioned collections of files representing a logical unit of spatial data (such as a 3D scan, a building model, or a simulation environment).
+-   **Files** are individual data items within an asset, stored with full version history and optional metadata and attributes.
 
 Learn more in [Core Concepts](concepts/overview.md).

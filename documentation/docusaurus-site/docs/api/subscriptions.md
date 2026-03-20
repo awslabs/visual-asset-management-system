@@ -6,7 +6,6 @@ This page documents the APIs for managing event subscriptions and databases. Sub
 All endpoints require a valid JWT token in the `Authorization` header. Subscription endpoints enforce Casbin authorization on the associated asset. Database endpoints enforce authorization using the `database` object type.
 :::
 
-
 ---
 
 ## Subscriptions
@@ -23,29 +22,29 @@ GET /subscriptions
 
 #### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                           |
-|-----------------|--------|----------|---------|---------------------------------------|
-| `maxItems`      | number | No       | `100`   | Maximum number of items to return     |
-| `pageSize`      | number | No       | `100`   | Number of items per page              |
+| Parameter       | Type   | Required | Default | Description                             |
+| --------------- | ------ | -------- | ------- | --------------------------------------- |
+| `maxItems`      | number | No       | `100`   | Maximum number of items to return       |
+| `pageSize`      | number | No       | `100`   | Number of items per page                |
 | `startingToken` | string | No       | `null`  | Pagination token from previous response |
 
 #### Response
 
 ```json
 {
-  "message": {
-    "Items": [
-      {
-        "eventName": "Asset Version Change",
-        "entityName": "Asset",
-        "entityId": "my-asset-id",
-        "entityValue": "Building Model",
-        "databaseId": "architecture-db",
-        "subscribers": ["user1@example.com", "user2@example.com"]
-      }
-    ],
-    "NextToken": null
-  }
+    "message": {
+        "Items": [
+            {
+                "eventName": "Asset Version Change",
+                "entityName": "Asset",
+                "entityId": "my-asset-id",
+                "entityValue": "Building Model",
+                "databaseId": "architecture-db",
+                "subscribers": ["user1@example.com", "user2@example.com"]
+            }
+        ],
+        "NextToken": null
+    }
 }
 ```
 
@@ -53,13 +52,12 @@ GET /subscriptions
 The `entityValue` field contains the asset name, and `databaseId` contains the asset's database. These are resolved at query time from the asset record.
 :::
 
-
 #### Error responses
 
-| Status | Description                     |
-|--------|---------------------------------|
-| `403`  | Not authorized                  |
-| `500`  | Internal server error           |
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
 
 ---
 
@@ -73,21 +71,21 @@ POST /subscriptions
 
 #### Request body
 
-| Field         | Type   | Required | Description                                                       |
-|--------------|--------|----------|-------------------------------------------------------------------|
-| `eventName`   | string | Yes      | Event type. Must be `Asset Version Change`.                       |
-| `entityName`  | string | Yes      | Entity type. Must be `Asset`.                                     |
+| Field         | Type   | Required | Description                                                               |
+| ------------- | ------ | -------- | ------------------------------------------------------------------------- |
+| `eventName`   | string | Yes      | Event type. Must be `Asset Version Change`.                               |
+| `entityName`  | string | Yes      | Entity type. Must be `Asset`.                                             |
 | `entityId`    | string | Yes      | Asset ID to subscribe to (3-63 chars, alphanumeric, hyphens, underscores) |
-| `subscribers` | array  | Yes      | Array of user IDs to subscribe                                    |
+| `subscribers` | array  | Yes      | Array of user IDs to subscribe                                            |
 
 #### Request body example
 
 ```json
 {
-  "eventName": "Asset Version Change",
-  "entityName": "Asset",
-  "entityId": "building-model",
-  "subscribers": ["user1@example.com", "user2@example.com"]
+    "eventName": "Asset Version Change",
+    "entityName": "Asset",
+    "entityId": "building-model",
+    "subscribers": ["user1@example.com", "user2@example.com"]
 }
 ```
 
@@ -95,22 +93,21 @@ POST /subscriptions
 VAMS resolves each subscriber's email from their user profile. If a subscriber does not have a valid email in their profile, and their user ID is not in email format, the request is rejected.
 :::
 
-
 #### Response
 
 ```json
 {
-  "message": "success"
+    "message": "success"
 }
 ```
 
 #### Error responses
 
-| Status | Description                                                            |
-|--------|------------------------------------------------------------------------|
+| Status | Description                                                                 |
+| ------ | --------------------------------------------------------------------------- |
 | `400`  | Invalid fields, subscriber already exists, or subscriber has no valid email |
-| `403`  | Not authorized to modify subscriptions for this asset                  |
-| `500`  | Internal server error                                                  |
+| `403`  | Not authorized to modify subscriptions for this asset                       |
+| `500`  | Internal server error                                                       |
 
 ---
 
@@ -130,10 +127,10 @@ Same structure as [Create a subscription](#create-a-subscription). The full subs
 
 ```json
 {
-  "eventName": "Asset Version Change",
-  "entityName": "Asset",
-  "entityId": "building-model",
-  "subscribers": ["user1@example.com", "user3@example.com"]
+    "eventName": "Asset Version Change",
+    "entityName": "Asset",
+    "entityId": "building-model",
+    "subscribers": ["user1@example.com", "user3@example.com"]
 }
 ```
 
@@ -141,17 +138,17 @@ Same structure as [Create a subscription](#create-a-subscription). The full subs
 
 ```json
 {
-  "message": "success"
+    "message": "success"
 }
 ```
 
 #### Error responses
 
-| Status | Description                                            |
-|--------|--------------------------------------------------------|
+| Status | Description                                             |
+| ------ | ------------------------------------------------------- |
 | `400`  | Subscription does not exist or invalid subscriber email |
-| `403`  | Not authorized                                         |
-| `500`  | Internal server error                                  |
+| `403`  | Not authorized                                          |
+| `500`  | Internal server error                                   |
 
 ---
 
@@ -165,21 +162,21 @@ DELETE /subscriptions
 
 #### Request body
 
-| Field         | Type   | Required | Description                     |
-|--------------|--------|----------|---------------------------------|
-| `eventName`   | string | Yes      | Event type                      |
-| `entityName`  | string | Yes      | Entity type                     |
-| `entityId`    | string | Yes      | Asset ID                        |
-| `subscribers` | array  | Yes      | Array of subscriber user IDs    |
+| Field         | Type   | Required | Description                  |
+| ------------- | ------ | -------- | ---------------------------- |
+| `eventName`   | string | Yes      | Event type                   |
+| `entityName`  | string | Yes      | Entity type                  |
+| `entityId`    | string | Yes      | Asset ID                     |
+| `subscribers` | array  | Yes      | Array of subscriber user IDs |
 
 #### Request body example
 
 ```json
 {
-  "eventName": "Asset Version Change",
-  "entityName": "Asset",
-  "entityId": "building-model",
-  "subscribers": ["user1@example.com"]
+    "eventName": "Asset Version Change",
+    "entityName": "Asset",
+    "entityId": "building-model",
+    "subscribers": ["user1@example.com"]
 }
 ```
 
@@ -187,17 +184,17 @@ DELETE /subscriptions
 
 ```json
 {
-  "message": "success"
+    "message": "success"
 }
 ```
 
 #### Error responses
 
-| Status | Description                     |
-|--------|---------------------------------|
-| `400`  | Subscription not found          |
-| `403`  | Not authorized                  |
-| `500`  | Internal server error           |
+| Status | Description            |
+| ------ | ---------------------- |
+| `400`  | Subscription not found |
+| `403`  | Not authorized         |
+| `500`  | Internal server error  |
 
 ---
 
@@ -211,17 +208,17 @@ POST /check-subscription
 
 #### Request body
 
-| Field    | Type   | Required | Description              |
-|---------|--------|----------|--------------------------|
-| `userId` | string | Yes      | User ID to check         |
-| `assetId`| string | Yes      | Asset ID to check        |
+| Field     | Type   | Required | Description       |
+| --------- | ------ | -------- | ----------------- |
+| `userId`  | string | Yes      | User ID to check  |
+| `assetId` | string | Yes      | Asset ID to check |
 
 #### Request body example
 
 ```json
 {
-  "userId": "user@example.com",
-  "assetId": "building-model"
+    "userId": "user@example.com",
+    "assetId": "building-model"
 }
 ```
 
@@ -229,7 +226,7 @@ POST /check-subscription
 
 ```json
 {
-  "message": "success"
+    "message": "success"
 }
 ```
 
@@ -237,7 +234,7 @@ POST /check-subscription
 
 ```json
 {
-  "message": "Subscription doesn't exists."
+    "message": "Subscription doesn't exists."
 }
 ```
 
@@ -253,21 +250,21 @@ DELETE /unsubscribe
 
 #### Request body
 
-| Field         | Type   | Required | Description                     |
-|--------------|--------|----------|---------------------------------|
-| `eventName`   | string | Yes      | Event type                      |
-| `entityName`  | string | Yes      | Entity type                     |
-| `entityId`    | string | Yes      | Asset ID                        |
+| Field         | Type   | Required | Description                            |
+| ------------- | ------ | -------- | -------------------------------------- |
+| `eventName`   | string | Yes      | Event type                             |
+| `entityName`  | string | Yes      | Entity type                            |
+| `entityId`    | string | Yes      | Asset ID                               |
 | `subscribers` | array  | Yes      | Array of subscriber user IDs to remove |
 
 #### Request body example
 
 ```json
 {
-  "eventName": "Asset Version Change",
-  "entityName": "Asset",
-  "entityId": "building-model",
-  "subscribers": ["user@example.com"]
+    "eventName": "Asset Version Change",
+    "entityName": "Asset",
+    "entityId": "building-model",
+    "subscribers": ["user@example.com"]
 }
 ```
 
@@ -275,7 +272,7 @@ DELETE /unsubscribe
 
 ```json
 {
-  "message": "success"
+    "message": "success"
 }
 ```
 
@@ -295,39 +292,39 @@ GET /database
 
 #### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                           |
-|-----------------|--------|----------|---------|---------------------------------------|
-| `maxItems`      | number | No       | `100`   | Maximum number of items to return     |
-| `pageSize`      | number | No       | `100`   | Number of items per page              |
+| Parameter       | Type   | Required | Default | Description                             |
+| --------------- | ------ | -------- | ------- | --------------------------------------- |
+| `maxItems`      | number | No       | `100`   | Maximum number of items to return       |
+| `pageSize`      | number | No       | `100`   | Number of items per page                |
 | `startingToken` | string | No       | `null`  | Pagination token from previous response |
-| `showDeleted`   | string | No       | `false` | Include soft-deleted databases        |
+| `showDeleted`   | string | No       | `false` | Include soft-deleted databases          |
 
 #### Response
 
 ```json
 {
-  "message": {
-    "Items": [
-      {
-        "databaseId": "architecture-db",
-        "databaseName": "Architecture Database",
-        "description": "3D architectural models and floor plans",
-        "assetCount": 42,
-        "dateCreated": "\"March 15 2026 - 10:30:00\"",
-        "dateUpdated": "\"March 16 2026 - 14:20:00\""
-      }
-    ],
-    "NextToken": null
-  }
+    "message": {
+        "Items": [
+            {
+                "databaseId": "architecture-db",
+                "databaseName": "Architecture Database",
+                "description": "3D architectural models and floor plans",
+                "assetCount": 42,
+                "dateCreated": "\"March 15 2026 - 10:30:00\"",
+                "dateUpdated": "\"March 16 2026 - 14:20:00\""
+            }
+        ],
+        "NextToken": null
+    }
 }
 ```
 
 #### Error responses
 
-| Status | Description                     |
-|--------|---------------------------------|
-| `403`  | Not authorized                  |
-| `500`  | Internal server error           |
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
 
 ---
 
@@ -341,9 +338,9 @@ GET /database/{databaseId}
 
 #### Path parameters
 
-| Parameter    | Type   | Required | Description              |
-|-------------|--------|----------|--------------------------|
-| `databaseId` | string | Yes      | Database identifier      |
+| Parameter    | Type   | Required | Description         |
+| ------------ | ------ | -------- | ------------------- |
+| `databaseId` | string | Yes      | Database identifier |
 
 #### Response
 
@@ -351,12 +348,12 @@ Returns a single database object in the same format as the items in the list res
 
 #### Error responses
 
-| Status | Description                     |
-|--------|---------------------------------|
-| `400`  | Invalid `databaseId` format     |
-| `403`  | Not authorized                  |
-| `404`  | Database not found              |
-| `500`  | Internal server error           |
+| Status | Description                 |
+| ------ | --------------------------- |
+| `400`  | Invalid `databaseId` format |
+| `403`  | Not authorized              |
+| `404`  | Database not found          |
+| `500`  | Internal server error       |
 
 ---
 
@@ -370,19 +367,19 @@ POST /database
 
 #### Request body
 
-| Field           | Type   | Required | Description                                                |
-|----------------|--------|----------|------------------------------------------------------------|
-| `databaseId`    | string | Yes      | Unique database identifier (3-63 chars)                    |
-| `databaseName`  | string | Yes      | Human-readable database name                               |
-| `description`   | string | No       | Description of the database                                |
+| Field          | Type   | Required | Description                             |
+| -------------- | ------ | -------- | --------------------------------------- |
+| `databaseId`   | string | Yes      | Unique database identifier (3-63 chars) |
+| `databaseName` | string | Yes      | Human-readable database name            |
+| `description`  | string | No       | Description of the database             |
 
 #### Request body example
 
 ```json
 {
-  "databaseId": "architecture-db",
-  "databaseName": "Architecture Database",
-  "description": "3D architectural models and floor plans"
+    "databaseId": "architecture-db",
+    "databaseName": "Architecture Database",
+    "description": "3D architectural models and floor plans"
 }
 ```
 
@@ -390,17 +387,17 @@ POST /database
 
 ```json
 {
-  "message": "Succeeded"
+    "message": "Succeeded"
 }
 ```
 
 #### Error responses
 
-| Status | Description                     |
-|--------|---------------------------------|
+| Status | Description                                 |
+| ------ | ------------------------------------------- |
 | `400`  | Validation error or database already exists |
-| `403`  | Not authorized                  |
-| `500`  | Internal server error           |
+| `403`  | Not authorized                              |
+| `500`  | Internal server error                       |
 
 ---
 
@@ -414,23 +411,23 @@ PUT /database/{databaseId}
 
 #### Path parameters
 
-| Parameter    | Type   | Required | Description              |
-|-------------|--------|----------|--------------------------|
-| `databaseId` | string | Yes      | Database identifier      |
+| Parameter    | Type   | Required | Description         |
+| ------------ | ------ | -------- | ------------------- |
+| `databaseId` | string | Yes      | Database identifier |
 
 #### Request body
 
-| Field          | Type   | Required | Description                     |
-|---------------|--------|----------|---------------------------------|
-| `databaseName` | string | No       | Updated database name           |
-| `description`  | string | No       | Updated description             |
+| Field          | Type   | Required | Description           |
+| -------------- | ------ | -------- | --------------------- |
+| `databaseName` | string | No       | Updated database name |
+| `description`  | string | No       | Updated description   |
 
 #### Request body example
 
 ```json
 {
-  "databaseName": "Architecture Database (v2)",
-  "description": "Updated 3D architectural models"
+    "databaseName": "Architecture Database (v2)",
+    "description": "Updated 3D architectural models"
 }
 ```
 
@@ -438,7 +435,7 @@ PUT /database/{databaseId}
 
 ```json
 {
-  "message": "Succeeded"
+    "message": "Succeeded"
 }
 ```
 
@@ -454,37 +451,36 @@ DELETE /database/{databaseId}
 
 #### Path parameters
 
-| Parameter    | Type   | Required | Description              |
-|-------------|--------|----------|--------------------------|
-| `databaseId` | string | Yes      | Database identifier      |
+| Parameter    | Type   | Required | Description         |
+| ------------ | ------ | -------- | ------------------- |
+| `databaseId` | string | Yes      | Database identifier |
 
 :::warning[Dependency check]
 A database cannot be deleted if it contains active assets, pipelines, or workflows. Remove all dependent resources before deleting the database.
 :::
 
-
 #### Response
 
 ```json
 {
-  "message": "Database deleted"
+    "message": "Database deleted"
 }
 ```
 
 #### Error responses
 
-| Status | Description                                                        |
-|--------|--------------------------------------------------------------------|
-| `400`  | Database has active assets, pipelines, or workflows                |
-| `403`  | Not authorized                                                     |
-| `404`  | Database not found                                                 |
-| `500`  | Internal server error                                              |
+| Status | Description                                         |
+| ------ | --------------------------------------------------- |
+| `400`  | Database has active assets, pipelines, or workflows |
+| `403`  | Not authorized                                      |
+| `404`  | Database not found                                  |
+| `500`  | Internal server error                               |
 
 ---
 
 ## Related resources
 
-- [Assets API](assets.md) -- Manage assets within databases
-- [Pipelines API](pipelines.md) -- Define pipelines scoped to databases
-- [Workflows API](workflows.md) -- Create workflows within databases
-- [Authorization API](auth.md) -- Configure database-level access permissions
+-   [Assets API](assets.md) -- Manage assets within databases
+-   [Pipelines API](pipelines.md) -- Define pipelines scoped to databases
+-   [Workflows API](workflows.md) -- Create workflows within databases
+-   [Authorization API](auth.md) -- Configure database-level access permissions

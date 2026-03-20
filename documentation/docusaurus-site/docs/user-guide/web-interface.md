@@ -12,7 +12,6 @@ The VAMS interface uses a persistent side navigation panel on the left and a top
 If the navigation panel shows **No Access**, your account does not have any web route permissions assigned. Contact your administrator to request the necessary role assignments.
 :::
 
-
 The side navigation panel can be collapsed or expanded using the toggle control. VAMS remembers your panel state across page navigations within a session.
 
 ---
@@ -25,25 +24,25 @@ The **Databases** page displays all databases you have access to in a searchable
 
 ### Key Features
 
-| Feature | Description |
-|---------|-------------|
-| **Create Database** | Opens a modal dialog to create a new database with a name, description, default bucket, and optional restrictions. |
-| **Edit Database** | Modify an existing database's description, bucket assignment, metadata schema restrictions, and file extension restrictions. |
-| **Metadata modal** | Select a database to view and edit its metadata in a dedicated modal. |
-| **Map thumbnails** | When Amazon Location Service is enabled, toggle the **Show map thumbnails** option to display geographic previews for databases that contain geospatial assets. |
-| **Text filtering** | Use the search box to filter databases by name or other visible fields. |
-| **Column sorting** | Select any column header to sort the table in ascending or descending order. |
-| **Pagination** | Navigate through large database lists using pagination controls. |
+| Feature             | Description                                                                                                                                                     |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Create Database** | Opens a modal dialog to create a new database with a name, description, default bucket, and optional restrictions.                                              |
+| **Edit Database**   | Modify an existing database's description, bucket assignment, metadata schema restrictions, and file extension restrictions.                                    |
+| **Metadata modal**  | Select a database to view and edit its metadata in a dedicated modal.                                                                                           |
+| **Map thumbnails**  | When Amazon Location Service is enabled, toggle the **Show map thumbnails** option to display geographic previews for databases that contain geospatial assets. |
+| **Text filtering**  | Use the search box to filter databases by name or other visible fields.                                                                                         |
+| **Column sorting**  | Select any column header to sort the table in ascending or descending order.                                                                                    |
+| **Pagination**      | Navigate through large database lists using pagination controls.                                                                                                |
 
 ### Database Properties
 
 Each database record displays the following information:
 
-| Column | Description |
-|--------|-------------|
-| **Database Name** | The unique identifier for the database. |
-| **Description** | A human-readable description of the database's purpose. |
-| **Asset Count** | The number of assets contained within the database. |
+| Column            | Description                                             |
+| ----------------- | ------------------------------------------------------- |
+| **Database Name** | The unique identifier for the database.                 |
+| **Description**   | A human-readable description of the database's purpose. |
+| **Asset Count**   | The number of assets contained within the database.     |
 
 ---
 
@@ -57,20 +56,20 @@ The **Assets and Files** page is the primary interface for discovering and brows
 
 VAMS provides three ways to browse assets:
 
-| View Mode | Description |
-|-----------|-------------|
-| **Table view** | A detailed tabular layout with sortable columns. Best for reviewing asset properties in bulk. |
-| **Card view** | A grid of asset cards showing preview thumbnails. Best for visual browsing. |
-| **Map view** | A geographic map display showing asset locations. Available only when Amazon Location Service is enabled. |
+| View Mode      | Description                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------------- |
+| **Table view** | A detailed tabular layout with sortable columns. Best for reviewing asset properties in bulk.             |
+| **Card view**  | A grid of asset cards showing preview thumbnails. Best for visual browsing.                               |
+| **Map view**   | A geographic map display showing asset locations. Available only when Amazon Location Service is enabled. |
 
 ### Search and Filtering
 
 The search page provides several mechanisms for finding assets:
 
-- **Text search** -- Enter keywords to search across asset names and properties.
-- **Database filter** -- Filter assets to a specific database by navigating from the Databases page or using the database selector.
-- **Column customization** -- Show or hide table columns to focus on the properties that matter to you.
-- **Property filtering** -- Use the filter bar to build complex queries combining multiple properties with AND/OR logic.
+-   **Text search** -- Enter keywords to search across asset names and properties.
+-   **Database filter** -- Filter assets to a specific database by navigating from the Databases page or using the database selector.
+-   **Column customization** -- Show or hide table columns to focus on the properties that matter to you.
+-   **Property filtering** -- Use the filter bar to build complex queries combining multiple properties with AND/OR logic.
 
 ### Preview Thumbnails
 
@@ -96,30 +95,30 @@ A breadcrumb trail at the top of the page shows your current location in the hie
 
 The details pane displays the asset's core properties and provides action buttons.
 
-| Element | Description |
-|---------|-------------|
-| **Asset Name** | The display name of the asset, shown as the container header. |
-| **Preview thumbnail** | If a preview image exists, a clickable thumbnail is displayed. Select it to open a larger preview modal. |
-| **Asset Id** | The unique identifier assigned to the asset. |
-| **Description** | The asset's description text. |
-| **Type / Distributable** | The asset type (file extension or "folder" for multi-file assets) and whether downloads are enabled. An info tooltip explains these fields. |
-| **Tags** | Any tags applied to the asset. |
-| **Version selector** | A dropdown to switch between asset versions. The current (latest) version is selected by default. |
-| **Delete button** | Opens the asset deletion dialog (archive or permanent delete). |
-| **Edit button** | Opens the update asset modal to modify name, description, type, distributable status, and tags. |
-| **Subscribe / Subscribed button** | Toggle notification subscription for this asset's version change events. |
+| Element                           | Description                                                                                                                                 |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Asset Name**                    | The display name of the asset, shown as the container header.                                                                               |
+| **Preview thumbnail**             | If a preview image exists, a clickable thumbnail is displayed. Select it to open a larger preview modal.                                    |
+| **Asset Id**                      | The unique identifier assigned to the asset.                                                                                                |
+| **Description**                   | The asset's description text.                                                                                                               |
+| **Type / Distributable**          | The asset type (file extension or "folder" for multi-file assets) and whether downloads are enabled. An info tooltip explains these fields. |
+| **Tags**                          | Any tags applied to the asset.                                                                                                              |
+| **Version selector**              | A dropdown to switch between asset versions. The current (latest) version is selected by default.                                           |
+| **Delete button**                 | Opens the asset deletion dialog (archive or permanent delete).                                                                              |
+| **Edit button**                   | Opens the update asset modal to modify name, description, type, distributable status, and tags.                                             |
+| **Subscribe / Subscribed button** | Toggle notification subscription for this asset's version change events.                                                                    |
 
 ### Tabbed Container
 
 Below the details pane, a tabbed interface provides access to the following sections:
 
-| Tab | Description |
-|-----|-------------|
-| **File Manager** | A split-pane file browser with a directory tree on the left and file details on the right. Supports uploading, moving, copying, renaming, archiving, and deleting files. When viewing a specific version, the label updates to **File Manager (v\{versionId\})** and file operations are read-only. |
-| **Relationships** | View and manage asset-to-asset relationships. Supports parent, child, and related link types, including cross-database relationships. |
-| **Workflows** | View workflow execution history for this asset and trigger new workflow executions. |
-| **Comments** | View and add comments on the asset using a rich text editor. |
-| **Versions** | View the full version history of the asset, including version aliases, comments, and archive status. |
+| Tab               | Description                                                                                                                                                                                                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **File Manager**  | A split-pane file browser with a directory tree on the left and file details on the right. Supports uploading, moving, copying, renaming, archiving, and deleting files. When viewing a specific version, the label updates to **File Manager (v\{versionId\})** and file operations are read-only. |
+| **Relationships** | View and manage asset-to-asset relationships. Supports parent, child, and related link types, including cross-database relationships.                                                                                                                                                               |
+| **Workflows**     | View workflow execution history for this asset and trigger new workflow executions.                                                                                                                                                                                                                 |
+| **Comments**      | View and add comments on the asset using a rich text editor.                                                                                                                                                                                                                                        |
+| **Versions**      | View the full version history of the asset, including version aliases, comments, and archive status.                                                                                                                                                                                                |
 
 ### Metadata Section
 
@@ -135,21 +134,20 @@ When you select a file in the file manager and choose to view it, VAMS opens a d
 
 VAMS includes 17 viewer plugins covering a wide range of file formats:
 
-| Category | Viewers | Example Extensions |
-|----------|---------|-------------------|
-| **3D Models** | Three.js, Online 3D Viewer, Needle USD, Cesium | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.usd`, `.usdz` |
-| **Point Clouds** | Potree Viewer | `.e57`, `.las`, `.laz`, `.ply` |
-| **Gaussian Splats** | BabylonJS, PlayCanvas | `.ply`, `.spz`, `.sog` |
-| **Images** | Image Viewer | `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif` |
-| **Video** | Video Player | `.mp4`, `.webm`, `.mov`, `.avi`, `.mkv` |
-| **Audio** | Audio Player | `.mp3`, `.wav`, `.ogg`, `.aac`, `.flac` |
-| **Documents** | PDF Viewer, HTML Viewer, Text Viewer | `.pdf`, `.html`, `.txt`, `.json`, `.xml`, `.md` |
-| **Data** | Columnar Data Viewer | `.csv`, `.rds`, `.fcs` |
+| Category            | Viewers                                        | Example Extensions                                       |
+| ------------------- | ---------------------------------------------- | -------------------------------------------------------- |
+| **3D Models**       | Three.js, Online 3D Viewer, Needle USD, Cesium | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.usd`, `.usdz` |
+| **Point Clouds**    | Potree Viewer                                  | `.e57`, `.las`, `.laz`, `.ply`                           |
+| **Gaussian Splats** | BabylonJS, PlayCanvas                          | `.ply`, `.spz`, `.sog`                                   |
+| **Images**          | Image Viewer                                   | `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`                  |
+| **Video**           | Video Player                                   | `.mp4`, `.webm`, `.mov`, `.avi`, `.mkv`                  |
+| **Audio**           | Audio Player                                   | `.mp3`, `.wav`, `.ogg`, `.aac`, `.flac`                  |
+| **Documents**       | PDF Viewer, HTML Viewer, Text Viewer           | `.pdf`, `.html`, `.txt`, `.json`, `.xml`, `.md`          |
+| **Data**            | Columnar Data Viewer                           | `.csv`, `.rds`, `.fcs`                                   |
 
 :::tip
 If a file's extension matches multiple viewers, VAMS selects the highest-priority viewer. The preview viewer serves as a fallback for files that have a preview image but no dedicated viewer.
 :::
-
 
 ---
 
@@ -181,10 +179,10 @@ The **Workflows** page lets you create and manage workflows that chain multiple 
 
 From this page you can:
 
-- View all workflows and their associated databases
-- Create new workflows with the workflow builder
-- Edit existing workflow configurations
-- View workflow execution history
+-   View all workflows and their associated databases
+-   Create new workflows with the workflow builder
+-   Edit existing workflow configurations
+-   View workflow execution history
 
 ---
 
@@ -192,10 +190,10 @@ From this page you can:
 
 The **Settings** dropdown in the top navigation bar provides access to theme preferences. VAMS offers two themes:
 
-| Theme | Description |
-|-------|-------------|
-| **Dark Theme** | Default theme with a dark background. Reduces eye strain in low-light conditions. |
-| **Light Theme** | Light background theme for bright environments. |
+| Theme           | Description                                                                       |
+| --------------- | --------------------------------------------------------------------------------- |
+| **Dark Theme**  | Default theme with a dark background. Reduces eye strain in low-light conditions. |
+| **Light Theme** | Light background theme for bright environments.                                   |
 
 Select a theme from the dropdown to switch immediately. The active theme is marked with a checkmark. Your preference persists across browser sessions.
 

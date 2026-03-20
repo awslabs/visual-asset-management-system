@@ -8,10 +8,10 @@ For general API information, see the [API Overview](overview.md). For file-level
 
 ## Concepts
 
-- **Asset**: A logical container for one or more files within a database. Assets have metadata, tags, version history, and storage locations.
-- **Database**: A logical grouping of assets. Each database has an associated S3 bucket for storage.
-- **Asset Version**: A point-in-time snapshot of an asset's files. Versions are created manually or when files are uploaded.
-- **Archive**: Soft-deletion of an asset. Archived assets can be unarchived. Permanent deletion removes all data.
+-   **Asset**: A logical container for one or more files within a database. Assets have metadata, tags, version history, and storage locations.
+-   **Database**: A logical grouping of assets. Each database has an associated S3 bucket for storage.
+-   **Asset Version**: A point-in-time snapshot of an asset's files. Versions are created manually or when files are uploaded.
+-   **Archive**: Soft-deletion of an asset. Archived assets can be unarchived. Permanent deletion removes all data.
 
 ---
 
@@ -25,13 +25,13 @@ Returns a paginated list of all assets in the specified database. By default, ar
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. Pattern: `^[-_a-zA-Z0-9]{3,63}$` |
-| `showDeleted` | query | boolean | No | When `true`, returns archived (soft-deleted) assets instead of active assets. Default: `false`. |
-| `maxItems` | query | integer | No | Maximum number of assets to return. Default: `100`. |
-| `pageSize` | query | integer | No | Page size for pagination. Default: `100`. |
-| `startingToken` | query | string | No | Continuation token from a previous response. |
+| Parameter       | Location | Type    | Required | Description                                                                                     |
+| --------------- | -------- | ------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `databaseId`    | path     | string  | Yes      | Database identifier. Pattern: `^[-_a-zA-Z0-9]{3,63}$`                                           |
+| `showDeleted`   | query    | boolean | No       | When `true`, returns archived (soft-deleted) assets instead of active assets. Default: `false`. |
+| `maxItems`      | query    | integer | No       | Maximum number of assets to return. Default: `100`.                                             |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`.                                                       |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response.                                                    |
 
 **Response:**
 
@@ -72,10 +72,10 @@ Returns a paginated list of all assets in the specified database. By default, ar
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `404` | Database not found. |
-| `500` | Internal server error. |
+| Status | Description            |
+| ------ | ---------------------- |
+| `404`  | Database not found.    |
+| `500`  | Internal server error. |
 
 ---
 
@@ -87,11 +87,11 @@ Returns a paginated list of all assets across all databases that the user has pe
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `maxItems` | query | integer | No | Maximum number of assets to return. Default: `100`. |
-| `pageSize` | query | integer | No | Page size for pagination. Default: `100`. |
-| `startingToken` | query | string | No | Continuation token from a previous response. |
+| Parameter       | Location | Type    | Required | Description                                         |
+| --------------- | -------- | ------- | -------- | --------------------------------------------------- |
+| `maxItems`      | query    | integer | No       | Maximum number of assets to return. Default: `100`. |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`.           |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response.        |
 
 **Response:**
 
@@ -114,9 +114,9 @@ Returns a paginated list of all assets across all databases that the user has pe
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `500` | Internal server error. |
+| Status | Description            |
+| ------ | ---------------------- |
+| `500`  | Internal server error. |
 
 ---
 
@@ -139,14 +139,14 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `databaseId` | string | Yes | Target database identifier. |
-| `assetName` | string | Yes | Display name for the asset (1-256 characters). |
-| `description` | string | Yes | Asset description (4-256 characters). |
-| `isDistributable` | boolean | Yes | Whether the asset can be downloaded. |
-| `assetType` | string | No | File type classification. |
-| `tags` | array[string] | No | Tags for categorization. |
+| Field             | Type          | Required | Description                                    |
+| ----------------- | ------------- | -------- | ---------------------------------------------- |
+| `databaseId`      | string        | Yes      | Target database identifier.                    |
+| `assetName`       | string        | Yes      | Display name for the asset (1-256 characters). |
+| `description`     | string        | Yes      | Asset description (4-256 characters).          |
+| `isDistributable` | boolean       | Yes      | Whether the asset can be downloaded.           |
+| `assetType`       | string        | No       | File type classification.                      |
+| `tags`            | array[string] | No       | Tags for categorization.                       |
 
 **Response:**
 
@@ -159,12 +159,12 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or validation error. |
-| `403` | Not authorized to create assets in this database. |
-| `404` | Database not found. |
-| `500` | Internal server error. |
+| Status | Description                                       |
+| ------ | ------------------------------------------------- |
+| `400`  | Invalid parameters or validation error.           |
+| `403`  | Not authorized to create assets in this database. |
+| `404`  | Database not found.                               |
+| `500`  | Internal server error.                            |
 
 ---
 
@@ -176,11 +176,11 @@ Retrieves detailed information about a specific asset, including version informa
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
-| `showDeleted` | query | boolean | No | When `true`, also searches archived assets. Default: `false`. |
+| Parameter     | Location | Type    | Required | Description                                                   |
+| ------------- | -------- | ------- | -------- | ------------------------------------------------------------- |
+| `databaseId`  | path     | string  | Yes      | Database identifier.                                          |
+| `assetId`     | path     | string  | Yes      | Asset identifier.                                             |
+| `showDeleted` | query    | boolean | No       | When `true`, also searches archived assets. Default: `false`. |
 
 **Response:**
 
@@ -217,11 +217,11 @@ Retrieves detailed information about a specific asset, including version informa
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to view this asset. |
-| `404` | Database or asset not found. |
-| `500` | Internal server error. |
+| Status | Description                        |
+| ------ | ---------------------------------- |
+| `403`  | Not authorized to view this asset. |
+| `404`  | Database or asset not found.       |
+| `500`  | Internal server error.             |
 
 ---
 
@@ -233,10 +233,10 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Request Body:**
 
@@ -249,12 +249,12 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `assetName` | string | No | Updated asset name. |
-| `description` | string | No | Updated description. |
-| `isDistributable` | boolean | No | Updated distributable flag. |
-| `tags` | array[string] | No | Updated tags (replaces existing tags). |
+| Field             | Type          | Required | Description                            |
+| ----------------- | ------------- | -------- | -------------------------------------- |
+| `assetName`       | string        | No       | Updated asset name.                    |
+| `description`     | string        | No       | Updated description.                   |
+| `isDistributable` | boolean       | No       | Updated distributable flag.            |
+| `tags`            | array[string] | No       | Updated tags (replaces existing tags). |
 
 **Response:**
 
@@ -274,12 +274,12 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters or validation error. |
-| `403` | Not authorized to update this asset. |
-| `404` | Asset not found. |
-| `500` | Internal server error. |
+| Status | Description                             |
+| ------ | --------------------------------------- |
+| `400`  | Invalid parameters or validation error. |
+| `403`  | Not authorized to update this asset.    |
+| `404`  | Asset not found.                        |
+| `500`  | Internal server error.                  |
 
 ---
 
@@ -293,13 +293,12 @@ Soft-deletes an asset by archiving it. Archived assets can be restored using the
 Archiving is a soft-delete. The asset data is preserved and can be restored. For permanent deletion, use the [Delete Asset](#delete-asset) endpoint.
 :::
 
-
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Response:**
 
@@ -311,11 +310,11 @@ Archiving is a soft-delete. The asset data is preserved and can be restored. For
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to archive this asset. |
-| `404` | Asset not found. |
-| `500` | Internal server error. |
+| Status | Description                           |
+| ------ | ------------------------------------- |
+| `403`  | Not authorized to archive this asset. |
+| `404`  | Asset not found.                      |
+| `500`  | Internal server error.                |
 
 ---
 
@@ -327,10 +326,10 @@ Restores a previously archived asset, making it active again.
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Response:**
 
@@ -342,11 +341,11 @@ Restores a previously archived asset, making it active again.
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to unarchive this asset. |
-| `404` | Asset not found or not archived. |
-| `500` | Internal server error. |
+| Status | Description                             |
+| ------ | --------------------------------------- |
+| `403`  | Not authorized to unarchive this asset. |
+| `404`  | Asset not found or not archived.        |
+| `500`  | Internal server error.                  |
 
 ---
 
@@ -360,13 +359,12 @@ Permanently deletes an asset, including all associated files, metadata, versions
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.
 :::
 
-
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Response:**
 
@@ -378,11 +376,11 @@ This operation permanently removes the asset and all its data. It cannot be undo
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `403` | Not authorized to delete this asset. |
-| `404` | Asset not found. |
-| `500` | Internal server error. |
+| Status | Description                          |
+| ------ | ------------------------------------ |
+| `403`  | Not authorized to delete this asset. |
+| `404`  | Asset not found.                     |
+| `500`  | Internal server error.               |
 
 ---
 
@@ -394,10 +392,10 @@ Generates a presigned S3 URL for downloading a file from an asset. The URL is ti
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Asset identifier. |
+| Parameter    | Location | Type   | Required | Description          |
+| ------------ | -------- | ------ | -------- | -------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier. |
+| `assetId`    | path     | string | Yes      | Asset identifier.    |
 
 **Request Body:**
 
@@ -410,17 +408,16 @@ Generates a presigned S3 URL for downloading a file from an asset. The URL is ti
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `key` | string | No | Relative file path within the asset. If omitted, the asset's primary file is used. |
-| `versionId` | string | No | S3 version ID to download a specific version. |
-| `assetVersionId` | string | No | VAMS asset version ID. Resolves the S3 version from the version snapshot. |
-| `assetVersionIdAlias` | string | No | Named version alias. Resolves to an asset version ID, then to the S3 version. |
+| Field                 | Type   | Required | Description                                                                        |
+| --------------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
+| `key`                 | string | No       | Relative file path within the asset. If omitted, the asset's primary file is used. |
+| `versionId`           | string | No       | S3 version ID to download a specific version.                                      |
+| `assetVersionId`      | string | No       | VAMS asset version ID. Resolves the S3 version from the version snapshot.          |
+| `assetVersionIdAlias` | string | No       | Named version alias. Resolves to an asset version ID, then to the S3 version.      |
 
 :::warning[Version Parameter Exclusivity]
 Only one of `versionId`, `assetVersionId`, or `assetVersionIdAlias` can be specified. Providing more than one returns a `400` error. Version parameters are not allowed for asset preview downloads.
 :::
-
 
 **Response:**
 
@@ -432,13 +429,13 @@ Only one of `versionId`, `assetVersionId`, or `assetVersionIdAlias` can be speci
 
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters, multiple version parameters specified, or version parameters used with preview downloads. |
-| `401` | Asset is not distributable. |
-| `403` | Not authorized to download this asset. |
-| `404` | Database, asset, version, or file not found. |
-| `500` | Internal server error. |
+| Status | Description                                                                                                   |
+| ------ | ------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, multiple version parameters specified, or version parameters used with preview downloads. |
+| `401`  | Asset is not distributable.                                                                                   |
+| `403`  | Not authorized to download this asset.                                                                        |
+| `404`  | Database, asset, version, or file not found.                                                                  |
+| `500`  | Internal server error.                                                                                        |
 
 ---
 
@@ -450,10 +447,10 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 
 **Request Parameters:**
 
-| Parameter | Location | Type | Required | Description |
-|-----------|----------|------|----------|-------------|
-| `databaseId` | path | string | Yes | Database identifier. |
-| `assetId` | path | string | Yes | Root asset identifier. |
+| Parameter    | Location | Type   | Required | Description            |
+| ------------ | -------- | ------ | -------- | ---------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier.   |
+| `assetId`    | path     | string | Yes      | Root asset identifier. |
 
 **Request Body:**
 
@@ -475,21 +472,21 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 }
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `generatePresignedUrls` | boolean | `false` | Generate presigned S3 URLs for file downloads. |
-| `includeFolderFiles` | boolean | `false` | Include folder markers in file listings. |
-| `includeOnlyPrimaryTypeFiles` | boolean | `false` | Include only files with `primaryType` metadata set. |
-| `includeFileMetadata` | boolean | `true` | Include file-specific metadata. |
-| `includeAssetLinkMetadata` | boolean | `true` | Include asset link relationship metadata. |
-| `includeAssetMetadata` | boolean | `true` | Include asset-level metadata. |
-| `fetchAssetRelationships` | boolean | `true` | Fetch asset relationships. When `false`, returns only the root asset. |
-| `fetchEntireChildrenSubtrees` | boolean | `false` | Fetch complete child tree hierarchy instead of one level. |
-| `includeParentRelationships` | boolean | `false` | Include parent relationships in the relationship data. |
-| `includeArchivedFiles` | boolean | `false` | Include archived files in export. |
-| `fileExtensions` | array[string] | -- | Filter files to specified extensions only. |
-| `maxAssets` | integer | `100` | Maximum assets per page (1-1000). |
-| `startingToken` | string | -- | Pagination token from a previous response. |
+| Field                         | Type          | Default | Description                                                           |
+| ----------------------------- | ------------- | ------- | --------------------------------------------------------------------- |
+| `generatePresignedUrls`       | boolean       | `false` | Generate presigned S3 URLs for file downloads.                        |
+| `includeFolderFiles`          | boolean       | `false` | Include folder markers in file listings.                              |
+| `includeOnlyPrimaryTypeFiles` | boolean       | `false` | Include only files with `primaryType` metadata set.                   |
+| `includeFileMetadata`         | boolean       | `true`  | Include file-specific metadata.                                       |
+| `includeAssetLinkMetadata`    | boolean       | `true`  | Include asset link relationship metadata.                             |
+| `includeAssetMetadata`        | boolean       | `true`  | Include asset-level metadata.                                         |
+| `fetchAssetRelationships`     | boolean       | `true`  | Fetch asset relationships. When `false`, returns only the root asset. |
+| `fetchEntireChildrenSubtrees` | boolean       | `false` | Fetch complete child tree hierarchy instead of one level.             |
+| `includeParentRelationships`  | boolean       | `false` | Include parent relationships in the relationship data.                |
+| `includeArchivedFiles`        | boolean       | `false` | Include archived files in export.                                     |
+| `fileExtensions`              | array[string] | --      | Filter files to specified extensions only.                            |
+| `maxAssets`                   | integer       | `100`   | Maximum assets per page (1-1000).                                     |
+| `startingToken`               | string        | --      | Pagination token from a previous response.                            |
 
 **Response:**
 
@@ -521,12 +518,11 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 Responses exceeding 100KB are automatically gzip-compressed. The `Content-Encoding: gzip` header indicates compression.
 :::
 
-
 **Error Responses:**
 
-| Status | Description |
-|--------|-------------|
-| `400` | Invalid parameters. |
-| `403` | Not authorized to export this asset. |
-| `404` | Asset not found. |
-| `500` | Internal server error. |
+| Status | Description                          |
+| ------ | ------------------------------------ |
+| `400`  | Invalid parameters.                  |
+| `403`  | Not authorized to export this asset. |
+| `404`  | Asset not found.                     |
+| `500`  | Internal server error.               |

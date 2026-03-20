@@ -12,7 +12,6 @@ An API key is a credential that impersonates a specific VAMS user. When an API c
 API keys grant the same level of access as the associated user. Treat API keys with the same care as passwords. Store them securely, rotate them regularly, and set expiration dates whenever possible.
 :::
 
-
 ### How API keys work
 
 1. An administrator creates an API key and associates it with an existing VAMS user ID.
@@ -24,7 +23,6 @@ API keys grant the same level of access as the associated user. Treat API keys w
 The user ID specified during API key creation must already have at least one VAMS role assigned. You cannot create an API key for a user with no roles.
 :::
 
-
 ---
 
 ## Creating an API key
@@ -33,13 +31,13 @@ The user ID specified during API key creation must already have at least one VAM
 2. Choose **Create API Key**.
 3. Complete the form fields:
 
-| Field            | Description                                                                                   | Required |
-| ---------------- | --------------------------------------------------------------------------------------------- | -------- |
-| Name             | A unique, human-readable name for the API key. Used for identification in the management console. | Yes      |
-| User ID          | The VAMS user ID this key will impersonate. The user must have roles assigned.                 | Yes      |
-| Description      | A description of the key's purpose. Maximum 256 characters.                                   | Yes      |
-| Expiration Date  | An optional date when the key will automatically become invalid. Format: `YYYY/MM/DD`.        | No       |
-| Expiration Time  | The time of day (UTC) when the key expires. Defaults to `23:59:59`. Only available when an expiration date is set. | No       |
+| Field           | Description                                                                                                        | Required |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ | -------- |
+| Name            | A unique, human-readable name for the API key. Used for identification in the management console.                  | Yes      |
+| User ID         | The VAMS user ID this key will impersonate. The user must have roles assigned.                                     | Yes      |
+| Description     | A description of the key's purpose. Maximum 256 characters.                                                        | Yes      |
+| Expiration Date | An optional date when the key will automatically become invalid. Format: `YYYY/MM/DD`.                             | No       |
+| Expiration Time | The time of day (UTC) when the key expires. Defaults to `23:59:59`. Only available when an expiration date is set. | No       |
 
 4. Choose **Create API Key**.
 5. **Copy the generated key immediately.** The key value is displayed only once in the confirmation dialog.
@@ -49,7 +47,6 @@ The user ID specified during API key creation must already have at least one VAM
 :::warning[Save the key now]
 The API key value is shown only once after creation. If you close the dialog without copying the key, you must delete the API key and create a new one. There is no way to retrieve the key value after creation.
 :::
-
 
 ---
 
@@ -85,7 +82,6 @@ vamscli asset list --database-id my-database
 For CI/CD pipelines, create a dedicated VAMS user with a role that has only the minimum permissions required by the pipeline. Set an expiration date on the API key and rotate it regularly.
 :::
 
-
 ---
 
 ## Managing API keys
@@ -94,16 +90,16 @@ For CI/CD pipelines, create a dedicated VAMS user with a role that has only the 
 
 The **API Key Management** page displays all API keys in a table with the following columns:
 
-| Column      | Description                                              |
-| ----------- | -------------------------------------------------------- |
-| Name        | The human-readable name assigned to the key.             |
-| Key ID      | The unique identifier for the API key record.            |
-| Description | The description of the key's purpose.                    |
-| User ID     | The VAMS user ID the key impersonates.                   |
-| Created By  | The user who created the API key.                        |
-| Created At  | The date and time the key was created.                   |
+| Column      | Description                                                         |
+| ----------- | ------------------------------------------------------------------- |
+| Name        | The human-readable name assigned to the key.                        |
+| Key ID      | The unique identifier for the API key record.                       |
+| Description | The description of the key's purpose.                               |
+| User ID     | The VAMS user ID the key impersonates.                              |
+| Created By  | The user who created the API key.                                   |
+| Created At  | The date and time the key was created.                              |
 | Expires At  | The expiration date and time, or **Never** if no expiration is set. |
-| Active      | Whether the key is currently active or inactive.         |
+| Active      | Whether the key is currently active or inactive.                    |
 
 Use the text filter at the top of the table to search by name, user ID, or description.
 
@@ -126,7 +122,6 @@ You can update the description, expiration date, and active status of an existin
 If you need to temporarily revoke access, toggle the key to **Inactive** instead of deleting it. This preserves the key record and allows you to reactivate it later.
 :::
 
-
 ### Deleting an API key
 
 Deleting an API key is permanent and cannot be undone. Any applications or scripts using the key will immediately lose access.
@@ -141,14 +136,14 @@ Deleting an API key is permanent and cannot be undone. Any applications or scrip
 
 Follow these recommendations to maintain the security of your VAMS API keys:
 
-| Practice                        | Description                                                                                   |
-| ------------------------------- | --------------------------------------------------------------------------------------------- |
-| Set expiration dates            | Always set an expiration date on API keys, especially for CI/CD pipelines and automation.     |
-| Use least-privilege users       | Associate API keys with users that have only the minimum permissions required for the use case. |
-| Rotate keys regularly           | Create new keys and decommission old ones on a regular schedule.                              |
-| Never commit keys to source control | Store API keys in secrets managers (such as AWS Secrets Manager) or CI/CD secret variables. |
-| Monitor key usage               | Review the API Key Management page periodically to identify unused or expired keys.           |
-| Deactivate compromised keys     | If a key is compromised, immediately set it to **Inactive** and create a replacement.         |
+| Practice                            | Description                                                                                     |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Set expiration dates                | Always set an expiration date on API keys, especially for CI/CD pipelines and automation.       |
+| Use least-privilege users           | Associate API keys with users that have only the minimum permissions required for the use case. |
+| Rotate keys regularly               | Create new keys and decommission old ones on a regular schedule.                                |
+| Never commit keys to source control | Store API keys in secrets managers (such as AWS Secrets Manager) or CI/CD secret variables.     |
+| Monitor key usage                   | Review the API Key Management page periodically to identify unused or expired keys.             |
+| Deactivate compromised keys         | If a key is compromised, immediately set it to **Inactive** and create a replacement.           |
 
 :::warning[Audit logging]
 All API key operations (creation, update, deletion) are recorded in the VAMS audit log. Administrators can review these logs in Amazon CloudWatch to track who created, modified, or deleted API keys.

@@ -6,25 +6,25 @@ The CAD/Mesh Metadata Extraction pipeline automatically extracts comprehensive m
 
 ### CAD Formats
 
-| Format | Extension | Handler | Key Metadata |
-|:---|:---|:---|:---|
-| STEP | `.step`, `.stp` | CadQuery (Open CASCADE) | Geometry dimensions, assembly hierarchy, volumes, surface areas, shape statistics, units |
-| DXF | `.dxf` | CadQuery | Layer information, 2D drawing data |
+| Format | Extension       | Handler                 | Key Metadata                                                                             |
+| :----- | :-------------- | :---------------------- | :--------------------------------------------------------------------------------------- |
+| STEP   | `.step`, `.stp` | CadQuery (Open CASCADE) | Geometry dimensions, assembly hierarchy, volumes, surface areas, shape statistics, units |
+| DXF    | `.dxf`          | CadQuery                | Layer information, 2D drawing data                                                       |
 
 ### Mesh Formats
 
-| Format | Extension | Handler | Key Metadata |
-|:---|:---|:---|:---|
-| STL | `.stl` | Trimesh | Triangle count, vertex count, bounding box, model size |
-| OBJ | `.obj` | Trimesh | Polygon count, vertex count, texture references, materials |
-| PLY | `.ply` | Trimesh | Vertex count, vertex colors, normals |
-| GLTF | `.gltf` | Trimesh | Shader info, animation data, texture references |
-| GLB | `.glb` | Trimesh | Shader info, animation data, embedded textures |
-| 3MF | `.3mf` | Trimesh | 3D printing metadata, units |
-| XAML | `.xaml` | Trimesh | Transform matrices, model size |
-| 3DXML | `.3dxml` | Trimesh | Dassault-specific metadata |
-| DAE | `.dae` | Trimesh | Animation data, materials, scene hierarchy |
-| XYZ | `.xyz` | Trimesh | Point count, bounding box |
+| Format | Extension | Handler | Key Metadata                                               |
+| :----- | :-------- | :------ | :--------------------------------------------------------- |
+| STL    | `.stl`    | Trimesh | Triangle count, vertex count, bounding box, model size     |
+| OBJ    | `.obj`    | Trimesh | Polygon count, vertex count, texture references, materials |
+| PLY    | `.ply`    | Trimesh | Vertex count, vertex colors, normals                       |
+| GLTF   | `.gltf`   | Trimesh | Shader info, animation data, texture references            |
+| GLB    | `.glb`    | Trimesh | Shader info, animation data, embedded textures             |
+| 3MF    | `.3mf`    | Trimesh | 3D printing metadata, units                                |
+| XAML   | `.xaml`   | Trimesh | Transform matrices, model size                             |
+| 3DXML  | `.3dxml`  | Trimesh | Dassault-specific metadata                                 |
+| DAE    | `.dae`    | Trimesh | Animation data, materials, scene hierarchy                 |
+| XYZ    | `.xyz`    | Trimesh | Point count, bounding box                                  |
 
 ## Architecture
 
@@ -70,25 +70,25 @@ This pipeline uses the **Lambda** execution type with synchronous invocation. Li
 
 ### CAD Files (STEP, DXF)
 
-| Category | Fields |
-|:---|:---|
-| Geometric details | Dimensions (length, width, height), volume, surface area |
-| Assembly hierarchy | Component tree, relationships between parts |
-| Materials | Material names and properties (if embedded in the file) |
-| Shape statistics | Face count, edge count, vertex count per component |
-| Units | Unit of measurement from the file header |
-| Custom metadata | Top-level node properties |
+| Category           | Fields                                                   |
+| :----------------- | :------------------------------------------------------- |
+| Geometric details  | Dimensions (length, width, height), volume, surface area |
+| Assembly hierarchy | Component tree, relationships between parts              |
+| Materials          | Material names and properties (if embedded in the file)  |
+| Shape statistics   | Face count, edge count, vertex count per component       |
+| Units              | Unit of measurement from the file header                 |
+| Custom metadata    | Top-level node properties                                |
 
 ### Mesh Files (STL, OBJ, PLY, GLB, etc.)
 
-| Category | Fields |
-|:---|:---|
-| Geometry | Triangle count, vertex count, polygon count |
-| Bounding box | Dimensions (X, Y, Z extents), model size |
-| Textures | Embedded or referenced texture information |
-| Shaders | Shader information (GLTF/GLB formats) |
-| Animation | Frame count, duration (if present) |
-| Transforms | Rotation, scale, translation matrices |
+| Category        | Fields                                       |
+| :-------------- | :------------------------------------------- |
+| Geometry        | Triangle count, vertex count, polygon count  |
+| Bounding box    | Dimensions (X, Y, Z extents), model size     |
+| Textures        | Embedded or referenced texture information   |
+| Shaders         | Shader information (GLTF/GLB formats)        |
+| Animation       | Frame count, duration (if present)           |
+| Transforms      | Rotation, scale, translation matrices        |
 | Format-specific | DRACO compression info, 3D Tiles data, units |
 
 ## Configuration
@@ -111,16 +111,15 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option | Default | Description |
-|:---|:---|:---|
-| `enabled` | `false` | Deploy the metadata extraction pipeline infrastructure. |
-| `autoRegisterWithVAMS` | `true` | Automatically register the pipeline and workflow during CDK deployment. |
-| `autoRegisterAutoTriggerOnFileUpload` | `true` | Automatically trigger the pipeline when supported CAD or mesh files are uploaded. |
+| Option                                | Default | Description                                                                       |
+| :------------------------------------ | :------ | :-------------------------------------------------------------------------------- |
+| `enabled`                             | `false` | Deploy the metadata extraction pipeline infrastructure.                           |
+| `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow during CDK deployment.           |
+| `autoRegisterAutoTriggerOnFileUpload` | `true`  | Automatically trigger the pipeline when supported CAD or mesh files are uploaded. |
 
 :::tip[Automatic Metadata Enrichment]
 When both `autoRegisterWithVAMS` and `autoRegisterAutoTriggerOnFileUpload` are enabled, every CAD or mesh file uploaded to VAMS is automatically analyzed and enriched with metadata. This provides immediate searchable properties for newly uploaded assets without user intervention.
 :::
-
 
 ## Output Format
 
@@ -157,32 +156,32 @@ This pipeline runs as a containerized Lambda function and does not require a VPC
 
 The Lambda container image is built during CDK deployment from `backendPipelines/conversion/meshCadMetadataExtraction/lambdaContainer/Dockerfile`. It includes:
 
-- **Python 3.12** -- Lambda runtime
-- **CadQuery** -- CAD file processing (STEP, DXF)
-- **Trimesh** -- Mesh file processing (STL, OBJ, PLY, GLTF, GLB, etc.)
-- **NumPy** -- Numerical computation for geometric analysis
-- **AWS Lambda Powertools** -- Structured logging
+-   **Python 3.12** -- Lambda runtime
+-   **CadQuery** -- CAD file processing (STEP, DXF)
+-   **Trimesh** -- Mesh file processing (STL, OBJ, PLY, GLTF, GLB, etc.)
+-   **NumPy** -- Numerical computation for geometric analysis
+-   **AWS Lambda Powertools** -- Structured logging
 
 ## Infrastructure Components
 
-| Resource | Service | Purpose |
-|:---|:---|:---|
-| Container Lambda Function | AWS Lambda | Metadata extraction execution |
-| Container Image | Amazon ECR | CadQuery + Trimesh container image |
-| Step Functions State Machine | AWS Step Functions | Workflow orchestration |
-| Lambda Function (vamsExecute) | AWS Lambda | Pipeline coordination |
+| Resource                      | Service            | Purpose                            |
+| :---------------------------- | :----------------- | :--------------------------------- |
+| Container Lambda Function     | AWS Lambda         | Metadata extraction execution      |
+| Container Image               | Amazon ECR         | CadQuery + Trimesh container image |
+| Step Functions State Machine  | AWS Step Functions | Workflow orchestration             |
+| Lambda Function (vamsExecute) | AWS Lambda         | Pipeline coordination              |
 
 ## Limitations
 
-| Constraint | Details |
-|:---|:---|
-| Maximum file size | Limited by Lambda container `/tmp` storage (10 GB) |
-| Execution timeout | 15 minutes (Lambda maximum) |
-| Read-only extraction | The pipeline reads metadata but does not modify the source file |
-| Format fidelity | Metadata depth varies by format; some formats embed richer metadata than others |
+| Constraint           | Details                                                                         |
+| :------------------- | :------------------------------------------------------------------------------ |
+| Maximum file size    | Limited by Lambda container `/tmp` storage (10 GB)                              |
+| Execution timeout    | 15 minutes (Lambda maximum)                                                     |
+| Read-only extraction | The pipeline reads metadata but does not modify the source file                 |
+| Format fidelity      | Metadata depth varies by format; some formats embed richer metadata than others |
 
 ## Related Resources
 
-- [Pipeline System Overview](overview.md)
-- [3D Basic Conversion Pipeline](3d-conversion.md) -- converts between the same file formats
-- [3D Preview Thumbnail Pipeline](3d-thumbnail.md) -- generates visual previews from similar file formats
+-   [Pipeline System Overview](overview.md)
+-   [3D Basic Conversion Pipeline](3d-conversion.md) -- converts between the same file formats
+-   [3D Preview Thumbnail Pipeline](3d-thumbnail.md) -- generates visual previews from similar file formats

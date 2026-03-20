@@ -36,10 +36,10 @@ graph TD
 
 ## How each level relates to the others
 
-| Relationship | Description |
-|---|---|
-| Database contains Assets | A database acts as the top-level boundary. All assets belong to exactly one database. |
-| Asset contains Files | An asset groups one or more files together under a common identifier and version history. |
+| Relationship              | Description                                                                                                 |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Database contains Assets  | A database acts as the top-level boundary. All assets belong to exactly one database.                       |
+| Asset contains Files      | An asset groups one or more files together under a common identifier and version history.                   |
 | Files belong to one Asset | Each file exists within a single asset's Amazon S3 prefix. Cross-asset file references use copy operations. |
 
 Assets can also be linked across databases using [asset relationships](assets.md#asset-relationships-and-links), which support both peer ("related") and hierarchical ("parent-child") link types.
@@ -48,30 +48,30 @@ Assets can also be linked across databases using [asset relationships](assets.md
 
 VAMS data maps directly to underlying AWS services, giving administrators full visibility into how content is stored and managed.
 
-| VAMS Concept | AWS Resource | Key Details |
-|---|---|---|
-| Database | Amazon S3 bucket + Amazon DynamoDB record | One Amazon S3 bucket per database (or a shared bucket with a unique prefix). Database metadata stored in Amazon DynamoDB. |
-| Asset | Amazon S3 prefix + Amazon DynamoDB record | Assets are stored under `{baseAssetsPrefix}{assetId}/` in the database's bucket. Asset metadata and version history stored in Amazon DynamoDB. |
-| File | Amazon S3 object | Individual objects within the asset prefix. Amazon S3 versioning provides file-level version history. |
-| Metadata | Amazon DynamoDB records | Stored in dedicated Amazon DynamoDB tables keyed by database, asset, and file path. |
-| Asset Versions | Amazon DynamoDB records + Amazon S3 version IDs | Each asset version is a snapshot recording which Amazon S3 version ID of each file was current at the time the version was created. |
+| VAMS Concept   | AWS Resource                                    | Key Details                                                                                                                                    |
+| -------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database       | Amazon S3 bucket + Amazon DynamoDB record       | One Amazon S3 bucket per database (or a shared bucket with a unique prefix). Database metadata stored in Amazon DynamoDB.                      |
+| Asset          | Amazon S3 prefix + Amazon DynamoDB record       | Assets are stored under `{baseAssetsPrefix}{assetId}/` in the database's bucket. Asset metadata and version history stored in Amazon DynamoDB. |
+| File           | Amazon S3 object                                | Individual objects within the asset prefix. Amazon S3 versioning provides file-level version history.                                          |
+| Metadata       | Amazon DynamoDB records                         | Stored in dedicated Amazon DynamoDB tables keyed by database, asset, and file path.                                                            |
+| Asset Versions | Amazon DynamoDB records + Amazon S3 version IDs | Each asset version is a snapshot recording which Amazon S3 version ID of each file was current at the time the version was created.            |
 
 ## Operations available at each level
 
 The following table summarizes the operations that can be performed at each level of the hierarchy.
 
-| Operation | Database | Asset | File |
-|---|---|---|---|
-| Create | Yes | Yes | Yes (upload) |
-| Read / List | Yes | Yes | Yes |
-| Update | Yes (description, settings) | Yes (name, description, tags, isDistributable) | Yes (metadata, attributes, primary type) |
-| Archive (soft delete) | Yes | Yes | Yes |
-| Unarchive (restore) | No | Yes | Yes |
-| Permanent delete | No | Yes | Yes |
-| Copy | No | No | Yes (within and across databases) |
-| Move / Rename | No | No | Yes |
-| Version | No | Yes (asset-level snapshots) | Yes (Amazon S3 object versioning) |
-| Metadata | Yes (database metadata) | Yes (asset metadata) | Yes (file metadata and file attributes) |
+| Operation             | Database                    | Asset                                          | File                                     |
+| --------------------- | --------------------------- | ---------------------------------------------- | ---------------------------------------- |
+| Create                | Yes                         | Yes                                            | Yes (upload)                             |
+| Read / List           | Yes                         | Yes                                            | Yes                                      |
+| Update                | Yes (description, settings) | Yes (name, description, tags, isDistributable) | Yes (metadata, attributes, primary type) |
+| Archive (soft delete) | Yes                         | Yes                                            | Yes                                      |
+| Unarchive (restore)   | No                          | Yes                                            | Yes                                      |
+| Permanent delete      | No                          | Yes                                            | Yes                                      |
+| Copy                  | No                          | No                                             | Yes (within and across databases)        |
+| Move / Rename         | No                          | No                                             | Yes                                      |
+| Version               | No                          | Yes (asset-level snapshots)                    | Yes (Amazon S3 object versioning)        |
+| Metadata              | Yes (database metadata)     | Yes (asset metadata)                           | Yes (file metadata and file attributes)  |
 
 ## Supporting concepts
 

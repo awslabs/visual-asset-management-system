@@ -4,18 +4,18 @@ The Gaussian Splatting pipeline generates 3D Gaussian splat reconstructions from
 
 ## Supported Input Formats
 
-| Format | Extension | Description |
-|:---|:---|:---|
-| ZIP archive | `.zip` | Archive containing a set of images for multi-view reconstruction |
-| MP4 video | `.mp4` | Video file from which frames are extracted for reconstruction |
-| MOV video | `.mov` | QuickTime video file from which frames are extracted |
+| Format      | Extension | Description                                                      |
+| :---------- | :-------- | :--------------------------------------------------------------- |
+| ZIP archive | `.zip`    | Archive containing a set of images for multi-view reconstruction |
+| MP4 video   | `.mp4`    | Video file from which frames are extracted for reconstruction    |
+| MOV video   | `.mov`    | QuickTime video file from which frames are extracted             |
 
 ## Output Formats
 
-| Format | Extension | Description |
-|:---|:---|:---|
-| PLY | `.ply` | Standard 3D Gaussian splat point cloud for viewing |
-| SPZ | `.spz` | Compressed splat format optimized for web viewing |
+| Format | Extension | Description                                        |
+| :----- | :-------- | :------------------------------------------------- |
+| PLY    | `.ply`    | Standard 3D Gaussian splat point cloud for viewing |
+| SPZ    | `.spz`    | Compressed splat format optimized for web viewing  |
 
 ## Architecture
 
@@ -85,27 +85,26 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option | Default | Description |
-|:---|:---|:---|
-| `enabled` | `false` | Deploy the Gaussian Splatting pipeline infrastructure. Enables the global VPC. |
-| `autoRegisterWithVAMS` | `false` | Automatically register the pipeline and workflow during CDK deployment. |
+| Option                 | Default | Description                                                                    |
+| :--------------------- | :------ | :----------------------------------------------------------------------------- |
+| `enabled`              | `false` | Deploy the Gaussian Splatting pipeline infrastructure. Enables the global VPC. |
+| `autoRegisterWithVAMS` | `false` | Automatically register the pipeline and workflow during CDK deployment.        |
 
 :::note[No Auto-Trigger on Upload]
 Unlike preview pipelines, the Gaussian Splatting pipeline does not support `autoRegisterAutoTriggerOnFileUpload`. Reconstruction jobs are resource-intensive and should be triggered intentionally through the VAMS web interface or API.
 :::
 
-
 ## Pipeline Parameters
 
 When executing the pipeline, the following parameters can be configured through the VAMS workflow input:
 
-| Parameter | Description | Default |
-|:---|:---|:---|
-| `MODEL` | Splatting model type (e.g., `splatfacto`, `splatfacto-big`) | `splatfacto` |
-| `MAX_STEPS` | Number of training iterations | Varies by model |
-| `SFM_SOFTWARE_NAME` | Structure from Motion software (`COLMAP` or `GLOMAP`) | `COLMAP` |
-| `REMOVE_BACKGROUND` | Enable background removal from input images | `false` |
-| `GENERATE_SPLAT` | Enable generation of compressed splat output files | `true` |
+| Parameter           | Description                                                 | Default         |
+| :------------------ | :---------------------------------------------------------- | :-------------- |
+| `MODEL`             | Splatting model type (e.g., `splatfacto`, `splatfacto-big`) | `splatfacto`    |
+| `MAX_STEPS`         | Number of training iterations                               | Varies by model |
+| `SFM_SOFTWARE_NAME` | Structure from Motion software (`COLMAP` or `GLOMAP`)       | `COLMAP`        |
+| `REMOVE_BACKGROUND` | Enable background removal from input images                 | `false`         |
+| `GENERATE_SPLAT`    | Enable generation of compressed splat output files          | `true`          |
 
 ## Prerequisites
 
@@ -113,18 +112,17 @@ When executing the pipeline, the following parameters can be configured through 
 
 This pipeline requires GPU-enabled instances for AWS Batch compute. The CDK stack creates a GPU compute environment using the `BatchGpuPipelineConstruct` with the following defaults:
 
-| Resource | Default Value |
-|:---|:---|
-| vCPUs | 15 |
-| Memory | 60,000 MiB (~58 GB) |
-| GPU | 1 (NVIDIA) |
-| Retry attempts | 3 |
-| Job timeout | 43,200 seconds (12 hours) |
+| Resource       | Default Value             |
+| :------------- | :------------------------ |
+| vCPUs          | 15                        |
+| Memory         | 60,000 MiB (~58 GB)       |
+| GPU            | 1 (NVIDIA)                |
+| Retry attempts | 3                         |
+| Job timeout    | 43,200 seconds (12 hours) |
 
 :::warning[GPU Instance Limits]
 Ensure your AWS account has sufficient GPU instance quotas for the target region. Common GPU instance types used include G4dn, G5, and P3 families. If the compute environment cannot provision instances, jobs will remain in a RUNNABLE state indefinitely.
 :::
-
 
 ### VPC with Internet Access
 
@@ -134,23 +132,23 @@ The pipeline runs on AWS Batch with GPU instances in **private subnets** that ha
 
 The container image is automatically synced from the upstream open-source repository during CDK deployment:
 
-- **Repository**: [Open Source 3D Reconstruction Toolbox for Gaussian Splats](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws)
-- **Pinned commit**: The CDK stack pins to a specific commit hash to ensure reproducible builds.
-- **Integration**: A VAMS-specific entrypoint script (`pipeline_vams.py`) wraps the upstream pipeline with Amazon S3 I/O and AWS Step Functions callback handling.
+-   **Repository**: [Open Source 3D Reconstruction Toolbox for Gaussian Splats](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws)
+-   **Pinned commit**: The CDK stack pins to a specific commit hash to ensure reproducible builds.
+-   **Integration**: A VAMS-specific entrypoint script (`pipeline_vams.py`) wraps the upstream pipeline with Amazon S3 I/O and AWS Step Functions callback handling.
 
 The sync process clones the upstream repository, copies the container files into the pipeline directory, and builds the Docker image during `cdk deploy`.
 
 ## Infrastructure Components
 
-| Resource | Service | Purpose |
-|:---|:---|:---|
-| GPU Compute Environment | AWS Batch | GPU-accelerated container execution |
-| Job Queue | AWS Batch | Job scheduling with GPU instance selection |
-| Job Definition | AWS Batch | Container configuration with GPU, memory, and storage settings |
-| Container Image | Amazon ECR | 3D reconstruction toolbox container |
-| Step Functions State Machine | AWS Step Functions | Workflow orchestration |
-| Lambda Functions (5) | AWS Lambda | Pipeline coordination (vamsExecute, constructPipeline, openPipeline, sqsExecute, pipelineEnd) |
-| SQS Queue | Amazon SQS | Event-driven pipeline triggering |
+| Resource                     | Service            | Purpose                                                                                       |
+| :--------------------------- | :----------------- | :-------------------------------------------------------------------------------------------- |
+| GPU Compute Environment      | AWS Batch          | GPU-accelerated container execution                                                           |
+| Job Queue                    | AWS Batch          | Job scheduling with GPU instance selection                                                    |
+| Job Definition               | AWS Batch          | Container configuration with GPU, memory, and storage settings                                |
+| Container Image              | Amazon ECR         | 3D reconstruction toolbox container                                                           |
+| Step Functions State Machine | AWS Step Functions | Workflow orchestration                                                                        |
+| Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, constructPipeline, openPipeline, sqsExecute, pipelineEnd) |
+| SQS Queue                    | Amazon SQS         | Event-driven pipeline triggering                                                              |
 
 ## How It Works
 
@@ -163,6 +161,6 @@ The sync process clones the upstream repository, copies the container files into
 
 ## Related Resources
 
-- [Pipeline System Overview](overview.md)
-- [3D Preview Thumbnail Pipeline](3d-thumbnail.md) -- generates preview images from 3D files including Gaussian splat outputs
-![Pipeline Architecture](/img/pipeline_usecase_splatToolbox.png)
+-   [Pipeline System Overview](overview.md)
+-   [3D Preview Thumbnail Pipeline](3d-thumbnail.md) -- generates preview images from 3D files including Gaussian splat outputs
+    ![Pipeline Architecture](/img/pipeline_usecase_splatToolbox.png)
