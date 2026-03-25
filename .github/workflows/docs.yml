@@ -10,16 +10,14 @@ on:
     workflow_dispatch:
 
 permissions:
-    contents: read
-    pages: write
-    id-token: write
+    contents: write
 
 concurrency:
-    group: "pages"
-    cancel-in-progress: false
+    group: "docs-${{ github.ref_name }}"
+    cancel-in-progress: true
 
 jobs:
-    build:
+    build-and-deploy:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout repository
@@ -32,24 +30,30 @@ jobs:
                   cache: "npm"
                   cache-dependency-path: documentation/docusaurus-site/package-lock.json
 
+            - name: Determine deploy path
+              id: paths
+              run: |
+                  BRANCH="${{ github.ref_name }}"
+                  if [ "$BRANCH" = "main" ]; then
+                    echo "deploy_subdir=." >> $GITHUB_OUTPUT
+                    echo "base_url=/visual-asset-management-system/" >> $GITHUB_OUTPUT
+                  else
+                    # release/2.5.0 -> release-2.5.0
+                    SLUG=$(echo "$BRANCH" | sed 's|/|-|g')
+                    echo "deploy_subdir=$SLUG" >> $GITHUB_OUTPUT
+                    echo "base_url=/visual-asset-management-system/$SLUG/" >> $GITHUB_OUTPUT
+                  fi
+
             - name: Install dependencies
               run: cd documentation/docusaurus-site && npm ci
 
             - name: Build documentation
-              run: cd documentation/docusaurus-site && npm run build
+              run: cd documentation/docusaurus-site && DOCS_BASE_URL="${{ steps.paths.outputs.base_url }}" npm run build
 
-            - name: Upload Pages artifact
-              uses: actions/upload-pages-artifact@v3
+            - name: Deploy to gh-pages branch
+              uses: peaceiris/actions-gh-pages@v4
               with:
-                  path: documentation/docusaurus-site/build
-
-    deploy:
-        needs: build
-        runs-on: ubuntu-latest
-        environment:
-            name: github-pages
-            url: ${{ steps.deployment.outputs.page_url }}
-        steps:
-            - name: Deploy to GitHub Pages
-              id: deployment
-              uses: actions/deploy-pages@v4
+                  github_token: ${{ secrets.GITHUB_TOKEN }}
+                  publish_dir: documentation/docusaurus-site/build
+                  destination_dir: ${{ steps.paths.outputs.deploy_subdir }}
+                  keep_files: true

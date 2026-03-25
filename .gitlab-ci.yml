@@ -3,18 +3,55 @@ stages:
     - deploy
 
 # Documentation build and deploy to GitLab Pages
+# Only builds the current branch's docs and merges into existing Pages content
 pages:
     stage: deploy
     image: node:20-slim
     variables:
         DOCS_URL: "https://aws-spatial-prototyping.pages.aws.dev"
-        DOCS_BASE_URL: "/vams-govcloud/"
     before_script:
+        - apt-get update -qq && apt-get install -y -qq curl > /dev/null
         - cd documentation/docusaurus-site
         - npm ci
     script:
+        # Determine deploy path based on branch
+        - |
+            if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+              export DOCS_BASE_URL="/vams-govcloud/"
+              export DEPLOY_SUBDIR=""
+            else
+              SLUG=$(echo "$CI_COMMIT_BRANCH" | sed 's|/|-|g')
+              export DOCS_BASE_URL="/vams-govcloud/$SLUG/"
+              export DEPLOY_SUBDIR="$SLUG"
+            fi
+            echo "Building for branch $CI_COMMIT_BRANCH -> baseUrl=$DOCS_BASE_URL"
         - npm run build
-        - mv build ../../public
+
+        # Download existing Pages content to preserve other versions
+        - mkdir -p ../../public
+        - |
+            echo "Downloading existing Pages content..."
+            curl -sSf --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+              "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/jobs/artifacts/main/download?job=pages" \
+              -o /tmp/existing-pages.zip 2>/dev/null && \
+            cd ../../public && \
+            unzip -o /tmp/existing-pages.zip 2>/dev/null && \
+            echo "Merged with existing Pages content" || \
+            echo "No existing Pages content found (first deploy)"
+            cd -
+
+        # Copy new build into the correct subdirectory
+        - |
+            if [ -z "$DEPLOY_SUBDIR" ]; then
+              # Main branch: replace root files but preserve release subdirectories
+              find ../../public -maxdepth 1 -type f -delete 2>/dev/null || true
+              cp -r build/* ../../public/
+            else
+              # Release branch: replace only its subdirectory
+              rm -rf "../../public/$DEPLOY_SUBDIR"
+              mkdir -p "../../public/$DEPLOY_SUBDIR"
+              cp -r build/* "../../public/$DEPLOY_SUBDIR/"
+            fi
     artifacts:
         paths:
             - public
