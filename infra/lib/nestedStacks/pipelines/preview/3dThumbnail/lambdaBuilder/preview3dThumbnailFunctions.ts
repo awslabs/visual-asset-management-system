@@ -213,5 +213,5 @@ export function buildPipelineEndFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
-    return fun;
+    return fun; //return
 }
