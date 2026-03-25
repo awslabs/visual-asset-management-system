@@ -2,7 +2,7 @@
 
 VAMS provides a powerful search interface for locating assets and files across all databases. The search system is powered by Amazon OpenSearch Service and supports full-text queries, metadata filtering, and geospatial map visualization.
 
-<!-- Screenshot needed: Full search page showing sidebar filters, search bar, and table results -->
+![Asset search page showing table view with filters and search bar](/img/asset_search_table_20260323_v2.5.png)
 
 ## Search modes
 
@@ -19,11 +19,13 @@ When you switch between Assets and Files mode, filters that do not apply to the 
 
 ## Text search
 
-The search bar at the top of the page performs a general query across all indexed fields. Type any term and press **Enter** or click the search button. The search runs against asset names, descriptions, tags, metadata values, file paths, and other indexed fields simultaneously.
+The search bar at the top of the page performs a general text query across all indexed fields. Type any term and press **Enter** or click the search button. The search runs against asset names, descriptions, tags, metadata values, file paths, and other indexed fields simultaneously.
+
+The text query is combined with all other active filters using **AND** logic — results must match both the text query and any filters you have applied. For example, searching for "pump" with a database filter of "facility-db" returns only items that contain "pump" AND belong to "facility-db".
 
 Results include a relevance score. Click the information icon next to any result to see which fields matched and why the result was returned.
 
-<!-- Screenshot needed: Search bar with a query entered and results showing explanation popovers -->
+![File search page showing file results in table view](/img/file_search_table_20260323_v2.5.png)
 
 ## Filters
 
@@ -62,10 +64,10 @@ Metadata filters allow you to search by specific metadata key-value pairs attach
 You can configure two additional options for metadata search:
 
 -   **Search mode**: Choose whether to match against metadata **keys**, **values**, or **both**.
--   **Operator**: Choose **AND** (all filters must match) or **OR** (any filter can match).
+-   **Operator**: Choose **AND** (all metadata conditions must match) or **OR** (any metadata condition can match) within the metadata group.
 
 :::info
-Metadata filters are applied server-side through Amazon OpenSearch Service. Only metadata that has been indexed is searchable.
+Metadata filters are combined with the text search bar and other filters using **AND** logic. For example, if you enter "pump" in the text search and set a metadata filter for `material = steel`, results must match both "pump" in any field AND have `material` equal to `steel`. Within the metadata group, you can choose whether multiple metadata conditions use AND or OR logic.
 :::
 
 ## View modes
@@ -86,7 +88,7 @@ The default view displays results in a sortable, paginated table. Key features i
 
 **File columns include**: Preview, File Path, Asset Name, Database, Asset Type, Tags, File Size, Last Modified, and Asset Description.
 
-<!-- Screenshot needed: Table view showing asset results with multiple columns -->
+<!-- The asset search screenshot at the top of this page shows the table view -->
 
 ### Card view
 
@@ -118,7 +120,7 @@ When you switch to map view, location-related metadata filters are automatically
 
 GeoJSON polygon data is rendered as filled shapes on the map with outline borders.
 
-![Map View](/img/assets_mapView.png)
+![Map view showing assets plotted on a geographic map](/img/asset_search_mapView__dark_20260323_v2.5.png)
 
 ## Preview thumbnails
 
@@ -176,3 +178,7 @@ Permanently deleting an archived asset cannot be undone. The asset and all its f
 ## Limited search mode
 
 If your deployment has Amazon OpenSearch Service disabled (the `NOOPENSEARCH` feature flag is active), the search page falls back to a basic asset listing mode. In this mode, full-text search, metadata filtering, and map view are unavailable. Only a paginated table of assets is displayed.
+
+:::tip[CLI alternative]
+Search operations can also be performed via the command line. See [CLI Search Commands](../cli/commands/search.md).
+:::

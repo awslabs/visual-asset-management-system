@@ -15,6 +15,8 @@ The GenAI 3D Metadata Labeling pipeline uses Amazon Bedrock and Amazon Rekogniti
 
 ## Architecture
 
+![GenAI Metadata Labeling Pipeline Architecture](/img/pipeline_usecase_genAiMetadata3dLabeling.png)
+
 The pipeline is orchestrated by an AWS Step Functions state machine that chains a container-based rendering stage with a Lambda-based metadata generation stage.
 
 ```mermaid

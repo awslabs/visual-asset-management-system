@@ -16,6 +16,8 @@ The Isaac Lab pipeline enables reinforcement learning (RL) policy training and e
 
 ## Architecture
 
+![Isaac Lab Pipeline Architecture](/img/pipeline_usecase_isaacLab.png)
+
 The pipeline uses a two-level AWS Step Functions pattern. The VAMS workflow invokes the `vamsExecute` Lambda function, which starts an internal Step Functions state machine. The internal state machine manages the AWS Batch GPU job lifecycle and reports completion back to the VAMS workflow via task tokens.
 
 ```mermaid

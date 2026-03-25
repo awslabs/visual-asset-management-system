@@ -472,7 +472,9 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
         const tagsText = tagsWithType.join(", ");
         return (
             <Box>
-                <TruncatedCell text={tagsText} maxLength={60} />
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    <TruncatedCell text={tagsText} maxLength={60} />
+                </span>
             </Box>
         );
     } else if (name.startsWith("bool_")) {

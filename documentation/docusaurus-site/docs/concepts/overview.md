@@ -91,7 +91,7 @@ Pipelines define processing steps (3D conversion, thumbnail generation, AI label
 
 ### Tags
 
-Tags are free-form labels that can be applied to assets for categorization and filtering. Tag types define controlled vocabularies for consistent tagging. See [Tags and Subscriptions](tags-and-subscriptions.md).
+Tags are free-form labels that can be applied to assets for categorization and filtering. Tag types define controlled vocabularies for consistent tagging. See [Tags](tags.md).
 
 ### Permissions
 
@@ -99,4 +99,4 @@ VAMS uses a two-tier authorization model. Tier 1 controls which API routes a rol
 
 ### Subscriptions
 
-Users can subscribe to asset change notifications. When a subscribed asset is modified (new files uploaded, versions created, metadata changed), VAMS sends email notifications through Amazon Simple Notification Service (Amazon SNS). See [Tags and Subscriptions](tags-and-subscriptions.md).
+Users can subscribe to asset change notifications. When a subscribed asset is modified (new files uploaded, versions created, metadata changed), VAMS sends email notifications through Amazon Simple Notification Service (Amazon SNS). See [Subscriptions](subscriptions.md).

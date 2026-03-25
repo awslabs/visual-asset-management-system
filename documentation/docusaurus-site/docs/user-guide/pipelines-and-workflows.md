@@ -33,7 +33,7 @@ Workflows can be:
 2. Select a database from the database selector, or view all pipelines across databases.
 3. The pipeline list displays all pipelines you have permission to access, showing the pipeline name, database, type, execution type, description, and associated actions.
 
-<!-- Screenshot needed: Pipeline listing page showing multiple pipelines with their properties -->
+![Pipelines page showing registered pipelines with properties](/img/pipelines_page_20260323_v2.5.png)
 
 To view details of a specific pipeline, click its name in the list. The detail view shows the full pipeline configuration including execution settings and input parameters.
 
@@ -98,7 +98,7 @@ When you update an existing pipeline, VAMS prompts you to choose whether to also
 2. Select a database or view all workflows across databases.
 3. The workflow list displays workflow names, databases, descriptions, and associated actions.
 
-<!-- Screenshot needed: Workflow listing page -->
+![Workflows page showing available workflows](/img/workflows_page_20260323_v2.5.png)
 
 ## Creating a workflow
 
@@ -132,11 +132,11 @@ You can also click **Create Pipeline** at the bottom of the pipelines tab to cre
 
 Click **Save** to persist the workflow. The workflow definition is stored and an AWS Step Functions state machine is created or updated.
 
-<!-- Screenshot needed: Workflow editor with pipeline steps configured and the visual graph showing the flow -->
+![Workflow editor with pipeline steps configured and visual graph](/img/workflow_editor_20260323_v2.5.png)
 
 ## Executing workflows
 
-![Workflow Execution](/img/workflow_execution.jpeg)
+![Workflow executions tab showing execution history on asset detail page](/img/view_asset_workflow_executions_tab_20260323_v2.5.png)
 
 Workflows can be executed in two ways:
 
@@ -188,3 +188,7 @@ For configuration details about enabling built-in pipelines, refer to the deploy
 ## Permissions
 
 Access to pipelines and workflows is controlled by the VAMS permission system. Users need appropriate constraints on the `pipeline` and `workflow` object types to view, create, edit, or delete pipelines and workflows. For details, see [Permissions](permissions.md).
+
+:::tip[CLI alternative]
+Workflow operations can also be performed via the command line. See [CLI Workflow Commands](../cli/commands/workflows.md).
+:::

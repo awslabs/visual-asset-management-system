@@ -842,8 +842,8 @@ class SimpleSearchQueryBuilder:
                 must_clauses.extend(specific_queries)
             
             if general_query:
-                # General query is optional - add to should_clauses
-                should_clauses.append(general_query)
+                # General query is required (AND) with other filters
+                must_clauses.append(general_query)
         
         # Build final bool query
         bool_query = {}
@@ -1026,20 +1026,17 @@ class DualIndexQueryBuilder:
                         # Only add non-rectype filters
                         filter_clauses.append(filter_dict)
         
-        # Add general text search
+        # Add general text search (AND with other filters)
         if request.query:
             general_search_query = self._build_general_search_query(request.query, request.includeMetadataInSearch, index_type)
             if general_search_query:
-                should_clauses.append(general_search_query)
+                must_clauses.append(general_search_query)
         
-        # Add dedicated metadata search
+        # Add dedicated metadata search (AND with other filters)
         if request.metadataQuery:
             metadata_search_query = self._build_metadata_search_query(request.metadataQuery, request.metadataSearchMode, index_type)
             if metadata_search_query:
-                if request.query:
-                    must_clauses.append(metadata_search_query)
-                else:
-                    should_clauses.append(metadata_search_query)
+                must_clauses.append(metadata_search_query)
         
         # Add database access restrictions
         if accessible_databases:

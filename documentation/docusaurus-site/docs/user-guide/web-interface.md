@@ -20,7 +20,7 @@ The side navigation panel can be collapsed or expanded using the toggle control.
 
 The **Databases** page displays all databases you have access to in a searchable, sortable table.
 
-![Database Listing](/img/database_view.png)
+![Database listing page showing all databases in a searchable table](/img/database_page_20260323_v2.5.png)
 
 ### Key Features
 
@@ -50,7 +50,7 @@ Each database record displays the following information:
 
 The **Assets and Files** page is the primary interface for discovering and browsing assets. It supports multiple view modes and powerful filtering capabilities.
 
-<!-- Screenshot needed: Asset search page in table view showing column headers and filter bar -->
+![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20260323_v2.5.png)
 
 ### View Modes
 
@@ -85,7 +85,7 @@ Select any asset row in the table view or any card in the card view to navigate 
 
 The asset detail page is the central hub for viewing and managing a single asset. It is divided into three main sections: the **details pane**, the **tabbed container**, and the **metadata section**.
 
-![Asset Detail](/img/asset_detail_view.png)
+![Asset detail page showing preview, properties, and tabbed container](/img/view_asset_page_20260323_v2.5.png)
 
 ### Breadcrumb Navigation
 
@@ -130,20 +130,13 @@ Below the tabbed container, the metadata section displays all key-value metadata
 
 When you select a file in the file manager and choose to view it, VAMS opens a dedicated file viewer page. The viewer automatically selects the best plugin based on the file extension.
 
+![File viewer page displaying a USDZ 3D model](/img/view_file_page_usdz_20260323_v2.5.png)
+
 ### Supported Viewer Types
 
-VAMS includes 17 viewer plugins covering a wide range of file formats:
+VAMS includes 17 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically based on the file extension. If multiple viewers support the same extension, you can switch between them using a dropdown.
 
-| Category            | Viewers                                        | Example Extensions                                       |
-| ------------------- | ---------------------------------------------- | -------------------------------------------------------- |
-| **3D Models**       | Three.js, Online 3D Viewer, Needle USD, Cesium | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.usd`, `.usdz` |
-| **Point Clouds**    | Potree Viewer                                  | `.e57`, `.las`, `.laz`, `.ply`                           |
-| **Gaussian Splats** | BabylonJS, PlayCanvas                          | `.ply`, `.spz`, `.sog`                                   |
-| **Images**          | Image Viewer                                   | `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`                  |
-| **Video**           | Video Player                                   | `.mp4`, `.webm`, `.mov`, `.avi`, `.mkv`                  |
-| **Audio**           | Audio Player                                   | `.mp3`, `.wav`, `.ogg`, `.aac`, `.flac`                  |
-| **Documents**       | PDF Viewer, HTML Viewer, Text Viewer           | `.pdf`, `.html`, `.txt`, `.json`, `.xml`, `.md`          |
-| **Data**            | Columnar Data Viewer                           | `.csv`, `.rds`, `.fcs`                                   |
+For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
 :::tip
 If a file's extension matches multiple viewers, VAMS selects the highest-priority viewer. The preview viewer serves as a fallback for files that have a preview image but no dedicated viewer.
@@ -176,6 +169,8 @@ Each pipeline entry shows its name, description, execution type (AWS Lambda, Ama
 ### Workflows Page
 
 The **Workflows** page lets you create and manage workflows that chain multiple pipelines into automated processing sequences. Workflows are triggered by asset uploads or executed manually from the asset detail page.
+
+![Workflow editor showing pipeline steps and visual graph](/img/workflow_editor_20260323_v2.5.png)
 
 From this page you can:
 

@@ -335,3 +335,23 @@ code {
 .react-flow__node-output {
     width: 300px !important;
 }
+
+/* MapLibre GL popup dark mode overrides */
+.maplibregl-popup-content {
+    background-color: var(--vams-bg-primary) !important;
+    color: var(--vams-text-primary) !important;
+}
+
+.maplibregl-popup-tip {
+    border-top-color: var(--vams-bg-primary) !important;
+}
+
+.maplibregl-popup-close-button {
+    color: var(--vams-text-primary) !important;
+    font-size: 18px;
+}
+
+.maplibregl-popup-close-button:hover {
+    background-color: var(--vams-bg-hover) !important;
+    color: var(--vams-text-heading) !important;
+}

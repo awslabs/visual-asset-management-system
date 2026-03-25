@@ -223,10 +223,10 @@ If Lambda functions behind a VPC were broken in v2.2, this version restores VPC 
         ```
 
 6.  The migration performs the following operations:
-    - Migrates metadata from the old table to the new multi-entity metadata tables.
-    - Migrates metadata schemas to the new schema table with support for multiple entity types.
-    - Migrates permission constraints from the auth entities table to the dedicated constraints table.
-    - Reindexes Amazon OpenSearch Service with the new field schemas.
+    -   Migrates metadata from the old table to the new multi-entity metadata tables.
+    -   Migrates metadata schemas to the new schema table with support for multiple entity types.
+    -   Migrates permission constraints from the auth entities table to the dedicated constraints table.
+    -   Reindexes Amazon OpenSearch Service with the new field schemas.
 
 ### v2.4 to v2.5
 
@@ -278,11 +278,11 @@ If Lambda functions behind a VPC were broken in v2.2, this version restores VPC 
         ```
 
 6.  The migration performs five phases:
-    - **Phase 1:** Builds a lookup cache by scanning the asset storage table for `assetId` to `databaseId` mappings.
-    - **Phase 2:** Migrates asset versions from V1 to V2 with transformed key schema (`assetId` becomes `databaseId:assetId`).
-    - **Phase 3:** Migrates asset file versions from V1 to V2 with transformed key schema.
-    - **Phase 4:** Backfills the `databaseId:assetId` field on existing asset file metadata version records for the new Global Secondary Index (GSI).
-    - **Phase 5:** Verifies record counts and key structure integrity between V1 and V2 tables.
+    -   **Phase 1:** Builds a lookup cache by scanning the asset storage table for `assetId` to `databaseId` mappings.
+    -   **Phase 2:** Migrates asset versions from V1 to V2 with transformed key schema (`assetId` becomes `databaseId:assetId`).
+    -   **Phase 3:** Migrates asset file versions from V1 to V2 with transformed key schema.
+    -   **Phase 4:** Backfills the `databaseId:assetId` field on existing asset file metadata version records for the new Global Secondary Index (GSI).
+    -   **Phase 5:** Verifies record counts and key structure integrity between V1 and V2 tables.
 
 :::tip[IAM permissions for migration]
 The migration requires `dynamodb:Scan` on source tables, `dynamodb:BatchWriteItem` on V2 destination tables, and `dynamodb:UpdateItem` on the metadata versions table. See the [v2.4 to v2.5 migration README](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/deploymentDataMigration/v2.4_to_v2.5/upgrade/v2.4_to_v2.5_migration_README.md) for the full IAM policy.

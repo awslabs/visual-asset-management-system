@@ -37,27 +37,9 @@ graph TD
 
 ## Current Viewers
 
-VAMS ships with 17 viewer plugins across five categories.
+VAMS ships with 17 viewer plugins across five categories: 3D, Media, Document, Data, and Preview.
 
-| ID                                 | Name                      | Category | Extensions                                                                       | Status                             |
-| ---------------------------------- | ------------------------- | -------- | -------------------------------------------------------------------------------- | ---------------------------------- |
-| `online3d-viewer`                  | Online 3D Viewer          | 3d       | .3dm, .amf, .bim, .off, .wrl                                                     | Enabled                            |
-| `potree-viewer`                    | Potree Viewer             | 3d       | .e57, .las, .laz, .ply                                                           | Enabled                            |
-| `threejs-viewer`                   | Three.js Viewer           | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep | Enabled                            |
-| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat  | 3d       | .ply, .spz                                                                       | Enabled                            |
-| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat | 3d       | .ply, .sog                                                                       | Enabled                            |
-| `needletools-usd-viewer`           | Needle USD Viewer         | 3d       | .usd, .usda, .usdc, .usdz                                                        | Enabled                            |
-| `cesium-viewer`                    | Cesium 3D Tileset         | 3d       | .json                                                                            | Enabled (requires ALLOWUNSAFEEVAL) |
-| `vntana-viewer`                    | VNTANA 3D Viewer          | 3d       | .glb                                                                             | Disabled (licensed)                |
-| `veerum-viewer`                    | VEERUM 3D Viewer          | 3d       | .e57, .las, .laz, .ply, .json                                                    | Disabled (licensed)                |
-| `image-viewer`                     | Image Viewer              | media    | .png, .jpg, .jpeg, .svg, .gif                                                    | Enabled                            |
-| `video-viewer`                     | Video Player              | media    | .mp4, .webm, .mov, .avi, .mkv, .flv, .wmv, .m4v                                  | Enabled                            |
-| `audio-viewer`                     | Audio Player              | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                              | Enabled                            |
-| `pdf-viewer`                       | PDF Viewer                | document | .pdf                                                                             | Enabled                            |
-| `html-viewer`                      | HTML Viewer               | document | .html                                                                            | Enabled                            |
-| `text-viewer`                      | Text Viewer               | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, and more                     | Enabled                            |
-| `columnar-viewer`                  | Columnar Data Viewer      | data     | .rds, .fcs, .csv                                                                 | Enabled                            |
-| `preview-viewer`                   | Preview Viewer            | preview  | \* (wildcard)                                                                    | Enabled                            |
+For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
 :::info[Priority System]
 When multiple viewers support the same file extension, the viewer with the lowest `priority` number is preferred. For example, `.ply` files match both BabylonJS Gaussian Splat (priority 1) and PlayCanvas Gaussian Splat (priority 2).

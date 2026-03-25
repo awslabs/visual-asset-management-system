@@ -397,7 +397,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     lambdaName: preview3dThumbnailPipelineVamsExecuteFunction.functionName,
                     taskTimeout: "3600", // 1 hour
                     taskHeartbeatTimeout: "",
-                    inputParameters: '{"overwriteExistingPreviewFiles": false}',
+                    inputParameters: '{"overwriteExistingPreviewFiles": true}',
                     workflowId: "preview-3d-thumbnail",
                     workflowDescription:
                         "Automated workflow for 3D file preview thumbnail generation (GIF/JPG/PNG)",

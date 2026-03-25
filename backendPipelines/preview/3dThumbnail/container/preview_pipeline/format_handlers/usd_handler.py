@@ -56,6 +56,9 @@ def load(file_path: str) -> pv.PolyData:
     all_colors = []
     vertex_offset = 0
 
+    # Create a single XformCache for consistent transform evaluation across all prims
+    xform_cache = UsdGeom.XformCache()
+
     # Traverse all prims in the stage
     for prim in stage.Traverse():
         if not prim.IsA(UsdGeom.Mesh):
@@ -86,14 +89,17 @@ def load(file_path: str) -> pv.PolyData:
             logger.warning(f"Skipping prim {prim.GetPath()}: no vertices")
             continue
 
-        xform_cache = UsdGeom.XformCache()
         world_transform = xform_cache.GetLocalToWorldTransform(prim)
         matrix = np.array(world_transform, dtype=np.float64)
 
-        # Apply 4x4 transform to points (homogeneous coordinates)
+        # Apply 4x4 transform to points (homogeneous coordinates).
+        # USD Gf.Matrix4d uses row-vector convention: p' = p * M
+        # so the correct multiplication is points_h @ matrix (NOT matrix.T).
+        # Transposing was incorrect and caused multi-prim scenes to have
+        # wrong world positions, leading to bad camera framing / bounds.
         ones = np.ones((len(points_np), 1), dtype=np.float64)
         points_h = np.hstack([points_np, ones])
-        transformed = points_h @ matrix.T
+        transformed = points_h @ matrix
         points_np = transformed[:, :3]
 
         # Triangulate faces (handle quads and n-gons)
@@ -112,13 +118,16 @@ def load(file_path: str) -> pv.PolyData:
         all_vertices.append(points_np)
         all_faces.append(triangles_np)
 
-        # Extract per-vertex colors: try texture-baked colors first, then displayColor
+        # Extract per-vertex colors: try texture-baked colors first, then displayColor,
+        # then fall back to the material's base color (flat color from shader graph)
         fvi_list = list(face_vertex_indices)
         colors = _extract_texture_colors(
             stage, prim, file_path, list(face_vertex_counts), fvi_list, len(points_np)
         )
         if colors is None:
             colors = _extract_display_colors(mesh, len(points_np))
+        if colors is None:
+            colors = _extract_material_base_color(prim, len(points_np))
         if colors is not None:
             all_colors.append(colors)
 
@@ -150,6 +159,64 @@ def load(file_path: str) -> pv.PolyData:
         f"from {len(all_vertices)} mesh prims"
     )
     return pv_mesh
+
+
+def _extract_material_base_color(prim, num_points):
+    """
+    Extract a flat base color from the UsdShade material bound to a prim.
+
+    Follows: Mesh → MaterialBindingAPI → Material → UsdPreviewSurface → diffuseColor value.
+    Unlike texture extraction, this reads the constant color value (not a texture connection).
+
+    Returns an (N, 3) uint8 numpy array of a single broadcast color, or None.
+    """
+    from pxr import UsdShade, Gf
+
+    try:
+        binding_api = UsdShade.MaterialBindingAPI(prim)
+        result = binding_api.ComputeBoundMaterial()
+        material = result[0] if isinstance(result, (tuple, list)) else result
+
+        if not material or not material.GetPrim().IsValid():
+            return None
+
+        # Find UsdPreviewSurface shader and read diffuseColor input value
+        from pxr import Usd
+        for desc in Usd.PrimRange(material.GetPrim()):
+            shader = UsdShade.Shader(desc)
+            shader_id_attr = shader.GetIdAttr()
+            if not shader_id_attr:
+                continue
+            if shader_id_attr.Get() != "UsdPreviewSurface":
+                continue
+
+            diffuse_input = shader.GetInput("diffuseColor")
+            if diffuse_input is None:
+                continue
+
+            # Check if it's connected to a texture (skip — texture path handles that)
+            if diffuse_input.HasConnectedSource():
+                continue
+
+            # Read the constant value
+            val = diffuse_input.Get()
+            if val is not None:
+                if isinstance(val, Gf.Vec3f):
+                    rgb = np.array([val[0], val[1], val[2]], dtype=np.float64)
+                else:
+                    rgb = np.array(val, dtype=np.float64)[:3]
+
+                # Convert from float [0,1] to uint8 [0,255]
+                rgb_uint8 = (np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8)
+                # Broadcast to all vertices
+                colors = np.tile(rgb_uint8.reshape(1, 3), (num_points, 1))
+                logger.info(f"    Extracted material base color: {rgb_uint8.tolist()}")
+                return colors
+
+    except Exception as e:
+        logger.debug(f"    Material base color extraction failed: {e}")
+
+    return None
 
 
 def _triangulate_faces(face_vertex_counts, face_vertex_indices):
@@ -453,14 +520,18 @@ def _load_texture_image(texture_path, usd_file_path):
     if ext == ".usdz":
         return _load_texture_from_usdz(usd_file_path, texture_path)
 
-    # For regular USD files, resolve relative to the USD file directory
+    # For regular USD files, resolve the texture path using multiple strategies
+    # 1. Absolute path
     if os.path.isabs(texture_path) and os.path.isfile(texture_path):
         try:
             return Image.open(texture_path).convert("RGB")
         except Exception:
             pass
 
-    usd_dir = os.path.dirname(usd_file_path)
+    usd_dir = os.path.dirname(os.path.abspath(usd_file_path))
+    basename = os.path.basename(texture_path)
+
+    # 2. Relative to USD file directory
     abs_path = os.path.join(usd_dir, texture_path)
     if os.path.isfile(abs_path):
         try:
@@ -468,7 +539,45 @@ def _load_texture_image(texture_path, usd_file_path):
         except Exception:
             pass
 
-    logger.warning(f"    Could not load texture: {texture_path}")
+    # 3. Search parent directories (up to 3 levels) for the texture filename
+    # USD scenes sometimes reference textures in sibling or parent folders
+    search_dir = usd_dir
+    for _ in range(3):
+        parent = os.path.dirname(search_dir)
+        if parent == search_dir:
+            break  # Hit filesystem root
+        search_dir = parent
+        candidate = os.path.join(search_dir, texture_path)
+        if os.path.isfile(candidate):
+            try:
+                return Image.open(candidate).convert("RGB")
+            except Exception:
+                pass
+
+    # 4. Recursive basename search in the USD directory tree
+    # Handles cases where textures are in a subdirectory like textures/, materials/, etc.
+    for root, dirs, files in os.walk(usd_dir):
+        if basename in files:
+            candidate = os.path.join(root, basename)
+            try:
+                return Image.open(candidate).convert("RGB")
+            except Exception:
+                pass
+        # Also search one level up from the USD directory
+        # (common when USD is in a subfolder alongside a textures folder)
+
+    # 5. Search one directory up from USD file
+    parent_dir = os.path.dirname(usd_dir)
+    if parent_dir != usd_dir:
+        for root, dirs, files in os.walk(parent_dir):
+            if basename in files:
+                candidate = os.path.join(root, basename)
+                try:
+                    return Image.open(candidate).convert("RGB")
+                except Exception:
+                    pass
+
+    logger.warning(f"    Could not load texture: {texture_path} (searched {usd_dir} and parent directories)")
     return None
 
 

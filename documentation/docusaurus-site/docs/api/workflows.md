@@ -1,18 +1,14 @@
-# Workflows and Asset Versions API
+# Workflows API
 
 The Workflows API allows you to create, retrieve, and delete workflows that orchestrate one or more [pipelines](pipelines.md) as AWS Step Functions state machines. You can execute workflows against specific assets and track execution history.
 
-This page also covers the **Asset Versions** API, which provides version management for assets including creating snapshots, reverting to previous versions, and archiving.
-
 :::info[Authorization]
-All endpoints require a valid JWT token in the `Authorization` header. Workflows and asset versions are subject to two-tier Casbin authorization.
+All endpoints require a valid JWT token in the `Authorization` header. Workflows are subject to two-tier Casbin authorization.
 :::
 
 ---
 
-## Workflows
-
-### List all workflows
+## List all workflows
 
 Retrieves all workflows across all databases.
 
@@ -20,7 +16,7 @@ Retrieves all workflows across all databases.
 GET /workflows
 ```
 
-#### Query parameters
+### Query parameters
 
 | Parameter       | Type   | Required | Default | Description                             |
 | --------------- | ------ | -------- | ------- | --------------------------------------- |
@@ -29,7 +25,7 @@ GET /workflows
 | `startingToken` | string | No       | `null`  | Pagination token from previous response |
 | `showDeleted`   | string | No       | `false` | Include soft-deleted workflows          |
 
-#### Response
+### Response
 
 ```json
 {
@@ -63,7 +59,7 @@ GET /workflows
 }
 ```
 
-#### Error responses
+### Error responses
 
 | Status | Description           |
 | ------ | --------------------- |
@@ -72,7 +68,7 @@ GET /workflows
 
 ---
 
-### List workflows for a database
+## List workflows for a database
 
 Retrieves all workflows for a specific database.
 
@@ -80,23 +76,23 @@ Retrieves all workflows for a specific database.
 GET /database/{databaseId}/workflows
 ```
 
-#### Path parameters
+### Path parameters
 
 | Parameter    | Type   | Required | Description         |
 | ------------ | ------ | -------- | ------------------- |
 | `databaseId` | string | Yes      | Database identifier |
 
-#### Query parameters
+### Query parameters
 
 Same as [List all workflows](#list-all-workflows).
 
-#### Response
+### Response
 
 Same structure as [List all workflows](#list-all-workflows).
 
 ---
 
-### Get a workflow
+## Get a workflow
 
 Retrieves a single workflow by its identifier.
 
@@ -104,18 +100,18 @@ Retrieves a single workflow by its identifier.
 GET /database/{databaseId}/workflows/{workflowId}
 ```
 
-#### Path parameters
+### Path parameters
 
 | Parameter    | Type   | Required | Description         |
 | ------------ | ------ | -------- | ------------------- |
 | `databaseId` | string | Yes      | Database identifier |
 | `workflowId` | string | Yes      | Workflow identifier |
 
-#### Response
+### Response
 
 Returns a single workflow object in the same format as the items in the list response.
 
-#### Error responses
+### Error responses
 
 | Status | Description             |
 | ------ | ----------------------- |
@@ -126,7 +122,7 @@ Returns a single workflow object in the same format as the items in the list res
 
 ---
 
-### Create or update a workflow
+## Create or update a workflow
 
 Creates a new workflow or updates an existing one. When updating, the underlying Step Functions state machine definition is updated in place, preserving execution history.
 
@@ -134,7 +130,7 @@ Creates a new workflow or updates an existing one. When updating, the underlying
 PUT /workflows
 ```
 
-#### Request body
+### Request body
 
 | Field                               | Type   | Required | Description                                                                                                  |
 | ----------------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------ |
@@ -165,7 +161,7 @@ Each entry in `specifiedPipelines.functions` must include:
 -   **Database-specific workflows** can reference global pipelines or pipelines from the same database.
     :::
 
-#### Request body example
+### Request body example
 
 ```json
 {
@@ -189,7 +185,7 @@ Each entry in `specifiedPipelines.functions` must include:
 }
 ```
 
-#### Response
+### Response
 
 ```json
 {
@@ -197,7 +193,7 @@ Each entry in `specifiedPipelines.functions` must include:
 }
 ```
 
-#### Error responses
+### Error responses
 
 | Status | Description                                                    |
 | ------ | -------------------------------------------------------------- |
@@ -207,7 +203,7 @@ Each entry in `specifiedPipelines.functions` must include:
 
 ---
 
-### Delete a workflow
+## Delete a workflow
 
 Soft-deletes a workflow and deletes the underlying Step Functions state machine.
 
@@ -215,14 +211,14 @@ Soft-deletes a workflow and deletes the underlying Step Functions state machine.
 DELETE /database/{databaseId}/workflows/{workflowId}
 ```
 
-#### Path parameters
+### Path parameters
 
 | Parameter    | Type   | Required | Description         |
 | ------------ | ------ | -------- | ------------------- |
 | `databaseId` | string | Yes      | Database identifier |
 | `workflowId` | string | Yes      | Workflow identifier |
 
-#### Response
+### Response
 
 ```json
 {
@@ -230,7 +226,7 @@ DELETE /database/{databaseId}/workflows/{workflowId}
 }
 ```
 
-#### Error responses
+### Error responses
 
 | Status | Description             |
 | ------ | ----------------------- |
@@ -241,7 +237,7 @@ DELETE /database/{databaseId}/workflows/{workflowId}
 
 ---
 
-### Execute a workflow
+## Execute a workflow
 
 Executes a workflow against a specific asset. This starts a new Step Functions execution.
 
@@ -249,7 +245,7 @@ Executes a workflow against a specific asset. This starts a new Step Functions e
 POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}
 ```
 
-#### Path parameters
+### Path parameters
 
 | Parameter    | Type   | Required | Description                      |
 | ------------ | ------ | -------- | -------------------------------- |
@@ -257,14 +253,14 @@ POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}
 | `assetId`    | string | Yes      | Asset identifier                 |
 | `workflowId` | string | Yes      | Workflow identifier              |
 
-#### Request body
+### Request body
 
 | Field                | Type   | Required | Description                                                                               |
 | -------------------- | ------ | -------- | ----------------------------------------------------------------------------------------- |
 | `workflowDatabaseId` | string | Yes      | Database ID of the workflow (use `GLOBAL` for global workflows)                           |
 | `fileKey`            | string | No       | Specific file path within the asset to process. If omitted, uses the asset's base prefix. |
 
-#### Request body example
+### Request body example
 
 ```json
 {
@@ -280,7 +276,7 @@ POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}
 -   All pipelines in the workflow must be enabled and accessible to the user.
     :::
 
-#### Response
+### Response
 
 ```json
 {
@@ -290,7 +286,7 @@ POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}
 
 The response body contains the Step Functions execution ID.
 
-#### Error responses
+### Error responses
 
 | Status | Description                                                                                 |
 | ------ | ------------------------------------------------------------------------------------------- |
@@ -301,7 +297,7 @@ The response body contains the Step Functions execution ID.
 
 ---
 
-### List workflow executions
+## List workflow executions
 
 Retrieves execution history for workflows on a specific asset.
 
@@ -315,7 +311,7 @@ To filter by a specific workflow:
 GET /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}
 ```
 
-#### Path parameters
+### Path parameters
 
 | Parameter    | Type   | Required | Description           |
 | ------------ | ------ | -------- | --------------------- |
@@ -323,7 +319,7 @@ GET /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}
 | `assetId`    | string | Yes      | Asset identifier      |
 | `workflowId` | string | No       | Filter by workflow ID |
 
-#### Response
+### Response
 
 ```json
 {
@@ -345,7 +341,7 @@ GET /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}
 Only currently running executions (without a stop date) are returned. Completed executions are not included.
 :::
 
-#### Error responses
+### Error responses
 
 | Status | Description           |
 | ------ | --------------------- |
@@ -354,238 +350,9 @@ Only currently running executions (without a stop date) are returned. Completed 
 
 ---
 
-## Asset versions
-
-### List asset versions
-
-Retrieves all versions for an asset.
-
-```
-GET /database/{databaseId}/assets/{assetId}/getVersions
-```
-
-#### Path parameters
-
-| Parameter    | Type   | Required | Description         |
-| ------------ | ------ | -------- | ------------------- |
-| `databaseId` | string | Yes      | Database identifier |
-| `assetId`    | string | Yes      | Asset identifier    |
-
-#### Response
-
-```json
-{
-    "message": {
-        "versions": [
-            {
-                "assetVersionId": "v-abc123",
-                "databaseId": "my-database",
-                "assetId": "my-asset",
-                "description": "Initial version",
-                "versionAlias": "v1.0",
-                "isArchived": false,
-                "dateCreated": "2026-03-15T10:30:00Z",
-                "createdBy": "user@example.com"
-            }
-        ]
-    }
-}
-```
-
----
-
-### Get a specific asset version
-
-Retrieves details for a specific asset version.
-
-```
-GET /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}
-```
-
-#### Path parameters
-
-| Parameter        | Type   | Required | Description         |
-| ---------------- | ------ | -------- | ------------------- |
-| `databaseId`     | string | Yes      | Database identifier |
-| `assetId`        | string | Yes      | Asset identifier    |
-| `assetVersionId` | string | Yes      | Version identifier  |
-
-#### Response
-
-Returns a single version object with full details including file listings.
-
----
-
-### Create an asset version
-
-Creates a new version snapshot of the asset's current state.
-
-```
-POST /database/{databaseId}/assets/{assetId}/createVersion
-```
-
-#### Path parameters
-
-| Parameter    | Type   | Required | Description         |
-| ------------ | ------ | -------- | ------------------- |
-| `databaseId` | string | Yes      | Database identifier |
-| `assetId`    | string | Yes      | Asset identifier    |
-
-#### Request body
-
-| Field         | Type   | Required | Description                     |
-| ------------- | ------ | -------- | ------------------------------- |
-| `description` | string | No       | Description for the new version |
-| `comment`     | string | No       | Comment for the version         |
-
-#### Request body example
-
-```json
-{
-    "description": "Added updated floor plan",
-    "comment": "Updated building model with revised floor 3"
-}
-```
-
-#### Response
-
-```json
-{
-    "message": {
-        "assetVersionId": "v-abc123def",
-        "message": "Asset version created successfully"
-    }
-}
-```
-
----
-
-### Update an asset version
-
-Updates the alias or comment on an existing asset version.
-
-```
-PUT /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}
-```
-
-#### Path parameters
-
-| Parameter        | Type   | Required | Description         |
-| ---------------- | ------ | -------- | ------------------- |
-| `databaseId`     | string | Yes      | Database identifier |
-| `assetId`        | string | Yes      | Asset identifier    |
-| `assetVersionId` | string | Yes      | Version identifier  |
-
-#### Request body
-
-| Field          | Type   | Required | Description                     |
-| -------------- | ------ | -------- | ------------------------------- |
-| `versionAlias` | string | No       | Human-readable version alias    |
-| `comment`      | string | No       | Updated comment for the version |
-
-#### Request body example
-
-```json
-{
-    "versionAlias": "v2.0-release",
-    "comment": "Production-ready version"
-}
-```
-
-#### Response
-
-```json
-{
-    "message": "Asset version updated successfully"
-}
-```
-
----
-
-### Archive an asset version
-
-Archives an asset version, making it read-only.
-
-```
-POST /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive
-```
-
-#### Path parameters
-
-| Parameter        | Type   | Required | Description         |
-| ---------------- | ------ | -------- | ------------------- |
-| `databaseId`     | string | Yes      | Database identifier |
-| `assetId`        | string | Yes      | Asset identifier    |
-| `assetVersionId` | string | Yes      | Version identifier  |
-
-#### Response
-
-```json
-{
-    "message": "Asset version archived successfully"
-}
-```
-
----
-
-### Unarchive an asset version
-
-Restores a previously archived asset version.
-
-```
-POST /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive
-```
-
-#### Path parameters
-
-Same as [Archive an asset version](#archive-an-asset-version).
-
-#### Response
-
-```json
-{
-    "message": "Asset version unarchived successfully"
-}
-```
-
----
-
-### Revert to an asset version
-
-Reverts the asset to the state captured in a specific version.
-
-```
-POST /database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}
-```
-
-#### Path parameters
-
-| Parameter        | Type   | Required | Description                     |
-| ---------------- | ------ | -------- | ------------------------------- |
-| `databaseId`     | string | Yes      | Database identifier             |
-| `assetId`        | string | Yes      | Asset identifier                |
-| `assetVersionId` | string | Yes      | Version identifier to revert to |
-
-#### Response
-
-```json
-{
-    "message": "Asset version reverted successfully"
-}
-```
-
-#### Error responses
-
-| Status | Description                             |
-| ------ | --------------------------------------- |
-| `400`  | Invalid parameters or version not found |
-| `403`  | Not authorized                          |
-| `500`  | Internal server error                   |
-
----
-
 ## Related resources
 
 -   [Pipelines API](pipelines.md) -- Define the individual pipeline steps used in workflows
 -   [Assets API](assets.md) -- Manage the assets that workflows process
+-   [Asset Versions API](asset-versions.md) -- Manage version snapshots of processed assets
 -   [Subscriptions API](subscriptions.md) -- Subscribe to asset version change notifications

@@ -25,7 +25,7 @@ The asset detail page is organized into three vertically stacked sections:
 
 The details pane is the top section and displays the asset's core properties alongside action buttons.
 
-<!-- Screenshot needed: Asset details pane showing preview thumbnail, properties grid, and action buttons -->
+![Asset detail page showing preview thumbnail, properties, and action buttons](/img/view_asset_page_20260323_v2.5.png)
 
 | Element                  | Description                                                                                                                                                     |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -91,7 +91,7 @@ VAMS maintains a complete version history for every asset. Versions capture the 
     - **Comment** -- An optional description of what changed in this version.
     - **Archive status** -- Whether the version is archived.
 
-![Asset Versioning](/img/asset_versioning.png)
+![Asset versions tab showing version history](/img/view_asset_versions_tab_20260323_v2.5.png)
 
 ### Selecting a Version
 
@@ -172,7 +172,7 @@ The left panel displays a hierarchical directory tree:
 -   Select any file or folder to view its details in the right panel.
 -   The root node shows the asset name and represents the top-level directory.
 
-<!-- Screenshot needed: File Manager tab showing directory tree on left and file details on right -->
+![File Manager tab showing directory tree and file operations](/img/file_manager_operations_20260323_v2.5.png)
 
 ### File Details Panel
 
@@ -199,6 +199,8 @@ To add files to an existing asset:
 :::tip
 You can also navigate to the dedicated upload page for the asset from the asset detail page to use the full upload wizard with metadata and relationship options.
 :::
+
+![Move files modal for relocating files within the asset](/img/move_files_modal_20260323_v2.5.png)
 
 ### Moving and Renaming Files
 
@@ -280,17 +282,23 @@ Preview images appear in the file details panel and are used as thumbnails in se
 
 ### Download and Share URLs
 
+![Download dialog for multiple file selection](/img/download_file_multiple_20260323_v2.5.png)
+
 For distributable assets, you can generate presigned download URLs:
 
 1. Select a file in the directory tree.
 2. Select the **Download** action to download the file directly, or select **Share** to generate a time-limited presigned URL.
 3. Presigned URLs expire after the timeout configured by your administrator.
 
+![Share files modal for generating presigned URLs](/img/share_files_modal_20260323_v2.5.png)
+
 ---
 
 ## Asset Relationships
 
 The **Relationships** tab allows you to view and manage links between assets. Relationships help model real-world hierarchies and associations between visual assets.
+
+![Asset relationships tab showing parent, child, and related links](/img/view_asset_relationships_tab_20260323_v2.5.png)
 
 ### Relationship Types
 
@@ -308,6 +316,8 @@ The **Relationships** tab allows you to view and manage links between assets. Re
 4. Select a linked asset to navigate to its detail page.
 
 ### Adding Relationships
+
+![Creating a child asset link with cross-database search](/img/create_child_assetlink_20260323_v2.5.png)
 
 1. In the Relationships tab, select the **Add** action for the desired relationship type.
 2. Use the asset selector to search for and select the target asset. You can search across databases.
@@ -362,6 +372,74 @@ To permanently delete an asset:
 
 ---
 
+## Comments
+
+The **Comments** tab provides a collaborative discussion space for each asset. Team members can leave notes, observations, or review feedback directly on the asset without needing external communication tools.
+
+![Asset comments tab with rich text editor](/img/view_asset_comments_tab_20260323_v2.5.png)
+
+### Adding a Comment
+
+1. Select the **Comments** tab on the asset detail page.
+2. Type your comment in the rich text editor at the bottom. The editor supports **bold**, _italic_, ~~strikethrough~~, underline, ordered/unordered lists, and links.
+3. Select **Add Comment** to post.
+
+### Viewing Comments
+
+Comments are displayed in chronological order with the most recent at the top. Each comment shows:
+
+-   The author's user ID
+-   The timestamp
+-   The full comment content with rich text formatting
+
+### Editing and Deleting Comments
+
+-   Comments can be deleted by selecting the delete icon next to a comment.
+-   Currently, comments cannot be edited after posting — delete and re-add if changes are needed.
+
+:::note
+Comments are tied to the asset, not to a specific version. All comments remain visible regardless of which version is selected in the version selector.
+:::
+
+---
+
+## Workflow Executions
+
+The **Workflows** tab shows the execution history of all workflows that have been run against the asset. This provides a centralized view of processing activities without needing to navigate to the workflow management pages.
+
+![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260323_v2.5.png)
+
+### Viewing Execution History
+
+1. Select the **Workflows** tab on the asset detail page.
+2. Executions are grouped by workflow, with each workflow showing its list of individual executions.
+3. Each execution displays:
+    - The workflow name
+    - Execution status (**Running**, **Succeeded**, **Failed**, **Timed Out**, **Aborted**)
+    - Start time
+    - Input file(s) that triggered the execution
+
+### Executing a Workflow from the Asset Page
+
+You can start a new workflow execution directly from the asset detail page:
+
+1. Select the **Execute Workflow** button above the workflows tab.
+2. Choose the workflow to run from the dropdown.
+3. Select the input file(s) for processing (or select the entire asset).
+4. Confirm the execution.
+
+The new execution appears in the workflow tab immediately with a **Running** status. The tab auto-refreshes to show status updates.
+
+### Auto-Triggered Workflows
+
+If a workflow has auto-trigger configured (based on file extension matching), executions appear automatically after uploading files that match the trigger pattern. These are displayed the same way as manually triggered executions.
+
+:::tip
+For detailed workflow creation and management, see [Pipelines and Workflows](pipelines-and-workflows.md).
+:::
+
+---
+
 ## Subscription Notifications
 
 VAMS can notify you when asset versions change. This is useful for staying informed about updates to assets you depend on.
@@ -384,10 +462,15 @@ Manage all your subscriptions from the **Subscription Management** page under **
 
 ---
 
+:::tip[CLI alternative]
+Asset operations can also be performed via the command line. See [CLI Asset Commands](../cli/commands/assets.md) and [CLI File Commands](../cli/commands/files.md).
+:::
+
 ## Related Topics
 
 -   [Upload Your First Asset](upload-first-asset.md) -- Step-by-step asset creation tutorial
 -   [Web Interface Overview](web-interface.md) -- Complete tour of all VAMS pages
 -   [Metadata Management](metadata-management.md) -- Working with metadata and metadata schemas
 -   [Pipelines and Workflows](pipelines-and-workflows.md) -- Automating asset processing
--   [Tags and Subscriptions](tags-and-subscriptions.md) -- Organizing assets and managing notifications
+-   [Tags](tags.md) -- Organizing assets with tags
+-   [Subscriptions](subscriptions.md) -- Receiving change notifications

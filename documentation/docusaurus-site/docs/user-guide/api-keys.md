@@ -42,7 +42,7 @@ The user ID specified during API key creation must already have at least one VAM
 4. Choose **Create API Key**.
 5. **Copy the generated key immediately.** The key value is displayed only once in the confirmation dialog.
 
-<!-- Screenshot needed: API Key Created dialog showing the generated key value with Copy to Clipboard button -->
+![API Key Management page showing key listing and management options](/img/API_key_managment_page_20260323_v2.5.png)
 
 :::warning[Save the key now]
 The API key value is shown only once after creation. If you close the dialog without copying the key, you must delete the API key and create a new one. There is no way to retrieve the key value after creation.
@@ -103,7 +103,7 @@ The **API Key Management** page displays all API keys in a table with the follow
 
 Use the text filter at the top of the table to search by name, user ID, or description.
 
-<!-- Screenshot needed: API Key Management page showing table with multiple keys -->
+<!-- The API Key Management screenshot is shown above in the Creating an API key section -->
 
 ### Updating an API key
 
@@ -147,4 +147,8 @@ Follow these recommendations to maintain the security of your VAMS API keys:
 
 :::warning[Audit logging]
 All API key operations (creation, update, deletion) are recorded in the VAMS audit log. Administrators can review these logs in Amazon CloudWatch to track who created, modified, or deleted API keys.
+:::
+
+:::tip[CLI alternative]
+API key operations can also be performed via the command line. See [CLI Users and Keys Commands](../cli/commands/users-and-keys.md).
 :::

@@ -162,47 +162,9 @@ Deny rules explicitly block specific operations. A single matching deny rule ove
 
 This constraint denies all write operations on any asset tagged with `locked`, regardless of other allow rules. Users can still view (`GET`) the asset.
 
-## Constraint examples for common roles
+## Common role patterns
 
-The following table illustrates the constraint patterns needed for common role profiles. Each row represents a separate constraint.
-
-### Database Admin (scoped to a specific database)
-
-| Object Type      | Permissions            | Scope                              | Purpose                         |
-| ---------------- | ---------------------- | ---------------------------------- | ------------------------------- |
-| `web`            | GET                    | Standard pages + `/assetIngestion` | UI navigation                   |
-| `api`            | GET, PUT, POST, DELETE | All non-admin API routes           | API access                      |
-| `api`            | GET                    | `/tags`, `/tag-types`              | Read-only tag access            |
-| `database`       | GET, PUT, DELETE       | `databaseId equals \{DB_ID\}`      | Database management (no create) |
-| `asset`          | GET, PUT, POST, DELETE | `databaseId equals \{DB_ID\}`      | Full asset management           |
-| `pipeline`       | GET, PUT, POST, DELETE | `databaseId equals \{DB_ID\}`      | Pipeline management             |
-| `pipeline`       | GET, POST              | `databaseId equals GLOBAL`         | Execute GLOBAL pipelines        |
-| `workflow`       | GET, PUT, POST, DELETE | `databaseId equals \{DB_ID\}`      | Workflow management             |
-| `workflow`       | GET, POST              | `databaseId equals GLOBAL`         | Execute GLOBAL workflows        |
-| `metadataSchema` | GET, PUT, POST, DELETE | `databaseId equals \{DB_ID\}`      | Schema management               |
-| `metadataSchema` | GET                    | `databaseId equals GLOBAL`         | View GLOBAL schemas             |
-| `tag`            | GET                    | All                                | Read-only tag access            |
-| `tagType`        | GET                    | All                                | Read-only tag type access       |
-
-### Database User (scoped to a specific database)
-
-| Object Type      | Permissions            | Scope                                              | Purpose                                                                   |
-| ---------------- | ---------------------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
-| `web`            | GET                    | Standard pages (no `/assetIngestion`)              | UI navigation                                                             |
-| `api`            | GET                    | Broad read access                                  | Read API routes                                                           |
-| `api`            | POST                   | Asset operations, workflow execution               | Create and execute                                                        |
-| `api`            | PUT                    | Asset updates only                                 | Update operations                                                         |
-| `api`            | DELETE                 | Archive paths only (`archiveAsset`, `archiveFile`) | Soft delete only                                                          |
-| `database`       | GET                    | `databaseId equals \{DB_ID\}`                      | View database (read-only)                                                 |
-| `asset`          | GET, PUT, POST, DELETE | `databaseId equals \{DB_ID\}`                      | Asset operations (DELETE for archive; permanent delete blocked at Tier 1) |
-| `pipeline`       | GET, POST              | `databaseId equals \{DB_ID\}`                      | View and execute pipelines                                                |
-| `pipeline`       | GET, POST              | `databaseId equals GLOBAL`                         | View and execute GLOBAL pipelines                                         |
-| `workflow`       | GET, POST              | `databaseId equals \{DB_ID\}`                      | View and execute workflows                                                |
-| `workflow`       | GET, POST              | `databaseId equals GLOBAL`                         | View and execute GLOBAL workflows                                         |
-| `metadataSchema` | GET                    | `databaseId equals \{DB_ID\}`                      | View schemas                                                              |
-| `metadataSchema` | GET                    | `databaseId equals GLOBAL`                         | View GLOBAL schemas                                                       |
-| `tag`            | GET                    | All                                                | Read-only tag access                                                      |
-| `tagType`        | GET                    | All                                                | Read-only tag type access                                                 |
+For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).
 
 :::warning[Archive versus permanent delete]
 The Database User role demonstrates a key pattern: the `asset` entity constraint grants DELETE (needed for archive operations), but the `api` route constraint uses the `contains` operator to only match paths containing `archiveAsset` or `archiveFile`. This blocks permanent delete paths (`deleteAsset`, `deleteFile`) at Tier 1 while allowing soft delete at Tier 2.
@@ -211,7 +173,7 @@ The Database User role demonstrates a key pattern: the `asset` entity constraint
 ## Common pitfalls
 
 :::warning[Incomplete constraint matrix]
-A common mistake is creating a `database` constraint and assuming it automatically restricts all resources within that database. The `database` object type only controls the database entity itself. You must create separate constraints for `asset`, `pipeline`, `workflow`, and `metadataSchema` to restrict resources within the database. See the constraint examples above for the full matrix.
+A common mistake is creating a `database` constraint and assuming it automatically restricts all resources within that database. The `database` object type only controls the database entity itself. You must create separate constraints for `asset`, `pipeline`, `workflow`, and `metadataSchema` to restrict resources within the database. See the [Developer Guide: Permissions](../developer/permissions.md) for complete constraint matrices.
 :::
 
 **Additional pitfalls to avoid:**
@@ -224,29 +186,9 @@ A common mistake is creating a `database` constraint and assuming it automatical
 
 ## Permission templates
 
-VAMS provides pre-built JSON templates for common permission profiles. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
-| Template           | File                      | Variables                  | Description                                                         |
-| ------------------ | ------------------------- | -------------------------- | ------------------------------------------------------------------- |
-| Database Admin     | `database-admin.json`     | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (13 constraints).            |
-| Database User      | `database-user.json`      | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (15 constraints).     |
-| Database Read-Only | `database-readonly.json`  | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (10 constraints).           |
-| Global Read-Only   | `global-readonly.json`    | `ROLE_NAME`                | Read-only access across all databases (10 constraints).             |
-| Deny Tagged Assets | `deny-tagged-assets.json` | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint). |
-
-Templates are located in the `documentation/permissionsTemplates/` directory. You can apply them using the `POST /auth/constraintsTemplateImport` API endpoint or the CLI tool in `tools/permissionsSetup/`.
-
-```bash
-# Apply the database-admin template with variable substitution
-python tools/permissionsSetup/apply_template.py \
-    --template documentation/permissionsTemplates/database-admin.json \
-    --role-name my-project-admin \
-    --variables '{"DATABASE_ID": "my-project-db"}' --dry-run
-```
-
-:::note[Templates create constraints only]
-The template import API creates constraints but does not create roles or assign users. Create the role and assign users separately using the `/roles` and `/user-roles` API endpoints.
-:::
+For the complete list of templates, JSON format details, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 
 ## Web route reference
 
@@ -463,6 +405,5 @@ The Casbin enforcer uses a 60-second in-memory policy cache per user per AWS Lam
 
 ## Related topics
 
--   [Tags and Subscriptions](tags-and-subscriptions.md) -- tag-based access control patterns
--   [Pipelines and Workflows](pipelines-and-workflows.md) -- pipeline and workflow permission scoping
--   [Metadata and Schemas](metadata-and-schemas.md) -- metadata schema permission controls
+-   [User Guide: Permissions](../user-guide/permissions.md) -- Web UI instructions for managing roles, constraints, and user assignments
+-   [Developer Guide: Permissions](../developer/permissions.md) -- Permission patterns, JSON constraint examples, and template details

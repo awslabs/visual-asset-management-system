@@ -26,7 +26,7 @@ const isDistributableOptions: OptionDefinition[] = [
     { label: "No", value: "false" },
 ];
 
-let tags: any[] = [];
+const tags: any[] = [];
 let assetTags: any[] = [];
 let tagTypes: TagType[] = [];
 
@@ -94,13 +94,42 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     useEffect(() => {
         setAssetDetail(asset);
         fetchTags().then((res) => {
-            tags = [];
+            tags.length = 0; // Clear without losing reference
             if (res && Array.isArray(res)) {
-                Object.values(res).map((x: any) => {
-                    tags.push({ label: `${x.tagName} (${x.tagTypeName})`, value: x.tagName });
-                });
+                const grouped: Record<
+                    string,
+                    { tagTypeName: string; required: string; tagItems: any[] }
+                > = {};
+                const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
+                for (const x of res) {
+                    const typeName = x.tagTypeName || "Uncategorized";
+                    if (!grouped[typeName]) {
+                        const typeInfo = storedTypes.find((t: any) => t.tagTypeName === typeName);
+                        grouped[typeName] = {
+                            tagTypeName: typeName,
+                            required: typeInfo?.required || "False",
+                            tagItems: [],
+                        };
+                    }
+                    grouped[typeName].tagItems.push(x);
+                }
+                Object.values(grouped)
+                    .filter((group) => group.tagItems.length > 0)
+                    .sort((a, b) => a.tagTypeName.localeCompare(b.tagTypeName))
+                    .forEach((group) => {
+                        tags.push({
+                            label:
+                                group.required === "True"
+                                    ? `${group.tagTypeName} [required]`
+                                    : group.tagTypeName,
+                            options: group.tagItems
+                                .sort((a: any, b: any) =>
+                                    (a.tagName || "").localeCompare(b.tagName || "")
+                                )
+                                .map((t: any) => ({ label: t.tagName, value: t.tagName })),
+                        });
+                    });
             }
-            return tags;
         });
 
         const tagTypesString = localStorage.getItem("tagTypes");

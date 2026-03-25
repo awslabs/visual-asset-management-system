@@ -278,8 +278,15 @@ When copying a file from one database to another, VAMS performs the following:
 If the destination file already has metadata with the same keys, the copy operation updates those keys with the source values. Metadata keys that exist only in the destination are preserved.
 :::
 
+## Viewing files
+
+VAMS includes 17 built-in viewer plugins that render files directly in the browser. When you select a file in the file manager, VAMS automatically selects the best viewer based on the file extension. Viewers cover 3D models, point clouds, Gaussian splats, USD scenes, images, video, audio, documents, and tabular data.
+
+For the complete list of supported file viewers and extensions, see [File Viewers](viewers.md).
+
 ## What's next
 
 -   Learn about the parent data model: [Assets](assets.md)
 -   Understand metadata and schema governance: [Metadata and Schemas](metadata-and-schemas.md)
 -   Explore how pipelines process files: [Pipelines and Workflows](pipelines-and-workflows.md)
+-   Browse all file viewers: [File Viewers](viewers.md)

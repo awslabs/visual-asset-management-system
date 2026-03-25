@@ -86,6 +86,9 @@ The website overhaul may cause a high number of merge conflicts for forked repos
 -   **Web** Refined View Asset page with cleaner asset details containers and compressed layout spacing
 -   **Web** View Asset page now displays the asset preview thumbnail in the top details section when a preview file is available
 -   **Web** Refined View File page with cleaner component containers and compressed layout
+-   **Web** Tag drop-down selections now have a new layout to group tags by tag types and sort by alphabetical order
+-   **Web** Execute workflow modal in view asset page now has descriptions with workflows, a tree view now for selecting files, and search capability for both components.
+-   Update asset and file general text search query to be a "AND" operation with the other filters, instead of an "OR" operation.
 -   Added cross-database asset link/relationship and file copy support (requires user access to both databases and assets via the auth asset entity)
 -   Added CLAUDE code steering files and commands
 

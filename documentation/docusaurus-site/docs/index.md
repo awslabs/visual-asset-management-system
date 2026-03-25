@@ -12,6 +12,8 @@ VAMS is provided as a near-production-grade solution at its default configuratio
 
 **Visual Asset Management System (VAMS)** is a purpose-built, AWS-native, open-source solution for managing, visualizing, and processing specialized visual assets used in Physical AI and Spatial Computing. VAMS provides a **single pane of glass** for an organization's spatial data source of truth — enabling any authorized user to store, search, visualize, transform, and distribute 3D models, point clouds, CAD files, and other spatial data through a web interface, CLI, or REST API.
 
+![VAMS Home Page](/img/home_page_20260323_v2.5.png)
+
 ---
 
 ## What is VAMS?

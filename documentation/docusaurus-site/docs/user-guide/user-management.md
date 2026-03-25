@@ -34,7 +34,7 @@ Creating a user in Amazon Cognito establishes authentication credentials only. T
 1. In the left sidebar, expand the **Admin - Auth** section.
 2. Choose **User Management**.
 
-<!-- Screenshot needed: Left sidebar navigation showing Admin - Auth section with User Management highlighted -->
+![Cognito User Management page showing user listing](/img/cognito_user_management_20260323_v2.5.png)
 
 :::note[Navigation visibility]
 The **User Management** link appears only when Amazon Cognito is the configured authentication provider. If you do not see this link, your deployment likely uses an external identity provider.
@@ -58,7 +58,7 @@ The User Management page displays all users in the Amazon Cognito user pool. The
 
 Use the filter fields at the top of the table to search by User ID, Email, or Phone Number.
 
-<!-- Screenshot needed: User Management page showing the user table with filter fields -->
+<!-- The Cognito User Management screenshot is shown above -->
 
 ---
 
@@ -77,7 +77,7 @@ When you create a new user, Amazon Cognito generates a temporary password and se
 
 3. Choose **Create Cognito User**.
 
-<!-- Screenshot needed: Create Cognito User modal with fields filled in -->
+<!-- No separate screenshot available for the Create Cognito User modal -->
 
 :::tip[Email delivery]
 After creation, the user receives a welcome email from Amazon Cognito containing their User ID and a temporary password. The user must sign in and set a new password before they can access VAMS. Ensure the user's email address is correct and that your Amazon Cognito configuration allows email delivery.
@@ -127,7 +127,7 @@ Resetting a password has the following effects:
 -   The user's VAMS role assignments are preserved (roles are stored separately from the Amazon Cognito user record).
     :::
 
-<!-- Screenshot needed: Reset User Password confirmation dialog showing user details and warning -->
+<!-- No separate screenshot available for the Reset Password dialog -->
 
 ---
 
@@ -173,3 +173,7 @@ To fully revoke a user's access:
 1. **Remove role assignments** -- Navigate to **Admin - Auth** > **Users in Roles** and remove the user from all roles.
 2. **Delete or disable the user** -- Delete the user from the User Management page (Cognito deployments) or disable the user in your external IdP.
 3. **Revoke API keys** -- If the user had any API keys, navigate to **API Key Management** and deactivate or delete them. See [API Keys](api-keys.md) for details.
+
+:::tip[CLI alternative]
+User and API key operations can also be performed via the command line. See [CLI Users and Keys Commands](../cli/commands/users-and-keys.md).
+:::

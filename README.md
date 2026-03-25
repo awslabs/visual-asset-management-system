@@ -49,13 +49,13 @@ _Use cases include:_
 
 ## Screenshots
 
-|                         Database Management                          |                        Asset Search                        |                        3D Model Viewer                         |
-| :------------------------------------------------------------------: | :--------------------------------------------------------: | :------------------------------------------------------------: |
-| ![Databases](./documentation/diagrams/screenshots/database_view.png) | ![Search](./documentation/diagrams/screenshots/assets.png) | ![Viewer](./documentation/diagrams/screenshots/model_view.png) |
+|                                      Database Management                                       |                                             Asset Search                                              |                                         Asset Detail                                         |
+| :--------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------: |
+| ![Database listing page](./documentation/diagrams/screenshots/database_page_20260323_v2.5.png) | ![Asset search table view](./documentation/diagrams/screenshots/asset_search_table_20260323_v2.5.png) | ![Asset detail page](./documentation/diagrams/screenshots/view_asset_page_20260323_v2.5.png) |
 
-|                             Asset Details                              |                            Metadata                            |                            Asset Versioning                            |
-| :--------------------------------------------------------------------: | :------------------------------------------------------------: | :--------------------------------------------------------------------: |
-| ![Details](./documentation/diagrams/screenshots/asset_detail_view.png) | ![Metadata](./documentation/diagrams/screenshots/metadata.png) | ![Versions](./documentation/diagrams/screenshots/asset_versioning.png) |
+|                                           File Viewer                                           |                                           Asset Versioning                                            |                                                  Map View                                                   |
+| :---------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------: |
+| ![File viewer page](./documentation/diagrams/screenshots/view_file_page_usdz_20260323_v2.5.png) | ![Asset versions tab](./documentation/diagrams/screenshots/view_asset_versions_tab_20260323_v2.5.png) | ![Asset search map view](./documentation/diagrams/screenshots/asset_search_mapView__dark_20260323_v2.5.png) |
 
 ## Architecture
 

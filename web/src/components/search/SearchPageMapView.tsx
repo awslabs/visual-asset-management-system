@@ -467,7 +467,16 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         closeOnClick={false}
                         maxWidth="400px"
                     >
-                        <div style={{ padding: "12px", minWidth: "300px", maxWidth: "400px" }}>
+                        <div
+                            style={{
+                                padding: "12px",
+                                minWidth: "300px",
+                                maxWidth: "400px",
+                                backgroundColor: "var(--vams-bg-primary, #ffffff)",
+                                color: "var(--vams-text-primary, #000716)",
+                                borderRadius: "8px",
+                            }}
+                        >
                             <SpaceBetween direction="vertical" size="s">
                                 {/* Preview thumbnail if enabled */}
                                 {state.showPreviewThumbnails && (

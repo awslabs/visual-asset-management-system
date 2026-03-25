@@ -23,7 +23,7 @@ If your organization uses an external identity provider (such as SAML or OIDC fe
 3. You will be prompted to set a new password. Choose a strong password that meets the requirements displayed on screen.
 4. After setting your new password, you are signed in and redirected to the VAMS home page.
 
-<!-- Screenshot needed: Cognito login form with username and password fields -->
+![Cognito login page with username and password fields](/img/login_page_cognito_20260323_v2.5.png)
 
 ### Federated Identity Provider Authentication
 
@@ -42,7 +42,7 @@ If your deployment uses an external OAuth identity provider (without Amazon Cogn
 2. Complete authentication on your organization's identity provider.
 3. You are redirected back to VAMS and signed in automatically.
 
-<!-- Screenshot needed: External OAuth login page with SSO and MFA buttons -->
+<!-- No screenshot available for external OAuth login page -->
 
 ---
 
@@ -60,7 +60,7 @@ The top navigation bar appears at the top of every page and contains:
 | **Settings dropdown**     | Provides theme selection (Light Theme or Dark Theme). The active theme is indicated with a checkmark. |
 | **User profile dropdown** | Displays your username and provides a **Sign out** option.                                            |
 
-<!-- Screenshot needed: Top navigation bar showing logo, settings, and user profile -->
+![VAMS home page showing the top navigation bar and side navigation panel](/img/home_page_20260323_v2.5.png)
 
 ### Side Navigation Panel
 
@@ -111,7 +111,7 @@ The navigation panel is divided into the following sections:
 The navigation items visible to you depend on your assigned role and permissions. If you do not see a particular item, contact your administrator to request the necessary access.
 :::
 
-<!-- Screenshot needed: Full side navigation panel expanded showing all sections -->
+<!-- The home page screenshot above shows the full side navigation panel -->
 
 ---
 

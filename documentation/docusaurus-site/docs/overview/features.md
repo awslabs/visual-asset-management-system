@@ -10,27 +10,9 @@ The VAMS web interface is a React 17 application built with Vite and the AWS Clo
 
 ### Viewer Plugins
 
-VAMS includes 17 built-in viewer plugins organized by category. The plugin-based architecture supports lazy loading, per-plugin dependency management, and fullscreen mode.
+VAMS includes 17 built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
-| Viewer                           | Category | Supported Extensions                                                                                       | Notes                                                                                                     |
-| -------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Three.js Viewer                  | 3D       | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.stp`, `.step`, `.iges`, `.brep` | Primary mesh and CAD viewer. Scene graph, material editing, transform controls. CAD formats require WASM. |
-| Online 3D Viewer                 | 3D       | `.3dm`, `.amf`, `.bim`, `.off`, `.wrl`                                                                     | Rhinoceros 3D, AMF, BIM, OFF, VRML formats                                                                |
-| Potree Viewer                    | 3D       | `.e57`, `.las`, `.laz`, `.ply`                                                                             | Octree-based point cloud streaming. Requires Potree pipeline preprocessing.                               |
-| Cesium 3D Tileset Viewer         | 3D       | `.json`                                                                                                    | 3D Tileset viewing with geospatial capabilities. Requires `ALLOWUNSAFEEVAL` feature flag.                 |
-| BabylonJS Gaussian Splat Viewer  | 3D       | `.ply`, `.spz`                                                                                             | Gaussian splat visualization with WebXR support                                                           |
-| PlayCanvas Gaussian Splat Viewer | 3D       | `.ply`, `.sog`                                                                                             | Gaussian splat visualization with orbit camera and auto-focus                                             |
-| Needle USD Viewer                | 3D       | `.usd`, `.usda`, `.usdc`, `.usdz`                                                                          | Universal Scene Description viewing via WebAssembly. Requires `ALLOWUNSAFEEVAL` feature flag.             |
-| VNTANA 3D Viewer                 | 3D       | `.glb`                                                                                                     | Licensed viewer for high-quality GLB rendering                                                            |
-| VEERUM 3D Viewer                 | 3D       | `.e57`, `.las`, `.laz`, `.ply`, `.json`                                                                    | Licensed viewer for point clouds and 3D tilesets                                                          |
-| Image Viewer                     | Media    | `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`                                                                    | Zoom and pan capabilities                                                                                 |
-| Video Player                     | Media    | `.mp4`, `.webm`, `.mov`, `.avi`, `.mkv`, `.flv`, `.wmv`, `.m4v`                                            | Standard playback controls                                                                                |
-| Audio Player                     | Media    | `.mp3`, `.wav`, `.ogg`, `.aac`, `.flac`, `.m4a`                                                            | Standard playback controls                                                                                |
-| PDF Viewer                       | Document | `.pdf`                                                                                                     | Navigation, zoom, and page management                                                                     |
-| HTML Viewer                      | Document | `.html`                                                                                                    | HTML presentations and documents                                                                          |
-| Text Viewer                      | Document | `.txt`, `.json`, `.xml`, `.yaml`, `.md`, `.py`, `.js`, `.ts`, `.sql`, and more                             | Syntax highlighting for 20+ file types                                                                    |
-| Columnar Data Viewer             | Data     | `.rds`, `.fcs`, `.csv`                                                                                     | Tabular data display                                                                                      |
-| Preview Viewer                   | Preview  | `*` (all types)                                                                                            | Displays generated preview thumbnails when available                                                      |
+For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
 ### Asset Management
 

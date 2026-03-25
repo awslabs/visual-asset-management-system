@@ -101,6 +101,8 @@ RapidPipeline provides two deployment options in VAMS: Amazon ECS and Amazon EKS
 
 #### VNTANA
 
+![VNTANA 3D viewer and optimization interface](/img/vntana_viewer__20260323_v2.5.png)
+
 VNTANA provides both a viewer plugin and a processing pipeline (ModelOps).
 
 1. Subscribe to the VNTANA 3D Optimization Engine on the [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4).
@@ -109,6 +111,8 @@ VNTANA provides both a viewer plugin and a processing pipeline (ModelOps).
 4. Redeploy the stack.
 
 #### Veerum
+
+![Veerum 3D Viewer displaying a point cloud](/img/veerum_viewer_20260323_v2.5.png)
 
 The Veerum 3D Viewer provides advanced visualization for point cloud and 3D tileset files.
 

@@ -135,7 +135,7 @@ When executing the pipeline manually or via API, you can pass the following inpu
 
 | Parameter                       | Type    | Default | Description                                                                                                                                               |
 | :------------------------------ | :------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `overwriteExistingPreviewFiles` | boolean | `false` | When `true`, regenerates preview files even if they already exist for the input file. When `false`, the pipeline skips files that already have a preview. |
+| `overwriteExistingPreviewFiles` | boolean | `true`  | When `true`, regenerates preview files even if they already exist for the input file. When `false`, the pipeline skips files that already have a preview. |
 
 ### Example Input Parameters
 

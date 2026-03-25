@@ -26,7 +26,7 @@ Assets in VAMS are organized into databases. If your administrator has already c
 
 4. Select **Create Database**.
 
-<!-- Screenshot needed: Create Database modal with all fields filled in -->
+![Database listing page with databases](/img/database_page_20260323_v2.5.png)
 
 :::tip
 Choose a descriptive database name that reflects the type of assets it will contain, such as `building-models` or `site-scans-2024`. The name becomes part of asset URLs and cannot be changed later.
@@ -39,7 +39,7 @@ Choose a descriptive database name that reflects the type of assets it will cont
 1. In the side navigation, select **Create Asset**.
 2. The upload wizard opens with the first step: **Asset Details**.
 
-<!-- Screenshot needed: Upload page showing the Asset Details wizard step -->
+![Create Asset page showing the Asset Details wizard step](/img/create_asset_first_20260323_v2.5.png)
 
 ---
 
@@ -65,7 +65,7 @@ Fill in the required fields on the **Asset Details** step:
 
 6. Select **Next** to proceed to the metadata step.
 
-<!-- Screenshot needed: Completed Asset Details form with all fields filled -->
+<!-- The create asset screenshot above shows the Asset Details form -->
 
 ---
 
@@ -161,7 +161,7 @@ The **Review and Upload** step displays a summary of everything you have configu
 1. Review all information carefully. To make changes, select the **Edit** button next to any section or use the **Previous** button to go back to a specific step.
 2. When satisfied, select **Upload Object** to begin the upload.
 
-![Asset Detail](/img/asset_detail_view.png)
+![Upload progress showing file upload status](/img/upload_asset_finalprogress_20260323_v2.5.png)
 
 ---
 
@@ -199,7 +199,7 @@ After the upload completes:
     - The **File Manager** tab displays your uploaded files in a directory tree.
     - The **Metadata** section at the bottom shows your key-value pairs.
 
-![Metadata](/img/metadata.png)
+![Asset detail page showing metadata, files, and properties](/img/view_asset_page_20260323_v2.5.png)
 
 ---
 
@@ -236,4 +236,5 @@ Congratulations -- you have created your first database and asset in VAMS. To co
 -   [Asset Management](asset-management.md) -- Learn about versioning, file operations, relationships, and advanced asset management
 -   [Web Interface Overview](web-interface.md) -- Explore all pages and features of the VAMS interface
 -   [Metadata Management](metadata-management.md) -- Deep dive into metadata schemas and metadata operations
--   [Tags and Subscriptions](tags-and-subscriptions.md) -- Organize assets with tags and receive change notifications
+-   [Tags](tags.md) -- Organize assets with tags
+-   [Subscriptions](subscriptions.md) -- Receive change notifications

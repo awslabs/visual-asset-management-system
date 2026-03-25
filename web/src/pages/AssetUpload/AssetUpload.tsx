@@ -1364,10 +1364,43 @@ const UploadForm = () => {
         tags = [];
 
         fetchTags().then((res) => {
+            tags.length = 0; // Clear existing array without losing reference
             if (res && Array.isArray(res)) {
-                Object.values(res).map((x: any) => {
-                    tags.push({ label: `${x.tagName} (${x.tagTypeName})`, value: x.tagName });
-                });
+                // Group tags by tag type, sorted alphabetically
+                const grouped: Record<
+                    string,
+                    { tagTypeName: string; required: string; tagItems: any[] }
+                > = {};
+                const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
+                for (const x of res) {
+                    const typeName = x.tagTypeName || "Uncategorized";
+                    if (!grouped[typeName]) {
+                        const typeInfo = storedTypes.find((t: any) => t.tagTypeName === typeName);
+                        grouped[typeName] = {
+                            tagTypeName: typeName,
+                            required: typeInfo?.required || "False",
+                            tagItems: [],
+                        };
+                    }
+                    grouped[typeName].tagItems.push(x);
+                }
+                // Sort groups alphabetically, filter out empty groups, build grouped options
+                Object.values(grouped)
+                    .filter((group) => group.tagItems.length > 0)
+                    .sort((a, b) => a.tagTypeName.localeCompare(b.tagTypeName))
+                    .forEach((group) => {
+                        tags.push({
+                            label:
+                                group.required === "True"
+                                    ? `${group.tagTypeName} [required]`
+                                    : group.tagTypeName,
+                            options: group.tagItems
+                                .sort((a: any, b: any) =>
+                                    (a.tagName || "").localeCompare(b.tagName || "")
+                                )
+                                .map((t: any) => ({ label: t.tagName, value: t.tagName })),
+                        });
+                    });
             }
         });
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {

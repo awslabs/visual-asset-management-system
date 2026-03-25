@@ -20,6 +20,8 @@ VAMS can store, manage, and version **any file type** — it is not limited to a
 | **Documents and Media**         | PDF, images, video, audio, CSV, HTML, text                            |
 | **Any other file type**         | Stored and versioned in Amazon S3; viewable via custom viewer plugins |
 
+For the complete viewer-to-extension mapping, see [File Viewers](../concepts/viewers.md).
+
 Associated data such as textures, materials, bills of materials, quality analysis data, temporal (4D) change data, and AI training labels can be managed as asset files or captured through the metadata and attribute system.
 
 ### Open-source extensibility

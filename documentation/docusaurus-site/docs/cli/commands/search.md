@@ -21,21 +21,21 @@ Search across all assets with advanced filtering, metadata search, and sorting.
 vamscli search assets [OPTIONS]
 ```
 
-| Option                                 | Type    | Description                                      |
-| -------------------------------------- | ------- | ------------------------------------------------ |
-| `-q`, `--query`                        | TEXT    | General text search query                        |
-| `--filters`                            | TEXT    | Advanced filters (query string or JSON format)   |
-| `--metadata-query`                     | TEXT    | Metadata search query (`field:value` format)     |
-| `--metadata-mode`                      | CHOICE  | Search mode: `key`, `value`, or `both` (default) |
-| `--include-metadata` / `--no-metadata` | Flag    | Include metadata in general search               |
-| `--explain-results`                    | Flag    | Include match explanations                       |
-| `--sort-field`                         | TEXT    | Field to sort by                                 |
-| `--sort-desc` / `--sort-asc`           | Flag    | Sort direction                                   |
-| `--from`                               | INTEGER | Pagination start offset                          |
-| `--size`                               | INTEGER | Results per page (max 2000)                      |
-| `--include-archived`                   | Flag    | Include archived assets                          |
-| `--output-format`                      | CHOICE  | `table`, `json`, or `csv`                        |
-| `--jsonOutput`                         | Flag    | Raw API response as JSON                         |
+| Option                                 | Type    | Description                                                            |
+| -------------------------------------- | ------- | ---------------------------------------------------------------------- |
+| `-q`, `--query`                        | TEXT    | General text search query (AND with filters)                           |
+| `--filters`                            | TEXT    | Advanced filters (query string or JSON format)                         |
+| `--metadata-query`                     | TEXT    | Metadata search query (AND with query/filters; supports AND/OR within) |
+| `--metadata-mode`                      | CHOICE  | Search mode: `key`, `value`, or `both` (default)                       |
+| `--include-metadata` / `--no-metadata` | Flag    | Include metadata in general search                                     |
+| `--explain-results`                    | Flag    | Include match explanations                                             |
+| `--sort-field`                         | TEXT    | Field to sort by                                                       |
+| `--sort-desc` / `--sort-asc`           | Flag    | Sort direction                                                         |
+| `--from`                               | INTEGER | Pagination start offset                                                |
+| `--size`                               | INTEGER | Results per page (max 2000)                                            |
+| `--include-archived`                   | Flag    | Include archived assets                                                |
+| `--output-format`                      | CHOICE  | `table`, `json`, or `csv`                                              |
+| `--jsonOutput`                         | Flag    | Raw API response as JSON                                               |
 
 ### Filter syntax
 
@@ -59,10 +59,22 @@ Filters support two formats:
 
 ### Metadata search
 
+The `--metadata-query` supports AND/OR operators within the metadata group. The metadata group as a whole is combined with `--query` and `--filters` using AND logic.
+
 ```bash
+# Single metadata condition
 vamscli search assets --metadata-query "MD_str_product:Training"
+
+# Wildcard in metadata value
 vamscli search assets --metadata-query "MD_str_product:Train*"
+
+# AND within metadata (both must match)
 vamscli search assets --metadata-query "MD_str_product:Training AND MD_num_version:1"
+
+# OR within metadata (either can match)
+vamscli search assets --metadata-query "MD_str_color:red OR MD_str_color:blue"
+
+# Combined: text query AND metadata (both must match)
 vamscli search assets -q "model" --metadata-query "MD_str_category:Training"
 ```
 

@@ -187,4 +187,4 @@ The VAMS web interface supports CSV-based bulk metadata operations. You can expo
 -   [Assets](assets.md) -- asset-level metadata and versioning
 -   [Files and Versions](files-and-versions.md) -- file metadata, file attributes, and version snapshots
 -   [Permissions Model](permissions-model.md) -- controlling who can read and write metadata
--   [Tags and Subscriptions](tags-and-subscriptions.md) -- tags as an alternative classification mechanism
+-   [Tags](tags.md) -- tags as an alternative classification mechanism

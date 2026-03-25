@@ -288,14 +288,18 @@ def _run_preview_pipeline(
         logger.warning(f"Up-axis normalization failed, rendering with original orientation: {e}")
 
     # Generate preview frames
+    # For USD and CAD files, use full bounding box (no percentile cropping)
+    # since these are engineered models where all geometry is intentional
+    _full_bounds_exts = {'.usd', '.usda', '.usdc', '.usdz', '.stp', '.step'}
+    use_full_bounds = ext.lower() in _full_bounds_exts
     try:
-        frames = renderer.generate_rotating_frames(pv_data)
+        frames = renderer.generate_rotating_frames(pv_data, use_full_bounds=use_full_bounds)
     except Exception as e:
         logger.exception(f"Failed to render frames: {e}")
         # Fall back to static frame
         try:
             logger.info("Attempting static frame fallback...")
-            static_img = renderer.generate_static_frame(pv_data)
+            static_img = renderer.generate_static_frame(pv_data, use_full_bounds=use_full_bounds)
             frames = [static_img]
         except Exception as e2:
             logger.exception(f"Static frame fallback also failed: {e2}")

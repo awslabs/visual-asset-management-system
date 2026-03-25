@@ -64,7 +64,7 @@ To create multiple metadata entries at once:
 
 The bulk operation response indicates how many items succeeded and failed, with detailed error messages for any failures.
 
-<!-- Screenshot needed: Metadata table showing multiple entries with different value types -->
+![Asset detail page showing metadata section with key-value pairs](/img/view_asset_page_20260323_v2.5.png)
 
 ## Editing metadata
 
@@ -135,7 +135,7 @@ Each schema targets one entity type:
 5. Add one or more schema fields.
 6. Click **Create Schema**.
 
-<!-- Screenshot needed: Create schema modal showing entity type selector and field editor -->
+![Metadata schema editor showing field definitions and value types](/img/edit_schema_management_20260323_v2.5.png)
 
 ### Schema field definitions
 
@@ -199,3 +199,7 @@ Database administrators can enable the **Restrict Metadata Outside Schemas** set
 -   The restriction applies only through the API and user interface, not to pipeline-generated metadata.
 
 For more information about managing databases and their settings, see [Asset Management](asset-management.md).
+
+:::tip[CLI alternative]
+Metadata operations can also be performed via the command line. See [CLI Metadata Commands](../cli/commands/metadata.md).
+:::

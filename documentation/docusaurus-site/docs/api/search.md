@@ -10,6 +10,7 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 
 -   **Dual-Index Architecture**: VAMS maintains two separate OpenSearch indexes -- one for assets and one for files. Search queries can target either or both indexes.
 -   **Entity Types**: Search results are categorized as either `asset` or `file`. You can filter by entity type.
+-   **AND Query Logic**: The `query`, `metadataQuery`, and `filters` parameters are combined using AND logic. Results must match ALL specified criteria. Within a `metadataQuery`, individual field conditions can use AND or OR (e.g., `"color:red AND size:large"` or `"color:red OR color:blue"`).
 -   **Metadata Search**: Metadata fields are indexed alongside core fields, enabling search by metadata keys, values, or both.
 -   **Field Prefixes**: OpenSearch fields use type prefixes for proper mapping: `str_` (string/keyword), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array).
 -   **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database).
@@ -59,23 +60,23 @@ Executes a search query across the asset and file indexes with full control over
 }
 ```
 
-| Field                     | Type    | Default      | Description                                                                                         |
-| ------------------------- | ------- | ------------ | --------------------------------------------------------------------------------------------------- |
-| `query`                   | string  | --           | General text search across all fields. Max 5,000 characters.                                        |
-| `tokens`                  | array   | `[]`         | Structured search tokens for field-specific queries. See [Search Tokens](#search-tokens).           |
-| `filters`                 | array   | `[]`         | Additional OpenSearch query_string filters. See [Search Filters](#search-filters).                  |
-| `sort`                    | array   | `["_score"]` | Sort configuration. See [Sorting](#sorting).                                                        |
-| `operation`               | string  | `"AND"`      | Default logical operation for combining tokens (`"AND"` or `"OR"`).                                 |
-| `entityTypes`             | array   | `null`       | Filter by entity type: `["asset"]`, `["file"]`, or `["asset", "file"]`. When `null`, searches both. |
-| `includeArchived`         | boolean | `false`      | Include archived items in results.                                                                  |
-| `aggregations`            | boolean | `true`       | Include aggregation facets in the response.                                                         |
-| `metadataQuery`           | string  | --           | Separate metadata search query. Max 5,000 characters.                                               |
-| `metadataSearchMode`      | string  | `"both"`     | Metadata search scope: `"key"` (search keys only), `"value"` (search values only), or `"both"`.     |
-| `includeMetadataInSearch` | boolean | `true`       | Include metadata fields in the general `query` search.                                              |
-| `explainResults`          | boolean | `false`      | Include match explanations in results.                                                              |
-| `includeHighlights`       | boolean | `true`       | Include highlighted matching text in results.                                                       |
-| `from`                    | integer | `0`          | Starting offset for pagination (0-10,000).                                                          |
-| `size`                    | integer | `100`        | Number of results to return (1-2,000).                                                              |
+| Field                     | Type    | Default      | Description                                                                                                                  |
+| ------------------------- | ------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `query`                   | string  | --           | General text search across all fields (AND with filters and metadata query). Max 5,000 characters.                           |
+| `tokens`                  | array   | `[]`         | Structured search tokens for field-specific queries. See [Search Tokens](#search-tokens).                                    |
+| `filters`                 | array   | `[]`         | Additional OpenSearch query_string filters. See [Search Filters](#search-filters).                                           |
+| `sort`                    | array   | `["_score"]` | Sort configuration. See [Sorting](#sorting).                                                                                 |
+| `operation`               | string  | `"AND"`      | Default logical operation for combining tokens (`"AND"` or `"OR"`).                                                          |
+| `entityTypes`             | array   | `null`       | Filter by entity type: `["asset"]`, `["file"]`, or `["asset", "file"]`. When `null`, searches both.                          |
+| `includeArchived`         | boolean | `false`      | Include archived items in results.                                                                                           |
+| `aggregations`            | boolean | `true`       | Include aggregation facets in the response.                                                                                  |
+| `metadataQuery`           | string  | --           | Metadata search query (AND with general query and filters). Supports AND/OR within the metadata group. Max 5,000 characters. |
+| `metadataSearchMode`      | string  | `"both"`     | Metadata search scope: `"key"` (search keys only), `"value"` (search values only), or `"both"`.                              |
+| `includeMetadataInSearch` | boolean | `true`       | Include metadata fields in the general `query` search.                                                                       |
+| `explainResults`          | boolean | `false`      | Include match explanations in results.                                                                                       |
+| `includeHighlights`       | boolean | `true`       | Include highlighted matching text in results.                                                                                |
+| `from`                    | integer | `0`          | Starting offset for pagination (0-10,000).                                                                                   |
+| `size`                    | integer | `100`        | Number of results to return (1-2,000).                                                                                       |
 
 :::warning[Pagination Limits]
 The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearch limitation. For deep pagination, use more specific search criteria to narrow results.
