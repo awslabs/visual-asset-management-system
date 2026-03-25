@@ -59,7 +59,9 @@ pages:
         - if: $CI_COMMIT_BRANCH == "main"
           changes:
               - documentation/docusaurus-site/**/*
+              - .gitlab-ci.yml
         - if: $CI_COMMIT_BRANCH =~ /^release\//
           changes:
               - documentation/docusaurus-site/**/*
+              - .gitlab-ci.yml
         - if: $CI_PIPELINE_SOURCE == "web"
