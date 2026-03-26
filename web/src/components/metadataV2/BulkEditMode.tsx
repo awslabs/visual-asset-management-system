@@ -338,6 +338,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
         {
             id: "key",
             header: "Metadata Key",
+            width: 250,
             cell: (item: MetadataRowState) => {
                 const index = editedRows.indexOf(item);
                 const isSchema = isSchemaField(item);
@@ -376,6 +377,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
         {
             id: "type",
             header: "Value Type",
+            width: 150,
             cell: (item: MetadataRowState) => {
                 const index = editedRows.indexOf(item);
                 const isSchema = isSchemaField(item);
@@ -447,6 +449,7 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
         {
             id: "actions",
             header: "Actions",
+            width: 100,
             cell: (item: MetadataRowState) => {
                 const index = editedRows.indexOf(item);
                 const isSchema = isSchemaField(item);

@@ -103,7 +103,7 @@ export const fetchAssetVersions = async ({
             }
         );
 
-        console.log("Raw API response:", JSON.stringify(response, null, 2));
+        //console.log("Raw API response:", JSON.stringify(response, null, 2));
 
         // Direct response format (no message wrapper)
         if (response && response.versions !== undefined) {

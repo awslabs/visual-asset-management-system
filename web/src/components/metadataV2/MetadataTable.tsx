@@ -374,12 +374,24 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                             </SpaceBetween>
                         </Box>
                     ) : (
-                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <table
+                            style={{
+                                width: "100%",
+                                borderCollapse: "collapse",
+                                tableLayout: "fixed",
+                            }}
+                        >
+                            <colgroup>
+                                <col style={{ width: "14%" }} />
+                                <col style={{ width: "120px" }} />
+                                <col />
+                                <col style={{ width: "80px" }} />
+                            </colgroup>
                             <thead>
                                 <tr>
                                     <th
                                         style={{
-                                            padding: "12px",
+                                            padding: "8px 12px",
                                             textAlign: "left",
                                             borderBottom: "2px solid #e9ebed",
                                         }}
@@ -388,7 +400,7 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                                     </th>
                                     <th
                                         style={{
-                                            padding: "12px",
+                                            padding: "8px 12px",
                                             textAlign: "left",
                                             borderBottom: "2px solid #e9ebed",
                                         }}
@@ -397,7 +409,7 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                                     </th>
                                     <th
                                         style={{
-                                            padding: "12px",
+                                            padding: "8px 12px",
                                             textAlign: "left",
                                             borderBottom: "2px solid #e9ebed",
                                         }}
@@ -406,8 +418,8 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                                     </th>
                                     <th
                                         style={{
-                                            padding: "12px",
-                                            textAlign: "left",
+                                            padding: "8px 12px",
+                                            textAlign: "center",
                                             borderBottom: "2px solid #e9ebed",
                                         }}
                                     >
