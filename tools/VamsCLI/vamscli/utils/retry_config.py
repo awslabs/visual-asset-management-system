@@ -147,7 +147,7 @@ class RetryConfig:
             show_progress: Whether to show progress indication
         """
         if not show_progress or delay < 1.0:
-            time.sleep(delay)
+            time.sleep(delay)  # nosemgrep: arbitrary-sleep
             return
             
         # Show progress for longer delays

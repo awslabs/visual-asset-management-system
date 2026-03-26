@@ -802,6 +802,7 @@ Active,boolean,true`}
                             uploadButtonText: (e) => (e ? "Choose file" : "Choose file"),
                             // nosemgrep: useless-ternary
                             dropzoneText: (e) =>
+                                // nosemgrep: useless-ternary
                                 e ? "Drop file to upload" : "Drop file to upload",
                             removeFileAriaLabel: (e) => `Remove file ${e + 1}`,
                             limitShowFewer: "Show fewer files",

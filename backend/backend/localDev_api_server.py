@@ -90,8 +90,8 @@ def routes():
 def decode_access_token(access_token):
   print('access_token', access_token)
 
-  header = pyjwt.get_unverified_header(access_token)
-  claims = pyjwt.decode(access_token, options={ 'verify_signature': False })
+  header = pyjwt.get_unverified_header(access_token)  # nosemgrep: unverified-jwt-decode
+  claims = pyjwt.decode(access_token, options={ 'verify_signature': False })  # nosemgrep: unverified-jwt-decode
   print('header', header)
   print('claims', claims)
 

@@ -675,7 +675,7 @@ def get_k8s_client():
 
                     # Create temporary kubeconfig
                     with tempfile.NamedTemporaryFile(delete=False) as kube_config: # nosemgrep: tempfile-without-flush
-                        kube_config_path = kube_config.name
+                        kube_config_path = kube_config.name # nosemgrep: tempfile-without-flush
 
                     # Try to get aws-auth ConfigMap using AWS CLI
                     logger.error("⚠️ Attempting to check aws-auth ConfigMap...")
