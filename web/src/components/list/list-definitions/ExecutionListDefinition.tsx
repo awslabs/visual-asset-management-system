@@ -7,12 +7,13 @@ import React from "react";
 import ListDefinition from "./types/ListDefinition";
 import { Link } from "@cloudscape-design/components";
 import ColumnDefinition from "./types/ColumnDefinition";
+import Synonyms from "../../../synonyms";
 
 export const WorkflowListDefinition = new ListDefinition({
     pluralName: "workflows",
     pluralNameTitleCase: "Workflows",
     visibleColumns: ["workflowId", "databaseId", "description", "pipelines"],
-    filterColumns: [{ name: "databaseId", placeholder: "Database" }],
+    filterColumns: [{ name: "databaseId", placeholder: Synonyms.Database }],
     columnDefinitions: [
         new ColumnDefinition({
             id: "workflowId",
@@ -29,7 +30,7 @@ export const WorkflowListDefinition = new ListDefinition({
         }),
         new ColumnDefinition({
             id: "databaseId",
-            header: "Database",
+            header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
                 return (

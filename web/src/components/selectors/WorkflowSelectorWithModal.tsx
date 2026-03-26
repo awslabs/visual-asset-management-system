@@ -20,6 +20,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
 import { fetchAssetS3Files } from "../../services/APIService";
+import Synonyms from "../../synonyms";
 
 // Helper function to check if a file has an extension (is a file, not a folder)
 const isFile = (file) => {
@@ -37,7 +38,7 @@ interface TreeNode {
 
 function buildFileTree(files: any[]): TreeNode {
     const root: TreeNode = {
-        name: "/ (Entire Asset)",
+        name: `/ (Entire ${Synonyms.Asset})`,
         path: "/",
         key: null,
         isFolder: true,
@@ -264,12 +265,14 @@ export default function WorkflowSelectorWithModal(props) {
                     setApiError(
                         typeof files === "string"
                             ? files
-                            : "Failed to load asset files. Please try again."
+                            : `Failed to load ${Synonyms.asset} files. Please try again.`
                     );
                 }
             } catch (error) {
                 console.error("Error fetching asset files:", error);
-                setApiError(`Failed to load asset files: ${error.message || "Unknown error"}`);
+                setApiError(
+                    `Failed to load ${Synonyms.asset} files: ${error.message || "Unknown error"}`
+                );
             } finally {
                 setLoadingFiles(false);
             }
@@ -413,8 +416,9 @@ export default function WorkflowSelectorWithModal(props) {
                                 triggerType="custom"
                                 content={
                                     <Box padding="s">
-                                        Select the root folder <strong>/ (Entire Asset)</strong> to
-                                        process all files in the asset, or select an individual file
+                                        Select the root folder{" "}
+                                        <strong>/ (Entire {Synonyms.Asset})</strong> to process all
+                                        files in the {Synonyms.asset}, or select an individual file
                                         to process only that file.
                                     </Box>
                                 }
@@ -433,7 +437,7 @@ export default function WorkflowSelectorWithModal(props) {
                     description={
                         selectedFileKey
                             ? `Selected: ${selectedFilePath}`
-                            : "Selected: Entire Asset (root folder)"
+                            : `Selected: Entire ${Synonyms.Asset} (root folder)`
                     }
                 >
                     {loadingFiles && (
@@ -441,7 +445,7 @@ export default function WorkflowSelectorWithModal(props) {
                             <SpaceBetween direction="vertical" size="xs">
                                 <Spinner size="normal" />
                                 <Box color="text-body-secondary" fontSize="body-s">
-                                    Loading asset files...
+                                    {`Loading ${Synonyms.asset} files...`}
                                 </Box>
                             </SpaceBetween>
                         </Box>
@@ -476,7 +480,7 @@ export default function WorkflowSelectorWithModal(props) {
                     )}
                     {!loadingFiles && !fileTree && assetFiles.length === 0 && (
                         <Box textAlign="center" padding="s" color="text-body-secondary">
-                            No files found in this asset.
+                            No files found in this {Synonyms.asset}.
                         </Box>
                     )}
                 </FormField>

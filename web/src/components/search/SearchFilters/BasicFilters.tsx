@@ -121,7 +121,7 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
                         gridDefinition={[{ colspan: { default: 10 } }, { colspan: { default: 2 } }]}
                     >
                         <Input
-                            placeholder="Search assets and files..."
+                            placeholder={`Search ${Synonyms.assets} and files...`}
                             type="search"
                             value={query}
                             onChange={(e) => onQueryChange(e.detail.value)}
@@ -170,7 +170,7 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
                                 {/* Database Filter */}
                                 <Select
                                     selectedOption={filters.str_databaseid || null}
-                                    placeholder="Database"
+                                    placeholder={Synonyms.Database}
                                     options={databaseOptions}
                                     onChange={({ detail }) =>
                                         onFilterChange("str_databaseid", detail.selectedOption)

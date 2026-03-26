@@ -11,6 +11,7 @@ import ResetCognitoUserPassword from "./ResetCognitoUserPassword";
 import { useState, useEffect } from "react";
 import { Box, Button, Grid, SpaceBetween, TextContent } from "@cloudscape-design/components";
 import TableList from "../../components/list/TableList";
+import { usePageTitle } from "../../hooks/usePageTitle";
 
 export const CognitoUsersListDefinition = new ListDefinition({
     pluralName: "Cognito User Management",
@@ -112,6 +113,7 @@ export const CognitoUsersListDefinition = new ListDefinition({
 });
 
 export default function CognitoUsers() {
+    usePageTitle("User Management");
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState<Array<any>>([]);

@@ -7,6 +7,7 @@ import { Modal } from "@cloudscape-design/components";
 import React, { useState } from "react";
 import { useNavigate } from "react-router";
 import AssetSelector from "./AssetSelector";
+import Synonyms from "../../synonyms";
 
 export default function AssetSelectorWithModal(props) {
     const { pathViewType } = props;
@@ -23,7 +24,7 @@ export default function AssetSelectorWithModal(props) {
             visible={open}
             closeAriaLabel="Close modal"
             size="medium"
-            header="Select Asset"
+            header={`Select ${Synonyms.Asset}`}
         >
             <AssetSelector pathViewType={pathViewType} />
         </Modal>

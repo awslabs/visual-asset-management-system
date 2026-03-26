@@ -430,7 +430,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         return (
             <Box>
                 <Alert type="info" header="Limited Search Mode">
-                    OpenSearch is disabled. Using basic asset listing instead.
+                    {`OpenSearch is disabled. Using basic ${Synonyms.asset} listing instead.`}
                 </Alert>
                 <ListPage
                     singularName={Synonyms.Asset}
@@ -775,9 +775,8 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     embedded?.title ||
                     (databaseId
                         ? `${Synonyms.Assets} for ${databaseId}`
-                        : "Assets and Files - Search")
+                        : `${Synonyms.Assets} and Files - Search`)
                 }
-                description={mode === "full" ? "Search and filter assets and files" : undefined}
             />
 
             {/* Error Display - removed, using toast notifications instead */}

@@ -307,11 +307,11 @@ Generates Gaussian splat reconstructions from media files. **Requires VPC.**
 
 Converts GLB mesh files to 3D Gaussian Splat PLY files using GPU-accelerated conversion. **Requires VPC.**
 
-| Field                                                                | Type    | Default | Description                                                        |
-| -------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------ |
-| `app.pipelines.useMesh2Splat.enabled`                                | boolean | `false` | Enables the Mesh2Splat pipeline.                                   |
-| `app.pipelines.useMesh2Splat.autoRegisterWithVAMS`                   | boolean | `true`  | Automatically registers the pipeline during deployment.            |
-| `app.pipelines.useMesh2Splat.autoRegisterAutoTriggerOnFileUpload`    | boolean | `false` | Automatically triggers the pipeline when `.glb` files are uploaded. |
+| Field                                                             | Type    | Default | Description                                                         |
+| ----------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------- |
+| `app.pipelines.useMesh2Splat.enabled`                             | boolean | `false` | Enables the Mesh2Splat pipeline.                                    |
+| `app.pipelines.useMesh2Splat.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.             |
+| `app.pipelines.useMesh2Splat.autoRegisterAutoTriggerOnFileUpload` | boolean | `false` | Automatically triggers the pipeline when `.glb` files are uploaded. |
 
 ### RapidPipeline on Amazon ECS (`app.pipelines.useRapidPipeline.useEcs`)
 
@@ -638,7 +638,11 @@ Key pipeline section for enabling all available pipelines:
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
             "useSplatToolbox": { "enabled": true, "autoRegisterWithVAMS": true },
-            "useMesh2Splat": { "enabled": false, "autoRegisterWithVAMS": true, "autoRegisterAutoTriggerOnFileUpload": false }
+            "useMesh2Splat": {
+                "enabled": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
+            }
         }
     }
 }

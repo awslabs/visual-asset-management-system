@@ -15,6 +15,7 @@ import {
 } from "@cloudscape-design/components";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
+import Synonyms from "../../synonyms";
 
 const FileUploadTableColumnDefinitions = [
     {
@@ -306,7 +307,7 @@ export const FileUploadTable = ({
             if (filepathColumnIndex !== -1) {
                 customColumnDefinitions[filepathColumnIndex] = {
                     ...customColumnDefinitions[filepathColumnIndex],
-                    header: "Asset Preview Path",
+                    header: `${Synonyms.Asset} Preview Path`,
                 };
             }
 

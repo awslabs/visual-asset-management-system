@@ -30,6 +30,7 @@ import { MetadataContainer } from "../metadataV2";
 import localforage from "localforage";
 import Synonyms from "../../synonyms";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import { usePageTitle } from "../../hooks/usePageTitle";
 
 // Fetch tag types and store in localStorage
 fetchtagTypes().then((res) => {
@@ -68,6 +69,8 @@ export default function ViewAsset() {
     const [versions, setVersions] = useState<any[]>([]);
     const [versionsLoading, setVersionsLoading] = useState(false);
 
+    usePageTitle(databaseId, asset?.assetName);
+
     // Config
     const config = appCache.getItem("config");
     const [useNoOpenSearch] = useState(
@@ -90,14 +93,14 @@ export default function ViewAsset() {
                     setAsset(item);
                 } else if (typeof item === "string" && item.includes("not found")) {
                     setApiError(
-                        "Asset not found. The requested asset may have been deleted or you may not have permission to access it."
+                        `${Synonyms.Asset} not found. The requested ${Synonyms.asset} may have been deleted or you may not have permission to access it.`
                     );
                     setShowApiError(true);
                     setApiErrorType("error");
                 } else {
                     // Handle other API failure cases
                     setApiError(
-                        "Failed to load asset data. The server returned an invalid response."
+                        `Failed to load ${Synonyms.asset} data. The server returned an invalid response.`
                     );
                     setShowApiError(true);
                     setApiErrorType("error");
@@ -105,7 +108,7 @@ export default function ViewAsset() {
                 }
             } catch (error) {
                 console.error("Error fetching asset:", error);
-                setApiError("Failed to load asset data. Please try again later.");
+                setApiError(`Failed to load ${Synonyms.asset} data. Please try again later.`);
                 setShowApiError(true);
                 setApiErrorType("error");
             }
@@ -248,6 +251,10 @@ export default function ViewAsset() {
                             items={[
                                 { text: Synonyms.Databases, href: "#/databases/" },
                                 {
+                                    text: "Search",
+                                    href: "#/assets/",
+                                },
+                                {
                                     text: databaseId,
                                     href: "#/databases/" + databaseId + "/assets/",
                                 },
@@ -271,7 +278,7 @@ export default function ViewAsset() {
 
                         {/* Asset Header - only shown on error, otherwise asset name is in the details container */}
                         {showApiError && (
-                            <Header variant="h1">Asset Information Unavailable</Header>
+                            <Header variant="h1">{`${Synonyms.Asset} Information Unavailable`}</Header>
                         )}
                     </SpaceBetween>
 
@@ -354,7 +361,7 @@ export default function ViewAsset() {
                     onSuccess={(operation) => {
                         setShowDeleteModal(false);
                         // Navigate back to search page after successful deletion / archival
-                        navigate(databaseId ? `/search/${databaseId}/assets` : "/search");
+                        navigate(databaseId ? `/databases/${databaseId}/assets` : "/assets");
                     }}
                 />
             </StatusMessageProvider>

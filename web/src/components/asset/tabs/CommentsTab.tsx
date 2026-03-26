@@ -13,6 +13,7 @@ import PopulateComments from "./comments/PopulateComments";
 import "./comments/Comments.css";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import { useStatusMessage } from "../../common/StatusMessage";
+import Synonyms from "../../../synonyms";
 
 interface CommentsTabProps {
     assetId: string;
@@ -117,21 +118,26 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                             );
                         } else if (typeof items === "string" && items.includes("not found")) {
                             setError(
-                                "Comments data not found. The requested asset may have been deleted or you may not have permission to access it."
+                                `${Synonyms.Comments} data not found. The requested asset may have been deleted or you may not have permission to access it.`
                             );
                             showMessage({
                                 type: "error",
-                                message:
-                                    "Comments data not found. The requested asset may have been deleted or you may not have permission to access it.",
+                                message: `${Synonyms.Comments} data not found. The requested asset may have been deleted or you may not have permission to access it.`,
                                 dismissible: true,
                             });
                         }
                     } catch (error: any) {
                         console.error("Error fetching comments:", error);
-                        setError(`Failed to load comments: ${error.message || "Unknown error"}`);
+                        setError(
+                            `Failed to load ${Synonyms.comments}: ${
+                                error.message || "Unknown error"
+                            }`
+                        );
                         showMessage({
                             type: "error",
-                            message: `Failed to load comments: ${error.message || "Unknown error"}`,
+                            message: `Failed to load ${Synonyms.comments}: ${
+                                error.message || "Unknown error"
+                            }`,
                             dismissible: true,
                         });
                     } finally {
@@ -235,7 +241,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             console.log(response);
             showMessage({
                 type: "success",
-                message: "Comment added successfully",
+                message: `${Synonyms.Comment} added successfully`,
                 dismissible: true,
                 autoDismiss: true,
             });
@@ -244,8 +250,8 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             setShowLoadingIcon(false);
             const errorMessage =
                 e.response?.status === 403
-                    ? "Unable to add comment. You don't have permission to perform this action."
-                    : `Unable to add comment: ${e.message || "Unknown error"}`;
+                    ? `Unable to add ${Synonyms.comment}. You don't have permission to perform this action.`
+                    : `Unable to add ${Synonyms.comment}: ${e.message || "Unknown error"}`;
 
             showMessage({
                 type: "error",

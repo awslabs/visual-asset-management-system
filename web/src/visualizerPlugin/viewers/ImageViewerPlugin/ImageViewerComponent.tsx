@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from "react";
 import { Button } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
+import Synonyms from "../../../synonyms";
 import { ViewerPluginProps } from "../../core/types";
 
 const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
@@ -89,7 +90,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                 src={url}
                 style={{ maxWidth: "100%", maxHeight: "100%", height: "100%" }}
                 onError={fallback}
-                alt="Asset preview"
+                alt={`${Synonyms.Asset} preview`}
             />
             {onDeletePreview && (
                 <div style={{ marginTop: "10px" }}>

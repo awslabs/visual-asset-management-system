@@ -13,9 +13,11 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { fetchAllPipelines } from "../../services/APIService";
 import Synonyms from "../../synonyms";
+import { usePageTitle } from "../../hooks/usePageTitle";
 
 export default function ViewPipeline() {
     const { pipelineName } = useParams();
+    usePageTitle("Pipeline", pipelineName);
     const [reload, setReload] = useState(true);
     const [databaseId, setDatabaseId] = useState("");
     const [pipelineDescription, setPipelineDescription] = useState("");

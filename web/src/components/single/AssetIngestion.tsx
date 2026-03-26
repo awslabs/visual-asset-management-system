@@ -12,6 +12,8 @@ import {
 import { ingestAsset } from "../../services/APIService";
 import { useState } from "react";
 import { generateUUID } from "../../common/utils/utils";
+import { usePageTitle } from "../../hooks/usePageTitle";
+import Synonyms from "../../synonyms";
 
 // Interface for file upload part
 interface UploadPart {
@@ -34,6 +36,7 @@ interface FileUploadResponse {
 }
 
 export default function AssetIngestion() {
+    usePageTitle(`${Synonyms.Asset} Ingestion`);
     const [file, setFile] = useState<File | null>(null);
     const [errorMessage, setErrorMessage] = useState("");
     const [jsonBody, setJsonBody] = useState("");
@@ -323,7 +326,7 @@ export default function AssetIngestion() {
 
     return (
         <Box padding={{ top: "m", horizontal: "l" }}>
-            <Container header={<Header variant="h2">Asset Ingestion</Header>}>
+            <Container header={<Header variant="h2">{`${Synonyms.Asset} Ingestion`}</Header>}>
                 <SpaceBetween size="l">
                     <Grid gridDefinition={[{ colspan: 2 }, { colspan: 3 }]}>
                         <FormField label="Choose File">
@@ -345,7 +348,7 @@ export default function AssetIngestion() {
                                 showFileThumbnail
                             />
                         </FormField>
-                        <FormField label="Upload Asset">
+                        <FormField label={`Upload ${Synonyms.Asset}`}>
                             <Button
                                 variant="primary"
                                 onClick={() => {
@@ -354,12 +357,12 @@ export default function AssetIngestion() {
                                 loading={uploading}
                                 disabled={!file}
                             >
-                                {uploading ? "Uploading..." : "Upload Asset"}
+                                {uploading ? "Uploading..." : `Upload ${Synonyms.Asset}`}
                             </Button>
                         </FormField>
                     </Grid>
                     <Grid gridDefinition={[{ colspan: 3 }]}>
-                        <FormField label="JSON Body - Asset Data">
+                        <FormField label={`JSON Body - ${Synonyms.Asset} Data`}>
                             <Textarea
                                 onChange={({ detail }) => setJsonBody(detail.value)}
                                 value={jsonBody || defaultPlaceholder}

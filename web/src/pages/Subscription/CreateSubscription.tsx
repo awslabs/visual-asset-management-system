@@ -22,6 +22,7 @@ import {
     searchAssets,
 } from "../../services/APIService";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import Synonyms from "../../synonyms";
 
 interface SubscriptionFields {
     eventName: string;
@@ -166,7 +167,7 @@ export default function CreateSubscription({
     const assetCols = [
         {
             id: "assetId",
-            header: "Asset Name",
+            header: `${Synonyms.Asset} Name`,
             cell: (item: any) => (
                 <Link href={`#/databases/${item.databaseName}/assets/${item.assetId}`}>
                     {item.assetName}
@@ -177,7 +178,7 @@ export default function CreateSubscription({
         },
         {
             id: "databaseId",
-            header: "Database Name",
+            header: `${Synonyms.Database} Name`,
             cell: (item: any) => item.databaseName,
             sortingField: "name",
             isRowHeader: true,
@@ -376,7 +377,7 @@ export default function CreateSubscription({
                                 placeholder="Event Types"
                                 options={[
                                     {
-                                        label: "Asset Version Change",
+                                        label: `${Synonyms.Asset} Version Change`,
                                         value: "Asset Version Change",
                                     },
                                 ]}
@@ -407,7 +408,7 @@ export default function CreateSubscription({
                                 }
                                 placeholder="Entity Type"
                                 options={[
-                                    { label: "Asset", value: "Asset" },
+                                    { label: Synonyms.Asset, value: "Asset" },
                                     //{ label: "Database", value: "Database" },
                                 ]}
                                 disabled={createOrUpdate === "Update"}

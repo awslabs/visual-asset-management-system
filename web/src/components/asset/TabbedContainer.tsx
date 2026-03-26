@@ -7,6 +7,7 @@ import React, { Suspense, useState, useCallback, useEffect } from "react";
 import { Container, Header, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
+import Synonyms from "../../synonyms";
 
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
@@ -114,10 +115,14 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                             },
                             {
                                 id: "comments",
-                                label: "Comments",
+                                label: Synonyms.Comments,
                                 content: (
                                     <Suspense
-                                        fallback={<LoadingSpinner text="Loading Comments..." />}
+                                        fallback={
+                                            <LoadingSpinner
+                                                text={`Loading ${Synonyms.Comments}...`}
+                                            />
+                                        }
                                     >
                                         <CommentsTab
                                             databaseId={databaseId}

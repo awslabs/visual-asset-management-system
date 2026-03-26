@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { FormField, Box, SpaceBetween, Alert } from "@cloudscape-design/components";
 import { AssetSearchTable, AssetSearchItem } from "../../searchSmall/AssetSearchTable";
 import { fetchtagTypes } from "../../../services/APIService";
+import Synonyms from "../../../synonyms";
 
 export interface Asset {
     assetId: string;
@@ -73,7 +74,7 @@ export function AssetSelector({
 
             {selectedAsset && (
                 <SpaceBetween direction="vertical" size="xs">
-                    <FormField label="Selected Asset">
+                    <FormField label={`Selected ${Synonyms.Asset}`}>
                         <Box>
                             <strong>{selectedAsset.assetName}</strong>
                             <br />
@@ -82,16 +83,18 @@ export function AssetSelector({
                             </span>
                             <br />
                             <span style={{ color: "var(--vams-text-secondary)", fontSize: "14px" }}>
-                                Database: <strong>{selectedAsset.databaseId}</strong>
+                                {`${Synonyms.Database}: `}
+                                <strong>{selectedAsset.databaseId}</strong>
                             </span>
                         </Box>
                     </FormField>
                     {selectedAsset.databaseId !== currentDatabaseId && (
                         <Alert type="warning">
-                            Cross-database operation: The selected asset is in database{" "}
-                            <strong>{selectedAsset.databaseId}</strong>, which differs from the
-                            current database <strong>{currentDatabaseId}</strong>. Ensure you have
-                            the required permissions on both databases.
+                            {`Cross-${Synonyms.database} operation: The selected ${Synonyms.asset} is in ${Synonyms.database} `}
+                            <strong>{selectedAsset.databaseId}</strong>
+                            {`, which differs from the current ${Synonyms.database} `}
+                            <strong>{currentDatabaseId}</strong>
+                            {`. Ensure you have the required permissions on both ${Synonyms.databases}.`}
                         </Alert>
                     )}
                 </SpaceBetween>

@@ -60,9 +60,10 @@
 }
 
 .selection-note {
-    font-size: 11px;
+    font-size: 13px;
     color: var(--vams-text-secondary);
     text-align: center;
+    padding: 4px 0;
 }
 
 .asset-links-tree-item {

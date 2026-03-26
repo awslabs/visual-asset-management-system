@@ -17,6 +17,7 @@ import {
     Input,
 } from "@cloudscape-design/components";
 import { SearchFilters } from "../types";
+import Synonyms from "../../../synonyms";
 
 interface AdvancedFiltersPanelProps {
     filters: SearchFilters;
@@ -412,8 +413,8 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                     <>
                         {/* Asset Relationship Filters */}
                         <FormField
-                            label="Asset Relationships"
-                            description="Filter assets based on their relationships with other assets"
+                            label={`${Synonyms.Asset} Relationships`}
+                            description={`Filter ${Synonyms.assets} based on their relationships with other ${Synonyms.assets}`}
                         >
                             <SpaceBetween direction="vertical" size="s">
                                 {/* Has Child Assets */}
@@ -431,7 +432,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                         checked={!!filters.bool_has_asset_children}
                                         disabled={loading}
                                     >
-                                        Has child assets
+                                        {`Has child ${Synonyms.assets}`}
                                     </Checkbox>
                                     {filters.bool_has_asset_children && (
                                         <Select
@@ -469,7 +470,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                         checked={!!filters.bool_has_asset_parents}
                                         disabled={loading}
                                     >
-                                        Has parent assets
+                                        {`Has parent ${Synonyms.assets}`}
                                     </Checkbox>
                                     {filters.bool_has_asset_parents && (
                                         <Select
@@ -507,7 +508,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                         checked={!!filters.bool_has_assets_related}
                                         disabled={loading}
                                     >
-                                        Has related assets
+                                        {`Has related ${Synonyms.assets}`}
                                     </Checkbox>
                                     {filters.bool_has_assets_related && (
                                         <Select

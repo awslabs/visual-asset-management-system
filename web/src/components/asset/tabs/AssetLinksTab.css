@@ -6,10 +6,8 @@
 .asset-links-tab {
     display: grid;
     grid-template-columns: 1fr 2fr;
-    gap: 20px;
-    height: 600px;
-    border-top: 1px solid var(--vams-border-default);
-    margin-top: 15px;
+    gap: 0;
+    height: 550px;
 }
 
 .asset-links-tree-panel {
@@ -18,7 +16,7 @@
     min-height: 0;
     overflow: auto;
     border-right: 1px solid var(--vams-border-default);
-    padding: 10px 0;
+    padding: 10px 16px;
 }
 
 .asset-links-details-panel {
@@ -26,7 +24,7 @@
     flex-direction: column;
     min-height: 0;
     overflow: auto;
-    padding: 0 10px;
+    padding: 0;
 }
 
 /* Responsive design */

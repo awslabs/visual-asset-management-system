@@ -35,6 +35,7 @@ import {
     updateMetadataSchema,
     deleteMetadataSchema,
 } from "../services/MetadataSchemaService";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 // Export for backward compatibility with old metadata components
 export interface SchemaContextData {
@@ -45,6 +46,7 @@ export interface SchemaContextData {
 export default function MetadataSchemaPage() {
     const params = useParams();
     const navigate = useNavigate();
+    usePageTitle("Metadata Schemas");
 
     // Get databaseId from params, but treat "create" as no database selected
     const databaseId =

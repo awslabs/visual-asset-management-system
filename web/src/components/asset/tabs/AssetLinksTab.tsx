@@ -18,7 +18,11 @@ import {
     NewAssetLinksData,
 } from "./types/AssetLinksTypes";
 import { featuresEnabled } from "../../../common/constants/featuresEnabled";
+import Box from "@cloudscape-design/components/box";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
 import ErrorBoundary from "../../common/ErrorBoundary";
+import Synonyms from "../../../synonyms";
 import "./AssetLinksTab.css";
 
 export function AssetLinksTab(props: AssetLinksTabProps) {
@@ -136,7 +140,7 @@ function ViewModeAssetLinksTab(props: AssetLinksTabProps) {
             console.error("Error fetching asset links:", error);
             dispatch({
                 type: "SET_ERROR",
-                payload: error.message || "Failed to load asset relationships",
+                payload: error.message || `Failed to load ${Synonyms.asset} relationships`,
             });
         }
     };
@@ -188,14 +192,14 @@ function ViewModeAssetLinksTab(props: AssetLinksTabProps) {
         if (isSubChild) {
             // For level 1 nodes, the parent is the top-level asset
             // We can get this from the current asset ID/database ID
-            parentAssetName = "Top-level Asset"; // Default fallback
+            parentAssetName = `Top-level ${Synonyms.Asset}`; // Default fallback
 
             // Try to find the actual asset name from the tree data
             const rootNodes = state.treeData;
             if (rootNodes && rootNodes.length > 0) {
                 // The parent asset name would be in the breadcrumb or page title
                 // For now, we'll use a generic name that's different from the child
-                parentAssetName = "Parent Asset";
+                parentAssetName = `Parent ${Synonyms.Asset}`;
             }
         }
 
@@ -252,18 +256,22 @@ function ViewModeAssetLinksTab(props: AssetLinksTabProps) {
     return (
         <ErrorBoundary componentName="Asset Links Tab">
             <AssetLinksContext.Provider value={{ state, dispatch }}>
-                <div className="asset-links-tab">
-                    <div className="asset-links-tree-panel">
-                        <AssetLinksTreeView />
+                <Container
+                    header={<Header variant="h2">{`${Synonyms.Asset} Relationships`}</Header>}
+                >
+                    <div className="asset-links-tab">
+                        <div className="asset-links-tree-panel">
+                            <AssetLinksTreeView />
+                        </div>
+                        <div className="asset-links-details-panel">
+                            <AssetLinksDetailsPanel
+                                onCreateLink={handleCreateLink}
+                                onDeleteLink={handleDeleteLink}
+                                onCreateSubChildLink={handleCreateSubChildLink}
+                            />
+                        </div>
                     </div>
-                    <div className="asset-links-details-panel">
-                        <AssetLinksDetailsPanel
-                            onCreateLink={handleCreateLink}
-                            onDeleteLink={handleDeleteLink}
-                            onCreateSubChildLink={handleCreateSubChildLink}
-                        />
-                    </div>
-                </div>
+                </Container>
 
                 {/* Create Asset Link Modal */}
                 <CreateAssetLinkModal
@@ -328,7 +336,7 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
     const [treeData, setTreeData] = useState<TreeNodeItem[]>([
         {
             id: "related",
-            name: "Related Assets",
+            name: `Related ${Synonyms.Assets}`,
             type: "root" as const,
             level: 0,
             expanded: true,
@@ -337,7 +345,7 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
         },
         {
             id: "parents",
-            name: "Parent Assets",
+            name: `Parent ${Synonyms.Assets}`,
             type: "root" as const,
             level: 0,
             expanded: true,
@@ -346,7 +354,7 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
         },
         {
             id: "child",
-            name: "Child Assets",
+            name: `Child ${Synonyms.Assets}`,
             type: "root" as const,
             level: 0,
             expanded: true,
@@ -431,6 +439,9 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
         assetName: string,
         relationshipType: "related" | "parent" | "child"
     ) => {
+        // Clear the selected node since the deleted item may be selected
+        setSelectedNode(null);
+
         setLocalAssetLinks((prev: NewAssetLinksData) => {
             // Handle the mapping between 'parent' and 'parents'
             const relationshipKey = relationshipType === "parent" ? "parents" : relationshipType;
@@ -605,17 +616,21 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
             <AssetLinksContext.Provider
                 value={{ state: uploadModeState, dispatch: uploadModeDispatch }}
             >
-                <div className="asset-links-tab">
-                    <div className="asset-links-tree-panel">
-                        <AssetLinksTreeView />
+                <Container
+                    header={<Header variant="h2">{`${Synonyms.Asset} Relationships`}</Header>}
+                >
+                    <div className="asset-links-tab">
+                        <div className="asset-links-tree-panel">
+                            <AssetLinksTreeView />
+                        </div>
+                        <div className="asset-links-details-panel">
+                            <AssetLinksDetailsPanel
+                                onCreateLink={handleCreateLink}
+                                onDeleteLink={handleDeleteLink}
+                            />
+                        </div>
                     </div>
-                    <div className="asset-links-details-panel">
-                        <AssetLinksDetailsPanel
-                            onCreateLink={handleCreateLink}
-                            onDeleteLink={handleDeleteLink}
-                        />
-                    </div>
-                </div>
+                </Container>
 
                 {/* Create Asset Link Modal for upload mode */}
                 <CreateAssetLinkModal

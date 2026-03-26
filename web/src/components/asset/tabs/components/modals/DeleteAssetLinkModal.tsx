@@ -8,6 +8,7 @@ import { Box, Button, Modal, SpaceBetween } from "@cloudscape-design/components"
 import { deleteAssetLink } from "../../../../../services/APIService";
 import { useStatusMessage } from "../../../../common/StatusMessage";
 import { DeleteAssetLinkModalProps } from "../../types/AssetLinksTypes";
+import Synonyms from "../../../../../synonyms";
 
 export function DeleteAssetLinkModal({
     visible,
@@ -44,13 +45,14 @@ export function DeleteAssetLinkModal({
                 showMessage({
                     type: "error",
                     message:
-                        error.response?.data?.message || "Not authorized to delete this asset link",
+                        error.response?.data?.message ||
+                        `Not authorized to delete this ${Synonyms.asset} link`,
                     dismissible: true,
                 });
             } else {
                 showMessage({
                     type: "error",
-                    message: "Failed to delete asset link. Please try again.",
+                    message: `Failed to delete ${Synonyms.asset} link. Please try again.`,
                     dismissible: true,
                 });
             }
@@ -67,7 +69,7 @@ export function DeleteAssetLinkModal({
             visible={visible}
             onDismiss={onDismiss}
             size="medium"
-            header="Delete Asset Link"
+            header={`Delete ${Synonyms.Asset} Link`}
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
@@ -76,7 +78,7 @@ export function DeleteAssetLinkModal({
                         </Button>
                         <Button variant="primary" disabled={deleteDisabled} onClick={handleDelete}>
                             {isSubChild && parentAssetName
-                                ? "Delete Sub-Child Asset Link"
+                                ? `Delete Sub-Child ${Synonyms.Asset} Link`
                                 : "Delete Link"}
                         </Button>
                     </SpaceBetween>
@@ -94,18 +96,17 @@ export function DeleteAssetLinkModal({
                 <Box variant="div" padding="s" color="text-status-warning">
                     <SpaceBetween direction="vertical" size="xs">
                         <div>
-                            <strong>Important:</strong> Removing this asset link will only break the
-                            connection between the current asset and the selected asset.
+                            <strong>Important:</strong>{" "}
+                            {`Removing this ${Synonyms.asset} link will only break the connection between the current ${Synonyms.asset} and the selected ${Synonyms.asset}.`}
                         </div>
                         <div>
                             It will <strong>not</strong> recursively delete any sub-relationships
-                            that may exist below the selected asset in the hierarchy.
+                            {`that may exist below the selected ${Synonyms.asset} in the hierarchy.`}
                         </div>
                         {isSubChild && parentAssetName && (
                             <div>
-                                <strong>Sub-Child Deletion:</strong> You are deleting a sub-child
-                                asset link. This affects the relationship between "{parentAssetName}
-                                " and "{assetName}".
+                                <strong>Sub-Child Deletion:</strong>{" "}
+                                {`You are deleting a sub-child ${Synonyms.asset} link. This affects the relationship between "${parentAssetName}" and "${assetName}".`}
                             </div>
                         )}
                     </SpaceBetween>

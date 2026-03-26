@@ -17,8 +17,10 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { fetchApiKeys, deleteApiKey } from "../../services/APIService";
 import CreateApiKey from "./CreateApiKey";
 import UpdateApiKey from "./UpdateApiKey";
+import { usePageTitle } from "../../hooks/usePageTitle";
 
 export default function ApiKeys() {
+    usePageTitle("API Keys");
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState<any[]>([]);

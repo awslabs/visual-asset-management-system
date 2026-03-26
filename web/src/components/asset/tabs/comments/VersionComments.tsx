@@ -14,6 +14,7 @@ import {
     TextContent,
 } from "@cloudscape-design/components";
 import JoditEditor from "jodit-react";
+import Synonyms from "../../../../synonyms";
 
 // Define the type for showMessage prop
 type ShowMessageFunction = (props: {
@@ -140,7 +141,7 @@ export default function VersionComments(props: VersionCommentsProps) {
             await deleteComment({ assetId, assetVersionIdAndCommentId });
             showMessage({
                 type: "success",
-                message: "Comment deleted successfully",
+                message: `${Synonyms.Comment} deleted successfully`,
                 dismissible: true,
                 autoDismiss: true,
             });
@@ -150,8 +151,8 @@ export default function VersionComments(props: VersionCommentsProps) {
             console.log("delete comment error", e);
             const errorMessage =
                 e.response?.status === 403
-                    ? "Unable to delete comment. You don't have permission to perform this action."
-                    : `Unable to delete comment: ${e.message || "Unknown error"}`;
+                    ? `Unable to delete ${Synonyms.comment}. You don't have permission to perform this action.`
+                    : `Unable to delete ${Synonyms.comment}: ${e.message || "Unknown error"}`;
 
             showMessage({
                 type: "error",
@@ -179,7 +180,7 @@ export default function VersionComments(props: VersionCommentsProps) {
             });
             showMessage({
                 type: "success",
-                message: "Comment updated successfully",
+                message: `${Synonyms.Comment} updated successfully`,
                 dismissible: true,
                 autoDismiss: true,
             });
@@ -189,8 +190,8 @@ export default function VersionComments(props: VersionCommentsProps) {
             console.log("edit comment error", e);
             const errorMessage =
                 e.response?.status === 403
-                    ? "Unable to edit comment. You don't have permission to perform this action."
-                    : `Unable to edit comment: ${e.message || "Unknown error"}`;
+                    ? `Unable to edit ${Synonyms.comment}. You don't have permission to perform this action.`
+                    : `Unable to edit ${Synonyms.comment}: ${e.message || "Unknown error"}`;
 
             showMessage({
                 type: "error",
@@ -217,7 +218,7 @@ export default function VersionComments(props: VersionCommentsProps) {
             >
                 <div>
                     {comments.length === 0 ? (
-                        <div className="noCommentsDiv">No comments for this version</div>
+                        <div className="noCommentsDiv">{`No ${Synonyms.comments} for this version`}</div>
                     ) : (
                         comments.map((comment) => (
                             <div
@@ -276,7 +277,7 @@ export default function VersionComments(props: VersionCommentsProps) {
             <Modal
                 visible={visible}
                 onDismiss={() => setVisible(false)}
-                header="Delete comment"
+                header={`Delete ${Synonyms.comment}`}
                 footer={
                     <Box float="right">
                         <SpaceBetween direction="horizontal" size="xs">
@@ -291,7 +292,7 @@ export default function VersionComments(props: VersionCommentsProps) {
                 }
             >
                 <TextContent>
-                    <p>Are you sure you want to delete this comment?</p>
+                    <p>{`Are you sure you want to delete this ${Synonyms.comment}?`}</p>
                 </TextContent>
             </Modal>
 
@@ -299,7 +300,7 @@ export default function VersionComments(props: VersionCommentsProps) {
             <Modal
                 visible={editVisible}
                 onDismiss={() => setEditVisible(false)}
-                header="Edit comment"
+                header={`Edit ${Synonyms.comment}`}
                 footer={
                     <Box float="right">
                         <SpaceBetween direction="horizontal" size="xs">

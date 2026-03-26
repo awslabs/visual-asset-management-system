@@ -19,6 +19,7 @@ import { appCache } from "../../services/appCache";
 import { fetchAllAssets, searchAssets } from "../../services/APIService";
 import CustomTable from "../table/CustomTable";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import Synonyms from "../../synonyms";
 
 export interface AssetSearchItem {
     assetId: string;
@@ -257,7 +258,7 @@ export function AssetSearchTable({
             setShowResults(true);
         } catch (error) {
             console.error("Error searching assets:", error);
-            setSearchError("Failed to search assets. Please try again.");
+            setSearchError(`Failed to search ${Synonyms.assets}. Please try again.`);
             setSearchResults([]);
             setShowResults(false);
         } finally {
@@ -335,7 +336,7 @@ export function AssetSearchTable({
         const columns: any[] = [
             {
                 id: "assetName",
-                header: "Asset Name",
+                header: `${Synonyms.Asset} Name`,
                 cell: (item: AssetSearchItem) => (
                     <Link
                         href={`#/databases/${item.databaseName || item.databaseId}/assets/${
@@ -355,7 +356,7 @@ export function AssetSearchTable({
         if (showDatabaseColumn) {
             columns.push({
                 id: "databaseId",
-                header: "Database Name",
+                header: `${Synonyms.Database} Name`,
                 cell: (item: AssetSearchItem) => item.databaseName || item.databaseId,
                 sortingField: "databaseName",
             });
@@ -410,7 +411,7 @@ export function AssetSearchTable({
                                 color: "var(--color-text-label)",
                             }}
                         >
-                            Selected Assets ({selectedAssets.length})
+                            {`Selected ${Synonyms.Assets} (${selectedAssets.length})`}
                         </label>
                     </div>
                     <CustomTable
@@ -437,7 +438,7 @@ export function AssetSearchTable({
                             color: "var(--color-text-label)",
                         }}
                     >
-                        Search Assets
+                        {`Search ${Synonyms.Assets}`}
                     </label>
                     <div
                         style={{
@@ -446,7 +447,7 @@ export function AssetSearchTable({
                             marginBottom: "8px",
                         }}
                     >
-                        Input asset search keywords. Press Enter to search.
+                        {`Input ${Synonyms.asset} search keywords. Press Enter to search.`}
                     </div>
                 </div>
                 <SpaceBetween direction="vertical" size="xs">
@@ -465,7 +466,7 @@ export function AssetSearchTable({
                         Search in metadata
                     </Toggle>
                     <Input
-                        placeholder="Search for assets"
+                        placeholder={`Search for ${Synonyms.assets}`}
                         type="search"
                         value={searchTerm}
                         onChange={({ detail }) => {
@@ -496,7 +497,7 @@ export function AssetSearchTable({
             {isSearching && (
                 <Box textAlign="center" padding="m">
                     <Spinner size="normal" />
-                    <div>Searching assets...</div>
+                    <div>{`Searching ${Synonyms.assets}...`}</div>
                 </Box>
             )}
 
@@ -530,7 +531,7 @@ export function AssetSearchTable({
                                 </Badge>
                             )}
                             {currentDatabaseId && restrictToCurrentDatabase && (
-                                <Badge>Database: {currentDatabaseId}</Badge>
+                                <Badge>{`${Synonyms.Database}: ${currentDatabaseId}`}</Badge>
                             )}
                         </SpaceBetween>
                         {selectionMode === "multi" && (
@@ -572,7 +573,7 @@ export function AssetSearchTable({
                             </>
                         ) : (
                             <Box textAlign="center" padding="m" color="text-status-inactive">
-                                No assets found matching your search
+                                {`No ${Synonyms.assets} found matching your search`}
                             </Box>
                         )}
                     </SpaceBetween>

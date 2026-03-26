@@ -272,6 +272,9 @@ export function mergeFiles(
         delete root.isArchived;
     }
 
+    // Sort the tree: folders first alphabetically, then files alphabetically
+    sortFileTree(root);
+
     return root;
 }
 
@@ -619,12 +622,37 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
             );
         }
 
+        // Sort the tree: folders first alphabetically, then files alphabetically
+        sortFileTree(root);
+
         return root;
     } catch (error) {
         console.error("Error in addFiles function:", error);
         // Handle the unknown error type properly
         const errorMessage = error instanceof Error ? error.message : String(error);
         throw new Error(`Failed to construct file tree: ${errorMessage}`);
+    }
+}
+
+/**
+ * Recursively sort all subTree arrays in the file tree.
+ * Folders come first (alphabetically), then files (alphabetically).
+ * Sorting is case-insensitive.
+ */
+function sortFileTree(node: FileTree): void {
+    if (node.subTree.length > 1) {
+        node.subTree.sort((a, b) => {
+            const aIsFolder = a.isFolder || a.subTree.length > 0;
+            const bIsFolder = b.isFolder || b.subTree.length > 0;
+            // Folders before files
+            if (aIsFolder && !bIsFolder) return -1;
+            if (!aIsFolder && bIsFolder) return 1;
+            // Alphabetical within same type
+            return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        });
+    }
+    for (const child of node.subTree) {
+        sortFileTree(child);
     }
 }
 

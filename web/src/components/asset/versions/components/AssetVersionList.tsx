@@ -19,6 +19,7 @@ import CollectionPreferences from "@cloudscape-design/components/collection-pref
 import { useNavigate, useParams } from "react-router";
 import { AssetVersionContext, AssetVersion, FileVersion } from "../AssetVersionManager";
 import { fetchAssetVersion, unarchiveAssetVersion } from "../../../../services/AssetVersionService";
+import Synonyms from "../../../../synonyms";
 
 interface AssetVersionListProps {
     onRevertVersion: (version: AssetVersion) => void;
@@ -192,8 +193,8 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
 
             // Create a fileTree structure from the version files
             const fileTree: FileTreeNode = {
-                name: `Asset Version v${downloadVersion.Version}`,
-                displayName: `Asset Version v${downloadVersion.Version}`,
+                name: `${Synonyms.Asset} Version v${downloadVersion.Version}`,
+                displayName: `${Synonyms.Asset} Version v${downloadVersion.Version}`,
                 relativePath: "/",
                 keyPrefix: "/",
                 level: 0,
@@ -440,7 +441,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                         disabled={item.fileCount === 0}
                         ariaLabel={
                             item.fileCount > 0
-                                ? `Download ${item.fileCount} asset files`
+                                ? `Download ${item.fileCount} ${Synonyms.asset} files`
                                 : "No files available for download"
                         }
                     >
@@ -694,7 +695,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             <Modal
                 visible={showDownloadModal}
                 onDismiss={() => setShowDownloadModal(false)}
-                header={`Download Asset Version ${
+                header={`Download ${Synonyms.Asset} Version ${
                     downloadVersion ? `v${downloadVersion.Version}` : ""
                 }`}
                 footer={

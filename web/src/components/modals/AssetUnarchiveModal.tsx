@@ -80,7 +80,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
             const assetId = selectedAsset.assetId || selectedAsset.str_assetid;
 
             if (!dbId || !assetId) {
-                throw new Error("Missing database ID or asset ID");
+                throw new Error(`Missing ${Synonyms.database} ID or ${Synonyms.asset} ID`);
             }
 
             // Fetch asset details with showArchived=true to get archived assets
@@ -90,7 +90,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
             if (Array.isArray(response) && response[0] === false) {
                 setState((prev) => ({
                     ...prev,
-                    error: response[1] || "Failed to fetch asset details",
+                    error: response[1] || `Failed to fetch ${Synonyms.asset} details`,
                     loadingDetails: false,
                 }));
                 return;
@@ -105,7 +105,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
             console.error("Error fetching asset details:", error);
             setState((prev) => ({
                 ...prev,
-                error: error.message || "Failed to fetch asset details",
+                error: error.message || `Failed to fetch ${Synonyms.asset} details`,
                 loadingDetails: false,
             }));
         }
@@ -142,7 +142,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
             const assetId = selectedAsset.assetId || selectedAsset.str_assetid;
 
             if (!dbId || !assetId) {
-                throw new Error("Missing database ID or asset ID");
+                throw new Error(`Missing ${Synonyms.database} ID or ${Synonyms.asset} ID`);
             }
 
             const response = await unarchiveAsset({
@@ -159,7 +159,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 setState((prev) => ({
                     ...prev,
                     loading: false,
-                    error: response[1] || "Failed to unarchive asset.",
+                    error: response[1] || `Failed to unarchive ${Synonyms.asset}.`,
                 }));
                 return;
             }
@@ -174,12 +174,13 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 error:
                     error?.response?.data?.message ||
                     error?.message ||
-                    "An error occurred while unarchiving the asset.",
+                    `An error occurred while unarchiving the ${Synonyms.asset}.`,
             }));
         }
     };
 
-    const assetName = selectedAsset?.assetName || selectedAsset?.str_assetname || "Unknown Asset";
+    const assetName =
+        selectedAsset?.assetName || selectedAsset?.str_assetname || `Unknown ${Synonyms.Asset}`;
 
     const formatDate = (dateString: string | undefined) => {
         if (!dateString) return "N/A";
@@ -234,7 +235,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 <Box variant="p">
                     Are you sure you want to unarchive <b>{assetName}</b>?
                     <br />
-                    This will restore the asset and make it visible in normal search results.
+                    {`This will restore the ${Synonyms.asset} and make it visible in normal search results.`}
                 </Box>
 
                 {/* Archive Information */}
@@ -267,7 +268,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 {/* Reason for Unarchiving */}
                 <FormField
                     label="Reason for unarchiving *"
-                    description="Please provide a reason for unarchiving this asset."
+                    description={`Please provide a reason for unarchiving this ${Synonyms.asset}.`}
                     errorText={reasonError}
                 >
                     <Input

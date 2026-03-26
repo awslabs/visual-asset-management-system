@@ -18,6 +18,7 @@ import {
 import { downloadAsset, revertFileVersion } from "../../../services/APIService";
 import { fetchFileVersions } from "../../../services/AssetVersionService";
 import { useNavigate } from "react-router";
+import Synonyms from "../../../synonyms";
 
 // TypeScript interfaces
 interface FileVersion {
@@ -305,7 +306,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                     {item.currentAssetVersionFileVersionMismatch && (
                         <span style={{ marginLeft: "12px" }}>
                             <StatusIndicator type="warning">
-                                Not Included in Current Asset Version
+                                {`Not Included in Current ${Synonyms.Asset} Version`}
                             </StatusIndicator>
                         </span>
                     )}
@@ -315,7 +316,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         },
         {
             id: "assetVersions",
-            header: "Asset Versions",
+            header: `${Synonyms.Asset} Versions`,
             cell: (item: FileVersion) => {
                 if (!item.assetVersionIds || item.assetVersionIds.length === 0) {
                     return <Box color="text-status-inactive">--</Box>;

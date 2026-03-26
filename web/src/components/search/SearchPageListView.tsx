@@ -618,7 +618,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
             if (name === "str_assettype") {
                 return {
                     id: name,
-                    header: isFileMode ? "Asset Type" : "Type",
+                    header: isFileMode ? `${Synonyms.Asset} Type` : "Type",
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
@@ -629,7 +629,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
             if (name === "list_tags") {
                 return {
                     id: name,
-                    header: isFileMode ? "Asset Tags" : "Tags",
+                    header: isFileMode ? `${Synonyms.Asset} Tags` : "Tags",
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
@@ -651,7 +651,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
             if (name === "str_description" && isFileMode) {
                 return {
                     id: name,
-                    header: "Asset Description",
+                    header: `${Synonyms.Asset} Description`,
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
@@ -1106,7 +1106,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                         const operationName =
                             operation === "archive" ? "archived" : "permanently deleted";
                         onShowToast(
-                            `Asset ${operationName} successfully`,
+                            `${Synonyms.Asset} ${operationName} successfully`,
                             "Changes may take a few minutes to propagate throughout the system, including search results."
                         );
                     }
@@ -1132,7 +1132,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     // Show toast notification
                     if (onShowToast) {
                         onShowToast(
-                            "Asset unarchived successfully",
+                            `${Synonyms.Asset} unarchived successfully`,
                             "Changes may take a few minutes to propagate throughout the system, including search results."
                         );
                     }

@@ -22,6 +22,7 @@ import {
     NewAssetLinksContextType,
 } from "../types/AssetLinksTypes";
 import { fetchAsset, fetchtagTypes } from "../../../../services/APIService";
+import Synonyms from "../../../../synonyms";
 import "./AssetLinksTreeView.css";
 
 // Create a context that will be overridden by the main component
@@ -202,13 +203,13 @@ function TreeItem({ item }: TreeItemProps) {
                         item.assetData.databaseId !== state.currentDatabaseId && (
                             <span
                                 className="asset-links-cross-db"
-                                title="This asset is in a different database"
+                                title={`This ${Synonyms.asset} is in a different ${Synonyms.database}`}
                                 style={{
                                     color: "var(--vams-color-warning, #ff9900)",
                                     marginLeft: "4px",
                                 }}
                             >
-                                (Database: {item.assetData.databaseId})
+                                ({Synonyms.Database}: {item.assetData.databaseId})
                             </span>
                         )}
                     {/* Show alias ID for parent/child relationships */}
@@ -254,7 +255,7 @@ function SearchResults() {
     if (state.searchResults.length === 0) {
         return (
             <Box textAlign="center" padding="m">
-                <div>No assets match your search</div>
+                <div>{`No ${Synonyms.assets} match your search`}</div>
             </Box>
         );
     }
@@ -304,7 +305,7 @@ function SearchResults() {
                                         marginLeft: "4px",
                                     }}
                                 >
-                                    (Database: {item.assetData.databaseId})
+                                    ({Synonyms.Database}: {item.assetData.databaseId})
                                 </span>
                             )}
                     </span>
@@ -336,7 +337,7 @@ export function AssetLinksTreeView() {
             <Container>
                 <Box textAlign="center" padding="m">
                     <Spinner size="normal" />
-                    <div>Loading asset relationships...</div>
+                    <div>{`Loading ${Synonyms.asset} relationships...`}</div>
                 </Box>
             </Container>
         );
@@ -372,31 +373,20 @@ export function AssetLinksTreeView() {
     if (isUploadMode) {
         const treeData = (state as any).treeData || [];
         return (
-            <Container
-                header={
-                    <Header variant="h2" description="Manage asset relationships for the new asset">
-                        Asset Relationships
-                    </Header>
-                }
-            >
-                <SpaceBetween direction="vertical" size="m">
-                    <div className="asset-links-tree">
-                        {treeData.map((rootNode: TreeNodeItem) => (
-                            <TreeItem key={rootNode.id} item={rootNode} />
-                        ))}
+            <div className="asset-links-tree-container">
+                <div className="asset-links-tree">
+                    {treeData.map((rootNode: TreeNodeItem) => (
+                        <TreeItem key={rootNode.id} item={rootNode} />
+                    ))}
+                </div>
+                <div className="asset-links-tree-footer">
+                    <div className="selection-note">
+                        {treeData.every((node: TreeNodeItem) => node.children.length === 0)
+                            ? `No ${Synonyms.asset} relationships defined yet. Select a relationship type and click "Create" to add.`
+                            : `Select a relationship or ${Synonyms.asset} to view details`}
                     </div>
-
-                    {treeData.every((node: TreeNodeItem) => node.children.length === 0) && (
-                        <div className="empty-state">
-                            <p>No asset relationships defined yet.</p>
-                            <p>
-                                Select a relationship type above and click "Create Link" to add
-                                relationships.
-                            </p>
-                        </div>
-                    )}
-                </SpaceBetween>
-            </Container>
+                </div>
+            </div>
         );
     }
 
@@ -407,8 +397,8 @@ export function AssetLinksTreeView() {
                 <div className="asset-links-search-container">
                     <TextFilter
                         filteringText={state.searchTerm || ""}
-                        filteringPlaceholder="Search assets"
-                        filteringAriaLabel="Search assets"
+                        filteringPlaceholder={`Search ${Synonyms.assets}`}
+                        filteringAriaLabel={`Search ${Synonyms.assets}`}
                         onChange={({ detail }) =>
                             dispatch({
                                 type: "SET_SEARCH_TERM",
@@ -424,7 +414,7 @@ export function AssetLinksTreeView() {
                     <Button
                         iconName="refresh"
                         variant="icon"
-                        ariaLabel="Refresh asset relationships"
+                        ariaLabel={`Refresh ${Synonyms.asset} relationships`}
                         onClick={() => dispatch({ type: "REFRESH_DATA", payload: null })}
                         disabled={state.loading}
                     />
@@ -471,9 +461,9 @@ export function AssetLinksTreeView() {
                     </div>
                 )}
                 <div className="selection-note">
-                    Select a asset link relationship to view details
+                    {`Select an ${Synonyms.asset} link relationship to view details`}
                     <br />
-                    Ctrl+click on an asset to open it in a new window
+                    {`Ctrl+click on an ${Synonyms.asset} to open it in a new window`}
                 </div>
             </div>
         </div>

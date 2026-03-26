@@ -64,6 +64,7 @@ import {
     formatValidationErrors,
     ValidationResult,
 } from "../../utils/fileExtensionValidation";
+import { usePageTitle } from "../../hooks/usePageTitle";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
 let tags: any[] = [];
@@ -1051,7 +1052,7 @@ const AssetFileInfo = ({
                     >
                         <SpaceBetween direction="vertical" size="m">
                             <FormField
-                                label="Asset Files"
+                                label={`${Synonyms.Asset} Files`}
                                 description={
                                     assetDetailState.Asset
                                         ? `Total Files to Upload: ${assetDetailState.Asset.length}`
@@ -1139,7 +1140,7 @@ const AssetFileInfo = ({
                         </SpaceBetween>
 
                         <FileUpload
-                            label="Asset Overall Preview File (Optional)"
+                            label={`${Synonyms.Asset} Overall Preview File (Optional)`}
                             disabled={false}
                             setFile={handlePreviewFileSelection}
                             fileFormats={previewFileFormatsStr}
@@ -1213,8 +1214,14 @@ const AssetUploadReview = ({
                 <ColumnLayout columns={2} variant="text-grid">
                     <SpaceBetween direction="vertical" size="xl">
                         {/* Left Column: Asset Name, Database, Description */}
-                        <DisplayKV label="Asset Name" value={assetDetailState.assetName || ""} />
-                        <DisplayKV label="Database" value={assetDetailState.databaseId || ""} />
+                        <DisplayKV
+                            label={`${Synonyms.Asset} Name`}
+                            value={assetDetailState.assetName || ""}
+                        />
+                        <DisplayKV
+                            label={Synonyms.Database}
+                            value={assetDetailState.databaseId || ""}
+                        />
                         <DisplayKV label="Description" value={assetDetailState.description || ""} />
                     </SpaceBetween>
 
@@ -1245,11 +1252,11 @@ const AssetUploadReview = ({
                                 Object.keys(assetDetailState.assetLinksFe).map((linkType) => {
                                     let label = linkType;
                                     if (linkType === "parents") {
-                                        label = "Parent Assets";
+                                        label = `Parent ${Synonyms.Assets}`;
                                     } else if (linkType === "child") {
-                                        label = "Child Assets";
+                                        label = `Child ${Synonyms.Assets}`;
                                     } else if (linkType === "related") {
-                                        label = "Related Assets";
+                                        label = `Related ${Synonyms.Assets}`;
                                     }
 
                                     const formattedValue =
@@ -1304,14 +1311,14 @@ const AssetUploadReview = ({
                             cell: (item: FileUploadTableItem) => {
                                 if (item.index === 99999) return "Preview File";
                                 if (item.name.includes(".previewFile.")) return "Preview File";
-                                return "Asset File";
+                                return `${Synonyms.Asset} File`;
                             },
                             sortingField: "type",
                             sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) => {
                                 const getType = (item: FileUploadTableItem) => {
                                     if (item.index === 99999) return "Preview File";
                                     if (item.name.includes(".previewFile.")) return "Preview File";
-                                    return "Asset File";
+                                    return `${Synonyms.Asset} File`;
                                 };
                                 return getType(a).localeCompare(getType(b));
                             },
@@ -1631,6 +1638,7 @@ const UploadForm = () => {
 };
 
 export default function AssetUploadPage() {
+    usePageTitle(`Create ${Synonyms.Asset}`);
     const [state, dispatch] = useReducer(assetDetailReducer, {
         isMultiFile: false,
         isDistributable: true,

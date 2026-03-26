@@ -30,6 +30,7 @@ import { fetchDatabaseWorkflows, saveWorkflow, runWorkflow } from "../../service
 import { WorkflowContext } from "../../context/WorkflowContext";
 import { validateEntityId, verifyStringMaxLength } from "./entity-types/EntityPropTypes";
 import Synonyms from "../../synonyms";
+import { usePageTitle } from "../../hooks/usePageTitle";
 
 const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
 
@@ -42,6 +43,7 @@ export default function CreateUpdateWorkflow(props) {
 
     const isGlobalWorkflow = databaseId === "GLOBAL";
     const navigate = useNavigate();
+    usePageTitle(databaseId, workflowId ? "Edit Workflow" : "Create Workflow");
     const [reload, setReload] = useState(true);
     const [loaded, setLoaded] = useState(!workflowId);
     const [saving, setSaving] = useState(false);

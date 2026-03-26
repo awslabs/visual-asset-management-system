@@ -22,6 +22,7 @@ import {
     pipelineExecutionTypeOptions,
 } from "./form-definitions/PipelineFormDefinition";
 import DatabaseSelector from "../selectors/DatabaseSelector";
+import Synonyms from "../../synonyms";
 
 // Type definition for string dictionary (was imported from babylonjs)
 type StringDictionary = { [key: string]: string };
@@ -360,8 +361,8 @@ export default function CreatePipeline({
                                 />
                             </FormField>
                             <FormField
-                                label="Database Name"
-                                constraintText="Required. Select the database for this pipeline."
+                                label={`${Synonyms.Database} Name`}
+                                constraintText={`Required. Select the ${Synonyms.database} for this pipeline.`}
                             >
                                 <DatabaseSelector
                                     disabled={
@@ -622,11 +623,11 @@ export default function CreatePipeline({
                                 />
                             </FormField>
                             <FormField
-                                label="Asset Type"
-                                constraintText="Required. Specify the asset type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used. Does not restrict pipeline use as part of VAMS execution."
+                                label={`${Synonyms.Asset} Type`}
+                                constraintText={`Required. Specify the ${Synonyms.asset} type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used. Does not restrict pipeline use as part of VAMS execution.`}
                                 errorText={
                                     formState.assetType.trim() === ""
-                                        ? "Asset Type is required"
+                                        ? `${Synonyms.Asset} Type is required`
                                         : null
                                 }
                             >

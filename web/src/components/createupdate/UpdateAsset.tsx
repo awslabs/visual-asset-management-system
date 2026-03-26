@@ -228,12 +228,12 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                             }}
                             disabled={(inProgress && !error.isError) || !isValid}
                         >
-                            Update Asset
+                            {`Update ${Synonyms.Asset}`}
                         </Button>
                     </SpaceBetween>
                 </Box>
             }
-            header="Update Asset"
+            header={`Update ${Synonyms.Asset}`}
         >
             <SpaceBetween direction="vertical" size="l">
                 <FormField

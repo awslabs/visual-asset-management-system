@@ -828,16 +828,26 @@ Known feature flags:
 
 ### 9.4 Synonyms (Display Name Customization)
 
-`src/synonyms.tsx` allows customizing display names:
+`src/synonyms.tsx` defines configurable display names for core entity types. **All user-visible text** containing "Asset", "Database", or "Comment" (Comments tab only) must use Synonyms instead of hardcoded strings.
+
+Available synonyms: `Asset/Assets/asset/assets`, `Database/Databases/database/databases`, `Comment/Comments/comment/comments`.
 
 ```typescript
 import Synonyms from "../../synonyms";
 
-// Use Synonyms.Asset instead of hardcoded "Asset"
-<Header>{Synonyms.Assets}</Header>;
+// Headers, labels, placeholders, error messages — use Synonyms
+<Header>{Synonyms.Assets}</Header>
+<FormField label={`${Synonyms.Asset} Name`}>
+placeholder={`Search ${Synonyms.assets} and files...`}
+setError(`${Synonyms.Asset} not found`);
 ```
 
-Available synonyms: `Asset/Assets/asset/assets`, `Database/Databases/database/databases`, `Comment/Comments/comment/comments`.
+**Critical rules:**
+
+-   **Use Synonyms for**: headers, labels, descriptions, placeholders, alt text, error messages, success messages, button text, modal titles, empty state text — any text the user sees.
+-   **Do NOT use Synonyms for**: API request body values (`entityName: "Asset"`), variable names, property names, type names, route paths, CSS classes, or `console.log` messages. API payloads must remain hardcoded.
+-   **Comment synonyms** apply only to the Comments tab feature. The word "Comment" on version records (version comment fields, labels) should remain hardcoded.
+-   **Match casing**: Use `Synonyms.Asset` for title case, `Synonyms.asset` for lowercase.
 
 ---
 

@@ -88,6 +88,8 @@ The website overhaul may cause a high number of merge conflicts for forked repos
 -   **Web** Refined View File page with cleaner component containers and compressed layout
 -   **Web** Tag drop-down selections now have a new layout to group tags by tag types and sort by alphabetical order
 -   **Web** Execute workflow modal in view asset page now has descriptions with workflows, a tree view now for selecting files, and search capability for both components.
+-   **Web** Updated page bread crumbs to have a `Search` crumb after database and added bread crumbs to some missing "deep" pages.
+-   **Web** Web titles of pages are now updated to properly reflect the page you are on. This helps with back/forward history and overall page history tracking in browsers.
 -   Update asset and file general text search query to be a "AND" operation with the other filters, instead of an "OR" operation.
 -   Added cross-database asset link/relationship and file copy support (requires user access to both databases and assets via the auth asset entity)
 -   Added CLAUDE code steering files and commands
@@ -115,6 +117,8 @@ The website overhaul may cause a high number of merge conflicts for forked repos
 -   Fixed Gaussian Splat pipeline to re-pull latest changes from the 3D reconstruction toolkit repository on every deployment
 -   Fixed VPC endpoint logic for ECS service in pipelines needing endpoints for both private and isolated VPC subnets; previously caused errors when enabling multiple pipelines with mixed subnet types. See troubleshooting section for CDK ECS VPC endpoint errors during re-deployments.
 -   **Web** Fixed various minor bugs across the website including proper error reporting
+-   **Web** Fixed many places throughout website displays to properly synonym words based on set constant variables (Asset, Database, etc.). This will not change CLI or API responses with these keywords.
+-   **Web** The View Asset File Manager now properly sorts files alphabetically in the tree view
 
 ### Chores
 

@@ -19,6 +19,7 @@ import { MetadataRowState, MetadataValueType, EditMode, EntityType } from "./typ
 import MetadataRow from "./MetadataRow";
 import MetadataSearchFilter from "./MetadataSearchFilter";
 import { getChangesCount } from "./utils/metadataHelpers";
+import Synonyms from "../../synonyms";
 
 interface MetadataTableProps {
     rows: MetadataRowState[];
@@ -178,13 +179,13 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
 
             switch (entityType) {
                 case "asset":
-                    return "Asset Metadata";
+                    return `${Synonyms.Asset} Metadata`;
                 case "assetLink":
-                    return "Asset Link Metadata";
+                    return `${Synonyms.Asset} Link Metadata`;
                 case "file":
                     return "File Metadata";
                 case "database":
-                    return "Database Metadata";
+                    return `${Synonyms.Database} Metadata`;
                 default:
                     return "Metadata";
             }

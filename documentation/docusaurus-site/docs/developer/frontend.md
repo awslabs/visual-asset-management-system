@@ -379,15 +379,58 @@ Known feature flags:
 | `NOOPENSEARCH`     | Disable OpenSearch-dependent features        |
 | `ALLOWUNSAFEEVAL`  | Required for CesiumJS and Needle USD viewers |
 
-### Display Name Customization
+### Display Name Customization (Synonyms)
 
-Use `Synonyms` instead of hardcoded entity names:
+VAMS uses a synonym system to make entity display names customizable. The file `src/synonyms.tsx` defines configurable display names for core entity types. Organizations can change these values to match their terminology (for example, renaming "Asset" to "Model" or "Database" to "Repository").
+
+**Available synonyms:**
+
+| Key         | Default       | Usage                                                   |
+| ----------- | ------------- | ------------------------------------------------------- |
+| `Asset`     | `"Asset"`     | Title case singular (headers, labels, modal titles)     |
+| `Assets`    | `"Assets"`    | Title case plural (page titles, navigation, tab labels) |
+| `asset`     | `"asset"`     | Lowercase singular (inline text, descriptions, errors)  |
+| `assets`    | `"assets"`    | Lowercase plural (placeholders, descriptions)           |
+| `Database`  | `"Database"`  | Title case singular                                     |
+| `Databases` | `"Databases"` | Title case plural                                       |
+| `database`  | `"database"`  | Lowercase singular                                      |
+| `databases` | `"databases"` | Lowercase plural                                        |
+| `Comment`   | `"Comment"`   | Title case singular (Comments tab feature only)         |
+| `Comments`  | `"Comments"`  | Title case plural (Comments tab feature only)           |
+| `comment`   | `"comment"`   | Lowercase singular (Comments tab feature only)          |
+| `comments`  | `"comments"`  | Lowercase plural (Comments tab feature only)            |
+
+:::info[Web UI Only]
+Synonyms affect **only the web interface display text**. They do not change API request or response payloads, backend behavior, CLI output, or any data stored in Amazon DynamoDB. The backend API and CLI will continue to use the original terms ("Asset", "Database", "Comment") regardless of synonym configuration.
+:::
+
+**Usage rules:**
+
+1. **All user-visible text** that mentions "Asset", "Database", or "Comment" (the Comments tab feature) must use the `Synonyms` import instead of hardcoded strings.
+2. **Match the casing** of the original text to the correct synonym key (`Synonyms.Asset` for title case, `Synonyms.asset` for lowercase).
+3. **Do not use Synonyms** for API body values, variable names, property names, type names, route paths, or internal identifiers -- only for display text.
+4. **Comment synonyms** apply only to the Comments tab feature (adding/editing/deleting comments on assets). The word "Comment" in other contexts (like version comment fields) should remain hardcoded.
 
 ```typescript
 import Synonyms from "../../synonyms";
 
+// Headers and labels -- use title case synonyms
 <Header>{Synonyms.Assets}</Header>
-<p>Select a {Synonyms.Database}</p>
+<FormField label={`${Synonyms.Asset} Name`}>
+
+// Descriptions and inline text -- use lowercase synonyms
+<p>{`Select a ${Synonyms.database} to continue`}</p>
+placeholder={`Search ${Synonyms.assets} and files...`}
+
+// Error messages
+setError(`${Synonyms.Asset} not found`);
+
+// Template literals for compound text
+header={`Create New ${Synonyms.Asset} Version`}
+description={`Please provide a reason for archiving this ${Synonyms.asset}.`}
+
+// WRONG -- do not use Synonyms in API body values
+const body = { entityName: "Asset" }; // Keep hardcoded for API
 ```
 
 ## Adding New Pages and Components

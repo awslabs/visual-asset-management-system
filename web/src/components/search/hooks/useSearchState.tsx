@@ -5,6 +5,7 @@
 
 import { useState, useCallback, useReducer, useEffect } from "react";
 import { SearchFilters, SearchQuery, SearchResponse, SearchResult, MetadataFilter } from "../types";
+import Synonyms from "../../../synonyms";
 
 interface SearchState {
     query: string;
@@ -45,7 +46,7 @@ const initialState: SearchState = {
     query: "",
     filters: {
         _rectype: {
-            label: "Assets",
+            label: Synonyms.Assets,
             value: "asset",
         },
     },

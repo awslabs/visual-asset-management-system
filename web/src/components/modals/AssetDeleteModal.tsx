@@ -183,7 +183,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
 
         // Check for API error tuple [false, errorMessage]
         if (Array.isArray(response) && response[0] === false) {
-            throw new Error(response[1] || `Failed to ${state.operation} asset.`);
+            throw new Error(response[1] || `Failed to ${state.operation} ${Synonyms.asset}.`);
         }
 
         return response;
@@ -270,7 +270,9 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                 loading: false,
                 error:
                     error.message ||
-                    `An error occurred while processing the ${isAssetMode ? "assets" : "files"}.`,
+                    `An error occurred while processing the ${
+                        isAssetMode ? Synonyms.assets : "files"
+                    }.`,
             }));
         }
     };
@@ -340,7 +342,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                             Are you sure you want to archive <b>{itemName}</b>?
                             <br />
                             {isAssetMode
-                                ? "Archived assets will not appear in normal results but can be restored later."
+                                ? `Archived ${Synonyms.assets} will not appear in normal results but can be restored later.`
                                 : "Archived files will not appear in normal results but can be restored later."}
                         </>
                     ) : (
@@ -360,8 +362,9 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                         }
                         checked={state.operation === "delete"}
                     >
-                        Permanently delete {isAssetMode ? "asset" : "file"} instead of archiving.
-                        This will remove all versions and sub-versions associated with the entity.
+                        Permanently delete {isAssetMode ? Synonyms.asset : "file"} instead of
+                        archiving. This will remove all versions and sub-versions associated with
+                        the entity.
                     </Toggle>
                 )}
 
@@ -369,7 +372,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                 {isAssetMode && state.operation === "archive" && (
                     <FormField
                         label="Reason for archiving *"
-                        description="Please provide a reason for archiving this asset."
+                        description={`Please provide a reason for archiving this ${Synonyms.asset}.`}
                         errorText={reasonError}
                     >
                         <Input

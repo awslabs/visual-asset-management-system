@@ -12,6 +12,7 @@ import TextContent from "@cloudscape-design/components/text-content";
 import TableList from "../components/list/TableList";
 import PropTypes from "prop-types";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 export default function ListPageNoDatabase(props: any) {
     const {
@@ -25,6 +26,7 @@ export default function ListPageNoDatabase(props: any) {
         editEnabled,
         onReload,
     } = props;
+    usePageTitle(pluralNameTitleCase);
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState<Array<any>>([]);

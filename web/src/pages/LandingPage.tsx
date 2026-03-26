@@ -16,6 +16,7 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 
 import { ExternalLinkItem } from "../common/common-components";
 import "../styles/landing-page.scss";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 import addPipelinesImageSrc from "../resources/img/add_pipelines.png";
 import buildWorkflowsImageSrc from "../resources/img/build_workflows.png";
@@ -37,6 +38,7 @@ const CarouselRadio = ({ id, setSlide, slide }) => {
 
 const LandingPage = (props) => {
     const { navigationOpen } = props;
+    usePageTitle("Home");
     const [carouselHeight, setCarouselHeight] = useState(400);
     const [slide, setSlide] = useState("img-1");
     const firstCarouselImageEl = useRef(null);

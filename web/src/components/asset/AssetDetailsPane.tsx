@@ -28,6 +28,7 @@ import PreviewModal from "../filemanager/components/PreviewModal";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
+import Synonyms from "../../synonyms";
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -229,7 +230,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                         }
                     >
                         <span style={{ fontSize: "1.2em" }}>
-                            {asset?.assetName || "Asset Details"}
+                            {asset?.assetName || `${Synonyms.Asset} Details`}
                         </span>
                     </Header>
                 }
@@ -249,7 +250,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                 {!thumbnailLoading && !thumbnailError && thumbnailUrl && (
                                     <img
                                         src={thumbnailUrl}
-                                        alt={`Preview of ${asset?.assetName || "asset"}`}
+                                        alt={`Preview of ${asset?.assetName || Synonyms.asset}`}
                                         onClick={() => setShowPreviewModal(true)}
                                         onError={() => setThumbnailError(true)}
                                         style={{

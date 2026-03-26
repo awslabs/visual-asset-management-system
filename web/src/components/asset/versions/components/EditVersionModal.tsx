@@ -14,6 +14,7 @@ import Input from "@cloudscape-design/components/input";
 import Textarea from "@cloudscape-design/components/textarea";
 import { AssetVersion } from "../AssetVersionManager";
 import { updateAssetVersion } from "../../../../services/AssetVersionService";
+import Synonyms from "../../../../synonyms";
 
 interface EditVersionModalProps {
     visible: boolean;

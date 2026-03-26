@@ -23,6 +23,7 @@ import {
     ENTITY_TYPE_LABELS,
 } from "./types";
 import { SchemaFieldEditor } from "./SchemaFieldEditor";
+import Synonyms from "../../synonyms";
 
 interface CreateEditSchemaModalProps {
     visible: boolean;
@@ -208,7 +209,7 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
                     <Input
                         value={schemaName}
                         onChange={({ detail }) => setSchemaName(detail.value)}
-                        placeholder="e.g., Asset Properties, File Attributes"
+                        placeholder={`e.g., ${Synonyms.Asset} Properties, File Attributes`}
                     />
                 </FormField>
 

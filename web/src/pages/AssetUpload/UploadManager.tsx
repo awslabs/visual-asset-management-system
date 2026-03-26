@@ -30,6 +30,7 @@ import { useMultiSequenceUpload } from "./hooks/useMultiSequenceUpload";
 import { useFilePartsUpload } from "./hooks/useFilePartsUpload";
 import { useAssetOperations } from "./hooks/useAssetOperations";
 import { formatRetryMessage } from "./uploadRetry";
+import Synonyms from "../../synonyms";
 
 interface UploadManagerProps {
     assetDetail: AssetDetail;
@@ -533,7 +534,7 @@ export default function UploadManager({
                     // No files to upload
                     const mockResponse: CompleteUploadResponse = {
                         assetId,
-                        message: "Asset created successfully without files",
+                        message: `${Synonyms.Asset} created successfully without files`,
                         uploadId: "no-upload-required",
                         fileResults: [],
                         overallSuccess: true,
@@ -1018,7 +1019,7 @@ export default function UploadManager({
         } else if (fileItems.length === 0) {
             const mockResponse: CompleteUploadResponse = {
                 assetId,
-                message: "Asset created successfully without files",
+                message: `${Synonyms.Asset} created successfully without files`,
                 uploadId: "no-upload-required",
                 fileResults: [],
                 overallSuccess: true,
@@ -1122,8 +1123,8 @@ export default function UploadManager({
                 errors: [
                     ...prev.errors,
                     {
-                        step: "Asset Links",
-                        message: error.message || "Failed to create asset links",
+                        step: `${Synonyms.Asset} Links`,
+                        message: error.message || `Failed to create ${Synonyms.asset} links`,
                     },
                 ],
             }));
@@ -1294,7 +1295,7 @@ export default function UploadManager({
                     {!isExistingAsset && (
                         <Box>
                             <SpaceBetween direction="vertical" size="xs">
-                                <Box variant="awsui-key-label">Asset Creation</Box>
+                                <Box variant="awsui-key-label">{Synonyms.Asset} Creation</Box>
                                 <SpaceBetween direction="horizontal" size="xs">
                                     <StatusIndicator
                                         type={getStatusIndicatorType(
@@ -1342,7 +1343,7 @@ export default function UploadManager({
                     {uploadState.assetLinksStatus !== "skipped" && (
                         <Box>
                             <SpaceBetween direction="vertical" size="xs">
-                                <Box variant="awsui-key-label">Asset Links Creation</Box>
+                                <Box variant="awsui-key-label">{`${Synonyms.Asset} Links Creation`}</Box>
                                 <SpaceBetween direction="horizontal" size="xs">
                                     <StatusIndicator
                                         type={getStatusIndicatorType(uploadState.assetLinksStatus)}

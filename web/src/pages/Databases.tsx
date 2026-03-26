@@ -16,8 +16,10 @@ import Toggle from "@cloudscape-design/components/toggle";
 import { MetadataContainer } from "../components/metadataV2/MetadataContainer";
 import { featuresEnabled } from "../common/constants/featuresEnabled";
 import DatabaseMapThumbnail from "../components/search/SearchResults/DatabaseMapThumbnail";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 export default function Databases() {
+    usePageTitle(Synonyms.Databases);
     const [metadataModalDatabaseId, setMetadataModalDatabaseId] = useState(null);
     const [showMapThumbnails, setShowMapThumbnails] = useState(false);
 

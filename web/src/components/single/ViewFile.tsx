@@ -30,6 +30,7 @@ import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 
 import Synonyms from "../../synonyms";
+import { usePageTitle } from "../../hooks/usePageTitle";
 import "./ViewFile.css";
 
 // TypeScript interfaces
@@ -213,6 +214,12 @@ export default function ViewFile() {
     const [viewType, setViewType] = useState<string | null>(null);
     const [asset, setAsset] = useState<Asset>({});
 
+    usePageTitle(
+        databaseId,
+        asset?.assetName,
+        isMultiFileMode ? `${currentFiles.length} Files` : singleFileInfo?.filename
+    );
+
     const [viewerOptions, setViewerOptions] = useState<ViewerOption[]>([]);
     const [viewerMode, setViewerMode] = useState("collapse");
     const [showDeletePreviewModal, setShowDeletePreviewModal] = useState(false);
@@ -337,7 +344,7 @@ export default function ViewFile() {
                 // Check if file is archived
                 if (fileInfo.isArchived) {
                     setDirectPathError(
-                        "This file is part of an archived asset and cannot be viewed."
+                        `This file is part of an archived ${Synonyms.asset} and cannot be viewed.`
                     );
                     setIsLoadingDirectPath(false);
                     return;
@@ -609,7 +616,7 @@ export default function ViewFile() {
     // Generate header text
     const getHeaderText = (): string => {
         if (isMultiFileMode) {
-            return `${asset?.assetName || "Asset"} - Multiple Files`;
+            return `${asset?.assetName || Synonyms.Asset} - Multiple Files`;
         }
 
         const filename = singleFileInfo?.filename || asset?.assetName || "";
@@ -663,7 +670,7 @@ export default function ViewFile() {
                                         <br />
                                         <br />
                                         <Link href={`#/databases/${databaseId}/assets/${assetId}`}>
-                                            Return to asset
+                                            {`Return to ${Synonyms.asset}`}
                                         </Link>
                                     </Alert>
                                 </Box>
@@ -678,6 +685,10 @@ export default function ViewFile() {
                                 <BreadcrumbGroup
                                     items={[
                                         { text: Synonyms.Databases, href: "#/databases/" },
+                                        {
+                                            text: "Search",
+                                            href: "#/assets/",
+                                        },
                                         {
                                             text: databaseId || "",
                                             href: "#/databases/" + databaseId + "/assets/",
@@ -742,7 +753,7 @@ export default function ViewFile() {
                                     {effectiveAssetVersionId && (
                                         <Box margin={{ top: "xxs" }}>
                                             <StatusIndicator type="info">
-                                                {`Asset Version: v${effectiveAssetVersionId}`}
+                                                {`${Synonyms.Asset} Version: v${effectiveAssetVersionId}`}
                                             </StatusIndicator>
                                         </Box>
                                     )}

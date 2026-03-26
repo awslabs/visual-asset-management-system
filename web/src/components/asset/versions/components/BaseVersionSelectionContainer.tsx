@@ -14,6 +14,7 @@ import {
     Badge,
     Pagination,
 } from "@cloudscape-design/components";
+import Synonyms from "../../../../synonyms";
 
 interface AssetVersion {
     Version: number;
@@ -51,7 +52,7 @@ export const BaseVersionSelectionContainer: React.FC<BaseVersionSelectionContain
             {loadingVersions ? (
                 <Box textAlign="center" padding="l">
                     <Spinner size="normal" />
-                    <div>Loading asset versions...</div>
+                    <div>{`Loading ${Synonyms.asset} versions...`}</div>
                 </Box>
             ) : (
                 <Table

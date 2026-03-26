@@ -37,6 +37,7 @@ import FileMetadata from "../../metadata/FileMetadata";
 import "./FileDetailsPanel.css";
 import { previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
+import Synonyms from "../../../synonyms";
 
 // Import the context from FileTreeView
 import { FileManagerContext } from "./FileTreeView";
@@ -607,7 +608,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     variant={"primary"}
                                                     onClick={handleMultiFileView}
                                                 >
-                                                    View Asset Files
+                                                    {`View ${Synonyms.Asset} Files`}
                                                 </Button>
                                             </>
                                         )}
@@ -1040,7 +1041,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     >
                                         {selectedItem.relativePath === "/" &&
                                         selectedItem.level === 0
-                                            ? "Asset Operations"
+                                            ? `${Synonyms.Asset} Operations`
                                             : "Folder Operations"}
                                     </ButtonDropdown>
                                 )}
@@ -1230,7 +1231,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         <div className="file-info-label">Type:</div>
                         <div className="file-info-value">
                             {selectedItem.relativePath === "/" && selectedItem.level === 0
-                                ? "Asset"
+                                ? Synonyms.Asset
                                 : isFolder
                                 ? "Folder"
                                 : "File"}
@@ -1250,7 +1251,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     {/* Show Total Asset Size for the top-level Asset Node */}
                     {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
                         <div className="file-info-item">
-                            <div className="file-info-label">Total Asset Size:</div>
+                            <div className="file-info-label">{`Total ${Synonyms.Asset} Size:`}</div>
                             <div className="file-info-value">
                                 {formatFileSize(state.totalAssetSize)}
                             </div>
@@ -1336,7 +1337,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     !isFolder &&
                                     selectedItem.relativePath !== "/" && (
                                         <div className="not-included-label">
-                                            Not Included in Current Asset Version
+                                            {`Not Included in Current ${Synonyms.Asset} Version`}
                                         </div>
                                     )}
                             </div>

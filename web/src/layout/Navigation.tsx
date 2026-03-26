@@ -117,7 +117,7 @@ export function Navigation({
             text: "Manage",
             items: [
                 { type: "link", text: Synonyms.Databases, href: "#/databases/" },
-                { type: "link", text: "Assets and Files", href: "#/assets/" },
+                { type: "link", text: `${Synonyms.Assets} and Files`, href: "#/assets/" },
                 { type: "link", text: `Create ${Synonyms.Asset}`, href: "#/upload/" },
             ],
         },

@@ -11,6 +11,7 @@ import CreateTagType from "./CreateTagType";
 import { fetchTags, fetchtagTypes, deleteTag, deleteTagType } from "../../services/APIService";
 import { useEffect, useState } from "react";
 import { Box } from "@cloudscape-design/components";
+import { usePageTitle } from "../../hooks/usePageTitle";
 let rel;
 
 export const TagsListDefinition = new ListDefinition({
@@ -112,6 +113,7 @@ export const TagTypesListDefinition = new ListDefinition({
 });
 
 export default function Tags() {
+    usePageTitle("Tag Management");
     const [reloadKey1, setReloadKey1] = useState(0);
     const [reloadKey2, setReloadKey2] = useState(100);
     const reloadChild1 = () => {
