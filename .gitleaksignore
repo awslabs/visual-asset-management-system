@@ -14,3 +14,7 @@ daad42860810edbe467d7ede88cc8fcf12ecab2b:tools/VamsCLI/docs/commands/api-key-man
 daad42860810edbe467d7ede88cc8fcf12ecab2b:tools/VamsCLI/docs/commands/api-key-management.md:generic-api-key:147
 ec712c1eb7e60f19980fd4f44495289272c65f94:documentation/VAMS_API.yaml:generic-api-key:9670
 daad42860810edbe467d7ede88cc8fcf12ecab2b:tools/VamsCLI/docs/commands/api-key-management.md:generic-api-key:277
+22cdbda1fca661048b99774cbbe63909bf249023:documentation/docusaurus-site/docs/api/overview.md:generic-api-key:123
+800b4d7bbead1c2b01e947a9ea906a1623d5a876:documentation/docusaurus-site/docs/api/overview.md:generic-api-key:125
+22cdbda1fca661048b99774cbbe63909bf249023:documentation/docusaurus-site/docs/api/authentication.md:generic-api-key:77
+800b4d7bbead1c2b01e947a9ea906a1623d5a876:documentation/docusaurus-site/docs/api/authentication.md:generic-api-key:79
