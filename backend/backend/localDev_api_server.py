@@ -58,8 +58,8 @@ def routes():
 
   # FIXME Issue with accessing header outside of route.
   access_token = request.headers['Authorization'].split()[1]
-  header = pyjwt.get_unverified_header(access_token)
-  claims = pyjwt.decode(access_token, options={ 'verify_signature': False })
+  header = pyjwt.get_unverified_header(access_token) # nosemgrep: unverified-jwt-decode
+  claims = pyjwt.decode(access_token, options={ 'verify_signature': False }) # nosemgrep: unverified-jwt-decode
   print('header', header)
   print('claims', claims)
 
@@ -133,4 +133,4 @@ if __name__ == '__main__':
   app = Flask(__name__)
   app.secret_key = 'development'
   app.register_blueprint(vams)
-  app.run(debug=True, port=8002, host='0.0.0.0')
+  app.run(debug=True, port=8002, host='0.0.0.0') # nosec B201

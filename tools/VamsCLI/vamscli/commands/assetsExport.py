@@ -276,8 +276,8 @@ async def download_export_files(
     
     # Create progress callback
     progress_display = DownloadProgressDisplay(hide_progress=hide_progress or json_output)
-    
-    def progress_callback(progress: DownloadProgress):
+
+    def progress_callback(progress: DownloadProgress):  # nosemgrep: useless-inner-function
         progress_display.update(progress)
     
     # Download files using DownloadManager

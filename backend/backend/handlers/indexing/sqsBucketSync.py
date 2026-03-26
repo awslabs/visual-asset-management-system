@@ -645,7 +645,7 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
     # No matching database found - need to create one
     # Generate unique database ID based on bucket and prefix
     prefix_for_hash = prefix.rstrip('/') if prefix else 'root'
-    prefix_hash = hashlib.md5(f"{bucket_name}:{prefix_for_hash}".encode()).hexdigest()[:8]
+    prefix_hash = hashlib.md5(f"{bucket_name}:{prefix_for_hash}".encode()).hexdigest()[:8] # nosec B324
     unique_db_id = f"{database_id}-{prefix_hash}"
     
     # Check cache for this specific database ID

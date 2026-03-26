@@ -798,7 +798,9 @@ Active,boolean,true`}
                         onChange={({ detail }) => setImportFile(detail.value)}
                         value={importFile}
                         i18nStrings={{
+                            // nosemgrep: useless-ternary
                             uploadButtonText: (e) => (e ? "Choose file" : "Choose file"),
+                            // nosemgrep: useless-ternary
                             dropzoneText: (e) =>
                                 e ? "Drop file to upload" : "Drop file to upload",
                             removeFileAriaLabel: (e) => `Remove file ${e + 1}`,

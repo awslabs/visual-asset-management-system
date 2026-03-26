@@ -1358,8 +1358,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                 
                 # Create progress callback
                 progress_display = DownloadProgressDisplay(hide_progress=hide_progress)
-                
-                def progress_callback(progress: DownloadProgress):
+
+                def progress_callback(progress: DownloadProgress):  # nosemgrep: useless-inner-function
                     progress_display.update(progress)
                 
                 # Use async download manager

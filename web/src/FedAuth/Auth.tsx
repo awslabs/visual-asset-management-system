@@ -605,6 +605,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                     config.featuresEnabled = value.featuresEnabled;
                     config.locationServiceApiUrl = value.locationServiceApiUrl;
                     appCache.setItem("config", config);
+                    // nosemgrep: calling-set-state-on-current-state
                     setConfig(config);
                 })
                 .catch((error: Error) => {

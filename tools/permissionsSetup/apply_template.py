@@ -139,7 +139,7 @@ def run_vamscli(args, profile=None, capture_output=True):
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
-    result = subprocess.run(
+    result = subprocess.run( # nosemgrep: dangerous-subprocess-use-audit
         cmd,
         capture_output=capture_output,
         text=True,

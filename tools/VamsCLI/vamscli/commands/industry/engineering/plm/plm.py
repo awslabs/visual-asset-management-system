@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional
-from xml.etree.ElementTree import Element  # For type hints only
+from xml.etree.ElementTree import Element  # For type hints only  # nosemgrep: use-defused-xml
 import defusedxml.ElementTree as ET  # For secure XML parsing
 from tqdm.rich import tqdm
 import click

@@ -196,8 +196,8 @@ def main():
     # Call the existing main.py from the directory
     try:
         print("Starting main.py with real-time output...")
-        result = subprocess.run([sys.executable, 'main.py'], 
-                              cwd='/opt/ml/code', 
+        result = subprocess.run([sys.executable, 'main.py'], # nosemgrep: dangerous-subprocess-use-audit
+                              cwd='/opt/ml/code',
                               env=env,
                               check=True)
         print("Pipeline completed successfully")

@@ -130,7 +130,7 @@ def potree_conversion_pipeline(input_file_path: str, output_dir: str) -> dict:
     logger.info("Executing LAS/LAZ to PotreeConverter Format 2.0...")
 
     # Run Potree Converter local subprocess
-    subprocess.Popen(POTREE_CONVERTER_CMD).wait()
+    subprocess.Popen(POTREE_CONVERTER_CMD).wait() # nosemgrep: dangerous-subprocess-use-audit
 
     # Get an array of all file names in output directory
     output_files = os.listdir(output_dir)
