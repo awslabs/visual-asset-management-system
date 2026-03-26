@@ -47,6 +47,14 @@ const config: Config = {
 
     themeConfig: {
         image: "img/logo.png",
+        announcementBar: {
+            id: "star_us",
+            content:
+                '⭐ If you like VAMS, give it a star on <a target="_blank" rel="noopener noreferrer" href="https://github.com/awslabs/visual-asset-management-system">GitHub</a>! ⭐',
+            backgroundColor: "#232f3e",
+            textColor: "#ffffff",
+            isCloseable: true,
+        },
         navbar: {
             title: "",
             logo: {

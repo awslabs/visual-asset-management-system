@@ -323,6 +323,12 @@ const LandingPage = (props) => {
                                             text="VAMS on Github"
                                         />
                                     </li>
+                                    <li>
+                                        <ExternalLinkItem
+                                            href="https://awslabs.github.io/visual-asset-management-system/"
+                                            text="VAMS Documentation"
+                                        />
+                                    </li>
                                 </ul>
                             </Container>
 

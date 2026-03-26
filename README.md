@@ -6,6 +6,8 @@
 ![Build](https://github.com/awslabs/visual-asset-management-system/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green)
 
+**[📖 Read the Documentation](https://awslabs.github.io/visual-asset-management-system/)**
+
 ## _Notice_
 
 _Visual Asset Management System (VAMS) is a solution that is near-production-grade at its default. Consult with your organizational security prior to production use._
