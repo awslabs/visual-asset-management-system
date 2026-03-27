@@ -28,6 +28,12 @@ interface VAMSConfig {
     CUSTOMER_LOGO?: string;
 
     /**
+     * Short prefix used in browser tab titles (e.g. "VAMS - Databases").
+     * Defaults to "VAMS".
+     */
+    APP_TITLE_PREFIX: string;
+
+    /**
      * API endpoint for local development.
      * Set to empty string to use the same origin (production default).
      * Set to a URL like "http://localhost:8002/" or an API Gateway URL for dev testing.
@@ -40,6 +46,7 @@ const config: VAMSConfig = {
     APP_NAME: "Visual Asset Management System",
     FOOTER_COPYRIGHT:
         "\u00A9 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved.",
+    APP_TITLE_PREFIX: "VAMS",
     // CUSTOMER_LOGO: "/path/to/custom-logo.png",
     DEV_API_ENDPOINT: "", // Can point to either remote or local API
 };

@@ -4,8 +4,9 @@
  */
 
 import { useEffect } from "react";
+import config from "../config";
 
-const APP_TITLE_PREFIX = "VAMS";
+const APP_TITLE_PREFIX = config.APP_TITLE_PREFIX;
 
 /**
  * Sets the document title for the current page.

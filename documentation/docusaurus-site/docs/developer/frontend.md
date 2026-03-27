@@ -24,7 +24,7 @@ This project uses React 17, not React 18. Do not use React 18 APIs such as `crea
 web/src/
   App.tsx                 # Root shell, HashRouter, TopNavigation
   routes.tsx              # Centralized route table with React.lazy
-  config.ts               # Static config (APP_TITLE, DEV_API_ENDPOINT)
+  config.ts               # Static config (APP_TITLE, APP_TITLE_PREFIX, DEV_API_ENDPOINT)
   synonyms.tsx            # Customizable display names (Asset, Database, Comment)
   index.tsx               # Entry point (ReactDOM.render)
 
@@ -321,6 +321,7 @@ interface VAMSConfig {
     APP_NAME: string; // Short name in footer and UI references
     FOOTER_COPYRIGHT: string; // Footer copyright text (empty string hides footer)
     CUSTOMER_LOGO?: string; // Optional custom logo URL for sidebar navigation
+    APP_TITLE_PREFIX: string; // Short prefix for browser tab titles (e.g. "VAMS - Databases")
     DEV_API_ENDPOINT: string; // API endpoint for local development
 }
 ```
@@ -331,6 +332,7 @@ interface VAMSConfig {
 | `APP_NAME`         | `"Visual Asset Management System"`        | Short name used in the footer and logo alt text                                                                                                                |
 | `FOOTER_COPYRIGHT` | `"(c) 2026, Amazon Web Services..."`      | Copyright text in the page footer. Set to empty string to hide the footer entirely.                                                                            |
 | `CUSTOMER_LOGO`    | `undefined`                               | URL to a custom logo for the sidebar navigation header. Supports relative paths or absolute URLs. Leave undefined for the default VAMS logo.                   |
+| `APP_TITLE_PREFIX` | `"VAMS"`                                  | Short prefix used in browser tab titles (e.g. "VAMS - Databases", "VAMS - myDb - My Asset"). Used by the `usePageTitle` hook to set `document.title`.          |
 | `DEV_API_ENDPOINT` | `""`                                      | API endpoint for local development. Empty string uses same origin (production default). Set to an API Gateway URL or `http://localhost:8002/` for development. |
 
 **Example customization:**
@@ -341,6 +343,7 @@ const config: VAMSConfig = {
     APP_NAME: "My Company Asset Manager",
     FOOTER_COPYRIGHT: "(c) 2026, My Company. All rights reserved.",
     CUSTOMER_LOGO: "/my-company-logo.png",
+    APP_TITLE_PREFIX: "MyCompany",
     DEV_API_ENDPOINT: "",
 };
 ```
