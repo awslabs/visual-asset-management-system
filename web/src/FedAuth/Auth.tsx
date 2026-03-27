@@ -598,12 +598,19 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Both Effect
     //Once logged in, get/set other configuration and profile information
     useEffect(() => {
-        //Secure Config Fetch - fetch if either featuresEnabled OR locationServiceApiUrl is missing
-        if (config && (!config.featuresEnabled || !config.locationServiceApiUrl) && isLoggedIn) {
+        //Secure Config Fetch - fetch if featuresEnabled, locationServiceApiUrl, or webDeployedUrl is missing
+        if (
+            config &&
+            (!config.featuresEnabled ||
+                !config.locationServiceApiUrl ||
+                config.webDeployedUrl === undefined) &&
+            isLoggedIn
+        ) {
             getSecureConfig()
                 .then((value) => {
                     config.featuresEnabled = value.featuresEnabled;
                     config.locationServiceApiUrl = value.locationServiceApiUrl;
+                    config.webDeployedUrl = value.webDeployedUrl || "";
                     appCache.setItem("config", config);
                     // nosemgrep: calling-set-state-on-current-state
                     setConfig(config);

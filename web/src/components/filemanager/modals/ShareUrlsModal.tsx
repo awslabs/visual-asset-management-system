@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
     Modal,
     Box,
@@ -54,12 +54,21 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
     const [itemsPerPage] = useState(10);
     const [allCopied, setAllCopied] = useState(false);
     const [urlMode, setUrlMode] = useState<UrlMode>("presigned");
+    // Base URL toggle is disabled until backend supports website base URL routing for API stream
+    const [useBaseUrl] = useState(false);
     const [tokenCopied, setTokenCopied] = useState(false);
     const DEFAULT_EXPIRATION_MESSAGE =
         "These URLs provide temporary access to the selected files. They will expire based on system expiration configuration.";
     const STREAM_URL_MESSAGE =
         "These URLs require an Authorization header with a Bearer token (e.g. 'Bearer <token>'). They do not expire and can be used in downstream applications as long as the caller has separately authenticated to VAMS.";
     const [expirationMessage, setExpirationMessage] = useState<string>(DEFAULT_EXPIRATION_MESSAGE);
+
+    // Stabilize selectedFiles reference to prevent useEffect re-triggers
+    const selectedFilesRef = useRef(selectedFiles);
+    const prevVisibleRef = useRef(false);
+    useEffect(() => {
+        selectedFilesRef.current = selectedFiles;
+    }, [selectedFiles]);
 
     // Collect files from selected items (shared between both modes)
     const collectSelectedFiles = (): {
@@ -114,7 +123,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
             }
         };
 
-        for (const item of selectedFiles) {
+        for (const item of selectedFilesRef.current) {
             const itemIsFolder =
                 item.isFolder === true ||
                 (item.isFolder === undefined &&
@@ -160,57 +169,82 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
         return filesToShare;
     };
 
+    // Check if webDeployedUrl is available in config
+    const config = appCache.getItem("config");
+    const webDeployedUrl = config?.webDeployedUrl;
+    const hasWebDeployedUrl = !!webDeployedUrl && webDeployedUrl.trim() !== "";
+
     // Generate stream URLs locally (no API call needed)
-    const generateStreamUrls = () => {
-        setIsLoading(false);
-        setError(null);
+    const generateStreamUrls = useCallback(
+        (baseUrlMode: boolean) => {
+            setIsLoading(false);
+            setError(null);
 
-        const config = appCache.getItem("config");
-        if (!config?.api) {
-            setError("API configuration not available");
-            return;
-        }
-
-        const filesToShare = collectSelectedFiles();
-        if (filesToShare.length === 0) {
-            setError("No valid files found to share");
-            return;
-        }
-
-        const urlItems: UrlItem[] = filesToShare.map((file) => {
-            // Encode each path segment individually to preserve slashes
-            const pathSegments = file.key.split("/");
-            const encodedFileKey = pathSegments
-                .map((segment) => encodeURIComponent(segment))
-                .join("/");
-
-            let streamUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
-            if (assetVersionId) {
-                streamUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+            let apiBase: string;
+            if (baseUrlMode && hasWebDeployedUrl) {
+                // Use deployed website base URL with /api/ prefix
+                let baseUrl = webDeployedUrl!.trim();
+                if (baseUrl.endsWith("/")) {
+                    baseUrl = baseUrl.slice(0, -1);
+                }
+                apiBase = `${baseUrl}/api/`;
+            } else {
+                // Use direct API Gateway URL
+                const cfg = appCache.getItem("config");
+                if (!cfg?.api) {
+                    setError("API configuration not available");
+                    return;
+                }
+                apiBase = cfg.api;
             }
 
-            return {
-                fileName: file.name,
-                filePath: file.relativePath,
-                url: streamUrl,
-                copied: false,
-            };
-        });
+            const filesToShare = collectSelectedFiles();
+            if (filesToShare.length === 0) {
+                setError("No valid files found to share");
+                return;
+            }
 
-        setUrls(urlItems);
-        setExpirationMessage(STREAM_URL_MESSAGE);
-    };
+            const urlItems: UrlItem[] = filesToShare.map((file) => {
+                // Encode each path segment individually to preserve slashes
+                const pathSegments = file.key.split("/");
+                const encodedFileKey = pathSegments
+                    .map((segment) => encodeURIComponent(segment))
+                    .join("/");
 
-    // Generate URLs when modal becomes visible or mode changes
+                let streamUrl = `${apiBase}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                if (assetVersionId) {
+                    streamUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+                }
+
+                return {
+                    fileName: file.name,
+                    filePath: file.relativePath,
+                    url: streamUrl,
+                    copied: false,
+                };
+            });
+
+            setUrls(urlItems);
+            setExpirationMessage(STREAM_URL_MESSAGE);
+        },
+        [databaseId, assetId, assetVersionId]
+    );
+
+    // Generate URLs when modal becomes visible or mode/settings change
     useEffect(() => {
-        if (visible && selectedFiles.length > 0) {
+        if (!visible) {
+            prevVisibleRef.current = false;
+            return;
+        }
+        if (selectedFilesRef.current.length > 0) {
+            prevVisibleRef.current = true;
             if (urlMode === "presigned") {
                 generatePresignedUrlsForFiles();
             } else {
-                generateStreamUrls();
+                generateStreamUrls(useBaseUrl);
             }
         }
-    }, [visible, selectedFiles, urlMode]);
+    }, [visible, urlMode, useBaseUrl]);
 
     const generatePresignedUrlsForFiles = async () => {
         setIsLoading(true);
@@ -441,7 +475,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
                         onClick={() =>
                             urlMode === "presigned"
                                 ? generatePresignedUrlsForFiles()
-                                : generateStreamUrls()
+                                : generateStreamUrls(useBaseUrl)
                         }
                     >
                         Retry
@@ -499,11 +533,11 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
                     options={[
                         {
                             id: "presigned",
-                            text: "Embedded Auth URLs",
+                            text: "URLs (Embedded Auth)",
                         },
                         {
                             id: "stream",
-                            text: "API Stream URLs",
+                            text: "URLs (API Stream)",
                         },
                     ]}
                 />

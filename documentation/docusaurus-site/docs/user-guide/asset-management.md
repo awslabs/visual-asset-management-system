@@ -284,11 +284,13 @@ Preview images appear in the file details panel and are used as thumbnails in se
 
 ![Download dialog for multiple file selection](/img/download_file_multiple_20260323_v2.5.png)
 
-For distributable assets, you can generate presigned download URLs:
+For distributable assets, you can generate shareable download URLs:
 
 1. Select a file in the directory tree.
-2. Select the **Download** action to download the file directly, or select **Share** to generate a time-limited presigned URL.
-3. Presigned URLs expire after the timeout configured by your administrator.
+2. Select the **Download** action to download the file directly, or select **Share** to open the Share File URLs modal.
+3. Choose a URL type using the segmented control at the top of the modal:
+    - **URLs (Embedded Auth)** -- Generates time-limited presigned URLs with embedded authentication. These expire after the timeout configured by your administrator.
+    - **URLs (API Stream)** -- Generates long-lasting streaming URLs that require an Authorization header with a Bearer token. These do not expire as long as the caller is authenticated.
 
 ![Share files modal for generating presigned URLs](/img/share_files_modal_20260323_v2.5.png)
 

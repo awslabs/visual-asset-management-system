@@ -40,7 +40,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 -   **Dark and light themes** -- Toggle between dark mode (default) and light mode from the top navigation settings
 -   **Responsive layout** -- AWS Cloudscape Design System components with consistent AWS console styling
 -   **Split navigation** -- Admin sections split into "Admin - Auth" and "Admin - Data" categories
--   **Share URLs** -- Generate presigned URLs for asset sharing with toggle for embedded auth vs. long-lasting authorization token URIs
+-   **Share URLs** -- Generate shareable URLs with toggle between URLs (Embedded Auth) for time-limited presigned access and URLs (API Stream) for long-lasting authorization token URIs
 -   **Configurable display names** -- Customize terminology for "Asset", "Database", and "Comment" through the synonyms system
 -   **Custom banner messages** -- Display organizational announcements via the `optionalBannerHtmlMessage` configuration
 
