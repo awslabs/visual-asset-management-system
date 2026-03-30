@@ -58,7 +58,17 @@ def generate_rotating_frames(
     else:
         _add_mesh(plotter, pv_data)
 
-    focal_point, radius, elevation = _compute_camera_framing(pv_data, use_full_bounds=use_full_bounds)
+    focal_point, radius, elevation = _compute_camera_framing(
+        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
+    )
+
+    # Compute stable clipping range from the full model extent so VTK
+    # does not auto-adjust per frame (which causes near-plane clipping
+    # and depth-buffer flicker for wide models at certain orbit angles).
+    full_diagonal = np.linalg.norm(pv_data.points.max(axis=0) - pv_data.points.min(axis=0))
+    cam_distance = np.sqrt(radius**2 + elevation**2)
+    near_clip = max((cam_distance - full_diagonal) * 0.5, cam_distance * 0.001)
+    far_clip = cam_distance + full_diagonal * 2.0
 
     frames = []
     for i in range(n_frames):
@@ -71,6 +81,7 @@ def generate_rotating_frames(
         plotter.camera.position = (cam_x, cam_y, cam_z)
         plotter.camera.focal_point = tuple(focal_point)
         plotter.camera.up = (0.0, 1.0, 0.0)
+        plotter.camera.clipping_range = (near_clip, far_clip)
 
         plotter.render()
         img = plotter.screenshot(return_img=True)
@@ -103,7 +114,14 @@ def generate_static_frame(
     else:
         _add_mesh(plotter, pv_data)
 
-    focal_point, radius, elevation = _compute_camera_framing(pv_data, use_full_bounds=use_full_bounds)
+    focal_point, radius, elevation = _compute_camera_framing(
+        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
+    )
+
+    full_diagonal = np.linalg.norm(pv_data.points.max(axis=0) - pv_data.points.min(axis=0))
+    cam_distance = np.sqrt(radius**2 + elevation**2)
+    near_clip = max((cam_distance - full_diagonal) * 0.5, cam_distance * 0.001)
+    far_clip = cam_distance + full_diagonal * 2.0
 
     angle_rad = np.radians(45)
     cam_x = focal_point[0] + radius * np.cos(angle_rad)
@@ -113,6 +131,7 @@ def generate_static_frame(
     plotter.camera.position = (cam_x, cam_y, cam_z)
     plotter.camera.focal_point = tuple(focal_point)
     plotter.camera.up = (0.0, 1.0, 0.0)
+    plotter.camera.clipping_range = (near_clip, far_clip)
 
     plotter.render()
     img = plotter.screenshot(return_img=True)
@@ -214,16 +233,19 @@ def _add_alpha_from_depth(plotter, img_rgb):
     return rgba
 
 
-def _compute_camera_framing(pv_data, use_full_bounds=False):
+def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION):
     """
     Compute camera framing parameters for orbit-style camera positioning.
 
-    For percentile mode (default): uses 2nd-98th percentile bounds and
-    diagonal * 1.8 radius — the proven formula for meshes and point clouds.
+    Uses per-axis FOV calculation that accounts for viewport aspect ratio
+    and the maximum visible horizontal extent during a full orbit (the XZ
+    diagonal, since the model is viewed from all angles).
 
-    For full-bounds mode (USD/CAD): uses complete bounding box and
-    diagonal * 1.4 radius — tighter because full bounds already includes
-    all geometry without percentile cropping.
+    For percentile mode (default): uses 2nd-98th percentile bounds to
+    crop outliers from sparse scenes (point clouds with distant noise).
+
+    For full-bounds mode (USD/CAD): uses complete bounding box since
+    all geometry in engineered models is intentional.
     """
     points = pv_data.points
 
@@ -240,28 +262,36 @@ def _compute_camera_framing(pv_data, use_full_bounds=False):
     dy = hi[1] - lo[1]
     dz = hi[2] - lo[2]
 
-    diagonal = np.sqrt(dx**2 + dy**2 + dz**2)
+    # FOV-based framing: compute required distance for each axis.
+    # Default VTK camera has ~30 degree vertical FOV.
+    half_fov_rad = np.radians(15.0)
+    tan_half_fov = np.tan(half_fov_rad)
 
-    if use_full_bounds:
-        # For engineered models (USD/CAD): use per-axis FOV calculation.
-        # This frames the model tightly based on actual visible extents
-        # rather than the full 3D diagonal which overestimates.
-        half_fov_rad = np.radians(15.0)  # Half of ~30 degree default FOV
-        tan_half_fov = np.tan(half_fov_rad)
-        dist_for_height = (dy / 2.0) / tan_half_fov if dy > 0 else 0
-        horizontal_extent = max(dx, dz)
-        dist_for_width = (horizontal_extent / 2.0) / tan_half_fov if horizontal_extent > 0 else 0
-        radius = max(dist_for_height, dist_for_width, 1e-6) * 1.05
-    else:
-        # Proven formula for point clouds, meshes, and general 3D data
-        radius = max(diagonal * 1.8, 1e-6)
+    # Horizontal FOV is wider due to viewport aspect ratio
+    aspect_ratio = resolution[0] / resolution[1]  # e.g. 800/600 = 1.333
+    tan_half_fov_h = tan_half_fov * aspect_ratio
+
+    # During a full orbit, the camera sees the model from all angles.
+    # The worst-case horizontal extent is the XZ diagonal (corner-on view).
+    xz_diagonal = np.sqrt(dx**2 + dz**2)
+
+    # Distance needed to fit vertical extent (Y axis)
+    dist_for_height = (dy / 2.0) / tan_half_fov if dy > 0 else 0
+
+    # Distance needed to fit horizontal extent (XZ diagonal during orbit)
+    dist_for_width = (xz_diagonal / 2.0) / tan_half_fov_h if xz_diagonal > 0 else 0
+
+    # Use the larger of the two with padding
+    padding = 1.15 if use_full_bounds else 1.25
+    radius = max(dist_for_height, dist_for_width, 1e-6) * padding
 
     elevation = radius * np.tan(np.radians(_CAMERA_ELEVATION_DEG))
 
     logger.info(
         f"Camera framing: focal={focal_point}, radius={radius:.2f}, "
         f"elevation={elevation:.2f}, focus_extents=({dx:.2f}, {dy:.2f}, {dz:.2f}), "
-        f"use_full_bounds={use_full_bounds}"
+        f"xz_diagonal={xz_diagonal:.2f}, dist_h={dist_for_height:.2f}, "
+        f"dist_w={dist_for_width:.2f}, use_full_bounds={use_full_bounds}"
     )
 
     return focal_point, radius, elevation
