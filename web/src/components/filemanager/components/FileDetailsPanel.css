@@ -30,12 +30,16 @@
 }
 
 .file-info-content {
-    padding: 20px 0;
+    padding: 10px 0 0 0;
 }
 
 .file-info-item {
     display: flex;
     margin-bottom: 12px;
+}
+
+.file-info-item:last-child {
+    margin-bottom: 0;
 }
 
 .file-info-label {
@@ -122,23 +126,53 @@
     font-size: 12px;
 }
 
-/* Metadata section styling - with single spacer bar above */
-.file-metadata-section {
-    margin-top: 24px;
-    padding-top: 16px;
-    border-top: 1px solid var(--vams-border-default);
-    transition: opacity 0.3s ease-in-out, transform 0.2s ease-in-out;
-    opacity: 1;
-    transform: translateY(0);
+/* Two-column body: details on left, metadata on right */
+.file-info-body {
+    flex: 1;
+    overflow-y: auto;
 }
 
-.file-metadata-section.loading {
-    opacity: 0.7;
-    transform: translateY(4px);
+.file-info-body--with-metadata {
+    display: flex;
+    flex-direction: row;
+    gap: 0;
+    min-height: 0;
 }
 
-.file-metadata-section.error {
-    opacity: 0.9;
+.file-info-body--with-metadata > .file-info-content {
+    flex: 0 0 auto;
+    width: 440px;
+    min-width: 340px;
+    overflow-y: auto;
+    padding-right: 16px;
+}
+
+.file-metadata-side-panel {
+    flex: 1;
+    min-width: 0;
+    border-left: 1px solid var(--vams-border-default);
+    padding-left: 16px;
+    overflow-y: auto;
+}
+
+/* Responsive: stack vertically on narrow panels */
+@media (max-width: 900px) {
+    .file-info-body--with-metadata {
+        flex-direction: column;
+    }
+
+    .file-info-body--with-metadata > .file-info-content {
+        width: 100%;
+        padding-right: 0;
+        padding-bottom: 16px;
+    }
+
+    .file-metadata-side-panel {
+        border-left: none;
+        border-top: 1px solid var(--vams-border-default);
+        padding-left: 0;
+        padding-top: 16px;
+    }
 }
 
 /* FileMetadata component styling within FileDetailsPanel */
@@ -226,9 +260,8 @@
     }
 }
 
-/* Ensure scrollable behavior when content exceeds height */
-.file-info-content {
-    padding: 20px 0;
+/* When not in two-column mode, content takes full width and scrolls */
+.file-info-body:not(.file-info-body--with-metadata) > .file-info-content {
     flex: 1;
     overflow-y: auto;
 }

@@ -272,7 +272,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
     if (error && !loading) {
         return (
             <ErrorBoundary componentName="Comments">
-                <Box padding={{ top: "m", horizontal: "l" }}>
+                <Box padding={{ top: "xxs" }}>
                     <div className="error-message">
                         {error}
                         <Button onClick={() => setReload(true)}>Retry</Button>
@@ -284,7 +284,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
 
     return (
         <ErrorBoundary componentName="Comments">
-            <Box padding={{ top: "m", horizontal: "l" }}>
+            <Box padding={{ top: "xxs" }}>
                 <div className="commentSectionDiv">
                     <table className="commentSectionTable commentSectionTableBorder">
                         <tbody>

@@ -382,7 +382,7 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                             }}
                         >
                             <colgroup>
-                                <col style={{ width: "14%" }} />
+                                <col style={{ width: "14%", minWidth: "180px" }} />
                                 <col style={{ width: "120px" }} />
                                 <col />
                                 <col style={{ width: "80px" }} />

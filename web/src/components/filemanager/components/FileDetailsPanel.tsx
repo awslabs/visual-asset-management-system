@@ -1197,130 +1197,127 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     </div>
                 </div>
 
-                <div className="file-info-content">
-                    {selectedItem.isPermanentlyDeleted && (
-                        <Alert type="error" statusIconAriaLabel="Error">
-                            This file has been permanently deleted. All S3 versions have been
-                            removed and the file is no longer available for download, viewing, or
-                            recovery.
-                        </Alert>
-                    )}
+                <div
+                    className={`file-info-body${
+                        shouldShowMetadata ? " file-info-body--with-metadata" : ""
+                    }`}
+                >
+                    <div className="file-info-content">
+                        {selectedItem.isPermanentlyDeleted && (
+                            <Alert type="error" statusIconAriaLabel="Error">
+                                This file has been permanently deleted. All S3 versions have been
+                                removed and the file is no longer available for download, viewing,
+                                or recovery.
+                            </Alert>
+                        )}
 
-                    <div className="file-info-item">
-                        <div className="file-info-label">Name:</div>
-                        <div className="file-info-value">
-                            {selectedItem.name}
-                            {!isFolder &&
-                                selectedItem.level > 0 &&
-                                !selectedItem.isPermanentlyDeleted && (
-                                    <span style={{ marginLeft: "8px" }}>
-                                        <Link onFollow={handleFileViewerModal} fontSize="body-s">
-                                            (Viewer Popup)
-                                        </Link>
-                                    </span>
-                                )}
+                        <div className="file-info-item">
+                            <div className="file-info-label">Name:</div>
+                            <div className="file-info-value">
+                                {selectedItem.name}
+                                {!isFolder &&
+                                    selectedItem.level > 0 &&
+                                    !selectedItem.isPermanentlyDeleted && (
+                                        <span style={{ marginLeft: "8px" }}>
+                                            <Link
+                                                onFollow={handleFileViewerModal}
+                                                fontSize="body-s"
+                                            >
+                                                (Viewer Popup)
+                                            </Link>
+                                        </span>
+                                    )}
+                            </div>
                         </div>
-                    </div>
 
-                    <div className="file-info-item">
-                        <div className="file-info-label">Path:</div>
-                        <div className="file-info-value">{selectedItem.relativePath}</div>
-                    </div>
-
-                    <div className="file-info-item">
-                        <div className="file-info-label">Type:</div>
-                        <div className="file-info-value">
-                            {selectedItem.relativePath === "/" && selectedItem.level === 0
-                                ? Synonyms.Asset
-                                : isFolder
-                                ? "Folder"
-                                : "File"}
+                        <div className="file-info-item">
+                            <div className="file-info-label">Path:</div>
+                            <div className="file-info-value">{selectedItem.relativePath}</div>
                         </div>
-                    </div>
 
-                    {/* Show S3 Bucket only for the top-level Asset Node */}
-                    {selectedItem.relativePath === "/" &&
-                        selectedItem.level === 0 &&
-                        asset?.bucketName && (
+                        <div className="file-info-item">
+                            <div className="file-info-label">Type:</div>
+                            <div className="file-info-value">
+                                {selectedItem.relativePath === "/" && selectedItem.level === 0
+                                    ? Synonyms.Asset
+                                    : isFolder
+                                    ? "Folder"
+                                    : "File"}
+                            </div>
+                        </div>
+
+                        {/* Show S3 Bucket only for the top-level Asset Node */}
+                        {selectedItem.relativePath === "/" &&
+                            selectedItem.level === 0 &&
+                            asset?.bucketName && (
+                                <div className="file-info-item">
+                                    <div className="file-info-label">S3 Bucket:</div>
+                                    <div className="file-info-value">{asset.bucketName}</div>
+                                </div>
+                            )}
+
+                        {/* Show Total Asset Size for the top-level Asset Node */}
+                        {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
                             <div className="file-info-item">
-                                <div className="file-info-label">S3 Bucket:</div>
-                                <div className="file-info-value">{asset.bucketName}</div>
+                                <div className="file-info-label">{`Total ${Synonyms.Asset} Size:`}</div>
+                                <div className="file-info-value">
+                                    {formatFileSize(state.totalAssetSize)}
+                                </div>
                             </div>
                         )}
 
-                    {/* Show Total Asset Size for the top-level Asset Node */}
-                    {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
-                        <div className="file-info-item">
-                            <div className="file-info-label">{`Total ${Synonyms.Asset} Size:`}</div>
-                            <div className="file-info-value">
-                                {formatFileSize(state.totalAssetSize)}
+                        {/* Show preview thumbnail for the top-level Asset Node */}
+                        {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
+                            <div className="file-info-item">
+                                <div className="file-info-label">Preview:</div>
+                                <AssetPreviewThumbnail
+                                    assetId={assetId || ""}
+                                    databaseId={databaseId || ""}
+                                    previewKey={
+                                        // Try to get previewKey from direct asset first, then fall back to assetDetailState
+                                        asset?.previewLocation?.Key ||
+                                        (asset?.previewLocation as any)?.key ||
+                                        assetDetailState?.previewLocation?.Key ||
+                                        (assetDetailState?.previewLocation as any)?.key ||
+                                        (typeof assetDetailState?.previewLocation === "string"
+                                            ? assetDetailState?.previewLocation
+                                            : undefined)
+                                    }
+                                    onOpenFullPreview={(url) => {
+                                        setPreloadedAssetUrl(url);
+                                        setShowPreviewModal(true);
+                                    }}
+                                    onDeletePreview={
+                                        state.assetVersionId
+                                            ? undefined
+                                            : asset?.previewLocation?.Key ||
+                                              (asset?.previewLocation as any)?.key ||
+                                              assetDetailState?.previewLocation?.Key ||
+                                              (assetDetailState?.previewLocation as any)?.key ||
+                                              (typeof assetDetailState?.previewLocation ===
+                                                  "string" &&
+                                                  assetDetailState?.previewLocation)
+                                            ? () => setShowDeletePreviewModal(true)
+                                            : undefined
+                                    }
+                                />
                             </div>
-                        </div>
-                    )}
+                        )}
 
-                    {/* Show preview thumbnail for the top-level Asset Node */}
-                    {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
-                        <div className="file-info-item">
-                            <div className="file-info-label">Preview:</div>
-                            <AssetPreviewThumbnail
-                                assetId={assetId || ""}
-                                databaseId={databaseId || ""}
-                                previewKey={
-                                    // Try to get previewKey from direct asset first, then fall back to assetDetailState
-                                    asset?.previewLocation?.Key ||
-                                    (asset?.previewLocation as any)?.key ||
-                                    assetDetailState?.previewLocation?.Key ||
-                                    (assetDetailState?.previewLocation as any)?.key ||
-                                    (typeof assetDetailState?.previewLocation === "string"
-                                        ? assetDetailState?.previewLocation
-                                        : undefined)
-                                }
-                                onOpenFullPreview={(url) => {
-                                    setPreloadedAssetUrl(url);
-                                    setShowPreviewModal(true);
-                                }}
-                                onDeletePreview={
-                                    state.assetVersionId
-                                        ? undefined
-                                        : asset?.previewLocation?.Key ||
-                                          (asset?.previewLocation as any)?.key ||
-                                          assetDetailState?.previewLocation?.Key ||
-                                          (assetDetailState?.previewLocation as any)?.key ||
-                                          (typeof assetDetailState?.previewLocation === "string" &&
-                                              assetDetailState?.previewLocation)
-                                        ? () => setShowDeletePreviewModal(true)
-                                        : undefined
-                                }
-                            />
-                        </div>
-                    )}
-
-                    {!isFolder && selectedItem.size !== undefined && (
-                        <div className="file-info-item">
-                            <div className="file-info-label">Size:</div>
-                            <div className="file-info-value">
-                                {formatFileSize(selectedItem.size)}
+                        {!isFolder && selectedItem.size !== undefined && (
+                            <div className="file-info-item">
+                                <div className="file-info-label">Size:</div>
+                                <div className="file-info-value">
+                                    {formatFileSize(selectedItem.size)}
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        )}
 
-                    {selectedItem.dateCreatedCurrentVersion && (
-                        <div className="file-info-item">
-                            <div className="file-info-label">Version Date:</div>
-                            <div className="file-info-value">
-                                {formatDate(selectedItem.dateCreatedCurrentVersion)}
-                            </div>
-                        </div>
-                    )}
-
-                    {selectedItem.versionId && (
-                        <div className="file-info-item">
-                            <div className="file-info-label">
-                                {state.assetVersionId ? "Version:" : "Latest Version:"}
-                            </div>
-                            <div className="file-info-value">
-                                <div>
-                                    {selectedItem.versionId}
+                        {selectedItem.dateCreatedCurrentVersion && (
+                            <div className="file-info-item">
+                                <div className="file-info-label">Version Date:</div>
+                                <div className="file-info-value">
+                                    {formatDate(selectedItem.dateCreatedCurrentVersion)}
                                     {!isFolder && !selectedItem.isPermanentlyDeleted && (
                                         <span style={{ marginLeft: "8px" }}>
                                             <Link
@@ -1332,114 +1329,128 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         </span>
                                     )}
                                 </div>
-                                {/* Only show label for files (not folders or top node) */}
-                                {selectedItem.currentAssetVersionFileVersionMismatch &&
-                                    !isFolder &&
-                                    selectedItem.relativePath !== "/" && (
-                                        <div className="not-included-label">
-                                            {`Not Included in Current ${Synonyms.Asset} Version`}
-                                        </div>
-                                    )}
                             </div>
-                        </div>
-                    )}
+                        )}
 
-                    {/* Show Primary Type for files only */}
-                    {!isFolder && selectedItem.level > 0 && (
-                        <div className="file-info-item">
-                            <div className="file-info-label">Primary Type:</div>
-                            <div className="file-info-value">
-                                {selectedItem.primaryType || "None"}
+                        {selectedItem.versionId && (
+                            <div className="file-info-item">
+                                <div className="file-info-label">
+                                    {state.assetVersionId ? "Version:" : "Latest Version:"}
+                                </div>
+                                <div className="file-info-value">
+                                    <div>{selectedItem.versionId}</div>
+                                    {/* Only show label for files (not folders or top node) */}
+                                    {selectedItem.currentAssetVersionFileVersionMismatch &&
+                                        !isFolder &&
+                                        selectedItem.relativePath !== "/" && (
+                                            <div className="not-included-label">
+                                                {`Not Included in Current ${Synonyms.Asset} Version`}
+                                            </div>
+                                        )}
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        )}
 
-                    {/* Show preview thumbnail or message for previewable file nodes - at the bottom of the panel */}
-                    {!isFolder && selectedItem.level > 0 && (
-                        <>
-                            {/* Check if file has a preview file or is a previewable format */}
-                            {(() => {
-                                // Debug the selectedItem to see if previewFile is available
-                                console.log("Selected item in FileDetailsPanel:", selectedItem);
-                                console.log("Selected item previewFile:", selectedItem.previewFile);
+                        {/* Show Primary Type for files only */}
+                        {!isFolder && selectedItem.level > 0 && (
+                            <div className="file-info-item">
+                                <div className="file-info-label">Primary Type:</div>
+                                <div className="file-info-value">
+                                    {selectedItem.primaryType || "None"}
+                                </div>
+                            </div>
+                        )}
 
-                                // First check if the file has a previewFile
-                                if (
-                                    selectedItem.previewFile &&
-                                    selectedItem.previewFile.trim() !== ""
-                                ) {
-                                    return (
-                                        <div className="file-info-item">
-                                            <div className="file-info-label">Preview:</div>
-                                            <FilePreviewThumbnail
-                                                assetId={assetId || ""}
-                                                databaseId={databaseId || ""}
-                                                fileKey={selectedItem.previewFile}
-                                                assetVersionId={state.assetVersionId}
-                                                onOpenFullPreview={(url) => {
-                                                    setPreloadedFileUrl(url);
-                                                    setShowFilePreviewModal(true);
-                                                }}
-                                                onDeletePreview={
-                                                    state.assetVersionId
-                                                        ? undefined
-                                                        : () => setShowDeletePreviewModal(true)
-                                                }
-                                            />
-                                        </div>
+                        {/* Show preview thumbnail or message for previewable file nodes - at the bottom of the panel */}
+                        {!isFolder && selectedItem.level > 0 && (
+                            <>
+                                {/* Check if file has a preview file or is a previewable format */}
+                                {(() => {
+                                    // Debug the selectedItem to see if previewFile is available
+                                    console.log("Selected item in FileDetailsPanel:", selectedItem);
+                                    console.log(
+                                        "Selected item previewFile:",
+                                        selectedItem.previewFile
                                     );
-                                }
 
-                                // If no previewFile, check if the file itself is previewable
-                                const fileName = selectedItem.name;
-                                const fileExt = fileName
-                                    .substring(fileName.lastIndexOf("."))
-                                    .toLowerCase();
-
-                                // Check if file extension is in previewFileFormats
-                                const isPreviewFormat = previewFileFormats.includes(fileExt);
-
-                                // If file format is previewable, show preview section
-                                if (isPreviewFormat) {
-                                    // Check if file size is less than 5MB
-                                    const isSizeOk =
-                                        selectedItem.size !== undefined &&
-                                        selectedItem.size < 5 * 1024 * 1024;
-
-                                    return (
-                                        <div className="file-info-item">
-                                            <div className="file-info-label">Preview:</div>
-                                            {isSizeOk ? (
-                                                // Show preview if size is ok
+                                    // First check if the file has a previewFile
+                                    if (
+                                        selectedItem.previewFile &&
+                                        selectedItem.previewFile.trim() !== ""
+                                    ) {
+                                        return (
+                                            <div className="file-info-item">
+                                                <div className="file-info-label">Preview:</div>
                                                 <FilePreviewThumbnail
                                                     assetId={assetId || ""}
                                                     databaseId={databaseId || ""}
-                                                    fileKey={selectedItem.keyPrefix}
+                                                    fileKey={selectedItem.previewFile}
                                                     assetVersionId={state.assetVersionId}
                                                     onOpenFullPreview={(url) => {
                                                         setPreloadedFileUrl(url);
                                                         setShowFilePreviewModal(true);
                                                     }}
+                                                    onDeletePreview={
+                                                        state.assetVersionId
+                                                            ? undefined
+                                                            : () => setShowDeletePreviewModal(true)
+                                                    }
                                                 />
-                                            ) : (
-                                                // Show message if file is too large
-                                                <Box padding="s" textAlign="center">
-                                                    <div>
-                                                        File is too large to preview (over 5MB)
-                                                    </div>
-                                                </Box>
-                                            )}
-                                        </div>
-                                    );
-                                }
-                                return null;
-                            })()}
-                        </>
-                    )}
+                                            </div>
+                                        );
+                                    }
 
-                    {/* Metadata section - only shown for single file selections */}
+                                    // If no previewFile, check if the file itself is previewable
+                                    const fileName = selectedItem.name;
+                                    const fileExt = fileName
+                                        .substring(fileName.lastIndexOf("."))
+                                        .toLowerCase();
+
+                                    // Check if file extension is in previewFileFormats
+                                    const isPreviewFormat = previewFileFormats.includes(fileExt);
+
+                                    // If file format is previewable, show preview section
+                                    if (isPreviewFormat) {
+                                        // Check if file size is less than 5MB
+                                        const isSizeOk =
+                                            selectedItem.size !== undefined &&
+                                            selectedItem.size < 5 * 1024 * 1024;
+
+                                        return (
+                                            <div className="file-info-item">
+                                                <div className="file-info-label">Preview:</div>
+                                                {isSizeOk ? (
+                                                    // Show preview if size is ok
+                                                    <FilePreviewThumbnail
+                                                        assetId={assetId || ""}
+                                                        databaseId={databaseId || ""}
+                                                        fileKey={selectedItem.keyPrefix}
+                                                        assetVersionId={state.assetVersionId}
+                                                        onOpenFullPreview={(url) => {
+                                                            setPreloadedFileUrl(url);
+                                                            setShowFilePreviewModal(true);
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    // Show message if file is too large
+                                                    <Box padding="s" textAlign="center">
+                                                        <div>
+                                                            File is too large to preview (over 5MB)
+                                                        </div>
+                                                    </Box>
+                                                )}
+                                            </div>
+                                        );
+                                    }
+                                    return null;
+                                })()}
+                            </>
+                        )}
+                    </div>
+
+                    {/* Metadata section - shown as side panel when available */}
                     {shouldShowMetadata && (
-                        <div className="file-metadata-section">
+                        <div className="file-metadata-side-panel">
                             <FileMetadata
                                 key={`${selectedItem.keyPrefix}-${
                                     state.assetVersionId || "latest"

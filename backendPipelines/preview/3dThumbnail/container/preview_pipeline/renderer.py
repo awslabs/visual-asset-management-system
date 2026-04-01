@@ -62,13 +62,12 @@ def generate_rotating_frames(
         pv_data, use_full_bounds=use_full_bounds, resolution=resolution
     )
 
-    # Compute stable clipping range from the full model extent so VTK
-    # does not auto-adjust per frame (which causes near-plane clipping
-    # and depth-buffer flicker for wide models at certain orbit angles).
-    full_diagonal = np.linalg.norm(pv_data.points.max(axis=0) - pv_data.points.min(axis=0))
-    cam_distance = np.sqrt(radius**2 + elevation**2)
-    near_clip = max((cam_distance - full_diagonal) * 0.5, cam_distance * 0.001)
-    far_clip = cam_distance + full_diagonal * 2.0
+    # Compute stable clipping range from the actual max vertex distance
+    # to the focal point. This is more accurate than the bounding box diagonal
+    # because it accounts for corner vertices that are farther from center.
+    # Using per-vertex distance ensures no geometry gets near-plane clipped
+    # at any orbit angle (critical for USD models with tighter framing).
+    max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
 
     frames = []
     for i in range(n_frames):
@@ -77,6 +76,11 @@ def generate_rotating_frames(
         cam_x = focal_point[0] + radius * np.cos(angle_rad)
         cam_z = focal_point[2] + radius * np.sin(angle_rad)
         cam_y = focal_point[1] + elevation
+
+        cam_pos = np.array([cam_x, cam_y, cam_z])
+        cam_distance = float(np.linalg.norm(cam_pos - focal_point))
+        near_clip = max(cam_distance - max_extent * 1.1, cam_distance * 0.001)
+        far_clip = cam_distance + max_extent * 1.5
 
         plotter.camera.position = (cam_x, cam_y, cam_z)
         plotter.camera.focal_point = tuple(focal_point)
@@ -118,15 +122,17 @@ def generate_static_frame(
         pv_data, use_full_bounds=use_full_bounds, resolution=resolution
     )
 
-    full_diagonal = np.linalg.norm(pv_data.points.max(axis=0) - pv_data.points.min(axis=0))
-    cam_distance = np.sqrt(radius**2 + elevation**2)
-    near_clip = max((cam_distance - full_diagonal) * 0.5, cam_distance * 0.001)
-    far_clip = cam_distance + full_diagonal * 2.0
+    max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
 
     angle_rad = np.radians(45)
     cam_x = focal_point[0] + radius * np.cos(angle_rad)
     cam_z = focal_point[2] + radius * np.sin(angle_rad)
     cam_y = focal_point[1] + elevation
+
+    cam_pos = np.array([cam_x, cam_y, cam_z])
+    cam_distance = float(np.linalg.norm(cam_pos - focal_point))
+    near_clip = max(cam_distance - max_extent * 1.1, cam_distance * 0.001)
+    far_clip = cam_distance + max_extent * 1.5
 
     plotter.camera.position = (cam_x, cam_y, cam_z)
     plotter.camera.focal_point = tuple(focal_point)

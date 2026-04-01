@@ -129,25 +129,28 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
                                 }}
                             />
                         </div>
-                        <div className="asset-preview-actions">
-                            <SpaceBetween direction="vertical" size="xs">
-                                <Button
-                                    iconName="external"
-                                    variant="link"
-                                    onClick={() => onOpenFullPreview(url)}
-                                >
-                                    View full preview
+                        <div
+                            className="asset-preview-actions"
+                            style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: "0px",
+                                marginTop: "0px",
+                            }}
+                        >
+                            <Button
+                                iconName="external"
+                                variant="link"
+                                onClick={() => onOpenFullPreview(url)}
+                            >
+                                View full preview
+                            </Button>
+                            {onDeletePreview && (
+                                <Button iconName="remove" variant="link" onClick={onDeletePreview}>
+                                    Delete preview file
                                 </Button>
-                                {onDeletePreview && (
-                                    <Button
-                                        iconName="remove"
-                                        variant="link"
-                                        onClick={onDeletePreview}
-                                    >
-                                        Delete Preview File
-                                    </Button>
-                                )}
-                            </SpaceBetween>
+                            )}
                         </div>
                     </>
                 )}

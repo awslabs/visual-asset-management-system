@@ -166,6 +166,12 @@ const sidebars: SidebarsConfig = {
                 },
                 {
                     type: "category",
+                    label: "Utilities",
+                    collapsed: true,
+                    items: ["developer/utilities/overview", "developer/utilities/reindex"],
+                },
+                {
+                    type: "category",
                     label: "Troubleshooting",
                     collapsed: true,
                     items: [
