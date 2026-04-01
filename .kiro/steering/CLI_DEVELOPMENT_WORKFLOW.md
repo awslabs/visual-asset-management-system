@@ -922,6 +922,15 @@ This workflow document itself MUST be updated whenever system-wide standards, im
 -   **New Decorator Requirements**: If a new decorator becomes mandatory for all commands
 -   **Authentication Pattern Changes**: If the authentication validation pattern changes
 -   **Error Handling Standards**: If new error handling patterns are required
+
+#### **Cross-Steering File Synchronization:**
+
+When updating this workflow document, also update the corresponding files:
+
+1. Update **both** `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` and `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md` (they must stay in sync)
+2. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
+3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, DOCUMENTATION_WORKFLOW.md)
+
 -   **Testing Framework Changes**: If testing patterns or requirements change
 -   **Documentation Structure Changes**: If the documentation file structure changes
 

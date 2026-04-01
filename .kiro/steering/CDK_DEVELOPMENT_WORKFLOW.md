@@ -100,10 +100,13 @@ infra/
 
 #### **Step 7: Documentation**
 
--   [ ] **Update Configuration Guide**: Document new configuration options
--   [ ] **Update Architecture Docs**: Update architecture diagrams if needed
+-   [ ] **Update Configuration Reference**: Document new config options in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
+-   [ ] **Update Architecture Docs**: Update `documentation/docusaurus-site/docs/architecture/` pages if architecture changes
+-   [ ] **Update Features Page**: Add new features to `documentation/docusaurus-site/docs/overview/features.md`
+-   [ ] **Update API Docs**: If new API endpoints, update `documentation/docusaurus-site/docs/api/` and `documentation/VAMS_API.yaml`
+-   [ ] **Update Pipeline Docs**: If new pipeline, create page in `documentation/docusaurus-site/docs/pipelines/` and update `sidebars.ts`
 -   [ ] **Add Code Comments**: Include comprehensive inline documentation
--   [ ] **Update README**: Update deployment and configuration instructions
+-   [ ] **Update README**: Update main `README.md` if needed
 
 #### **Step 8: Validation**
 
@@ -1893,6 +1896,28 @@ const resourceArn = ServiceHelper.getResourceArn();
 // ❌ INCORRECT - Direct SSM parameter access
 const resourceArn = ssm.StringParameter.valueFromLookup(this, "/path"); // VIOLATION
 ```
+
+### **Rule 7: Documentation and Steering Files MUST Be Updated**
+
+When making CDK infrastructure changes, update the corresponding documentation and steering files:
+
+#### **Docusaurus Documentation Updates:**
+
+-   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
+-   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
+-   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
+-   **New nested stack** → Update `architecture/details.md`
+-   **New feature switch** → Update `overview/features.md`
+
+#### **Cross-Steering File Updates:**
+
+When changes affect development standards, architecture patterns, or quality requirements:
+
+1. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
+2. Update **both** `.kiro/steering/` and `.clinerules/workflows/` versions of affected workflow files (they must stay in sync)
+3. Keep WEB_DEVELOPMENT_WORKFLOW.md, BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, CLI_DEVELOPMENT_WORKFLOW.md, and DOCUMENTATION_WORKFLOW.md aligned when cross-component patterns change
+
+---
 
 ## 📚 **Detailed Implementation Guide**
 

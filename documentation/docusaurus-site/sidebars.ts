@@ -84,6 +84,7 @@ const sidebars: SidebarsConfig = {
             collapsed: true,
             items: [
                 "developer/setup",
+                "developer/agentic-development",
                 "developer/backend",
                 "developer/frontend",
                 "developer/cdk",
