@@ -860,6 +860,20 @@ When adding 14B model support:
 
 ---
 
+## Design Decisions
+
+### Offloading Flags Always Enabled
+
+The `--offload_diffusion_transformer`, `--offload_tokenizer`, `--offload_text_encoder_model`, and `--offload_prompt_upsampler` flags are always passed to the inference script regardless of GPU instance size. These flags move model components to CPU RAM, reducing VRAM usage at the cost of slightly increased inference time.
+
+**Rationale:**
+- On g5.12xlarge (A10G 24GB per GPU): offloading is required -- the model does not fit without it.
+- On larger instances (A100 40GB, H100 80GB): offloading is unnecessary but safe, adding ~10-20% overhead.
+- Always-on avoids runtime GPU detection complexity and works on any instance type.
+- If performance optimization for large-GPU customers becomes important, add an optional `offloadStrategy` config field per model sub-section that the container reads to skip offloading flags.
+
+---
+
 ## Licensing Requirements
 
 Per NVIDIA Open Model License:
