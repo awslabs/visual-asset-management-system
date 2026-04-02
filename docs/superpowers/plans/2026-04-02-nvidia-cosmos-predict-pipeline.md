@@ -60,6 +60,8 @@ In `infra/config/config.ts`, add to the `pipelines` section of the `ConfigPublic
 useCosmosPredict: {
     enabled: boolean;
     huggingFaceToken: string;
+    useWarmInstances: boolean;
+    warmInstanceCount: number;
     models: {
         text2world7B: {
             enabled: boolean;
@@ -88,6 +90,8 @@ if (config.app.pipelines.useCosmosPredict == undefined) {
     config.app.pipelines.useCosmosPredict = {
         enabled: false,
         huggingFaceToken: "",
+        useWarmInstances: false,
+        warmInstanceCount: 1,
         models: {
             text2world7B: {
                 enabled: false,
@@ -107,6 +111,12 @@ if (config.app.pipelines.useCosmosPredict == undefined) {
 }
 if (config.app.pipelines.useCosmosPredict.enabled == undefined) {
     config.app.pipelines.useCosmosPredict.enabled = false;
+}
+if (config.app.pipelines.useCosmosPredict.useWarmInstances == undefined) {
+    config.app.pipelines.useCosmosPredict.useWarmInstances = false;
+}
+if (config.app.pipelines.useCosmosPredict.warmInstanceCount == undefined) {
+    config.app.pipelines.useCosmosPredict.warmInstanceCount = 1;
 }
 if (config.app.pipelines.useCosmosPredict.models == undefined) {
     config.app.pipelines.useCosmosPredict.models = {
@@ -1513,7 +1523,7 @@ The construct should create:
 2. **EFS FileSystem** — encrypted with shared KMS key, elastic throughput, IA lifecycle at 30 days, mount targets in pipeline subnets, security group allowing NFS (2049) from Batch compute SG, removal policy RETAIN
 3. **ECR Repository + DockerImageAsset** — single image from `backendPipelines/genAi/cosmosPredict/container/`
 4. **IAM Roles** — container execution role and container job role (same pattern as SplatToolbox: S3 read/write on asset buckets + model cache bucket, EFS client mount, states:SendTask*, SSM GetParameter for HF_TOKEN)
-5. **Batch Compute Environment** — via `BatchGpuPipelineConstruct`, instance types from config, launch template with 200GB gp3 EBS + EFS mount user data
+5. **Batch Compute Environment** — via `BatchGpuPipelineConstruct`, instance types from config, launch template with 200GB gp3 EBS + EFS mount user data. **Warm instances**: if `config.app.pipelines.useCosmosPredict.useWarmInstances === true`, set `minVCpus = config.app.pipelines.useCosmosPredict.warmInstanceCount * 48` (48 vCPUs per g5.12xlarge). If `false` (default), set `minVCpus = 0` (scale to zero, cold start)
 6. **Batch Job Queue** — shared by all model types
 7. **Shared Lambda Functions** — constructPipeline, pipelineEnd (openPipeline may need to be per-model if STATE_MACHINE_ARN is an env var, or shared if passed in payload)
 
@@ -1825,6 +1835,8 @@ Add after the existing pipeline configuration entries:
 ```markdown
 -   `app.pipelines.useCosmosPredict.enabled` | default: false | # Enable NVIDIA Cosmos Predict pipeline
 -   `app.pipelines.useCosmosPredict.huggingFaceToken` | default: "" | # SSM SecureString parameter path for HuggingFace token (e.g., /vams/cosmos/hf-token)
+-   `app.pipelines.useCosmosPredict.useWarmInstances` | default: false | # Keep GPU instances running when idle for instant job starts (~$5.67/hr per g5.12xlarge)
+-   `app.pipelines.useCosmosPredict.warmInstanceCount` | default: 1 | # Number of warm GPU instances to maintain when useWarmInstances is true
 -   `app.pipelines.useCosmosPredict.models.text2world7B.enabled` | default: false | # Enable Cosmos-Predict1-7B-Text2World model
 -   `app.pipelines.useCosmosPredict.models.text2world7B.autoRegisterWithVAMS` | default: true | # Auto-register pipeline with VAMS on deploy
 -   `app.pipelines.useCosmosPredict.models.text2world7B.instanceTypes` | default: ["g5.12xlarge"] | # EC2 GPU instance types for Batch compute environment

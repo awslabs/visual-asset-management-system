@@ -36,6 +36,8 @@ Add an NVIDIA Cosmos Predict pipeline to VAMS that supports multiple model insta
       "useCosmosPredict": {
         "enabled": false,
         "huggingFaceToken": "",
+        "useWarmInstances": false,
+        "warmInstanceCount": 1,
         "models": {
           "text2world7B": {
             "enabled": false,
@@ -57,6 +59,11 @@ Add an NVIDIA Cosmos Predict pipeline to VAMS that supports multiple model insta
 }
 ```
 
+**Warm vs Cold Instances:**
+- `useWarmInstances: false` (default) — Batch compute environment scales to 0 when idle. Jobs incur a cold start penalty (~5-10 minutes for EC2 GPU instance launch + EFS mount). No cost when idle.
+- `useWarmInstances: true` — Batch compute environment keeps `warmInstanceCount` instances running at all times via `minVCpus`. Jobs start near-instantly since instances are pre-warmed. Costs ~$5.67/hr per g5.12xlarge instance even when no jobs are running.
+- `warmInstanceCount` — Number of warm instances to maintain (default: 1). Each g5.12xlarge provides 48 vCPUs, so `warmInstanceCount: 1` means `minVCpus: 48`.
+
 ### Config TypeScript Interface (`infra/config/config.ts`)
 
 ```typescript
@@ -74,6 +81,8 @@ interface CosmosVideo2WorldModelConfig extends CosmosModelConfig {
 interface CosmosPredict {
     enabled: boolean;
     huggingFaceToken: string; // SSM SecureString parameter path
+    useWarmInstances: boolean; // Keep GPU instances running when idle (default: false)
+    warmInstanceCount: number; // Number of warm instances to maintain (default: 1)
     models: {
         text2world7B: CosmosModelConfig;
         video2world7B: CosmosVideo2WorldModelConfig;
@@ -473,7 +482,8 @@ interface CosmosPredictBuilderNestedStackProps extends cdk.NestedStackProps {
 **Batch Compute Environment:**
 - Uses `BatchGpuPipelineConstruct` (reusable construct from SplatToolbox pattern)
 - Instance types: from config (default: `["g5.12xlarge"]`)
-- Min vCPUs: 0, Max vCPUs: from config (default: 48)
+- Min vCPUs: `0` when `useWarmInstances: false` (cold start, scale to zero), or `warmInstanceCount * 48` when `useWarmInstances: true` (warm pool, instances stay running)
+- Max vCPUs: from config (default: 48)
 - Allocation strategy: `BEST_FIT_PROGRESSIVE`
 - Launch template: 200GB gp3 encrypted EBS + EFS mount via user data
 - AMI: ECS AL2 (Amazon Linux 2)
