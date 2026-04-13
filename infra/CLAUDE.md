@@ -768,9 +768,29 @@ lib/nestedStacks/pipelines/{category}/{pipelineName}/
         {pipelineName}Functions.ts          # Lambda builder functions
 ```
 
+**CRITICAL — Pipeline Lambda Directory Structure:** Every pipeline's `lambda/` directory in `backendPipelines/` MUST include:
+
+```
+lambda/
+  __init__.py                    # Package marker (copy from existing pipeline)
+  customLogging/
+    __init__.py                  # Package marker
+    logger.py                    # safeLogger + mask_sensitive_data (copy from existing pipeline)
+  vamsExecute*.py                # Pipeline handler(s)
+  constructPipeline.py           # Batch job definition builder
+  openPipeline.py                # Step Functions starter
+  pipelineEnd.py                 # Cleanup + task token callback
+```
+
+Without `__init__.py` and `customLogging/logger.py`, Lambda will fail at import time with `No module named 'customLogging'`. Copy these files from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`).
+
 Pipelines are conditionally created in `pipelineBuilder-nestedStack.ts` based on config flags.
 
-**Important:** New pipelines that use AWS Batch/Fargate must also be added to the VPC endpoint conditions in `lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Specifically, add the pipeline's config flag to the "Pipeline-Only Required Endpoints" condition block so that Batch, ECR, and ECR Docker VPC endpoints are created when the pipeline is enabled. Pipelines requiring internet access (e.g. AWS Marketplace integrations) should additionally be added to the public/private subnet configuration condition and the ECS endpoint condition.
+**CRITICAL — VPC Builder Updates:** New pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** condition blocks in `lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Missing any one of these causes deployment failures. Search for `useSplatToolbox` in the file to find all locations:
+
+1. **Subnet creation condition** (~line 341): The `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig`. Without this, the VPC has only isolated subnets and Batch compute environments fail with `"Resource subnets are required"`.
+2. **VPC endpoint condition** (~line 540): The `if` block that creates Batch, ECR API, ECR Docker, and optionally EFS interface VPC endpoints. Without this, Batch jobs cannot pull container images or access AWS services.
+3. **ECS endpoint condition** (~line 619): The `needsEcsPrivate` variable. Without this, the ECS agent on Batch instances cannot register with the ECS service.
 
 ### Pipeline S3 Output Path Conventions
 

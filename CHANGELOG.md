@@ -8,10 +8,13 @@ All notable changes to this project will be documented in this file. See [standa
 
 • Documentation Overhaul - Entire documentation base refactored, implemented as markdown and static website
 • Website Overhaul - Migrated to Vite build framework, AWS Amplify V6 Gen2 SDK, and added dark/light theme support (dark is now the default)
-• New USD Web Viewer - Needle USD 3D WASM viewer with dependency chain loading for .usd, .usda, .usdc, .usdz files
+• New Experimental USD Web Viewer - Needle USD 3D WASM experimental viewer with dependency chain loading for .usd, .usda, .usdc, .usdz files
 • New ThreeJS 3D and CAD STP Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading, scene graph support, and optional LGPL-licensed CAD support; now the primary viewer for common mesh types
 • New Pipeline Type Support - Pipelines and workflows now support SQS and EventBridge execution types alongside Lambda, enabling integration with external processing systems
 • New 3D/Point Cloud Preview Thumbnail Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
+• New External Tool Integrations (Experimental) - Open-source VAMS connector plugins for NVIDIA Isaac Sim (Omniverse Kit extension) and Esri ArcGIS Pro (.NET add-in) via the VAMS CLI
+• New Physical AI NVIDIA Cosmos Inference Pipelines - GPU-accelerated world generation, video analysis, and video transformation using NVIDIA Cosmos foundation models with HuggingFace model integration and metadata-driven prompts. Predict 2.5 (Text2World/Video2World, 2B/14B), Reason v2 (VLM video/image analysis, 2B/8B), and Transfer v2.5 (control-signal video transformation, 2B). Configurable per-model GPU instance types across G and P EC2 instance families. AWS CodeBuild is an optional container deployment method for cloud-based builds.
+• New Physical AI NVIDIA GR00T Fine-Tuning Pipeline - GPU-accelerated fine-tuning of NVIDIA's GR00T-N1.5-3B embodied AI foundation model for robotics applications. Supports LoRA and full fine-tuning on user-provided datasets in LeRobot v2.1 format with configurable training hyperparameters. Model checkpoints stored back to VAMS assets. Configurable GPU instance types (g6e.4xlarge for LoRA, g6e.12xlarge for full fine-tuning).
 • New Database Metadata and Location Map Support - Database metadata management on the website with location service mini-map display option
 • Website Asset and File Page Refinement - Refined asset and file viewing page layouts; added asset preview thumbnail to top details section
 • Enhanced Asset Versions - Version aliasing, archive/unarchive, version details editing, metadata/attribute versioning, and revert with metadata restoration
@@ -47,9 +50,45 @@ The website overhaul may cause a high number of merge conflicts for forked repos
     -   100 GB maximum input file size with pre-download S3 size validation (can be extended but may require an EFS Fargate implementation)
     -   Configurable `overwriteExistingPreviewFiles` pipeline input parameter to control preview file overwrite behavior
     -   Auto-registration with VAMS pipelines and workflows via CDK custom resources
--   **Web** Added Needle USD 3D WASM viewer to the plugin system for `.usd, .usda, .usdc, .usdz` files with full dependency chain loading. Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
+-   **Pipeline** Added Physical AI NVIDIA Cosmos Predict 2.5 inference pipeline for GPU-accelerated world generation
+    -   Text2World: Generates videos from text prompts using asset metadata
+    -   Video2World: Generates videos from image/video inputs using file metadata, with auto-detection of input frames (1 for images, 9 for videos)
+    -   Supports 2B and 14B models (v2.5) for both Text2World and Video2World. 2B models run on g5/g6e.12xlarge instances; 14B models require g6e.48xlarge (8x L40S) or p5.48xlarge (8x H100) instances with 8-GPU context parallelism.
+    -   Shared infrastructure: Common EFS model cache + S3 backup for all Cosmos pipelines, with lazy-load from HuggingFace on first run (shared with Transfer and Reason)
+    -   CDK configuration with per-model enable/disable, configurable GPU instance types with BEST_FIT_PROGRESSIVE fallback, warm/cold instance support, and HuggingFace token stored in AWS Secrets Manager; additional pipeline input configuration for performance tuning available, see documentation.
+-   **Pipeline** Added NVIDIA Cosmos Reason v2 inference pipeline for Vision Language Model (VLM) video and image analysis
+    -   Analyzes video/image content and generates text-based analysis, captions, descriptions, and reasoning
+    -   Supports Cosmos-Reason2-2B (~5GB) and Cosmos-Reason2-8B (~16GB) models based on Qwen3-VL architecture
+    -   Supports spatial-temporal reasoning, physics understanding, temporal event localization, and embodied reasoning use cases
+    -   Prompt-driven analysis via COSMOS_REASON_PROMPT file metadata or workflow inputParameters
+    -   Output: JSON file with text analysis
+    -   2B model runs on g5/g6e.12xlarge instances (24GB+ VRAM per GPU); 8B model requires g6e instances (32GB+ VRAM per GPU, g5 A10G 24GB is insufficient)
+    -   Shared infrastructure: Uses common Cosmos EFS model cache and HuggingFace token (shared with Predict and Transfer)
+-   **Pipeline** Added NVIDIA Cosmos Transfer v2.5 inference pipeline for video transformation with control signal conditioning
+    -   Transforms videos with style transfer and content transformation using control signals
+    -   Supports Cosmos-Transfer2.5-2B model (~20GB) for video-to-video transformation
+    -   Control signals: edge (Canny detection), depth (VideoDepthAnything), segmentation (GroundDino+SAM2), visual blur (bilateral Gaussian)
+    -   Auto-compute control signals from source video or provide pre-computed signals via COSMOS_TRANSFER_CONTROL_PATH metadata
+    -   Prompt-driven transformation via COSMOS_TRANSFER_PROMPT file metadata or workflow inputParameters
+    -   Output: Transformed MP4 video
+    -   Requires g6e.48xlarge (8x L40S 48GB) or p5.48xlarge (8x H100 80GB) instances (65.4GB VRAM minimum). p4d instances are not supported due to CUDA driver incompatibilities.
+    -   Shared infrastructure: Uses common Cosmos EFS model cache and HuggingFace token (shared with Predict and Reason)
+-   **Pipeline** Added NVIDIA GR00T N1.5-3B fine-tuning pipeline for embodied AI and robotics applications
+    -   Fine-tunes NVIDIA's GR00T-N1.5-3B foundation model on user-provided datasets in LeRobot v2.1 format
+    -   Supports LoRA (parameter-efficient, single GPU) and full fine-tuning (multi-GPU) modes
+    -   Configurable training hyperparameters via `gr00t_config.json` in the asset or pipeline inputParameters
+    -   Output: Model checkpoints stored back to the VAMS asset for download and deployment
+    -   Default instance types: g6e.4xlarge (1 GPU, LoRA) with g6e.12xlarge and g5.12xlarge as fallbacks
+    -   Shared infrastructure: Uses common EFS model cache and HuggingFace token (shared with Cosmos pipelines)
+-   **Pipeline** For NVIDIA Cosmos and GR00T Pipelines, AWS CodeBuild is a container deployment method (`useCodeBuild: true`), building containers in the cloud and pushing to ECR. DockerImageAsset local builds available as fallback (`useCodeBuild: false`). The default however is `false`. Read the documentation for more information before using this feature.
+-   **Web** Added experimental Needle USD 3D WASM viewer to the plugin system for `.usd, .usda, .usdc, .usdz` files with full dependency chain loading. Needle WASM libraries have some limitations on supported USD features and dependency depth for textures.
     -   Note: Requires CloudFront deployment mode or the front-end service worker to set proper HTTPS headers for WASM loading. Will not load if organizational security restrictions prevent this. Safari is not currently supported.
     -   Note: Needle Viewer has issues loading dependencies from compressed (USDC) files as these cannot be reliably parsed ahead of time.
+    -   Note: This viewer is experimental and some USDs may not load correctly or look correct
+-   **External Plugin** Added experimental NVIDIA Isaac Sim connector (`tools/ExternalIntegrations/isaacsim_vams_integration/`) as an Omniverse Kit extension for managing VAMS assets from within Isaac Sim. Supports authentication (Cognito and token override), database/asset/file browsing, single and recursive file download, file and directory upload, workflow listing and execution, and Isaac Sim stage operations (export/upload scenes, download/import USD files, add references to stages). Includes a dockable UI panel and a Python scripting API. See documentation for more information.
+    -   Uses the VAMS CLI (`vamscli`) as the communication layer, avoiding direct AWS SDK or VAMS API dependencies
+-   **External Plugin** Added experimental Esri ArcGIS Pro connector (`tools/ExternalIntegrations/arcgispro-connector-for-vams/`) as a .NET add-in for managing VAMS assets from within ArcGIS Pro. Supports authentication (Cognito and token override), hierarchical database/asset/file browsing, file reference linking to GIS feature classes and tables, image preview with pan/zoom, single and recursive file download, and context menu integration for attribute tables. See documentation for more information.
+    -   Uses the VAMS CLI (`vamscli`) as the communication layer, avoiding direct AWS SDK or VAMS API dependencies.
 -   **Web** Added ThreeJS 3D viewer to the plugin system for `.gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep` files with full dependency chain loading and scene graph support. Now the primary viewer for most common mesh file types. Additional LGPL-licensed libraries are required for CAD file support (see `./web/customInstalls/threejs/README.md`).
     -   Note: CAD loading requires WASM support via CloudFront deployment mode or the front-end service worker. Without proper HTTPS headers, the viewer will not work for CAD extensions but will still function for other mesh formats. Safari is not currently supported for CAD WASM.
 -   **Web** Online3DViewer configuration adjusted to only display for `.3dm, .amf, .bim, .off, .wrl` file types, which are not currently supported by the ThreeJS viewer.
@@ -63,7 +102,7 @@ The website overhaul may cause a high number of merge conflicts for forked repos
 -   **CLI** Added commands for admin functionality including Cognito user management, user-role management, role management, and constraint management
 -   Added `POST /auth/constraintsTemplateImport` API endpoint for bulk-importing permission constraints from JSON templates. Handles server-side variable substitution, UUID generation, groupId mapping, and constraint creation in DynamoDB, replacing the previous client-side XML parsing and one-by-one creation approach.
     -   **CLI** Added `vamscli role constraint template import` command for importing permission constraint templates
-    -   Added `tools/permissionsSetup/apply_template.py` tool for automating deployment of roles and constraint templates, useful for setting up permission structures when new databases are created
+    -   Added `tools/PermissionsSetup/apply_template.py` tool for automating deployment of roles and constraint templates, useful for setting up permission structures when new databases are created
     -   Added pre-built JSON permission templates in `documentation/permissionsTemplates/` for common profiles: `database-admin.json` (13 constraints), `database-user.json` (15 constraints), `database-readonly.json` (10 constraints), `global-readonly.json` (10 constraints), and `deny-tagged-assets.json` (1 constraint) with variable placeholders for database IDs and role names
     -   Added comprehensive Permissions Guide (`documentation/PermissionsGuide.md`) covering ABAC/RBAC constraint matrix, two-tier authorization, GLOBAL keyword usage, archive vs permanent delete enforcement, deny overlay patterns, and step-by-step examples
 -   **Web** Added version selector on View Asset page for viewing files and metadata from a specific stored version

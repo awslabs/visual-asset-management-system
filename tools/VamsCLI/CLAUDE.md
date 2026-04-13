@@ -552,6 +552,10 @@ Follow this checklist:
 
 8. **Update CHANGELOG.md** with the new command under the appropriate version section
 
+9. **Evaluate external tool integrations** for required updates. When CLI commands, parameters, output formats, or authentication flows change, review and update the external connectors at `tools/ExternalIntegrations/` that wrap the CLI:
+    - `isaacsim_vams_integration/` -- Python subprocess wrapper (`vams_cli_service.py`)
+    - `arcgispro-connector-for-vams/` -- C# subprocess wrapper (`Services/VamsCliService.cs`)
+
 ### Adding a New Exception Class
 
 1. Choose the correct tier:

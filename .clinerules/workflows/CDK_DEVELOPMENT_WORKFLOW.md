@@ -766,8 +766,13 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Error Handling**: Implement comprehensive error handling and logging
-6. **Resource Cleanup**: Ensure proper cleanup of temporary resources
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`.
+6. **Error Handling**: Implement comprehensive error handling and logging
+7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
+8. **VPC Builder Updates (CRITICAL)**: Pipelines using AWS Batch, ECS, or Fargate MUST be added to **all three** condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` (search for `useSplatToolbox` to find them):
+    - **Subnet creation** (~line 341): adds public + private subnets to the VPC
+    - **VPC endpoints** (~line 540): creates Batch, ECR, ECR Docker endpoints
+    - **ECS endpoint** (~line 619): includes private subnets in the ECS endpoint
 
 #### **Pipeline Configuration Rules**
 

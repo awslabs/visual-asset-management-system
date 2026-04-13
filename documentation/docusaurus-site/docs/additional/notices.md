@@ -70,9 +70,19 @@ Some viewer plugins and processing pipelines require separate commercial license
 | Veerum 3D Viewer              | [Veerum](https://veerum.com/)                                 | Commercial      |
 | RapidPipeline 3D Processor    | [RapidPipeline](https://rapidpipeline.com/) (AWS Marketplace) | Commercial      |
 
-### NVIDIA License Notice
+### NVIDIA License Notices
 
-The Isaac Lab Training pipeline uses NVIDIA Isaac Sim container images, which are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA by setting `acceptNvidiaEula: true` in the deployment configuration to use this pipeline.
+**Isaac Lab Training Pipeline:** Uses NVIDIA Isaac Sim container images, which are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA by setting `acceptNvidiaEula: true` in the deployment configuration to use this pipeline.
+
+**NVIDIA Cosmos Predict Pipeline (v1 -- Predict1):** Uses NVIDIA Cosmos-Predict1 (7B) world foundation models licensed under the [NVIDIA Open Model License](https://developer.nvidia.com/cosmos-license). The v1 pipeline downloads six models from HuggingFace, each requiring separate license acceptance: two NVIDIA Cosmos diffusion models, one NVIDIA tokenizer, one NVIDIA guardrail model (all NVIDIA Open Model License), one Google T5-11B text encoder (Apache 2.0), and one Meta Llama-Guard-3-8B safety model (Meta Llama 3 Community License). The v1 container uses the NVIDIA NGC PyTorch base image subject to the [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license).
+
+**NVIDIA Cosmos Predict Pipeline (v2 -- Predict2.5):** Uses NVIDIA Cosmos-Predict2.5 (2B and 14B) world foundation models licensed under the [NVIDIA Open Model License](https://developer.nvidia.com/cosmos-license). The v2.5 pipeline uses the `cosmos-oss` framework package (Apache 2.0), `nvidia/Cosmos-Predict2.5-2B` and `nvidia/Cosmos-Predict2.5-14B` model checkpoints (NVIDIA Open Model License), transformer-engine 2.2.0 (Apache 2.0), and flash-attn 2.7.3 (BSD-3-Clause). The v2.5 container uses the NVIDIA CUDA 12.8.1 base image with cuDNN (`nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`). The 14B model requires P-series GPU instances (p4d.24xlarge with 8x A100 GPUs).
+
+**NVIDIA Cosmos Reason Pipeline (v2):** Uses NVIDIA Cosmos-Reason2 (2B and 8B) Vision Language Models licensed under the [NVIDIA Open Model License](https://developer.nvidia.com/cosmos-license). The Reason pipeline analyzes video and image content to generate text-based captions, descriptions, and reasoning. The pipeline uses vLLM inference engine (Apache 2.0) and downloads `nvidia/Cosmos-Reason2-2B` (~5GB) and `nvidia/Cosmos-Reason2-8B` (~16GB) model checkpoints from HuggingFace. The 2B model runs on g5/g6e instances with 24GB+ VRAM, while the 8B model requires 32GB+ VRAM. Users must accept the NVIDIA Cosmos Reason license on HuggingFace before deployment.
+
+**NVIDIA Cosmos Transfer Pipeline (v2.5):** Uses NVIDIA Cosmos-Transfer2.5-2B model for video transformation with control signal conditioning, licensed under the [NVIDIA Open Model License](https://developer.nvidia.com/cosmos-license). The Transfer pipeline generates stylized videos from source videos combined with control signals (edge, depth, segmentation, or visual blur). The pipeline downloads `nvidia/Cosmos-Transfer2.5-2B` (~20GB), `video-depth-anything` (~2GB, Apache 2.0) for depth map generation, and `sam2` (~5GB, Apache 2.0) for semantic segmentation from HuggingFace. The Transfer model requires 65.4GB VRAM and runs exclusively on p4d.24xlarge instances with 8x A100 40GB GPUs. Users must accept all model licenses on HuggingFace before deployment.
+
+Per the NVIDIA Open Model License, applications using Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"**. See the full pipeline documentation ([Cosmos Predict](../pipelines/nvidia-cosmos.md), [Cosmos Reason](../pipelines/nvidia-cosmos-reason.md), [Cosmos Transfer](../pipelines/nvidia-cosmos-transfer.md)) for details.
 
 ---
 

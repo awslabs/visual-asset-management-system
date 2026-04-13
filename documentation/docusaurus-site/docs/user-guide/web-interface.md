@@ -194,16 +194,43 @@ Select a theme from the dropdown to switch immediately. The active theme is mark
 
 ---
 
-## Hash-Based URLs
+## Hash-Based URLs and Deep Linking
 
-VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility across all deployment modes including Amazon CloudFront and Application Load Balancer distributions. All internal page paths follow this format:
+VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility across all deployment modes including Amazon CloudFront and Application Load Balancer distributions. You can construct direct links to any page in VAMS using these URL patterns.
+
+### URL Patterns
+
+| Target                | URL Pattern                                                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Database list         | `https://<VAMS_WEBSITE>/#/databases/`                                                                                   |
+| Specific database     | `https://<VAMS_WEBSITE>/#/databases/<databaseId>`                                                                       |
+| Asset detail          | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>`                                                      |
+| File viewer           | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>`                               |
+| File at version       | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?version=<fileVersionId>`       |
+| File at asset version | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
+| Upload page           | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
+
+### File Path Encoding
+
+File paths in URLs must be encoded using standard URL encoding (`encodeURIComponent` in JavaScript). Forward slashes in the file path become `%2F`.
+
+**Examples:**
 
 ```
-https://your-vams-url/#/databases/
-https://your-vams-url/#/databases/{databaseId}/assets/{assetId}
-https://your-vams-url/#/upload/
+# File at asset root
+https://vams.example.com/#/databases/building/assets/x7150abc/file/photo.jpg
+
+# File in a subdirectory
+https://vams.example.com/#/databases/building/assets/x7150abc/file/images%2Ffloor-plan.png
+
+# File with specific version
+https://vams.example.com/#/databases/building/assets/x7150abc/file/scan.e57?version=v2
 ```
 
-:::note
-When sharing links or creating bookmarks, always include the `#/` portion of the URL. Direct navigation to these URLs works without any server-side routing configuration.
+:::tip[Sharing and bookmarking]
+When sharing links or creating bookmarks, always include the `#/` portion of the URL. These deep links work without any server-side routing configuration and can be used in external tools, documentation, emails, or ticketing systems to link directly to specific VAMS content.
+:::
+
+:::note[Version query parameters]
+When both `version` and `assetVersion` query parameters are provided, `assetVersion` takes priority. The `assetVersion` parameter shows the file as it existed at that specific asset version snapshot.
 :::

@@ -418,23 +418,23 @@ You can apply templates using the CLI tool or the `POST /auth/constraintsTemplat
 
 ```bash
 # Apply the database-admin template with variable substitution
-python tools/permissionsSetup/apply_template.py \
+python tools/PermissionsSetup/apply_template.py \
     --template documentation/permissionsTemplates/database-admin.json \
     --role-name my-project-admin \
     --variables '{"DATABASE_ID": "my-project-db"}' --dry-run
 
 # Apply the database-user template
-python tools/permissionsSetup/apply_template.py \
+python tools/PermissionsSetup/apply_template.py \
     --template documentation/permissionsTemplates/database-user.json \
     --role-name my-project-user \
     --variables '{"DATABASE_ID": "my-project-db"}' --dry-run
 
 # Stack multiple deny constraints
-python tools/permissionsSetup/apply_template.py \
+python tools/PermissionsSetup/apply_template.py \
     --template documentation/permissionsTemplates/deny-tagged-assets.json \
     --role-name my-project-admin --var TAG_VALUE=locked
 
-python tools/permissionsSetup/apply_template.py \
+python tools/PermissionsSetup/apply_template.py \
     --template documentation/permissionsTemplates/deny-tagged-assets.json \
     --role-name my-project-admin --var TAG_VALUE=approved
 ```

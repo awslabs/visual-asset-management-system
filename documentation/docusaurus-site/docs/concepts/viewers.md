@@ -53,7 +53,7 @@ This table is the definitive reference for all 17 built-in viewer plugins.
 | **Three.js Viewer**                  | 3D       | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.stp`, `.step`, `.iges`, `.brep`                                                              | 1        | Yes        | Primary mesh and CAD viewer. Scene graph, material editing, transform controls. CAD formats (`.stp`, `.step`, `.iges`, `.brep`) require WASM and `ALLOWUNSAFEEVAL`. |
 | **Potree Viewer**                    | 3D       | `.e57`, `.las`, `.laz`, `.ply`                                                                                                                                          | 1        | No         | Octree-based point cloud streaming. Requires the Potree preprocessing pipeline. Shows latest version only.                                                          |
 | **BabylonJS Gaussian Splat Viewer**  | 3D       | `.ply`, `.spz`                                                                                                                                                          | 1        | No         | Gaussian splat visualization with WebXR support.                                                                                                                    |
-| **Needle USD Viewer**                | 3D       | `.usd`, `.usda`, `.usdc`, `.usdz`                                                                                                                                       | 1        | No         | Universal Scene Description via WebAssembly. Requires `ALLOWUNSAFEEVAL`.                                                                                            |
+| **Needle USD Viewer (Experimental)** | 3D       | `.usd`, `.usda`, `.usdc`, `.usdz`                                                                                                                                       | 1        | No         | Universal Scene Description via WebAssembly. Requires `ALLOWUNSAFEEVAL`. Experimental -- may not display all USD files correctly or load all dependencies.          |
 | **Online 3D Viewer**                 | 3D       | `.3dm`, `.amf`, `.bim`, `.off`, `.wrl`                                                                                                                                  | 2        | Yes        | Rhinoceros 3D, AMF, BIM, OFF, and VRML formats.                                                                                                                     |
 | **Cesium 3D Tileset Viewer**         | 3D       | `.json`                                                                                                                                                                 | 2        | No         | 3D Tileset viewing with geospatial capabilities. Requires `ALLOWUNSAFEEVAL`. Shows latest version only.                                                             |
 | **PlayCanvas Gaussian Splat Viewer** | 3D       | `.ply`, `.sog`                                                                                                                                                          | 2        | No         | Gaussian splat visualization with orbit camera and auto-focus.                                                                                                      |
@@ -112,12 +112,16 @@ The `.ply` extension is used for both point cloud data and Gaussian splat data. 
 
 ### USD extensions
 
-| Extension | Default Viewer    | Other Available Viewers |
-| --------- | ----------------- | ----------------------- |
-| `.usd`    | Needle USD Viewer | --                      |
-| `.usda`   | Needle USD Viewer | --                      |
-| `.usdc`   | Needle USD Viewer | --                      |
-| `.usdz`   | Needle USD Viewer | --                      |
+| Extension | Default Viewer                   | Other Available Viewers |
+| --------- | -------------------------------- | ----------------------- |
+| `.usd`    | Needle USD Viewer (Experimental) | --                      |
+| `.usda`   | Needle USD Viewer (Experimental) | --                      |
+| `.usdc`   | Needle USD Viewer (Experimental) | --                      |
+| `.usdz`   | Needle USD Viewer (Experimental) | --                      |
+
+:::warning[Needle USD Viewer -- Experimental]
+The Needle USD Viewer is experimental. It may not display all USD files correctly or load all file dependencies, particularly with compressed USDC files or complex scene hierarchies with external references. For production workflows requiring reliable USD viewing, consider using a desktop USD viewer such as NVIDIA Omniverse or Pixar's usdview.
+:::
 
 ### Media extensions
 
@@ -174,7 +178,7 @@ The `.ply` extension is used for both point cloud data and Gaussian splat data. 
 
 ## Viewer screenshots
 
-### USD viewer (Needle Engine)
+### USD viewer (Needle Engine) -- Experimental
 
 ![VAMS file viewer page displaying a USDZ 3D model rendered by the Needle USD Viewer](/img/view_file_page_usdz_20260323_v2.5.png)
 
@@ -200,7 +204,7 @@ The following viewers use WASM:
 
 | Viewer                             | WASM Library                        | Required Feature Flag |
 | ---------------------------------- | ----------------------------------- | --------------------- |
-| Needle USD Viewer                  | `usd-wasm`                          | `ALLOWUNSAFEEVAL`     |
+| Needle USD Viewer (Experimental)   | `usd-wasm`                          | `ALLOWUNSAFEEVAL`     |
 | Cesium 3D Tileset Viewer           | CesiumJS (WebGL shader compilation) | `ALLOWUNSAFEEVAL`     |
 | Three.js Viewer (CAD formats only) | OpenCascade (`opencascade.js`)      | `ALLOWUNSAFEEVAL`     |
 

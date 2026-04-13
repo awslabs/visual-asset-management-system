@@ -474,8 +474,4 @@ Use this checklist when building a new pipeline:
 ## Related pages
 
 -   [Pipeline overview](overview.md)
--   [GenAI labeling pipeline](genai-labeling.md)
--   [Isaac Lab pipeline](isaac-lab.md)
--   [RapidPipeline](rapidpipeline.md)
--   [ModelOps pipeline](model-ops.md)
 -   [Deployment configuration](../deployment/configuration-reference.md)

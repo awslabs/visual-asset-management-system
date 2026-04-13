@@ -1,6 +1,10 @@
 # NVIDIA Isaac Lab Training Pipeline
 
-The Isaac Lab pipeline enables reinforcement learning (RL) policy training and evaluation using NVIDIA Isaac Lab on GPU-accelerated Amazon EC2 instances managed by AWS Batch. It supports two operational modes -- training new RL policies from scratch and evaluating pre-trained policies -- both orchestrated by AWS Step Functions with asynchronous task token callbacks.
+The NVIDIA Isaac Lab pipeline enables reinforcement learning (RL) policy training and evaluation using [NVIDIA Isaac Lab](https://developer.nvidia.com/isaac/lab) on GPU-accelerated Amazon EC2 instances managed by AWS Batch. It supports two operational modes -- training new RL policies from scratch and evaluating pre-trained policies -- both orchestrated by AWS Step Functions with asynchronous task token callbacks.
+
+:::tip[Learn more]
+Read the AWS blog post [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/spatial/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) for a detailed walkthrough of the pipeline architecture, setup, and usage with example training scenarios.
+:::
 
 ## Overview
 
@@ -200,3 +204,4 @@ Training progress can be monitored through Amazon CloudWatch Logs for the AWS Ba
 -   [Pipeline overview](overview.md)
 -   [Custom pipelines](custom-pipelines.md)
 -   [Deployment configuration](../deployment/configuration-reference.md)
+-   [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/spatial/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) (AWS Blog)
