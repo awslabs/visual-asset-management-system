@@ -151,6 +151,7 @@ Private and public subnets are created when any of the following are enabled:
 -   ModelOps pipeline
 -   Splat Toolbox pipeline
 -   Isaac Lab Training pipeline
+-   NVIDIA Cosmos pipeline (Predict, Reason, or Transfer)
 
 ### Availability Zone Configuration
 
@@ -216,6 +217,7 @@ These endpoints are created based on the deployment configuration:
 | AWS Batch              | Any pipeline enabled                      | Pipeline job submission  |
 | Amazon ECR API         | Any pipeline enabled                      | Container image registry |
 | Amazon ECR Docker      | Any pipeline enabled                      | Container image pulls    |
+| Amazon EFS             | NVIDIA Cosmos enabled                     | Model cache file system  |
 | Amazon ECS             | Pipeline with compute needs               | Container orchestration  |
 | Amazon ECS Agent       | Isaac Lab Training                        | ECS agent communication  |
 | Amazon ECS Telemetry   | Isaac Lab Training                        | ECS telemetry            |
@@ -224,7 +226,7 @@ These endpoints are created based on the deployment configuration:
 
 ### Pipeline-Required Endpoints
 
-The following endpoints are created when any of these pipelines are enabled: Point Cloud Potree Viewer, 3D Preview Thumbnail, GenAI Metadata Labeling, RapidPipeline (ECS/EKS), ModelOps, Splat Toolbox, or Isaac Lab Training.
+The following endpoints are created when any of these pipelines are enabled: Point Cloud Potree Viewer, 3D Preview Thumbnail, GenAI Metadata Labeling, RapidPipeline (ECS/EKS), ModelOps, Splat Toolbox, Isaac Lab Training, or NVIDIA Cosmos (Predict, Reason, Transfer).
 
 -   AWS Batch
 -   Amazon ECR API

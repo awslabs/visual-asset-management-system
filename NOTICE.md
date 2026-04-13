@@ -246,6 +246,62 @@ Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES
 All rights reserved.
 ```
 
+### NVIDIA Cosmos Predict Pipeline
+
+| Name                           | Version | License                   | Purpose                                                                    |
+| :----------------------------- | :------ | :------------------------ | :------------------------------------------------------------------------- |
+| NVIDIA Cosmos-Predict1         | 1.0     | Apache-2.0                | Cosmos Predict v1 framework (inference code)                               |
+| Cosmos-Predict1-7B-Text2World  | 1.0     | NVIDIA Open Model License | Text-to-video diffusion model (~45GB)                                      |
+| Cosmos-Predict1-7B-Video2World | 1.0     | NVIDIA Open Model License | Video/image-to-video diffusion model (~45GB)                               |
+| cosmos-oss                     | 0.1.0   | Apache-2.0                | Cosmos Predict v2.5 core framework package                                 |
+| Cosmos-Predict2.5-2B           | 2.5     | NVIDIA Open Model License | 2B unified world generation model (v2.5 flow-matching, ~5-10GB)            |
+| Cosmos-Predict2.5-14B          | 2.5     | NVIDIA Open Model License | 14B unified world generation model (v2.5 flow-matching, ~5-10GB)           |
+| Cosmos-Tokenize1-CV8x8x8-720p  | 1.0     | NVIDIA Open Model License | Video tokenizer (~5GB, shared across v1 and v2.5)                          |
+| google-t5/t5-11b               | 11B     | Apache-2.0                | Text encoder for prompt processing (~85GB, shared across v1 and v2.5)      |
+| meta-llama/Llama-Guard-3-8B    | 3.0     | Meta Llama 3 Community    | Safety guardrail for content moderation (~16GB, shared across v1 and v2.5) |
+| NVIDIA Cosmos-Guardrail1       | 1.0     | NVIDIA Open Model License | Content safety blocklist and face filter (~1GB, shared across v1 and v2.5) |
+| NVIDIA Transformer Engine      | 2.2.0   | Apache-2.0                | Optimized transformer computation (updated for v2.5)                       |
+| flash-attn                     | 2.7.3   | BSD-3-Clause              | Flash attention for v2.5 flow-matching architecture                        |
+| NVIDIA APEX                    | latest  | BSD-3-Clause              | Mixed precision training utilities                                         |
+| PyTorch                        | 2.6.0   | BSD-3-Clause              | Deep learning framework                                                    |
+| boto3                          | latest  | Apache-2.0                | AWS SDK for Python                                                         |
+| huggingface_hub                | latest  | Apache-2.0                | Model download from HuggingFace Hub                                        |
+
+### NVIDIA Cosmos Reason Pipeline
+
+| Name              | Version | License                   | Purpose                                                      |
+| :---------------- | :------ | :------------------------ | :----------------------------------------------------------- |
+| Cosmos-Reason2-2B | 2.0     | NVIDIA Open Model License | Vision Language Model for video/image analysis (~5GB)        |
+| Cosmos-Reason2-8B | 2.0     | NVIDIA Open Model License | Larger Vision Language Model with improved reasoning (~16GB) |
+| vLLM              | latest  | Apache-2.0                | Efficient VLM inference engine for Cosmos Reason             |
+| PyTorch           | 2.6.0   | BSD-3-Clause              | Deep learning framework                                      |
+| boto3             | latest  | Apache-2.0                | AWS SDK for Python                                           |
+| huggingface_hub   | latest  | Apache-2.0                | Model download from HuggingFace Hub                          |
+
+### NVIDIA Cosmos Transfer Pipeline
+
+| Name                      | Version | License                   | Purpose                                                       |
+| :------------------------ | :------ | :------------------------ | :------------------------------------------------------------ |
+| Cosmos-Transfer2.5-2B     | 2.5     | NVIDIA Open Model License | Video transformation with control signal conditioning (~20GB) |
+| video-depth-anything      | latest  | Apache-2.0                | Depth map generation for depth control signals (~2GB)         |
+| sam2                      | latest  | Apache-2.0                | Semantic segmentation for segmentation control signals (~5GB) |
+| NVIDIA Transformer Engine | 2.2.0   | Apache-2.0                | Optimized transformer computation                             |
+| PyTorch                   | 2.6.0   | BSD-3-Clause              | Deep learning framework                                       |
+| boto3                     | latest  | Apache-2.0                | AWS SDK for Python                                            |
+| huggingface_hub           | latest  | Apache-2.0                | Model download from HuggingFace Hub                           |
+
+**Container Base Image**
+
+The Cosmos Predict Pipeline uses the NVIDIA NGC PyTorch container image (`nvcr.io/nvidia/pytorch:24.10-py3`) which is subject to the [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license).
+
+**NVIDIA Cosmos Attribution Requirement**
+
+Per the NVIDIA Open Model License, applications using NVIDIA Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"**. See the [NVIDIA Cosmos License](https://developer.nvidia.com/cosmos-license) for full terms.
+
+**HuggingFace Model Access**
+
+All six models listed above are gated on HuggingFace and require explicit license acceptance and access request before download. The Meta Llama-Guard-3-8B model requires separate acceptance of the Meta Llama 3 Community License.
+
 ---
 
 ## THIRD PARTY PAID COMPONENTS - BACKEND PIPELINES (AWS MARKETPLACE)

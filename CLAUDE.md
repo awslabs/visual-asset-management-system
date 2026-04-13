@@ -10,7 +10,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 -   **Python Lambda backend** (`backend/`) -- Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) -- 10 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) -- Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) -- 3D conversion, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails
+-   **Processing pipelines** (`backendPipelines/`) -- 3D conversion, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict
 
 ### **Version Info**
 
@@ -43,6 +43,10 @@ root/
 │   └── VamsCLI/               # Python CLI tool
 │       └── CLAUDE.md          # CLI development guide
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
+│   ├── genAi/
+│   │   ├── cosmos/predict/    # NVIDIA Cosmos Predict (Text2World, Video2World)
+│   │   └── metadata3dLabeling/
+│   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
 ├── .clinerules/workflows/     # Detailed workflow docs (supplementary)
 ├── .claude/commands/          # Claude Code skills (slash commands)
@@ -625,13 +629,20 @@ VAMS uses single-table design with composite keys. Common patterns:
 ### **Adding a New Processing Pipeline**
 
 1. Create directory under `backendPipelines/{useCase}/`
-2. Add Lambda handler in `lambda/` subdirectory
+2. Add Lambda handler in `lambda/` subdirectory. **Every pipeline `lambda/` directory MUST include:**
+    - `__init__.py` (package marker)
+    - `customLogging/__init__.py` (package marker)
+    - `customLogging/logger.py` (copy from any existing pipeline, e.g., `backendPipelines/3dRecon/splatToolbox/lambda/customLogging/logger.py`)
+      Without these files, Lambda will fail at import time with `No module named 'customLogging'`. The Lambda layer provides a fallback, but the local `customLogging/` package is required in each pipeline's code asset.
 3. Add container if needed in `container/` subdirectory
 4. Create CDK nested stack in `infra/lib/nestedStacks/pipelines/`
 5. Add pipeline config to `config.ts` under `pipelines` section
 6. Register in pipeline builder nested stack
 7. Add feature switch if pipeline is optional
-8. **Add pipeline flag to VPC builder** (`infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`) in the "Pipeline-Only Required Endpoints" condition so that VPC endpoints for Batch, ECR, and ECR Docker are created when the pipeline is enabled. Pipelines that need internet access (e.g. AWS Marketplace) should also be added to the public/private subnet configuration condition and the ECS endpoint condition.
+8. **Add pipeline flag to VPC builder** (`infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`). Pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** of these condition blocks in the VPC builder (search for `useSplatToolbox` to find them all):
+    - **Subnet creation condition** (~line 341): The `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig` into `subnetConfigurations`. Without this, the VPC has no private subnets and Batch compute environments will fail with "Resource subnets are required".
+    - **VPC endpoint condition** (~line 540): The `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints. Without this, Batch jobs cannot pull container images.
+    - **ECS endpoint condition** (~line 619): The `needsEcsPrivate` variable that controls whether the ECS VPC endpoint includes private subnets. Without this, the ECS agent on Batch instances cannot communicate with the ECS service.
 9. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
 10. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).
 11. **Preserve relative paths** in container output. When writing asset-adjacent files (e.g., `.previewFile.X`), the container must maintain the input file's relative subdirectory within the asset so process-output can locate outputs correctly. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for the derivation pattern.

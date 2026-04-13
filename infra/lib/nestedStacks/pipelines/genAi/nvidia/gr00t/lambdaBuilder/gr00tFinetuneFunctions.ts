@@ -1,0 +1,227 @@
+/*
+ * Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as path from "path";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as sfn from "aws-cdk-lib/aws-stepfunctions";
+import { Construct } from "constructs";
+import { Duration } from "aws-cdk-lib";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../../config/config";
+import * as Config from "../../../../../../../config/config";
+import * as kms from "aws-cdk-lib/aws-kms";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../../../../../../helper/security";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as ServiceHelper from "../../../../../../helper/service-helper";
+import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../../helper/security";
+import { grantReadPermissionsToAllAssetBuckets } from "../../../../../../helper/security";
+
+export function buildVamsExecuteGr00tFinetunePipelineFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    openPipelineLambdaFunction: lambda.IFunction,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    kmsKey?: kms.IKey
+): lambda.Function {
+    const name = "vamsExecuteGr00tFinetunePipeline";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(
+            path.join(
+                __dirname,
+                `../../../../../../../../backendPipelines/genAi/nvidia/gr00t/lambda`
+            )
+        ),
+        handler: `${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            OPEN_PIPELINE_FUNCTION_NAME: openPipelineLambdaFunction.functionName,
+        },
+    });
+
+    grantReadPermissionsToAllAssetBuckets(fun);
+    openPipelineLambdaFunction.grantInvoke(fun);
+    // Grant SFN permissions for task failure callback on errors
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: ["*"],
+        })
+    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return fun;
+}
+
+export function buildGr00tFinetuneOpenPipelineFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    assetAuxiliaryBucket: s3.IBucket,
+    pipelineStateMachine: sfn.StateMachine,
+    allowedPipelineInputExtensions: string,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    kmsKey?: kms.IKey
+): lambda.Function {
+    const name = "gr00tFinetuneOpenPipeline";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(
+            path.join(
+                __dirname,
+                `../../../../../../../../backendPipelines/genAi/nvidia/gr00t/lambda`
+            )
+        ),
+        handler: `openPipeline.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
+            ALLOWED_INPUT_FILEEXTENSIONS: allowedPipelineInputExtensions,
+        },
+    });
+
+    grantReadPermissionsToAllAssetBuckets(fun);
+    assetAuxiliaryBucket.grantRead(fun);
+    pipelineStateMachine.grantStartExecution(fun);
+    // Grant SFN permissions for abort_external_workflow task failure callback
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: ["*"],
+        })
+    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return fun;
+}
+
+export function buildGr00tFinetuneConstructPipelineFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    pipelineSecurityGroups: ec2.ISecurityGroup[],
+    kmsKey?: kms.IKey
+): lambda.Function {
+    const name = "gr00tFinetuneConstructPipeline";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(
+            path.join(
+                __dirname,
+                `../../../../../../../../backendPipelines/genAi/nvidia/gr00t/lambda`
+            )
+        ),
+        handler: `constructPipeline.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        securityGroups:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? pipelineSecurityGroups
+                : undefined,
+    });
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    return fun;
+}
+
+export function buildGr00tFinetunePipelineEndFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    assetAuxiliaryBucket: s3.IBucket,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    pipelineSecurityGroups: ec2.ISecurityGroup[],
+    kmsKey?: kms.IKey
+): lambda.Function {
+    const name = "gr00tFinetunePipelineEnd";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(
+            path.join(
+                __dirname,
+                `../../../../../../../../backendPipelines/genAi/nvidia/gr00t/lambda`
+            )
+        ),
+        handler: `pipelineEnd.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        securityGroups:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? pipelineSecurityGroups
+                : undefined,
+        environment: {},
+    });
+
+    grantReadPermissionsToAllAssetBuckets(fun);
+    assetAuxiliaryBucket.grantRead(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    const stateTaskPolicy = new iam.PolicyStatement({
+        actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+        resources: [
+            `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${config.env.account}:*`,
+        ],
+    });
+    fun.addToRolePolicy(stateTaskPolicy);
+
+    return fun;
+}

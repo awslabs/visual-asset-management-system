@@ -13,7 +13,7 @@
             "externalAssetBuckets": null
         },
         "adminUserId": "administrator",
-        "adminEmailAddress": "admin@example.com",
+        "adminEmailAddress": "adminEmail@example.com",
         "useFips": false,
         "useWaf": true,
         "addStackCloudTrailLogs": true,
@@ -134,6 +134,81 @@
                 "acceptNvidiaEula": false,
                 "autoRegisterWithVAMS": true,
                 "keepWarmInstance": false
+            },
+            "useNvidiaCosmos": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useCodeBuild": false,
+                "useWarmInstances": false,
+                "warmInstanceCount": 1,
+                "modelsPredict": {
+                    "text2world2B_v2": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["g6e.12xlarge", "g5.12xlarge", "g5.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "video2world2B_v2": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.12xlarge", "g5.12xlarge", "g5.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "text2world14B_v2": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["g6e.48xlarge", "p5.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "video2world14B_v2": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.48xlarge", "p5.48xlarge"],
+                        "maxVCpus": 192
+                    }
+                },
+                "modelsTransfer": {
+                    "transfer2B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.48xlarge", "p5.48xlarge"],
+                        "maxVCpus": 192
+                    }
+                },
+                "modelsReason": {
+                    "reason2B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.12xlarge", "g5.12xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "reason8B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.12xlarge", "g6e.24xlarge"],
+                        "maxVCpus": 192
+                    }
+                }
+            },
+            "useNvidiaGr00t": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useCodeBuild": false,
+                "useWarmInstances": false,
+                "warmInstanceCount": 1,
+                "modelsFinetune": {
+                    "gr00tN1_5_3B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"],
+                        "maxVCpus": 192
+                    }
+                }
             }
         },
         "addons": {

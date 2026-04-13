@@ -1,0 +1,25 @@
+[package]
+version = "1.0.0"
+title = "VAMS Connector for Isaac Sim"
+description = "Integrates NVIDIA Isaac Sim with the Visual Asset Management System (VAMS) for browsing, downloading, uploading, and managing 3D assets. Uses the VAMS CLI for all operations."
+category = "asset-management"
+keywords = ["vams", "asset management", "3d", "usd", "connector"]
+authors = ["VAMS Team"]
+
+[core]
+reloadable = true
+
+[dependencies]
+"omni.ext" = {}
+"omni.ui" = {}
+"omni.usd" = {}
+"omni.kit.window.extensions" = {optional = true}
+
+[[python.module]]
+name = "vams.connector.isaacsim"
+
+[settings]
+# Default VAMS CLI profile name. Change if using a non-default profile.
+exts."vams.connector.isaacsim".profile = "default"
+# Optional explicit path to the vamscli executable. Leave empty to use PATH.
+exts."vams.connector.isaacsim".vamscli_path = ""

@@ -274,8 +274,8 @@
         },
         {
             "id": "needletools-usd-viewer",
-            "name": "Needle USD Viewer",
-            "description": "View USD files using Needle's USD Web Viewer with WebAssembly. Supports USD format files with dependency loading and advanced 3D rendering capabilities.",
+            "name": "Needle USD Viewer (Experimental)",
+            "description": "View USD files using Needle's USD Web (experimental) Viewer with WebAssembly. Supports USD format files with dependency loading and advanced 3D rendering capabilities.",
             "componentPath": "./viewers/NeedleUSDViewerPlugin/NeedleUSDViewerComponent",
             "dependencyManager": "./viewers/NeedleUSDViewerPlugin/dependencies",
             "dependencyManagerClass": "NeedleUSDDependencyManager",

@@ -185,19 +185,22 @@ Pipelines support three execution types for integration with different processin
 
 ### Built-In Pipelines
 
-VAMS includes nine built-in processing pipelines, each deployable through configuration flags:
+VAMS includes twelve built-in processing pipelines, each deployable through configuration flags:
 
-| Pipeline                     | Config Flag                              | Description                                     | Default  |
-| ---------------------------- | ---------------------------------------- | ----------------------------------------------- | -------- |
-| 3D Conversion Basic          | `useConversion3dBasic`                   | Format conversion using Trimesh and Blender     | Enabled  |
-| CAD/Mesh Metadata Extraction | `useConversionCadMeshMetadataExtraction` | Geometric metadata extraction using CADQuery    | Disabled |
-| Point Cloud Potree Viewer    | `usePreviewPcPotreeViewer`               | Potree octree generation for browser streaming  | Disabled |
-| Gaussian Splat Toolbox       | `useSplatToolbox`                        | 3D Gaussian splat generation from media files   | Disabled |
-| GenAI Metadata 3D Labeling   | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling via Amazon Bedrock | Disabled |
-| 3D Preview Thumbnail         | `usePreview3dThumbnail`                  | Animated GIF or static image preview generation | Disabled |
-| RapidPipeline (ECS/EKS)      | `useRapidPipeline`                       | Licensed spatial data optimization              | Disabled |
-| VNTANA ModelOps              | `useModelOps`                            | Licensed ModelOps optimization                  | Disabled |
-| NVIDIA Isaac Lab Training    | `useIsaacLabTraining`                    | Reinforcement learning training and evaluation  | Disabled |
+| Pipeline                     | Config Flag                              | Description                                                                                                                                                                                   | Default  |
+| ---------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 3D Conversion Basic          | `useConversion3dBasic`                   | Format conversion using Trimesh and Blender                                                                                                                                                   | Enabled  |
+| CAD/Mesh Metadata Extraction | `useConversionCadMeshMetadataExtraction` | Geometric metadata extraction using CADQuery                                                                                                                                                  | Disabled |
+| Point Cloud Potree Viewer    | `usePreviewPcPotreeViewer`               | Potree octree generation for browser streaming                                                                                                                                                | Disabled |
+| Gaussian Splat Toolbox       | `useSplatToolbox`                        | 3D Gaussian splat generation from media files                                                                                                                                                 | Disabled |
+| GenAI Metadata 3D Labeling   | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling via Amazon Bedrock                                                                                                                                               | Disabled |
+| 3D Preview Thumbnail         | `usePreview3dThumbnail`                  | Animated GIF or static image preview generation                                                                                                                                               | Disabled |
+| NVIDIA Cosmos Predict        | `useNvidiaCosmos.modelsPredict`          | GPU-accelerated video generation from text or image/video using NVIDIA Cosmos-Predict1 (v1) and Cosmos-Predict2.5 (v2.5) world foundation models with 7B (v1), 2B, and 14B (v2.5) model sizes | Disabled |
+| NVIDIA Cosmos Reason         | `useNvidiaCosmos.modelsReason`           | Vision Language Model for video/image analysis generating text-based captions, descriptions, and reasoning with Cosmos-Reason2 (2B, 8B) models                                                | Disabled |
+| NVIDIA Cosmos Transfer       | `useNvidiaCosmos.modelsTransfer`         | Video transformation with control signal conditioning using Cosmos-Transfer2.5-2B for style transfer and content transformation                                                               | Disabled |
+| RapidPipeline (ECS/EKS)      | `useRapidPipeline`                       | Licensed spatial data optimization                                                                                                                                                            | Disabled |
+| VNTANA ModelOps              | `useModelOps`                            | Licensed ModelOps optimization                                                                                                                                                                | Disabled |
+| NVIDIA Isaac Lab Training    | `useIsaacLabTraining`                    | Reinforcement learning training and evaluation                                                                                                                                                | Disabled |
 
 ### Pipeline Capabilities
 

@@ -344,7 +344,9 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
-                props.config.app.pipelines.useIsaacLabTraining.enabled
+                props.config.app.pipelines.useIsaacLabTraining.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
                 subnetConfigurations.push(subnetPublicConfig);
                 subnetConfigurations.push(subnetPrivateConfig);
@@ -545,7 +547,9 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
-                props.config.app.pipelines.useIsaacLabTraining?.enabled
+                props.config.app.pipelines.useIsaacLabTraining?.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
                 // Create VPC endpoint for Batch
                 new ec2.InterfaceVpcEndpoint(this, "BatchEndpoint", {
@@ -573,6 +577,20 @@ export class VPCBuilderNestedStack extends NestedStack {
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
+
+                // Create VPC endpoint for EFS (Cosmos Predict pipeline)
+                if (
+                    props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                    props.config.app.pipelines.useNvidiaGr00t.enabled
+                ) {
+                    new ec2.InterfaceVpcEndpoint(this, "EFSEndpoint", {
+                        vpc: this.vpc,
+                        privateDnsEnabled: true,
+                        service: ec2.InterfaceVpcEndpointAwsService.ELASTIC_FILESYSTEM,
+                        subnets: { subnets: this.isolatedSubnets },
+                        securityGroups: [vpceSecurityGroup],
+                    });
+                }
             }
 
             //All Lambda and Metadata Generation Pipeline Required Endpoints
@@ -607,7 +625,9 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
-                props.config.app.pipelines.useSplatToolbox.enabled;
+                props.config.app.pipelines.useSplatToolbox.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaGr00t.enabled;
             const needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining?.enabled;
 
             if (needsEcsPrivate || needsEcsIsolated) {

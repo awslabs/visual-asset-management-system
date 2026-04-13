@@ -213,6 +213,95 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.usePreview3dThumbnail.enabled = false;
     }
 
+    // Cosmos Predict defaults
+    if (config.app.pipelines.useNvidiaCosmos == undefined) {
+        config.app.pipelines.useNvidiaCosmos = {
+            enabled: false,
+            huggingFaceToken: "",
+            useCodeBuild: false,
+            useWarmInstances: false,
+            warmInstanceCount: 1,
+            modelsPredict: {
+                text2world2B_v2: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    instanceTypes: ["g6e.12xlarge", "g5.12xlarge", "g5.48xlarge"],
+                    maxVCpus: 192,
+                },
+                video2world2B_v2: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["g6e.12xlarge", "g5.12xlarge", "g5.48xlarge"],
+                    maxVCpus: 192,
+                },
+                text2world14B_v2: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    instanceTypes: ["g6e.48xlarge", "p5.48xlarge"],
+                    maxVCpus: 192,
+                },
+                video2world14B_v2: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["g6e.48xlarge", "p5.48xlarge"],
+                    maxVCpus: 192,
+                },
+            },
+            modelsReason: {
+                reason2B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["g6e.12xlarge", "g5.12xlarge"],
+                    maxVCpus: 192,
+                },
+                reason8B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["g6e.12xlarge", "g6e.24xlarge"],
+                    maxVCpus: 192,
+                },
+            },
+            modelsTransfer: {
+                transfer2B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["g6e.48xlarge", "p5.48xlarge"],
+                    maxVCpus: 192,
+                },
+            },
+        };
+    }
+    if (config.app.pipelines.useNvidiaCosmos.enabled == undefined) {
+        config.app.pipelines.useNvidiaCosmos.enabled = false;
+    }
+
+    // Gr00t Fine-Tuning defaults
+    if (config.app.pipelines.useNvidiaGr00t == undefined) {
+        config.app.pipelines.useNvidiaGr00t = {
+            enabled: false,
+            huggingFaceToken: "",
+            useCodeBuild: false,
+            useWarmInstances: false,
+            warmInstanceCount: 1,
+            modelsFinetune: {
+                gr00tN1_5_3B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    instanceTypes: ["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"],
+                    maxVCpus: 192,
+                },
+            },
+        };
+    }
+    if (config.app.pipelines.useNvidiaGr00t.enabled == undefined) {
+        config.app.pipelines.useNvidiaGr00t.enabled = false;
+    }
+
     if (config.app.addons.useGarnetFramework.enabled == undefined) {
         config.app.addons.useGarnetFramework.enabled = false;
     }
@@ -376,6 +465,8 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useModelOps.enabled ||
         config.app.pipelines.useIsaacLabTraining.enabled ||
         config.app.pipelines.usePreview3dThumbnail.enabled ||
+        config.app.pipelines.useNvidiaCosmos.enabled ||
+        config.app.pipelines.useNvidiaGr00t.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
@@ -385,6 +476,141 @@ export function getConfig(app: cdk.App): Config {
         }
 
         config.app.useGlobalVpc.enabled = true;
+    }
+
+    // Cosmos Predict/Transfer validation
+    if (config.app.pipelines.useNvidiaCosmos.enabled) {
+        const cosmosModels = config.app.pipelines.useNvidiaCosmos.modelsPredict;
+        const cosmosTransferModels = config.app.pipelines.useNvidiaCosmos.modelsTransfer;
+        const cosmosReasonModels = config.app.pipelines.useNvidiaCosmos.modelsReason;
+        const anyModelEnabled =
+            cosmosModels.text2world2B_v2.enabled ||
+            cosmosModels.video2world2B_v2.enabled ||
+            cosmosModels.text2world14B_v2.enabled ||
+            cosmosModels.video2world14B_v2.enabled ||
+            (cosmosTransferModels?.transfer2B?.enabled ?? false) ||
+            (cosmosReasonModels?.reason2B?.enabled ?? false) ||
+            (cosmosReasonModels?.reason8B?.enabled ?? false);
+
+        if (!anyModelEnabled) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos is enabled but no model types are enabled. " +
+                    "Enable at least one model in useNvidiaCosmos.modelsPredict, modelsTransfer, or modelsReason."
+            );
+        }
+
+        if (
+            !config.app.pipelines.useNvidiaCosmos.huggingFaceToken ||
+            config.app.pipelines.useNvidiaCosmos.huggingFaceToken.trim() === ""
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos requires huggingFaceToken " +
+                    "(SSM SecureString parameter path, e.g., '/vams/cosmos/hf-token') for model downloads."
+            );
+        }
+
+        if (
+            cosmosModels.text2world2B_v2.enabled &&
+            (!cosmosModels.text2world2B_v2.instanceTypes ||
+                cosmosModels.text2world2B_v2.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos.modelsPredict.text2world2B_v2.instanceTypes must be a non-empty array."
+            );
+        }
+
+        if (
+            cosmosModels.video2world2B_v2.enabled &&
+            (!cosmosModels.video2world2B_v2.instanceTypes ||
+                cosmosModels.video2world2B_v2.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos.modelsPredict.video2world2B_v2.instanceTypes must be a non-empty array."
+            );
+        }
+
+        if (
+            cosmosModels.text2world14B_v2.enabled &&
+            (!cosmosModels.text2world14B_v2.instanceTypes ||
+                cosmosModels.text2world14B_v2.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos.modelsPredict.text2world14B_v2.instanceTypes must be a non-empty array."
+            );
+        }
+
+        if (
+            cosmosModels.video2world14B_v2.enabled &&
+            (!cosmosModels.video2world14B_v2.instanceTypes ||
+                cosmosModels.video2world14B_v2.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos.modelsPredict.video2world14B_v2.instanceTypes must be a non-empty array."
+            );
+        }
+
+        if (
+            cosmosTransferModels?.transfer2B?.enabled &&
+            (!cosmosTransferModels.transfer2B.instanceTypes ||
+                cosmosTransferModels.transfer2B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos.modelsTransfer.transfer2B.instanceTypes must be a non-empty array."
+            );
+        }
+
+        if (
+            cosmosReasonModels?.reason2B?.enabled &&
+            (!cosmosReasonModels.reason2B.instanceTypes ||
+                cosmosReasonModels.reason2B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos.modelsReason.reason2B.instanceTypes must be a non-empty array."
+            );
+        }
+
+        if (
+            cosmosReasonModels?.reason8B?.enabled &&
+            (!cosmosReasonModels.reason8B.instanceTypes ||
+                cosmosReasonModels.reason8B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos.modelsReason.reason8B.instanceTypes must be a non-empty array."
+            );
+        }
+    }
+
+    // Gr00t Fine-Tuning validation
+    if (config.app.pipelines.useNvidiaGr00t.enabled) {
+        const gr00tModels = config.app.pipelines.useNvidiaGr00t.modelsFinetune;
+        const anyGr00tModelEnabled = gr00tModels.gr00tN1_5_3B.enabled;
+
+        if (!anyGr00tModelEnabled) {
+            throw new Error(
+                "Configuration Error: useNvidiaGr00t is enabled but no model types are enabled. " +
+                    "Enable at least one model in useNvidiaGr00t.modelsFinetune."
+            );
+        }
+
+        if (
+            !config.app.pipelines.useNvidiaGr00t.huggingFaceToken ||
+            config.app.pipelines.useNvidiaGr00t.huggingFaceToken.trim() === ""
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaGr00t requires huggingFaceToken " +
+                    "for model downloads from HuggingFace."
+            );
+        }
+
+        if (
+            gr00tModels.gr00tN1_5_3B.enabled &&
+            (!gr00tModels.gr00tN1_5_3B.instanceTypes ||
+                gr00tModels.gr00tN1_5_3B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes must be a non-empty array."
+            );
+        }
     }
 
     //Any configuration warnings/errors checks
@@ -910,6 +1136,81 @@ export interface ConfigPublic {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
+            };
+            useNvidiaCosmos: {
+                enabled: boolean;
+                huggingFaceToken: string;
+                useCodeBuild: boolean;
+                useWarmInstances: boolean;
+                warmInstanceCount: number;
+                modelsPredict: {
+                    text2world2B_v2: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    video2world2B_v2: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    text2world14B_v2: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    video2world14B_v2: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                };
+                modelsTransfer?: {
+                    transfer2B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                };
+                modelsReason?: {
+                    reason2B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    reason8B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                };
+            };
+            useNvidiaGr00t: {
+                enabled: boolean;
+                huggingFaceToken: string;
+                useCodeBuild: boolean;
+                useWarmInstances: boolean;
+                warmInstanceCount: number;
+                modelsFinetune: {
+                    gr00tN1_5_3B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                };
             };
         };
         addons: {
