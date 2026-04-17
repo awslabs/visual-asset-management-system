@@ -644,6 +644,7 @@ All CLI documentation lives in the Docusaurus documentation site at `documentati
 -   [ ] **Build verification**: Run `cd documentation/docusaurus-site && npm run build` to verify
 -   [ ] **Cross-Reference Check**: Verify all internal documentation links work
 -   [ ] **Accuracy Check**: Ensure all documented features actually exist in code
+-   [ ] **External Tool Integrations**: If CLI commands, parameters, output formats, or authentication flows changed, review and update the external connectors at `tools/ExternalIntegrations/` that wrap the CLI (Isaac Sim Python wrapper in `isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py`, ArcGIS Pro C# wrapper in `arcgispro-connector-for-vams/Services/VamsCliService.cs`)
 
 #### **New Documentation Structure:**
 

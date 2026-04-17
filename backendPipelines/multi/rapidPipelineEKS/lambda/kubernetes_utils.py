@@ -680,10 +680,12 @@ def get_k8s_client():
                     # Try to get aws-auth ConfigMap using AWS CLI
                     logger.error("⚠️ Attempting to check aws-auth ConfigMap...")
                     cmd = f"AWS_STS_REGIONAL_ENDPOINTS=regional aws eks update-kubeconfig --name {cluster_name} --kubeconfig {kube_config_path}"
-                    subprocess.run(cmd, shell=True, check=False) # nosemgrep: dangerous-subprocess-use-audit # nosemgrep: subprocess-shell-true # nosec B602
+                    # nosemgrep: subprocess-shell-true, dangerous-subprocess-use-audit
+                    subprocess.run(cmd, shell=True, check=False)  # nosemgrep: subprocess-shell-true  # nosec B602
 
                     cmd = f"kubectl --kubeconfig={kube_config_path} get configmap -n kube-system aws-auth -o json"
-                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False) # nosemgrep: dangerous-subprocess-use-audit # nosemgrep: subprocess-shell-true # nosec B602
+                    # nosemgrep: subprocess-shell-true, dangerous-subprocess-use-audit
+                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)  # nosemgrep: subprocess-shell-true  # nosec B602
 
                     if result.returncode == 0:
                         aws_auth = json.loads(result.stdout)

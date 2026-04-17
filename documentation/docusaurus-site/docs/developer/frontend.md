@@ -109,6 +109,16 @@ navigate("/databases/mydb/assets");
 import { BrowserRouter } from "react-router-dom";
 ```
 
+**Deep link URL patterns** (defined in `routes.tsx`):
+
+| Route                                           | Component   | Deep Link Format                                          |
+| ----------------------------------------------- | ----------- | --------------------------------------------------------- |
+| `/databases/`                                   | `Databases` | `/#/databases/`                                           |
+| `/databases/:databaseId/assets/:assetId`        | `ViewAsset` | `/#/databases/<dbId>/assets/<assetId>`                    |
+| `/databases/:databaseId/assets/:assetId/file/*` | `ViewFile`  | `/#/databases/<dbId>/assets/<assetId>/file/<encodedPath>` |
+
+File paths must be URL-encoded (`encodeURIComponent`). Version parameters: `?version=<fileVersionId>` or `?assetVersion=<assetVersionId>` (asset version takes priority). See [Web Interface - Deep Linking](../user-guide/web-interface.md#hash-based-urls-and-deep-linking) for the full reference.
+
 ### Rule 4: Lazy Load All Pages
 
 Every page component in `routes.tsx` must be lazy-loaded for route-level code splitting.

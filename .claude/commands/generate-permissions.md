@@ -1,6 +1,6 @@
 # Generate VAMS Permission Template
 
-Generate a VAMS permission constraint JSON template file based on user requirements. This skill understands the full VAMS authorization system and creates properly structured JSON templates compatible with `tools/permissionsSetup/apply_template.py` and the `POST /auth/constraintsTemplateImport` API.
+Generate a VAMS permission constraint JSON template file based on user requirements. This skill understands the full VAMS authorization system and creates properly structured JSON templates compatible with `tools/PermissionsSetup/apply_template.py` and the `POST /auth/constraintsTemplateImport` API.
 
 ## Instructions
 
@@ -285,7 +285,7 @@ When the user describes their permission requirements:
 5. **Validate with dry-run** after writing:
 
     ```
-    python tools/permissionsSetup/apply_template.py \
+    python tools/PermissionsSetup/apply_template.py \
         --template documentation/permissionsTemplates/<name>.json \
         --role-name test-role \
         --variables '{"DATABASE_ID": "test-db"}' --dry-run
@@ -296,7 +296,7 @@ When the user describes their permission requirements:
 
 6. **Show the apply command** to the user:
     ```
-    python tools/permissionsSetup/apply_template.py \
+    python tools/PermissionsSetup/apply_template.py \
         --template documentation/permissionsTemplates/<name>.json \
         --role-name <role-name> \
         --variables '{"DATABASE_ID": "<db-id>"}' --dry-run

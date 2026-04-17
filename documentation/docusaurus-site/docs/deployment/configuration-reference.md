@@ -111,6 +111,59 @@ kms:CreateGrant
 Each subnet must reside in its own Availability Zone. Minimum Availability Zone requirements: 3 for OpenSearch Provisioned, 2 for ALB or EKS pipelines, 1 for all other configurations.
 :::
 
+### VPC Resource Usage by Feature
+
+The following table shows which VPC resources are created based on enabled features and pipelines.
+
+#### Subnet Requirements
+
+| Feature / Pipeline                                   | Private Subnets            | Public Subnets | Min AZs | Notes                           |
+| ---------------------------------------------------- | -------------------------- | -------------- | ------- | ------------------------------- |
+| ALB (`useAlb.enabled`)                               | Yes (if `usePublicSubnet`) | Yes            | 2       | Public subnets for ALB          |
+| RapidPipeline ECS (`useRapidPipeline.useEcs`)        | Yes                        | Yes            | 2       | Batch compute                   |
+| RapidPipeline EKS (`useRapidPipeline.useEks`)        | Yes                        | Yes            | 2       | EKS cluster                     |
+| ModelOps (`useModelOps`)                             | Yes                        | Yes            | 1       | Batch compute                   |
+| Gaussian Splatting (`useSplatToolbox`)               | Yes                        | Yes            | 1       | Batch compute                   |
+| Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 1       | Batch compute                   |
+| NVIDIA Cosmos (`useNvidiaCosmos`)                    | Yes                        | Yes            | 1       | Batch compute + EFS + CodeBuild |
+| OpenSearch Provisioned (`openSearch.useProvisioned`) | No                         | No             | 3       | Requires 3 AZs for cluster      |
+| All other features                                   | Isolated only              | No             | 1       | Lambda VPC endpoints            |
+
+#### VPC Interface Endpoints
+
+| Endpoint        | Created When                                                        | Subnet Type                     |
+| --------------- | ------------------------------------------------------------------- | ------------------------------- |
+| API Gateway     | `addVpcEndpoints=true`                                              | Isolated                        |
+| SSM             | `addVpcEndpoints=true`                                              | Isolated                        |
+| Lambda          | `addVpcEndpoints=true`                                              | Isolated                        |
+| STS             | `addVpcEndpoints=true`                                              | Isolated                        |
+| CloudWatch Logs | `addVpcEndpoints=true`                                              | Isolated                        |
+| Step Functions  | `addVpcEndpoints=true`                                              | Isolated                        |
+| SNS             | `addVpcEndpoints=true`                                              | Isolated                        |
+| SQS             | `addVpcEndpoints=true`                                              | Isolated                        |
+| KMS             | `useKmsCmkEncryption.enabled=true`                                  | Isolated                        |
+| KMS FIPS        | `useKmsCmkEncryption.enabled=true` + `useFips=true`                 | Isolated                        |
+| AWS Batch       | Any pipeline enabled                                                | Isolated                        |
+| ECR API         | Any pipeline enabled                                                | Isolated                        |
+| ECR Docker      | Any pipeline enabled                                                | Isolated                        |
+| EFS             | `useNvidiaCosmos.enabled=true`                                      | Isolated                        |
+| ECS             | Pipelines with Batch compute                                        | Private (preferred) or Isolated |
+| ECS Agent       | `useIsaacLabTraining.enabled=true`                                  | Isolated                        |
+| ECS Telemetry   | `useIsaacLabTraining.enabled=true`                                  | Isolated                        |
+| Bedrock Runtime | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
+| Rekognition     | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
+
+#### Gateway Endpoints (Always Created)
+
+| Endpoint | Notes                                         |
+| -------- | --------------------------------------------- |
+| S3       | Created when `addVpcEndpoints=true` (no cost) |
+| DynamoDB | Created when `addVpcEndpoints=true` (no cost) |
+
+:::note
+Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled. VAMS consolidates ECS endpoint subnets across pipeline types, with private subnets taking priority over isolated subnets when both are needed.
+:::
+
 ## Amazon OpenSearch Service (`app.openSearch`)
 
 | Field                                                  | Type    | Default            | Description                                                                                                                                                                                                                                                                                           |
@@ -366,6 +419,81 @@ NVIDIA Isaac Lab reinforcement learning training pipeline on GPU instances. **Re
 | `app.pipelines.useIsaacLabTraining.autoRegisterWithVAMS` | boolean | `true`  | Automatically registers training and evaluation workflows during deployment.                                                                                                                                                                                 |
 | `app.pipelines.useIsaacLabTraining.keepWarmInstance`     | boolean | `false` | Keeps a warm AWS Batch compute instance running to reduce cold start times. **Warning:** Incurs continuous compute costs even when no jobs are running.                                                                                                      |
 
+### NVIDIA Cosmos Predict (`app.pipelines.useNvidiaCosmos`)
+
+NVIDIA Cosmos world foundation models for generating videos from text prompts (Text2World) and from images/videos (Video2World). **Requires VPC** and internet access for HuggingFace model downloads.
+
+| Field                                                                                             | Type    | Default                                          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useNvidiaCosmos.enabled`                                                           | boolean | `false`                                          | Enables the NVIDIA Cosmos Predict pipeline.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `app.pipelines.useNvidiaCosmos.huggingFaceToken`                                                  | string  | `""`                                             | HuggingFace Read access token value (e.g., `hf_xxxx`). CDK stores this in AWS Secrets Manager during deployment. Must have access to all 6 required Cosmos models. **Required when enabled.**                                                                                                                                                                                                                                                                                                                                             |
+| `app.pipelines.useNvidiaCosmos.useCodeBuild`                                                      | boolean | `false`                                          | When true, Cosmos pipeline containers are built using AWS CodeBuild in the cloud. When false (default), containers are built locally during CDK deployment using DockerImageAsset. CodeBuild runs in the same private VPC subnets as the pipeline Batch compute environments, with NAT Gateway egress for internet access. CodeBuild builds run asynchronously — if a build fails, check the CodeBuild project name in CDK stack outputs. Consider configuring Docker Hub authentication credentials to avoid rate limiting (429 errors). |
+| `app.pipelines.useNvidiaCosmos.useWarmInstances`                                                  | boolean | `false`                                          | Keeps GPU instances running when idle for instant pipeline starts. When `false`, scales to zero after job completion (~5-10 min cold start). **Warning:** Warm instances incur continuous compute costs (~$5.67/hr per g5.12xlarge).                                                                                                                                                                                                                                                                                                      |
+| `app.pipelines.useNvidiaCosmos.warmInstanceCount`                                                 | number  | `1`                                              | Number of warm GPU instances to keep running when `useWarmInstances` is `true`.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.text2world2B_v2.enabled`                             | boolean | `false`                                          | Enables Cosmos-Predict2.5-2B-Text2World for generating ~4-second videos from text prompts using the v2.5 flow-matching architecture.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.text2world2B_v2.autoRegisterWithVAMS`                | boolean | `true`                                           | Automatically registers the Text2World 2B v2.5 pipeline during deployment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.text2world2B_v2.instanceTypes`                       | array   | `["g6e.12xlarge", "g5.12xlarge", "g5.48xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Requires 4 GPUs with 24GB+ VRAM. 2B model runs without CPU offloading.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.text2world2B_v2.maxVCpus`                            | number  | `192`                                            | Maximum vCPUs for the AWS Batch compute environment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.text2world14B_v2.enabled`                            | boolean | `false`                                          | Enables Cosmos-Predict2.5-14B-Text2World for generating ~4-second videos from text prompts using the v2.5 flow-matching architecture. Requires P-series instances.                                                                                                                                                                                                                                                                                                                                                                        |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.text2world14B_v2.autoRegisterWithVAMS`               | boolean | `true`                                           | Automatically registers the Text2World 14B v2.5 pipeline during deployment.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.text2world14B_v2.instanceTypes`                      | array   | `["g6e.48xlarge", "p5.48xlarge"]`                | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). 14B models use 8-GPU context parallelism via torchrun. g6e.48xlarge (8x L40S 48GB) recommended; p5.48xlarge (8x H100 80GB) as fallback. **Note:** p4d instances are not supported due to older CUDA driver incompatibilities.                                                                                                                                                                                                                                        |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.text2world14B_v2.maxVCpus`                           | number  | `192`                                            | Maximum vCPUs for the AWS Batch compute environment (g6e.48xlarge and p5.48xlarge both have 192 vCPUs).                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world2B_v2.enabled`                            | boolean | `false`                                          | Enables Cosmos-Predict2.5-2B-Video2World for generating ~4-second videos from image/video inputs with optional text guidance using the v2.5 flow-matching architecture.                                                                                                                                                                                                                                                                                                                                                                   |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world2B_v2.autoRegisterWithVAMS`               | boolean | `true`                                           | Automatically registers the Video2World 2B v2.5 pipeline during deployment.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world2B_v2.autoTriggerOnFileExtensionsUpload`  | string  | `""`                                             | Comma-separated list of file extensions to auto-trigger the pipeline on upload (for example, `".jpg,.png,.mp4"`). Leave empty to disable auto-trigger.                                                                                                                                                                                                                                                                                                                                                                                    |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world2B_v2.instanceTypes`                      | array   | `["g6e.12xlarge", "g5.12xlarge", "g5.48xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Requires 4 GPUs with 24GB+ VRAM. 2B model runs without CPU offloading.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world2B_v2.maxVCpus`                           | number  | `192`                                            | Maximum vCPUs for the AWS Batch compute environment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world14B_v2.enabled`                           | boolean | `false`                                          | Enables Cosmos-Predict2.5-14B-Video2World for generating ~4-second videos from image/video inputs with optional text guidance using the v2.5 flow-matching architecture. Requires P-series instances.                                                                                                                                                                                                                                                                                                                                     |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world14B_v2.autoRegisterWithVAMS`              | boolean | `true`                                           | Automatically registers the Video2World 14B v2.5 pipeline during deployment.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world14B_v2.autoTriggerOnFileExtensionsUpload` | string  | `""`                                             | Comma-separated list of file extensions to auto-trigger the pipeline on upload. Leave empty to disable auto-trigger.                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world14B_v2.instanceTypes`                     | array   | `["g6e.48xlarge", "p5.48xlarge"]`                | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). 14B models use 8-GPU context parallelism via torchrun. g6e.48xlarge (8x L40S 48GB) recommended; p5.48xlarge (8x H100 80GB) as fallback. **Note:** p4d instances are not supported due to older CUDA driver incompatibilities.                                                                                                                                                                                                                                        |
+| `app.pipelines.useNvidiaCosmos.modelsPredict.video2world14B_v2.maxVCpus`                          | number  | `192`                                            | Maximum vCPUs for the AWS Batch compute environment (g6e.48xlarge and p5.48xlarge both have 192 vCPUs).                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+### NVIDIA Cosmos Reason (`app.pipelines.useNvidiaCosmos.modelsReason`)
+
+NVIDIA Cosmos Reason Vision Language Models (VLMs) for analyzing video and image content to generate text-based analysis, captions, descriptions, and reasoning. **Requires VPC** and internet access for HuggingFace model downloads. Shares the same EFS model cache and HuggingFace token as Cosmos Predict pipelines.
+
+| Field                                                                                   | Type    | Default                            | Description                                                                                                                                                          |
+| --------------------------------------------------------------------------------------- | ------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason2B.enabled`                           | boolean | `false`                            | Enables Cosmos-Reason2-2B Vision Language Model for video/image analysis generating text-based output. Model size: ~5GB.                                             |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason2B.autoRegisterWithVAMS`              | boolean | `true`                             | Automatically registers the Reason 2B pipeline during deployment.                                                                                                    |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason2B.autoTriggerOnFileExtensionsUpload` | string  | `""`                               | Comma-separated file extensions to auto-trigger on upload (e.g., `".mp4,.mov,.jpg"`). Leave empty to disable.                                                        |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason2B.instanceTypes`                     | array   | `["g6e.12xlarge", "g5.12xlarge"]`  | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Requires 24GB+ VRAM.                                                                            |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason2B.maxVCpus`                          | number  | `192`                              | Maximum vCPUs for the AWS Batch compute environment.                                                                                                                 |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason8B.enabled`                           | boolean | `false`                            | Enables Cosmos-Reason2-8B Vision Language Model for improved reasoning quality. Model size: ~16GB. Larger model with better spatial-temporal understanding than 2B.  |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason8B.autoRegisterWithVAMS`              | boolean | `true`                             | Automatically registers the Reason 8B pipeline during deployment.                                                                                                    |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason8B.autoTriggerOnFileExtensionsUpload` | string  | `""`                               | Comma-separated file extensions to auto-trigger on upload. Leave empty to disable.                                                                                   |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason8B.instanceTypes`                     | array   | `["g6e.12xlarge", "g6e.24xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Requires 32GB+ VRAM per GPU. g5 instances (A10G, 24GB VRAM) are not supported for the 8B model. |
+| `app.pipelines.useNvidiaCosmos.modelsReason.reason8B.maxVCpus`                          | number  | `192`                              | Maximum vCPUs for the AWS Batch compute environment.                                                                                                                 |
+
+### NVIDIA Cosmos Transfer (`app.pipelines.useNvidiaCosmos.modelsTransfer`)
+
+NVIDIA Cosmos Transfer model for video transformation with control signal conditioning. Supports style transfer and content transformation using edge, depth, segmentation, or visual blur control signals. **Requires VPC** and internet access for HuggingFace model downloads. Shares the same EFS model cache and HuggingFace token as Cosmos Predict and Reason pipelines.
+
+| Field                                                                                       | Type    | Default                           | Description                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------- | ------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useNvidiaCosmos.modelsTransfer.transfer2B.enabled`                           | boolean | `false`                           | Enables Cosmos-Transfer2.5-2B for video transformation with control signal conditioning. Model size: ~20GB. Additional dependencies: VideoDepthAnything (~2GB), SAM2 (~5GB).                                                                                                           |
+| `app.pipelines.useNvidiaCosmos.modelsTransfer.transfer2B.autoRegisterWithVAMS`              | boolean | `true`                            | Automatically registers the Transfer 2B pipeline during deployment.                                                                                                                                                                                                                    |
+| `app.pipelines.useNvidiaCosmos.modelsTransfer.transfer2B.autoTriggerOnFileExtensionsUpload` | string  | `""`                              | Comma-separated file extensions to auto-trigger on upload (e.g., `".mp4,.mov"`). Leave empty to disable.                                                                                                                                                                               |
+| `app.pipelines.useNvidiaCosmos.modelsTransfer.transfer2B.instanceTypes`                     | array   | `["g6e.48xlarge", "p5.48xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). g6e.48xlarge (8x L40S 48GB) is the recommended default. p5.48xlarge (8x H100 80GB) as fallback. **Note:** p4d.24xlarge is not supported due to older CUDA driver incompatibilities with the Transfer 2.5 runtime. |
+| `app.pipelines.useNvidiaCosmos.modelsTransfer.transfer2B.maxVCpus`                          | number  | `192`                             | Maximum vCPUs for the AWS Batch compute environment (g6e.48xlarge and p5.48xlarge both have 192 vCPUs).                                                                                                                                                                                |
+
+### NVIDIA Gr00t Fine-Tuning (`app.pipelines.useNvidiaGr00t`)
+
+NVIDIA Gr00t (GR00T-N1.5-3B) fine-tuning pipeline for embodied AI robot training. Uses LeRobot v2.1 datasets stored as VAMS assets. Operates at the asset level -- downloads the entire asset, looks for training data in a `dataset/` subfolder (configurable), and outputs model checkpoints. **Requires VPC** and internet access for HuggingFace model downloads.
+
+| Setting                                                                         | Type    | Default                                          | Description                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------- | ------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useNvidiaGr00t.enabled`                                          | boolean | `false`                                          | Enables the NVIDIA Gr00t fine-tuning pipeline.                                                                                                                                                                                  |
+| `app.pipelines.useNvidiaGr00t.huggingFaceToken`                                 | string  | `""`                                             | HuggingFace Read access token value (e.g., `hf_xxxx`). CDK stores this in AWS Secrets Manager during deployment. Must have access to `nvidia/GR00T-N1.5-3B`. **Required when enabled.**                                         |
+| `app.pipelines.useNvidiaGr00t.useCodeBuild`                                     | boolean | `false`                                          | Build container image via AWS CodeBuild + ECR instead of local Docker. Recommended for large GPU images. When `false`, uses inline CDK DockerImageAsset (requires local Docker).                                                |
+| `app.pipelines.useNvidiaGr00t.useWarmInstances`                                 | boolean | `false`                                          | Keeps GPU instances running when idle for faster pipeline starts.                                                                                                                                                               |
+| `app.pipelines.useNvidiaGr00t.warmInstanceCount`                                | number  | `0`                                              | Number of warm GPU instances to keep running when `useWarmInstances` is `true`.                                                                                                                                                 |
+| `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.enabled`              | boolean | `false`                                          | Enables GR00T-N1.5-3B fine-tuning.                                                                                                                                                                                              |
+| `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.autoRegisterWithVAMS` | boolean | `true`                                           | Automatically registers the fine-tuning pipeline during deployment.                                                                                                                                                             |
+| `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes`        | array   | `["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Multiple types listed for regional capacity flexibility. g6e.4xlarge (1 GPU) for LoRA, g6e.12xlarge (4 GPU) for full fine-tuning, g5.12xlarge as fallback. |
+| `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.maxVCpus`             | number  | `192`                                            | Maximum vCPUs for the AWS Batch compute environment.                                                                                                                                                                            |
+
 ## Addons (`app.addons`)
 
 ### Garnet Framework (`app.addons.useGarnetFramework`)
@@ -381,196 +509,10 @@ Integration with the Garnet Framework external knowledge graph for NGSI-LD data 
 
 ## Example configurations
 
-### Minimal commercial deployment
+For complete configuration examples, see the template files in the repository:
 
-```json
-{
-    "name": "vams",
-    "env": {
-        "account": null,
-        "region": "us-east-1",
-        "loadContextIgnoreVPCStacks": false
-    },
-    "app": {
-        "baseStackName": "prod",
-        "assetBuckets": {
-            "createNewBucket": true,
-            "defaultNewBucketSyncDatabaseId": "default",
-            "externalAssetBuckets": null
-        },
-        "adminUserId": "administrator",
-        "adminEmailAddress": "admin@example.com",
-        "useFips": false,
-        "useWaf": true,
-        "addStackCloudTrailLogs": true,
-        "useKmsCmkEncryption": {
-            "enabled": false,
-            "optionalExternalCmkArn": null
-        },
-        "govCloud": {
-            "enabled": false,
-            "il6Compliant": false
-        },
-        "useGlobalVpc": {
-            "enabled": false,
-            "useForAllLambdas": false,
-            "addVpcEndpoints": true,
-            "optionalExternalVpcId": null,
-            "optionalExternalIsolatedSubnetIds": null,
-            "optionalExternalPrivateSubnetIds": null,
-            "optionalExternalPublicSubnetIds": null,
-            "vpcCidrRange": "10.1.0.0/16"
-        },
-        "openSearch": {
-            "useServerless": { "enabled": true },
-            "useProvisioned": {
-                "enabled": false,
-                "dataNodeInstanceType": "r6g.large.search",
-                "masterNodeInstanceType": "r6g.large.search",
-                "ebsInstanceNodeSizeGb": 120
-            },
-            "reindexOnCdkDeploy": false
-        },
-        "useLocationService": { "enabled": true },
-        "useAlb": {
-            "enabled": false,
-            "usePublicSubnet": false,
-            "addAlbS3SpecialVpcEndpoint": true,
-            "domainHost": "",
-            "certificateArn": "",
-            "optionalHostedZoneId": null
-        },
-        "useCloudFront": {
-            "enabled": true,
-            "customDomain": {
-                "enabled": false,
-                "domainHost": "",
-                "certificateArn": "",
-                "optionalHostedZoneId": ""
-            }
-        },
-        "pipelines": {
-            "useConversion3dBasic": {
-                "enabled": true,
-                "autoRegisterWithVAMS": true
-            },
-            "useConversionCadMeshMetadataExtraction": {
-                "enabled": false,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
-            },
-            "usePreviewPcPotreeViewer": {
-                "enabled": false,
-                "autoRegisterWithVAMS": false,
-                "autoRegisterAutoTriggerOnFileUpload": true,
-                "sqsAutoRunOnAssetModified": false
-            },
-            "usePreview3dThumbnail": {
-                "enabled": false,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
-            },
-            "useGenAiMetadata3dLabeling": {
-                "enabled": false,
-                "bedrockModelId": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": false
-            },
-            "useSplatToolbox": {
-                "enabled": false,
-                "autoRegisterWithVAMS": true
-            },
-            "useMesh2Splat": {
-                "enabled": false,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": false
-            },
-            "useRapidPipeline": {
-                "useEcs": {
-                    "enabled": false,
-                    "ecrContainerImageURI": "",
-                    "autoRegisterWithVAMS": true
-                },
-                "useEks": {
-                    "enabled": false,
-                    "ecrContainerImageURI": "",
-                    "autoRegisterWithVAMS": true,
-                    "eksClusterVersion": "1.31",
-                    "nodeInstanceType": "m5.2xlarge",
-                    "minNodes": 1,
-                    "maxNodes": 10,
-                    "desiredNodes": 2,
-                    "jobTimeout": 7200,
-                    "jobMemory": "16Gi",
-                    "jobCpu": "2000m",
-                    "jobBackoffLimit": 2,
-                    "jobTTLSecondsAfterFinished": 600,
-                    "observability": {
-                        "enableControlPlaneLogs": false,
-                        "enableContainerInsights": false
-                    }
-                }
-            },
-            "useModelOps": {
-                "enabled": false,
-                "ecrContainerImageURI": "",
-                "autoRegisterWithVAMS": true
-            },
-            "useIsaacLabTraining": {
-                "enabled": false,
-                "acceptNvidiaEula": false,
-                "autoRegisterWithVAMS": true,
-                "keepWarmInstance": false
-            }
-        },
-        "addons": {
-            "useGarnetFramework": {
-                "enabled": false,
-                "garnetApiEndpoint": "",
-                "garnetApiToken": "",
-                "garnetIngestionQueueSqsUrl": ""
-            }
-        },
-        "authProvider": {
-            "presignedUrlTimeoutSeconds": 86400,
-            "authorizerOptions": { "allowedIpRanges": [] },
-            "useCognito": {
-                "enabled": true,
-                "useSaml": false,
-                "useUserPasswordAuthFlow": false,
-                "credTokenTimeoutSeconds": 3600
-            },
-            "useExternalOAuthIdp": {
-                "enabled": false,
-                "idpAuthProviderUrl": null,
-                "idpAuthClientId": null,
-                "idpAuthProviderScope": null,
-                "idpAuthProviderScopeMfa": null,
-                "idpAuthPrincipalDomain": null,
-                "idpAuthProviderTokenEndpoint": null,
-                "idpAuthProviderAuthorizationEndpoint": null,
-                "idpAuthProviderDiscoveryEndpoint": null,
-                "lambdaAuthorizorJWTIssuerUrl": null,
-                "lambdaAuthorizorJWTAudience": null
-            }
-        },
-        "webUi": {
-            "optionalBannerHtmlMessage": "",
-            "allowUnsafeEvalFeatures": false
-        },
-        "api": {
-            "globalRateLimit": 50,
-            "globalBurstLimit": 100
-        },
-        "metadataSchema": {
-            "autoLoadDefaultAssetLinksSchema": true,
-            "autoLoadDefaultDatabaseSchema": true,
-            "autoLoadDefaultAssetSchema": true,
-            "autoLoadDefaultAssetFileSchema": true
-        }
-    }
-}
-```
+-   **Commercial:** [`infra/config/config.template.commercial.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.commercial.json)
+-   **GovCloud:** [`infra/config/config.template.govcloud.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.govcloud.json)
 
 ### AWS GovCloud deployment
 
@@ -599,50 +541,6 @@ Key differences from the commercial template:
         "useCloudFront": { "enabled": false },
         "authProvider": {
             "useCognito": { "enabled": true }
-        }
-    }
-}
-```
-
-### Commercial with all pipelines enabled
-
-Key pipeline section for enabling all available pipelines:
-
-```json
-{
-    "app": {
-        "useGlobalVpc": { "enabled": true, "vpcCidrRange": "10.1.0.0/16" },
-        "webUi": { "allowUnsafeEvalFeatures": true },
-        "pipelines": {
-            "useConversion3dBasic": { "enabled": true, "autoRegisterWithVAMS": true },
-            "useConversionCadMeshMetadataExtraction": {
-                "enabled": true,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
-            },
-            "usePreviewPcPotreeViewer": {
-                "enabled": true,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true,
-                "sqsAutoRunOnAssetModified": false
-            },
-            "usePreview3dThumbnail": {
-                "enabled": true,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
-            },
-            "useGenAiMetadata3dLabeling": {
-                "enabled": true,
-                "bedrockModelId": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
-            },
-            "useSplatToolbox": { "enabled": true, "autoRegisterWithVAMS": true },
-            "useMesh2Splat": {
-                "enabled": false,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": false
-            }
         }
     }
 }
