@@ -4,7 +4,7 @@
     "description": "Custom installation for PlayCanvas with dynamic loading",
     "private": true,
     "dependencies": {
-        "playcanvas": "2.11.8"
+        "playcanvas": "2.17.2"
     },
     "devDependencies": {
         "webpack": "^5.89.0",

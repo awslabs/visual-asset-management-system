@@ -5,7 +5,8 @@
     "private": true,
     "dependencies": {
         "@babylonjs/core": "^8.33.0",
-        "@babylonjs/loaders": "^8.33.0"
+        "@babylonjs/loaders": "^8.33.0",
+        "fflate": "^0.8.2"
     },
     "devDependencies": {
         "webpack": "^5.89.0",

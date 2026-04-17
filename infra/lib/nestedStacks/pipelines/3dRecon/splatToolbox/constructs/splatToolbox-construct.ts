@@ -70,7 +70,7 @@ export class SplatToolboxConstruct extends Construct {
 
         const splatGitHubRepoLink =
             "https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.git";
-        const splatGitHubRepoCommitHash = "700407e1c1b91206967cbb3f691c73165d34f5f5";
+        const splatGitHubRepoCommitHash = "e27cc1439890d832e85c8949e3c9f920ac80a391";
 
         // Download and Sync splat toolbox repository container files
         this.syncSplatToolboxContainer(splatGitHubRepoLink, splatGitHubRepoCommitHash);
