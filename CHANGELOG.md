@@ -6,23 +6,23 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
-• Documentation Overhaul - Entire documentation base refactored, implemented as markdown and static website
-• Website Overhaul - Migrated to Vite build framework, AWS Amplify V6 Gen2 SDK, and added dark/light theme support (dark is now the default)
-• New Experimental USD Web Viewer - Needle USD 3D WASM experimental viewer with dependency chain loading for .usd, .usda, .usdc, .usdz files
-• New ThreeJS 3D and CAD STP Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading, scene graph support, and optional LGPL-licensed CAD support; now the primary viewer for common mesh types
-• New Pipeline Type Support - Pipelines and workflows now support SQS and EventBridge execution types alongside Lambda, enabling integration with external processing systems
-• New 3D/Point Cloud Preview Thumbnail Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
-• New External Tool Integrations (Experimental) - Open-source VAMS connector plugins for NVIDIA Isaac Sim (Omniverse Kit extension) and Esri ArcGIS Pro (.NET add-in) via the VAMS CLI
-• New Physical AI NVIDIA Cosmos Inference Pipelines - GPU-accelerated world generation, video analysis, and video transformation using NVIDIA Cosmos foundation models with HuggingFace model integration and metadata-driven prompts. Predict 2.5 (Text2World/Video2World, 2B/14B), Reason v2 (VLM video/image analysis, 2B/8B), and Transfer v2.5 (control-signal video transformation, 2B). Configurable per-model GPU instance types across G and P EC2 instance families. AWS CodeBuild is an optional container deployment method for cloud-based builds.
-• New Physical AI NVIDIA GR00T Fine-Tuning Pipeline - GPU-accelerated fine-tuning of NVIDIA's GR00T-N1.5-3B embodied AI foundation model for robotics applications. Supports LoRA and full fine-tuning on user-provided datasets in LeRobot v2.1 format with configurable training hyperparameters. Model checkpoints stored back to VAMS assets. Configurable GPU instance types (g6e.4xlarge for LoRA, g6e.12xlarge for full fine-tuning).
-• New Database Metadata and Location Map Support - Database metadata management on the website with location service mini-map display option
-• Website Asset and File Page Refinement - Refined asset and file viewing page layouts; added asset preview thumbnail to top details section
-• Enhanced Asset Versions - Version aliasing, archive/unarchive, version details editing, metadata/attribute versioning, and revert with metadata restoration
-• Enhanced File and Download Functionality with Asset Versions - Version-aware download APIs with file and asset version query parameters, updated file viewers for versioned file retrieval, and web version selector filtering for files and metadata
-• Enhanced Cross-Database Support - Cross-database asset linking and file copying capability
-• New Cognito User Management - Web UI, API, and CLI for managing Cognito users without AWS Console access; includes add/update/remove/reset password operations and a new admin navigation page (enabled only when Cognito authentication is active)
-• New API Key Management - Complete API Key system with creation through API/CLI/web UI, user ID impersonation with role assignment, upstream/downstream application integration, and admin web interface for key management
-• New Permission Constraints Templating - Bulk-import permission constraints from JSON templates with server-side variable substitution, pre-built templates for common profiles (database-admin, database-user, database-readonly, global-readonly, deny-tagged-assets), CLI import command, automated deployment tool, and comprehensive Permissions Guide documentation
+-   Documentation Overhaul - Entire documentation base refactored, implemented as markdown and static website
+-   Website Overhaul - Migrated to Vite build framework, AWS Amplify V6 Gen2 SDK, and added dark/light theme support (dark is now the default)
+-   New Experimental USD Web Viewer - Needle USD 3D WASM experimental viewer with dependency chain loading for .usd, .usda, .usdc, .usdz files
+-   New ThreeJS 3D and CAD STP Web Viewer - Open-source ThreeJS viewer for .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep files with dependency chain loading, scene graph support, and optional LGPL-licensed CAD support; now the primary viewer for common mesh types
+-   New Pipeline Type Support - Pipelines and workflows now support SQS and EventBridge execution types alongside Lambda, enabling integration with external processing systems
+-   New 3D/Point Cloud Preview Thumbnail Pipeline - CPU-based headless rendering pipeline generating animated GIF or static image previews from 3D mesh, point cloud, CAD, and USD files
+-   New External Tool Integrations (Experimental) - Open-source VAMS connector plugins for NVIDIA Isaac Sim (Omniverse Kit extension) and Esri ArcGIS Pro (.NET add-in) via the VAMS CLI
+-   New Physical AI NVIDIA Cosmos Inference Pipelines - GPU-accelerated world generation, video analysis, and video transformation using NVIDIA Cosmos foundation models with HuggingFace model integration and metadata-driven prompts. Predict 2.5 (Text2World/Video2World, 2B/14B), Reason v2 (VLM video/image analysis, 2B/8B), and Transfer v2.5 (control-signal video transformation, 2B). Configurable per-model GPU instance types across G and P EC2 instance families. AWS CodeBuild is an optional container deployment method for cloud-based builds.
+-   New Physical AI NVIDIA GR00T Fine-Tuning Pipeline - GPU-accelerated fine-tuning of NVIDIA's GR00T-N1.5-3B embodied AI foundation model for robotics applications. Supports LoRA and full fine-tuning on user-provided datasets in LeRobot v2.1 format with configurable training hyperparameters. Model checkpoints stored back to VAMS assets. Configurable GPU instance types (g6e.4xlarge for LoRA, g6e.12xlarge for full fine-tuning).
+-   New Database Metadata and Location Map Support - Database metadata management on the website with location service mini-map display option
+-   Website Asset and File Page Refinement - Refined asset and file viewing page layouts; added asset preview thumbnail to top details section
+-   Enhanced Asset Versions - Version aliasing, archive/unarchive, version details editing, metadata/attribute versioning, and revert with metadata restoration
+-   Enhanced File and Download Functionality with Asset Versions - Version-aware download APIs with file and asset version query parameters, updated file viewers for versioned file retrieval, and web version selector filtering for files and metadata
+-   Enhanced Cross-Database Support - Cross-database asset linking and file copying capability
+-   New Cognito User Management - Web UI, API, and CLI for managing Cognito users without AWS Console access; includes add/update/remove/reset password operations and a new admin navigation page (enabled only when Cognito authentication is active)
+-   New API Key Management - Complete API Key system with creation through API/CLI/web UI, user ID impersonation with role assignment, upstream/downstream application integration, and admin web interface for key management
+-   New Permission Constraints Templating - Bulk-import permission constraints from JSON templates with server-side variable substitution, pre-built templates for common profiles (database-admin, database-user, database-readonly, global-readonly, deny-tagged-assets), CLI import command, automated deployment tool, and comprehensive Permissions Guide documentation
 
 ### ⚠ BREAKING CHANGES
 
@@ -173,6 +173,7 @@ The website overhaul may cause a high number of merge conflicts for forked repos
 -   **Web** Removed progress bar and status columns from asset file tables on the pre-upload screen to avoid confusion about upload state
 -   Further API performance improvements for listing asset files and gathering asset export data
 -   Updated Gaussian Splat pipeline to the newest version of the 3D reconstruction toolkit
+-   **Web** Updated PlayCanvas viewer to latest version; also fixed camera rotation bugs
 -   Updated CLINE/KIRO workflows for clarifying CLI patterns with json-output
 -   Updated NPM dependencies in web, web visualizers, and infra for audit fixes; refactored deprecated components (RelatedTable) replaced by newer packages
 

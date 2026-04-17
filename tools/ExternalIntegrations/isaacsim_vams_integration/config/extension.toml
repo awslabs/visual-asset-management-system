@@ -10,10 +10,10 @@ authors = ["VAMS Team"]
 reloadable = true
 
 [dependencies]
-"omni.ext" = {}
-"omni.ui" = {}
-"omni.usd" = {}
 "omni.kit.window.extensions" = {optional = true}
+"omni.kit.uiapp" = {optional = true}
+"isaacsim.asset.importer.urdf" = {optional = true}
+"isaacsim.asset.importer.mjcf" = {optional = true}
 
 [[python.module]]
 name = "vams.connector.isaacsim"

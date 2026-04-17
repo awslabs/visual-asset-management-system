@@ -10,18 +10,18 @@ Add an NVIDIA Cosmos Predict pipeline to VAMS that supports multiple model insta
 
 ### Supported Model Types (Initial)
 
-| Model | Input | Output | GPU Memory (full offload) |
-|---|---|---|---|
-| Cosmos-Predict1-7B-Text2World | Text prompt | 5s MP4 video (1280x704, 24fps) | 24.4 GB |
-| Cosmos-Predict1-7B-Video2World | Image/video + optional text prompt | 5s MP4 video (1280x704, 24fps) | 27.3 GB |
+| Model                          | Input                              | Output                         | GPU Memory (full offload) |
+| ------------------------------ | ---------------------------------- | ------------------------------ | ------------------------- |
+| Cosmos-Predict1-7B-Text2World  | Text prompt                        | 5s MP4 video (1280x704, 24fps) | 24.4 GB                   |
+| Cosmos-Predict1-7B-Video2World | Image/video + optional text prompt | 5s MP4 video (1280x704, 24fps) | 27.3 GB                   |
 
 ### Future Model Types (Planned)
 
-| Model | Notes |
-|---|---|
-| Cosmos-Predict1-14B-Text2World | ~39 GB VRAM, needs A100/H100 (p4d/p5 instances) |
-| Cosmos-Predict1-14B-Video2World | ~39 GB VRAM, needs A100/H100 |
-| Cosmos-Predict2.5 variants | Different architecture (flow-based), 2B and 14B sizes |
+| Model                           | Notes                                                 |
+| ------------------------------- | ----------------------------------------------------- |
+| Cosmos-Predict1-14B-Text2World  | ~39 GB VRAM, needs A100/H100 (p4d/p5 instances)       |
+| Cosmos-Predict1-14B-Video2World | ~39 GB VRAM, needs A100/H100                          |
+| Cosmos-Predict2.5 variants      | Different architecture (flow-based), 2B and 14B sizes |
 
 ---
 
@@ -31,38 +31,39 @@ Add an NVIDIA Cosmos Predict pipeline to VAMS that supports multiple model insta
 
 ```json
 {
-  "app": {
-    "pipelines": {
-      "useCosmosPredict": {
-        "enabled": false,
-        "huggingFaceToken": "",
-        "useWarmInstances": false,
-        "warmInstanceCount": 1,
-        "models": {
-          "text2world7B": {
-            "enabled": false,
-            "autoRegisterWithVAMS": true,
-            "instanceTypes": ["g5.12xlarge"],
-            "maxVCpus": 48
-          },
-          "video2world7B": {
-            "enabled": false,
-            "autoRegisterWithVAMS": true,
-            "autoTriggerOnFileExtensionsUpload": "",
-            "instanceTypes": ["g5.12xlarge"],
-            "maxVCpus": 48
-          }
+    "app": {
+        "pipelines": {
+            "useCosmosPredict": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useWarmInstances": false,
+                "warmInstanceCount": 1,
+                "models": {
+                    "text2world7B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["g5.12xlarge"],
+                        "maxVCpus": 48
+                    },
+                    "video2world7B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g5.12xlarge"],
+                        "maxVCpus": 48
+                    }
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
 **Warm vs Cold Instances:**
-- `useWarmInstances: false` (default) — Batch compute environment scales to 0 when idle. Jobs incur a cold start penalty (~5-10 minutes for EC2 GPU instance launch + EFS mount). No cost when idle.
-- `useWarmInstances: true` — Batch compute environment keeps `warmInstanceCount` instances running at all times via `minVCpus`. Jobs start near-instantly since instances are pre-warmed. Costs ~$5.67/hr per g5.12xlarge instance even when no jobs are running.
-- `warmInstanceCount` — Number of warm instances to maintain (default: 1). Each g5.12xlarge provides 48 vCPUs, so `warmInstanceCount: 1` means `minVCpus: 48`.
+
+-   `useWarmInstances: false` (default) — Batch compute environment scales to 0 when idle. Jobs incur a cold start penalty (~5-10 minutes for EC2 GPU instance launch + EFS mount). No cost when idle.
+-   `useWarmInstances: true` — Batch compute environment keeps `warmInstanceCount` instances running at all times via `minVCpus`. Jobs start near-instantly since instances are pre-warmed. Costs ~$5.67/hr per g5.12xlarge instance even when no jobs are running.
+-   `warmInstanceCount` — Number of warm instances to maintain (default: 1). Each g5.12xlarge provides 48 vCPUs, so `warmInstanceCount: 1` means `minVCpus: 48`.
 
 ### Config TypeScript Interface (`infra/config/config.ts`)
 
@@ -133,11 +134,11 @@ infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/
 
 ### Base Image & Dependencies
 
-- **Base**: `nvcr.io/nvidia/pytorch:24.10-py3` (NVIDIA NGC PyTorch, CUDA 12.4)
-- **Framework**: `cosmos-predict1` cloned from `https://github.com/nvidia-cosmos/cosmos-predict1.git`
-- **Conda environment**: from `cosmos-predict1.yaml` (Python 3.10, PyTorch 2.6.0, CUDA 12.4)
-- **Additional**: transformer-engine 1.12.0, NVIDIA APEX (compiled from source)
-- **TORCH_CUDA_ARCH_LIST**: `"8.0 8.6 8.9"` (A100, A10G, L4/L40S)
+-   **Base**: `nvcr.io/nvidia/pytorch:24.10-py3` (NVIDIA NGC PyTorch, CUDA 12.4)
+-   **Framework**: `cosmos-predict1` cloned from `https://github.com/nvidia-cosmos/cosmos-predict1.git`
+-   **Conda environment**: from `cosmos-predict1.yaml` (Python 3.10, PyTorch 2.6.0, CUDA 12.4)
+-   **Additional**: transformer-engine 1.12.0, NVIDIA APEX (compiled from source)
+-   **TORCH_CUDA_ARCH_LIST**: `"8.0 8.6 8.9"` (A100, A10G, L4/L40S)
 
 Model weights are NOT baked into the image. They are managed at runtime via the model manager.
 
@@ -183,6 +184,7 @@ ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]
 Handles the EFS + S3 hybrid caching with lazy-load on first run.
 
 **Flow:**
+
 ```
 ensure_model_available(model_name, efs_base_path, s3_bucket, hf_token)
   │
@@ -202,14 +204,15 @@ ensure_model_available(model_name, efs_base_path, s3_bucket, hf_token)
 
 **Required models per type:**
 
-| Model Type | Required Checkpoints |
-|---|---|
-| Text2World 7B | Cosmos-Predict1-7B-Text2World, Cosmos-Tokenize1-CV8x8x8-720p, google-t5/t5-11b |
+| Model Type     | Required Checkpoints                                                            |
+| -------------- | ------------------------------------------------------------------------------- |
+| Text2World 7B  | Cosmos-Predict1-7B-Text2World, Cosmos-Tokenize1-CV8x8x8-720p, google-t5/t5-11b  |
 | Video2World 7B | Cosmos-Predict1-7B-Video2World, Cosmos-Tokenize1-CV8x8x8-720p, google-t5/t5-11b |
 
 The tokenizer and T5 text encoder are shared between models -- downloaded once, used by both.
 
 **EFS directory layout:**
+
 ```
 /mnt/efs/cosmos-models/
 ├── Cosmos-Predict1-7B-Text2World/
@@ -380,9 +383,10 @@ def lambda_handler(event, context):
 ### vamsExecuteCosmosVideo2WorldPipeline.py
 
 Same structure as above, except:
-- Reads `COSMOS_PREDICT_PROMPT` from **file metadata** (`fileMetadata.metadata`) instead of asset metadata
-- Passes `inputS3AssetFilePath` from the event (specific file to process)
-- Sets `modelType: "video2world"`
+
+-   Reads `COSMOS_PREDICT_PROMPT` from **file metadata** (`fileMetadata.metadata`) instead of asset metadata
+-   Passes `inputS3AssetFilePath` from the event (specific file to process)
+-   Sets `modelType: "video2world"`
 
 ### constructPipeline.py (Shared)
 
@@ -419,19 +423,19 @@ def construct_cosmos_definition(event):
 
 ### openPipeline.py (Shared)
 
-- Validates file extension for Video2World: `.mp4`, `.mov`, `.jpg`, `.jpeg`, `.png`, `.webp`
-- For Text2World (no `inputS3AssetFilePath`): skips file validation
-- Starts Step Functions state machine execution
-- Environment variable: `ALLOWED_INPUT_FILEEXTENSIONS`
-- **State machine ARN routing**: Each vamsExecute Lambda passes the correct `STATE_MACHINE_ARN` in its invocation payload to openPipeline (not as a Lambda env var). This allows the shared openPipeline to route to the correct state machine per model type. Alternatively, if the VAMS pattern requires `STATE_MACHINE_ARN` as an env var, we create two openPipeline instances (one per model type) with different env vars -- following whichever pattern is simpler.
+-   Validates file extension for Video2World: `.mp4`, `.mov`, `.jpg`, `.jpeg`, `.png`, `.webp`
+-   For Text2World (no `inputS3AssetFilePath`): skips file validation
+-   Starts Step Functions state machine execution
+-   Environment variable: `ALLOWED_INPUT_FILEEXTENSIONS`
+-   **State machine ARN routing**: Each vamsExecute Lambda passes the correct `STATE_MACHINE_ARN` in its invocation payload to openPipeline (not as a Lambda env var). This allows the shared openPipeline to route to the correct state machine per model type. Alternatively, if the VAMS pattern requires `STATE_MACHINE_ARN` as an env var, we create two openPipeline instances (one per model type) with different env vars -- following whichever pattern is simpler.
 
 **Note on Text2World asset-level execution**: VAMS workflow execution normally requires a `fileKey` (specific file). For Text2World, which operates on the global asset without a specific file, the workflow should be triggered with an empty or sentinel `fileKey`. The vamsExecute Lambda for Text2World ignores `inputAssetFileKey` and only uses `assetId` + `databaseId` for metadata lookup and output path construction. The `executeWorkflow.py` handler already handles the case where `filePath` is empty by skipping file metadata retrieval (only fetching asset metadata).
 
 ### pipelineEnd.py (Shared)
 
-- Cleanup handler
-- Sends `states:SendTaskSuccess` or `states:SendTaskFailure` via task token callback
-- Same pattern as Gaussian Splat `pipelineEnd.py`
+-   Cleanup handler
+-   Sends `states:SendTaskSuccess` or `states:SendTaskFailure` via task token callback
+-   Same pattern as Gaussian Splat `pipelineEnd.py`
 
 ---
 
@@ -460,36 +464,41 @@ interface CosmosPredictBuilderNestedStackProps extends cdk.NestedStackProps {
 #### Shared Resources (created once regardless of which models are enabled)
 
 **S3 Model Cache Bucket:**
-- Bucket name: `vams-cosmos-model-cache-{account}-{region}`
-- KMS encryption (shared VAMS key)
-- TLS enforced via bucket policy
-- Lifecycle: transition to IA after 90 days
+
+-   Bucket name: `vams-cosmos-model-cache-{account}-{region}`
+-   KMS encryption (shared VAMS key)
+-   TLS enforced via bucket policy
+-   Lifecycle: transition to IA after 90 days
 
 **EFS FileSystem:**
-- Encrypted with shared KMS key
-- Performance mode: generalPurpose
-- Throughput mode: elastic (scales with usage, important for large model downloads)
-- Lifecycle: transition to IA after 30 days
-- Mount targets: one per pipeline subnet
-- Security group: allows NFS (port 2049) from Batch compute security group
-- Removal policy: RETAIN (model data persists across stack updates)
+
+-   Encrypted with shared KMS key
+-   Performance mode: generalPurpose
+-   Throughput mode: elastic (scales with usage, important for large model downloads)
+-   Lifecycle: transition to IA after 30 days
+-   Mount targets: one per pipeline subnet
+-   Security group: allows NFS (port 2049) from Batch compute security group
+-   Removal policy: RETAIN (model data persists across stack updates)
 
 **ECR Repository + Docker Image:**
-- Single ECR repo for the Cosmos container image
-- `DockerImageAsset` builds from `backendPipelines/genAi/cosmosPredict/container/`
-- Image tag based on build hash
+
+-   Single ECR repo for the Cosmos container image
+-   `DockerImageAsset` builds from `backendPipelines/genAi/cosmosPredict/container/`
+-   Image tag based on build hash
 
 **Batch Compute Environment:**
-- Uses `BatchGpuPipelineConstruct` (reusable construct from SplatToolbox pattern)
-- Instance types: from config (default: `["g5.12xlarge"]`)
-- Min vCPUs: `0` when `useWarmInstances: false` (cold start, scale to zero), or `warmInstanceCount * 48` when `useWarmInstances: true` (warm pool, instances stay running)
-- Max vCPUs: from config (default: 48)
-- Allocation strategy: `BEST_FIT_PROGRESSIVE`
-- Launch template: 200GB gp3 encrypted EBS + EFS mount via user data
-- AMI: ECS AL2 (Amazon Linux 2)
-- Security group: outbound internet for HuggingFace downloads
+
+-   Uses `BatchGpuPipelineConstruct` (reusable construct from SplatToolbox pattern)
+-   Instance types: from config (default: `["g5.12xlarge"]`)
+-   Min vCPUs: `0` when `useWarmInstances: false` (cold start, scale to zero), or `warmInstanceCount * 48` when `useWarmInstances: true` (warm pool, instances stay running)
+-   Max vCPUs: from config (default: 48)
+-   Allocation strategy: `BEST_FIT_PROGRESSIVE`
+-   Launch template: 200GB gp3 encrypted EBS + EFS mount via user data
+-   AMI: ECS AL2 (Amazon Linux 2)
+-   Security group: outbound internet for HuggingFace downloads
 
 **Launch Template User Data** (EFS mount):
+
 ```bash
 #!/bin/bash
 yum install -y amazon-efs-utils
@@ -500,118 +509,130 @@ mkdir -p /mnt/workspace
 ```
 
 **Batch Job Queue:**
-- Single queue shared by all Cosmos model types
-- Priority: 1
-- State: ENABLED
+
+-   Single queue shared by all Cosmos model types
+-   Priority: 1
+-   State: ENABLED
 
 **Shared Lambda Functions:**
-- `constructPipelineFunction` (shared across model types)
-- `openPipelineFunction` (shared, different env vars per state machine)
-- `pipelineEndFunction` (shared)
+
+-   `constructPipelineFunction` (shared across model types)
+-   `openPipelineFunction` (shared, different env vars per state machine)
+-   `pipelineEndFunction` (shared)
 
 #### Per-Model Resources (conditional on each model's `enabled` flag)
 
 **For each enabled model (text2world7B, video2world7B):**
 
 1. **Batch Job Definition:**
-   - Container image: shared ECR image
-   - vCPUs: 48, Memory: 120,000 MB, GPUs: 4
-   - Privileged mode, shared memory 8192 MB
-   - Device mappings: `/dev/nvidia0-3`, `/dev/nvidiactl`, `/dev/nvidia-uvm`
-   - Environment: `AWS_REGION`, `MODEL_TYPE`, `MODEL_SIZE`
-   - Secrets: `HF_TOKEN` from SSM SecureString
-   - Mount points: EFS at `/mnt/efs/cosmos-models`, `/tmp` workspace volume
-   - Timeout: 28,800 seconds (8 hours)
-   - Retry: 1 attempt
+
+    - Container image: shared ECR image
+    - vCPUs: 48, Memory: 120,000 MB, GPUs: 4
+    - Privileged mode, shared memory 8192 MB
+    - Device mappings: `/dev/nvidia0-3`, `/dev/nvidiactl`, `/dev/nvidia-uvm`
+    - Environment: `AWS_REGION`, `MODEL_TYPE`, `MODEL_SIZE`
+    - Secrets: `HF_TOKEN` from SSM SecureString
+    - Mount points: EFS at `/mnt/efs/cosmos-models`, `/tmp` workspace volume
+    - Timeout: 28,800 seconds (8 hours)
+    - Retry: 1 attempt
 
 2. **vamsExecute Lambda:**
-   - Text2World: `vamsExecuteCosmosText2WorldPipeline.lambda_handler`
-   - Video2World: `vamsExecuteCosmosVideo2WorldPipeline.lambda_handler`
-   - Env: `OPEN_PIPELINE_FUNCTION_NAME`
-   - Grants: invoke openPipeline, read asset buckets
+
+    - Text2World: `vamsExecuteCosmosText2WorldPipeline.lambda_handler`
+    - Video2World: `vamsExecuteCosmosVideo2WorldPipeline.lambda_handler`
+    - Env: `OPEN_PIPELINE_FUNCTION_NAME`
+    - Grants: invoke openPipeline, read asset buckets
 
 3. **Step Functions State Machine:**
-   ```
-   ConstructPipelineTask (Lambda)
-     → CosmosBatchJob (BatchSubmitJob, RUN_JOB integration)
-       → [catch] HandleBatchError → PipelineEndTask
-     → PipelineEndTask (Lambda)
-       → EndStatesChoice
-         → SuccessState / FailState
-   ```
-   - Container overrides pass: `EXTERNAL_SFN_TASK_TOKEN`, `INPUT_PARAMETERS`, `INPUT_METADATA`, `S3_MODEL_BUCKET`
-   - Timeout: 5 hours
-   - Logging: ALL, 10-year retention
-   - Tracing: ENABLED
+
+    ```
+    ConstructPipelineTask (Lambda)
+      → CosmosBatchJob (BatchSubmitJob, RUN_JOB integration)
+        → [catch] HandleBatchError → PipelineEndTask
+      → PipelineEndTask (Lambda)
+        → EndStatesChoice
+          → SuccessState / FailState
+    ```
+
+    - Container overrides pass: `EXTERNAL_SFN_TASK_TOKEN`, `INPUT_PARAMETERS`, `INPUT_METADATA`, `S3_MODEL_BUCKET`
+    - Timeout: 5 hours
+    - Logging: ALL, 10-year retention
+    - Tracing: ENABLED
 
 4. **Custom Resource (Pipeline + Workflow Registration):**
 
-   Text2World:
-   ```
-   pipelineId: "cosmos-predict-text2world-7b"
-   pipelineType: "standardFile"
-   pipelineExecutionType: "Lambda"
-   assetType: ".all"
-   outputType: ".mp4"
-   waitForCallback: "Enabled"
-   taskTimeout: "28800"
-   inputParameters: '{"MODEL_TYPE": "text2world", "MODEL_SIZE": "7B"}'
-   workflowId: "cosmos-predict-text2world-7b"
-   ```
+    Text2World:
 
-   Video2World:
-   ```
-   pipelineId: "cosmos-predict-video2world-7b"
-   pipelineType: "standardFile"
-   pipelineExecutionType: "Lambda"
-   assetType: ".all"
-   outputType: ".mp4"
-   waitForCallback: "Enabled"
-   taskTimeout: "28800"
-   autoTriggerOnFileExtensionsUpload: (from config)
-   inputParameters: '{"MODEL_TYPE": "video2world", "MODEL_SIZE": "7B"}'
-   workflowId: "cosmos-predict-video2world-7b"
-   ```
+    ```
+    pipelineId: "cosmos-predict-text2world-7b"
+    pipelineType: "standardFile"
+    pipelineExecutionType: "Lambda"
+    assetType: ".all"
+    outputType: ".mp4"
+    waitForCallback: "Enabled"
+    taskTimeout: "28800"
+    inputParameters: '{"MODEL_TYPE": "text2world", "MODEL_SIZE": "7B"}'
+    workflowId: "cosmos-predict-text2world-7b"
+    ```
+
+    Video2World:
+
+    ```
+    pipelineId: "cosmos-predict-video2world-7b"
+    pipelineType: "standardFile"
+    pipelineExecutionType: "Lambda"
+    assetType: ".all"
+    outputType: ".mp4"
+    waitForCallback: "Enabled"
+    taskTimeout: "28800"
+    autoTriggerOnFileExtensionsUpload: (from config)
+    inputParameters: '{"MODEL_TYPE": "video2world", "MODEL_SIZE": "7B"}'
+    workflowId: "cosmos-predict-video2world-7b"
+    ```
 
 ### Lambda Builders (`cosmosPredictFunctions.ts`)
 
 5 Lambda builder functions following standard VAMS pattern:
 
-| Function | Handler | Key Env Vars | Key Grants |
-|---|---|---|---|
-| `buildVamsExecuteCosmosText2WorldFunction` | `vamsExecuteCosmosText2WorldPipeline.lambda_handler` | `OPEN_PIPELINE_FUNCTION_NAME` | invoke openPipeline, read asset buckets |
-| `buildVamsExecuteCosmosVideo2WorldFunction` | `vamsExecuteCosmosVideo2WorldPipeline.lambda_handler` | `OPEN_PIPELINE_FUNCTION_NAME` | invoke openPipeline, read asset buckets |
-| `buildConstructPipelineFunction` | `constructPipeline.lambda_handler` | (none) | read asset buckets |
-| `buildOpenPipelineFunction` | `openPipeline.lambda_handler` | `STATE_MACHINE_ARN`, `ALLOWED_INPUT_FILEEXTENSIONS` | start state machine, read asset buckets |
-| `buildPipelineEndFunction` | `pipelineEnd.lambda_handler` | (none) | read asset+auxiliary buckets, states:SendTask* |
+| Function                                    | Handler                                               | Key Env Vars                                        | Key Grants                                      |
+| ------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------- |
+| `buildVamsExecuteCosmosText2WorldFunction`  | `vamsExecuteCosmosText2WorldPipeline.lambda_handler`  | `OPEN_PIPELINE_FUNCTION_NAME`                       | invoke openPipeline, read asset buckets         |
+| `buildVamsExecuteCosmosVideo2WorldFunction` | `vamsExecuteCosmosVideo2WorldPipeline.lambda_handler` | `OPEN_PIPELINE_FUNCTION_NAME`                       | invoke openPipeline, read asset buckets         |
+| `buildConstructPipelineFunction`            | `constructPipeline.lambda_handler`                    | (none)                                              | read asset buckets                              |
+| `buildOpenPipelineFunction`                 | `openPipeline.lambda_handler`                         | `STATE_MACHINE_ARN`, `ALLOWED_INPUT_FILEEXTENSIONS` | start state machine, read asset buckets         |
+| `buildPipelineEndFunction`                  | `pipelineEnd.lambda_handler`                          | (none)                                              | read asset+auxiliary buckets, states:SendTask\* |
 
 All builders:
-- Runtime: PYTHON_3_12
-- Timeout: 5 minutes
-- Memory: 5,308 MB (LAMBDA_MEMORY_SIZE)
-- Code path: `backendPipelines/genAi/cosmosPredict/lambda`
-- VPC: conditional on `useGlobalVpc.enabled && useForAllLambdas`
-- Security: `kmsKeyLambdaPermissionAddToResourcePolicy()`, `globalLambdaEnvironmentsAndPermissions()`, `suppressCdkNagErrorsByGrantReadWrite()`
+
+-   Runtime: PYTHON_3_12
+-   Timeout: 5 minutes
+-   Memory: 5,308 MB (LAMBDA_MEMORY_SIZE)
+-   Code path: `backendPipelines/genAi/cosmosPredict/lambda`
+-   VPC: conditional on `useGlobalVpc.enabled && useForAllLambdas`
+-   Security: `kmsKeyLambdaPermissionAddToResourcePolicy()`, `globalLambdaEnvironmentsAndPermissions()`, `suppressCdkNagErrorsByGrantReadWrite()`
 
 ### IAM Roles
 
 **Container Execution Role:**
-- Principal: `ecs-tasks.amazonaws.com`
-- Managed policies: `AmazonECSTaskExecutionRolePolicy`, `AWSXrayWriteOnlyAccess`
-- Inline: S3 read/write on asset buckets + model cache bucket, EFS client mount, states:SendTask*
+
+-   Principal: `ecs-tasks.amazonaws.com`
+-   Managed policies: `AmazonECSTaskExecutionRolePolicy`, `AWSXrayWriteOnlyAccess`
+-   Inline: S3 read/write on asset buckets + model cache bucket, EFS client mount, states:SendTask\*
 
 **Container Job Role:**
-- Principal: `ecs-tasks.amazonaws.com`
-- Same inline policies as execution role
-- Additional: SSM GetParameter for HF_TOKEN
+
+-   Principal: `ecs-tasks.amazonaws.com`
+-   Same inline policies as execution role
+-   Additional: SSM GetParameter for HF_TOKEN
 
 ### CDK Nag Suppressions
 
 Required suppressions (with justification):
-- `AwsSolutions-IAM5`: Wildcard S3 permissions on asset buckets (dynamic bucket names from global registry)
-- `AwsSolutions-IAM4`: AWS Managed Policies for Batch/ECS roles (required by service)
-- `AwsSolutions-EFS1`: EFS encryption handled by KMS key
-- `AwsSolutions-SQS3`: No DLQ needed for pipeline event queues
+
+-   `AwsSolutions-IAM5`: Wildcard S3 permissions on asset buckets (dynamic bucket names from global registry)
+-   `AwsSolutions-IAM4`: AWS Managed Policies for Batch/ECS roles (required by service)
+-   `AwsSolutions-EFS1`: EFS encryption handled by KMS key
+-   `AwsSolutions-SQS3`: No DLQ needed for pipeline event queues
 
 ---
 
@@ -677,6 +698,7 @@ The generated video is a file-level output tied to the specific input file.
 **Preview:** `{outputS3AssetFilesPath}{relative_subdir}/{input_filename}.cosmos-v2w.mp4.previewFile.gif`
 
 **Example:**
+
 ```
 Input:  s3://asset-bucket/xd130a6d6/videos/drone-footage.mp4
 Output: s3://asset-bucket/xd130a6d6/videos/drone-footage.mp4.cosmos-v2w.mp4
@@ -694,6 +716,7 @@ The generated video is a new file added to the asset at the root level.
 **Preview:** `{outputS3AssetFilesPath}cosmos-text2world-{timestamp}.mp4.previewFile.gif`
 
 **Example:**
+
 ```
 Output: s3://asset-bucket/xd130a6d6/cosmos-text2world-20260402-143022.mp4
 Preview: s3://asset-bucket/xd130a6d6/cosmos-text2world-20260402-143022.mp4.previewFile.gif
@@ -702,6 +725,7 @@ Preview: s3://asset-bucket/xd130a6d6/cosmos-text2world-20260402-143022.mp4.previ
 ### Preview Generation
 
 The container generates a GIF preview from the first ~2 seconds of the output video using ffmpeg:
+
 ```bash
 ffmpeg -i output.mp4 -t 2 -vf "fps=10,scale=320:-1" -loop 0 output.previewFile.gif
 ```
@@ -713,22 +737,25 @@ ffmpeg -i output.mp4 -t 2 -vf "fps=10,scale=320:-1" -loop 0 output.previewFile.g
 ### Endpoint Conditions (`vpcBuilder-nestedStack.ts`)
 
 Add `config.app.pipelines.useCosmosPredict.enabled` to the existing condition block that creates:
-- Batch interface endpoint
-- ECR API interface endpoint
-- ECR DKR (Docker) interface endpoint
-- ECS interface endpoint
-- CloudWatch Logs interface endpoint
+
+-   Batch interface endpoint
+-   ECR API interface endpoint
+-   ECR DKR (Docker) interface endpoint
+-   ECS interface endpoint
+-   CloudWatch Logs interface endpoint
 
 **New endpoint required:** EFS interface endpoint (`com.amazonaws.{region}.elasticfilesystem`)
-- Required for EFS mount from Batch compute instances in VPC
-- Add to the same condition block
+
+-   Required for EFS mount from Batch compute instances in VPC
+-   Add to the same condition block
 
 ### Subnet Configuration
 
 Uses existing pipeline private subnets (same as SplatToolbox). The Batch compute environment security group needs:
-- Outbound: HTTPS (443) to internet (for HuggingFace model downloads)
-- Outbound: NFS (2049) to EFS security group
-- Inbound: NFS (2049) from Batch compute security group (on EFS SG)
+
+-   Outbound: HTTPS (443) to internet (for HuggingFace model downloads)
+-   Outbound: NFS (2049) to EFS security group
+-   Inbound: NFS (2049) from Batch compute security group (on EFS SG)
 
 ---
 
@@ -774,15 +801,16 @@ if (props.config.app.pipelines.useCosmosPredict.enabled) {
 ### New Page: `documentation/docusaurus-site/docs/pipelines/nvidia-cosmos.md`
 
 Structure:
+
 1. **Overview** - What is NVIDIA Cosmos, what models are supported
 2. **Architecture Diagram** - Visual diagram showing the full pipeline flow
 3. **Prerequisites** - HuggingFace account, license acceptance, GPU instance availability
 4. **Configuration** - CDK config options with descriptions and defaults
 5. **Cosmos Predict** (sub-section)
-   - Text2World usage (setting asset metadata, triggering pipeline)
-   - Video2World usage (uploading video/image, setting file metadata, triggering pipeline)
-   - Prompt configuration (metadata vs inputParameters)
-   - Output format and location
+    - Text2World usage (setting asset metadata, triggering pipeline)
+    - Video2World usage (uploading video/image, setting file metadata, triggering pipeline)
+    - Prompt configuration (metadata vs inputParameters)
+    - Output format and location
 6. **GPU Instance Recommendations** - Table of instance types per model size
 7. **Model Caching** - How EFS + S3 caching works, first-run behavior
 8. **Troubleshooting** - Common issues (OOM, HF token, EFS mount)
@@ -877,16 +905,18 @@ When adding 14B model support:
 The `--offload_diffusion_transformer`, `--offload_tokenizer`, `--offload_text_encoder_model`, and `--offload_prompt_upsampler` flags are always passed to the inference script regardless of GPU instance size. These flags move model components to CPU RAM, reducing VRAM usage at the cost of slightly increased inference time.
 
 **Rationale:**
-- On g5.12xlarge (A10G 24GB per GPU): offloading is required -- the model does not fit without it.
-- On larger instances (A100 40GB, H100 80GB): offloading is unnecessary but safe, adding ~10-20% overhead.
-- Always-on avoids runtime GPU detection complexity and works on any instance type.
-- If performance optimization for large-GPU customers becomes important, add an optional `offloadStrategy` config field per model sub-section that the container reads to skip offloading flags.
+
+-   On g5.12xlarge (A10G 24GB per GPU): offloading is required -- the model does not fit without it.
+-   On larger instances (A100 40GB, H100 80GB): offloading is unnecessary but safe, adding ~10-20% overhead.
+-   Always-on avoids runtime GPU detection complexity and works on any instance type.
+-   If performance optimization for large-GPU customers becomes important, add an optional `offloadStrategy` config field per model sub-section that the container reads to skip offloading flags.
 
 ---
 
 ## Licensing Requirements
 
 Per NVIDIA Open Model License:
-- Include "Built on NVIDIA Cosmos" attribution in VAMS documentation
-- Do not bypass/disable safety guardrails in production (license termination risk)
-- Note: reference implementation uses `--disable_guardrail` flag -- we should use `--offload_guardrail_models` instead (offloads to CPU rather than disabling)
+
+-   Include "Built on NVIDIA Cosmos" attribution in VAMS documentation
+-   Do not bypass/disable safety guardrails in production (license termination risk)
+-   Note: reference implementation uses `--disable_guardrail` flag -- we should use `--offload_guardrail_models` instead (offloads to CPU rather than disabling)

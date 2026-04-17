@@ -382,7 +382,10 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                         );
                                         if (cameraControlsRef.current) {
                                             (cameraControlsRef.current as any).setTarget(
-                                                center.x, center.y, center.z, fitDistance
+                                                center.x,
+                                                center.y,
+                                                center.z,
+                                                fitDistance
                                             );
                                         }
                                         // Adjust far clip to scene scale

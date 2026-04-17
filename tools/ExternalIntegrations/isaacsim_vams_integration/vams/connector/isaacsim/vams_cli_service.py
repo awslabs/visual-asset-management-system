@@ -14,6 +14,7 @@ import logging
 import os
 import subprocess
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -183,6 +184,29 @@ class VamsCliService:
 
         logger.debug("Executing: %s", cmd)
 
+        # Build a CA bundle that includes the bundled Amazon certs plus whatever
+        # system CA bundle exists. This ensures S3 downloads work on any machine
+        # regardless of SSL_CERT_FILE set by the parent process (e.g. Isaac Sim).
+        env = os.environ.copy()
+        _bundled = os.path.join(
+            os.path.dirname(__file__), "..", "..", "..", "certs", "amazon-ca-bundle.pem"
+        )
+        _bundled = os.path.normpath(_bundled)
+        if os.path.isfile(_bundled):
+            _system = "/etc/ssl/certs/ca-certificates.crt"
+            if os.path.isfile(_system):
+                _merged = os.path.join(tempfile.gettempdir(), "vams_ca_bundle.pem")
+                if not os.path.isfile(_merged):
+                    with open(_merged, "wb") as _f:
+                        for _src in (_system, _bundled):
+                            with open(_src, "rb") as _s:
+                                _f.write(_s.read())
+                env["SSL_CERT_FILE"] = _merged
+                env["REQUESTS_CA_BUNDLE"] = _merged
+            else:
+                env["SSL_CERT_FILE"] = _bundled
+                env["REQUESTS_CA_BUNDLE"] = _bundled
+
         try:
             # nosemgrep: dangerous-subprocess-use-audit
             result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
@@ -190,6 +214,7 @@ class VamsCliService:
                 capture_output=True,
                 text=True,
                 timeout=600,
+                env=env,
             )
         except subprocess.TimeoutExpired:
             raise VamsCliError("Command timed out after 600 seconds")
@@ -362,11 +387,17 @@ class VamsCliService:
             output = self._execute_command(["auth", "status", "--json-output"])
             data = self._parse_json(output)
 
+            # If the token has no expiration (e.g. override tokens without
+            # --expires-at), is_expired will be absent from the response.
+            # Treat that as not expired when the session is authenticated.
+            is_authenticated = data.get("authenticated", False)
+            is_expired = data.get("is_expired", not is_authenticated)
+
             status = AuthStatus(
-                authenticated=data.get("authenticated", False),
+                authenticated=is_authenticated,
                 authentication_type=data.get("authentication_type", ""),
                 user_id=data.get("user_id", ""),
-                is_expired=data.get("is_expired", True),
+                is_expired=is_expired,
                 expires_at=data.get("expires_at", ""),
                 web_deployed_url=data.get("web_deployed_url", ""),
                 success=data.get("success", False),
@@ -630,8 +661,7 @@ class VamsCliService:
         """
         self.ensure_authenticated()
 
-        os.makedirs(local_path if os.path.isdir(local_path) or not os.path.splitext(local_path)[1]
-                     else os.path.dirname(local_path), exist_ok=True)
+        os.makedirs(local_path, exist_ok=True)
 
         # local_path is the first positional argument to assets download
         output = self._execute_command(

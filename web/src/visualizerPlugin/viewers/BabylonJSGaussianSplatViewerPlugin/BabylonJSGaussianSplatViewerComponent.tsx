@@ -135,15 +135,15 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                 camera.lowerRadiusLimit = 0.0001; // Almost no limit
                 camera.upperRadiusLimit = 5000;
                 camera.speed = 2; // Increase overall camera speed
-                
+
                 // Use percentage-based zoom for smoother experience at all distances
                 camera.wheelDeltaPercentage = 0.01; // 1% of current distance per wheel tick
-                
+
                 console.log("BabylonJS Camera Settings:", {
                     wheelPrecision: camera.wheelPrecision,
                     initialRadius: camera.radius,
                     initialBeta: camera.beta,
-                    lowerRadiusLimit: camera.lowerRadiusLimit
+                    lowerRadiusLimit: camera.lowerRadiusLimit,
                 });
 
                 // Handle window resize to maintain aspect ratio
@@ -202,7 +202,14 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                             "BabylonJS Gaussian Splat Viewer: Loading Gaussian Splat with SceneLoader..."
                         );
 
-                        BABYLON.SceneLoader.ImportMeshAsync("", "", response[1], scene, null, ".spz")
+                        BABYLON.SceneLoader.ImportMeshAsync(
+                            "",
+                            "",
+                            response[1],
+                            scene,
+                            null,
+                            ".spz"
+                        )
                             .then((result: any) => {
                                 console.log(
                                     "BabylonJS Gaussian Splat Viewer: File loaded successfully, positioning camera"
@@ -224,11 +231,11 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                                         (mx.z - mn.z) / 2
                                     );
                                     const fractionalBits = 12; // SPZ default
-                                    const fbScale = rawMaxHalf > 10 ? (1 << fractionalBits) : 1;
+                                    const fbScale = rawMaxHalf > 10 ? 1 << fractionalBits : 1;
 
-                                    const cx = ((mn.x + mx.x) / 2) / fbScale;
-                                    const cy = ((mn.y + mx.y) / 2) / fbScale;
-                                    const cz = ((mn.z + mx.z) / 2) / fbScale;
+                                    const cx = (mn.x + mx.x) / 2 / fbScale;
+                                    const cy = (mn.y + mx.y) / 2 / fbScale;
+                                    const cz = (mn.z + mx.z) / 2 / fbScale;
                                     const hx = (mx.x - mn.x) / 2 / fbScale;
                                     const hy = (mx.y - mn.y) / 2 / fbScale;
                                     const hz = (mx.z - mn.z) / 2 / fbScale;
@@ -238,7 +245,8 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                                     scene.createDefaultCameraOrLight(true, true, true);
                                     const cam = scene.activeCamera;
                                     const scaledRadius = (cam.radius / fbScale) * 3.0;
-                                    cam.target = fbScale > 1 ? cam.target.scale(1 / fbScale) : cam.target;
+                                    cam.target =
+                                        fbScale > 1 ? cam.target.scale(1 / fbScale) : cam.target;
                                     cam.radius = scaledRadius;
                                     cam.lowerRadiusLimit = scaledRadius * 0.0001;
                                     cam.minZ = scaledRadius * 0.0001;
@@ -248,7 +256,13 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                                     cam.panningSensibility = 1000;
 
                                     console.log("BabylonJS Camera Auto-fit:", {
-                                        rawMaxHalf, fbScale, cx, cy, cz, maxHalf, fitRadius
+                                        rawMaxHalf,
+                                        fbScale,
+                                        cx,
+                                        cy,
+                                        cz,
+                                        maxHalf,
+                                        fitRadius,
                                     });
                                 }
 

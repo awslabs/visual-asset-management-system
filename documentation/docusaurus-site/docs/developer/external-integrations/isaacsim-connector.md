@@ -9,7 +9,8 @@ This integration is in **experimental** status and may still have issues. Verify
 ## Features
 
 -   **Database and Asset Browsing** -- Navigate VAMS databases, assets, and files in a dockable UI panel
--   **Asset Download and Import** -- Download individual files or full assets, open USD files as new stages, or add them as references to existing stages
+-   **Asset Download and Import** -- Download individual files or full assets; USD, URDF, and MJCF files can be imported directly into the Isaac Sim stage from the file list UI. USD files can be opened as new stages or added as prim references. URDF and MJCF files are converted to USD on import using Isaac Sim's built-in asset importers.
+-   **General File Download** -- Other files can be downloaded to a local temporary directory
 -   **Scene Export and Upload** -- Export the current Isaac Sim USD stage and upload it to VAMS as a new or existing asset
 -   **Workflow Execution** -- List available processing workflows, view execution history, and trigger new workflow runs on assets
 -   **Dual Authentication** -- Cognito username/password login and token override authentication (IDP JWT tokens and VAMS API keys)
@@ -69,6 +70,37 @@ isaac-sim --ext-folder /path/to/tools/ExternalIntegrations/isaacsim_vams_integra
 folders = ["/path/to/tools/ExternalIntegrations/isaacsim_vams_integration"]
 ```
 
+## Ubuntu / EC2 Setup
+
+When running Isaac Sim on Ubuntu (e.g., on an Amazon EC2 instance), the VAMS CLI should be installed in an isolated Python virtual environment to avoid conflicts with Isaac Sim's bundled Python.
+
+### Virtual environment installation
+
+```bash
+python3 -m venv ~/vamscli-venv
+~/vamscli-venv/bin/pip install vamscli
+~/vamscli-venv/bin/vamscli setup https://your-api-gateway-url.amazonaws.com
+```
+
+Then set the explicit CLI path in `config/extension.toml`:
+
+```toml
+[settings]
+exts."vams.connector.isaacsim".vamscli_path = "/home/ubuntu/vamscli-venv/bin/vamscli"
+```
+
+### SSL certificate bundle
+
+Isaac Sim may override the `SSL_CERT_FILE` environment variable with its own certificate bundle that does not include Amazon's CA certificates, causing S3 download failures. The extension handles this automatically if an Amazon CA certificate bundle is placed in the `certs/` directory.
+
+To set up the certificate bundle:
+
+1.  Download the Amazon root CA certificates from [https://www.amazontrust.com/repository/](https://www.amazontrust.com/repository/)
+2.  Concatenate the PEM files into a single file named `amazon-ca-bundle.pem`
+3.  Place it at `isaacsim_vams_integration/certs/amazon-ca-bundle.pem`
+
+If the certificate bundle is present, the extension merges it with the system CA bundle (at `/etc/ssl/certs/ca-certificates.crt` on Ubuntu) and configures the CLI subprocess accordingly. If the file is absent, the extension uses the system's default SSL configuration.
+
 ## Authentication
 
 The connector supports two authentication methods:
@@ -108,11 +140,19 @@ vamscli auth login --user-id user@example.com --token-override "vams_your-api-ke
 
 Once enabled, the extension opens a **VAMS Connector** window with:
 
-1. **Authentication** -- Enter credentials and click the appropriate login button
-2. **Databases** -- List and select databases
-3. **Assets** -- List assets in the selected database
-4. **Files** -- List files in the selected asset
-5. **Workflows** -- List and execute available workflows
+1.  **Authentication** -- Enter credentials and click the appropriate login button
+2.  **Databases** -- List and select databases
+3.  **Assets** -- List assets in the selected database
+4.  **Files** -- List files in the selected asset with context-aware actions:
+    -   **USD files** (`.usd`, `.usda`, `.usdc`, `.usdz`): Click the play button to download and open as a new stage, or click **Add Ref** to add as a reference under `/World/<filename>`
+    -   **URDF files** (`.urdf`): Click the play button to download and import the robot description into the current stage
+    -   **MJCF files** (`.mjcf`, `.xml`): Click the play button to download and import the MuJoCo model into the current stage
+    -   **Other files**: Click the download button to save to a local temporary directory
+5.  **Workflows** -- List and execute available workflows
+
+:::tip
+After loading a USD asset, if the viewport appears empty, add a light (**Create > Light > Dome Light**) and press **F** to frame the camera on the root prim.
+:::
 
 ### Scripting API
 
@@ -145,7 +185,17 @@ connector.execute_workflow("my-db", "my-asset", "wf-id", "wf-db-id")
 connector.export_and_upload_scene("my-db", "scene_v1")
 connector.download_and_import_asset("my-db", "my-asset", "/scene.usd")
 connector.download_and_add_reference("my-db", "my-asset", "/robot.usd", "/World/Robot")
+
+# URDF import (requires isaacsim.asset.importer.urdf extension)
+prim_path = connector.download_and_import_urdf("my-db", "my-asset", "/robot.urdf")
+
+# MJCF import (requires isaacsim.asset.importer.mjcf extension)
+connector.download_and_import_mjcf("my-db", "my-asset", "/ant.xml")
 ```
+
+:::note
+The `download_and_import_asset` and `download_and_add_reference` methods validate that the file has a USD extension (`.usd`, `.usda`, `.usdc`, `.usdz`) before attempting to open or reference it. The URDF and MJCF import methods similarly validate their expected file extensions (`.urdf` for URDF; `.mjcf` or `.xml` for MJCF). The URDF and MJCF importers are optional -- if the corresponding Isaac Sim importer extension is not enabled, the import will fail with an import error.
+:::
 
 ## Configuration
 
@@ -174,6 +224,8 @@ prod_connector = IsaacVAMSConnector(profile="prod")
 
 ```
 isaacsim_vams_integration/
+├── certs/
+│   └── amazon-ca-bundle.pem           # Optional: Amazon CA certs for SSL (see Ubuntu setup)
 ├── config/
 │   └── extension.toml                 # Extension metadata, dependencies, settings
 ├── vams/
@@ -193,6 +245,8 @@ isaacsim_vams_integration/
 | Extension   | `extension.py`        | `omni.ext.IExt` subclass with `on_startup`/`on_shutdown` lifecycle and UI |
 | Connector   | `connector.py`        | High-level API for all VAMS operations and Isaac Sim stage integration    |
 | CLI Service | `vams_cli_service.py` | Subprocess wrapper around `vamscli` with JSON output parsing              |
+
+UI button handlers are deferred via `omni.kit.app`'s update event stream to avoid blocking the Omniverse Kit draw pass, which can cause deadlocks or crashes when performing blocking I/O during rendering.
 
 ## Source Location
 

@@ -21,8 +21,11 @@ An [Omniverse Kit](https://docs.omniverse.nvidia.com/kit/docs/kit-manual/latest/
 
 -   **Single File Download**: Download individual files from any asset
 -   **Full Asset Download**: Recursively download all files in an asset with progress tracking
--   **Stage Import**: Download a USD file and open it as a new Isaac Sim stage
--   **Reference Import**: Download a USD file and add it as a reference to the current stage at a specified prim path
+-   **Stage Import**: Download a USD file and open it as a new Isaac Sim stage (via UI button or scripting API)
+-   **Reference Import**: Download a USD file and add it as a reference to the current stage at an auto-generated prim path
+-   **URDF Import**: Download a URDF file and import it into the current stage using Isaac Sim's URDF importer (requires `isaacsim.asset.importer.urdf`)
+-   **MJCF Import**: Download a MJCF/MuJoCo XML file and import it into the current stage using Isaac Sim's MJCF importer (requires `isaacsim.asset.importer.mjcf`)
+-   **General Download**: Download any other file to a local temporary directory
 
 ### Scene Export & Upload
 
@@ -143,17 +146,95 @@ folders = ["/path/to/isaacsim_vams_integration"]
 
 ---
 
+## Ubuntu / EC2 Setup
+
+When running Isaac Sim on Ubuntu (e.g., on an EC2 instance), the VAMS CLI should be installed in an isolated Python virtual environment to avoid conflicts with Isaac Sim's bundled Python.
+
+### 1. Create a virtual environment and install the CLI
+
+```bash
+python3 -m venv ~/vamscli-venv
+~/vamscli-venv/bin/pip install vamscli
+```
+
+### 2. Configure a VAMS CLI profile
+
+```bash
+~/vamscli-venv/bin/vamscli setup https://your-api-gateway-url.amazonaws.com
+```
+
+### 3. Set the vamscli path in extension.toml
+
+Point the extension to the venv executable so it does not depend on `PATH`:
+
+```toml
+[settings]
+exts."vams.connector.isaacsim".vamscli_path = "/home/ubuntu/vamscli-venv/bin/vamscli"
+```
+
+### 4. Verify the CLI works
+
+```bash
+~/vamscli-venv/bin/vamscli auth login -u your-email@example.com -p yourpassword
+~/vamscli-venv/bin/vamscli database list --json-output
+```
+
+### 5. Load the extension in Isaac Sim
+
+Using the command line (adjust paths for your installation):
+
+```bash
+/opt/IsaacSim/isaac-sim.sh --ext-folder /path/to/isaacsim_vams_integration --enable vams.connector.isaacsim
+```
+
+Or via **Window > Extensions** in the Isaac Sim UI (see [Installation](#installation) above).
+
+### SSL Certificate Bundle (Optional)
+
+Isaac Sim may set its own `SSL_CERT_FILE` environment variable that does not include Amazon's CA certificates, causing S3 download failures. The extension automatically handles this if a certificate bundle is present.
+
+To set up the CA certificate bundle:
+
+1.  Download the Amazon Root CA certificates from [https://www.amazontrust.com/repository/](https://www.amazontrust.com/repository/)
+2.  Concatenate the root certificates into a single PEM file named `amazon-ca-bundle.pem`
+3.  Place it in the `certs/` directory at the root of this extension:
+
+```
+isaacsim_vams_integration/
+├── certs/
+│   └── amazon-ca-bundle.pem    # <-- place the file here
+├── config/
+│   └── extension.toml
+├── vams/
+│   └── ...
+```
+
+If the certificate bundle file is present, the extension will automatically merge it with the system CA bundle (if available at `/etc/ssl/certs/ca-certificates.crt`) and configure the CLI subprocess accordingly. If the file is not present, the extension skips this step and relies on the system's default SSL configuration.
+
+---
+
 ## Usage
 
 ### Extension UI
 
 Once enabled, the extension opens a **VAMS Connector** window with:
 
-1. **Authentication** - Enter username + password (Cognito) or user ID + token/API key, then click the appropriate login button
-2. **Databases** - Click to list all databases, then click one to select it
-3. **Assets** - Lists assets in the selected database, click to select
-4. **Files** - Lists files in the selected asset
-5. **Workflows** - Lists available workflows with an Execute button per workflow
+1.  **Authentication** - Enter username + password (Cognito) or user ID + token/API key, then click the appropriate login button
+2.  **Databases** - Click to list all databases, then click one to select it
+3.  **Assets** - Lists assets in the selected database, click to select
+4.  **Files** - Lists files in the selected asset with context-aware actions:
+    -   **USD files** (`.usd`, `.usda`, `.usdc`, `.usdz`): Click the play button to download and open as a new stage, or click **Add Ref** to add as a reference to the current stage
+    -   **URDF files** (`.urdf`): Click the play button to download and import the robot description into the current stage
+    -   **MJCF files** (`.mjcf`, `.xml`): Click the play button to download and import the MuJoCo model into the current stage
+    -   **Other files**: Click the download button to save to a local temporary directory
+5.  **Workflows** - Lists available workflows with an Execute button per workflow
+
+### Viewing a loaded asset
+
+After a stage opens, if the viewport appears empty:
+
+1.  **Add a light**: **Create > Light > Dome Light** (downloaded assets may have no lights)
+2.  **Frame the camera**: Select the root prim in the Stage panel, then press **F** in the viewport
 
 ### Scripting API
 
@@ -247,6 +328,24 @@ connector.download_and_import_asset("my-db", "my-asset", "/scene.usd")
 connector.download_and_add_reference("my-db", "my-asset", "/robot.usd", "/World/Robot")
 ```
 
+#### URDF & MJCF Import
+
+Requires the `isaacsim.asset.importer.urdf` and/or `isaacsim.asset.importer.mjcf` extensions to be enabled in Isaac Sim.
+
+```python
+# Import a URDF robot description into the current stage
+prim_path = connector.download_and_import_urdf(
+    "my-db", "my-asset", "/robot.urdf",
+    fix_base=True, import_inertia_tensor=True,
+)
+
+# Import a MJCF/MuJoCo model into the current stage
+connector.download_and_import_mjcf(
+    "my-db", "my-asset", "/ant.xml",
+    fix_base=True, import_inertia_tensor=True,
+)
+```
+
 ---
 
 ## Configuration
@@ -280,6 +379,8 @@ prod_connector = IsaacVAMSConnector(profile="prod")
 
 ```
 isaacsim_vams_integration/
+├── certs/
+│   └── amazon-ca-bundle.pem           # Optional: Amazon CA certs for SSL (see Ubuntu setup)
 ├── config/
 │   └── extension.toml                 # Extension metadata, dependencies, settings
 ├── vams/
@@ -314,18 +415,24 @@ Isaac Sim UI / Python Console
 
 All VAMS API interactions go through the VAMS CLI with `--json-output` for structured responses. No direct HTTP calls or AWS SDK usage in the extension.
 
+UI button handlers are deferred via `omni.kit.app`'s update event stream to avoid blocking the Omniverse Kit draw pass, which can cause deadlocks or crashes when performing blocking I/O (subprocess calls) during rendering.
+
 ---
 
 ## Troubleshooting
 
 | Issue                               | Solution                                                                                                   |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **"VAMS CLI not found"**            | Install the CLI: `pip install vamscli` and ensure it is on PATH                                            |
+| **"VAMS CLI not found"**            | Install the CLI: `pip install vamscli` and ensure it is on PATH, or set `vamscli_path` in extension.toml   |
 | **"Profile may not be configured"** | Run `vamscli setup <api-gateway-url>` to configure the default profile                                     |
 | **Login fails (Cognito)**           | Verify credentials with `vamscli auth login -u <email>` in a terminal                                      |
 | **Login fails (token/API key)**     | Verify with `vamscli auth login --user-id <email> --token-override <token>`                                |
 | **Extension not found**             | Ensure the extension search path points to the `isaacsim_vams_integration/` directory (not a subdirectory) |
 | **omni.usd import errors**          | Stage operations (`export_and_upload_scene`, etc.) must be called from within Isaac Sim                    |
+| **SSL/S3 download errors**          | See [SSL Certificate Bundle](#ssl-certificate-bundle-optional) in the Ubuntu setup section                 |
+| **Viewport empty after load**       | Add a light (Create > Light > Dome Light) and press F to frame the camera                                  |
+| **URDF/MJCF import fails**          | Ensure `isaacsim.asset.importer.urdf` or `isaacsim.asset.importer.mjcf` is enabled in Isaac Sim            |
+| **UI freezes on button click**      | This should not happen with the deferred execution pattern; if it does, file an issue                      |
 
 ---
 

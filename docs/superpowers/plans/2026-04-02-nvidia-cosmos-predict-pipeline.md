@@ -16,32 +16,32 @@
 
 ### New Files
 
-| File | Responsibility |
-|---|---|
-| `backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosText2WorldPipeline.py` | VAMS entry point for Text2World: extracts COSMOS_PREDICT_PROMPT from asset metadata |
-| `backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosVideo2WorldPipeline.py` | VAMS entry point for Video2World: extracts COSMOS_PREDICT_PROMPT from file metadata |
-| `backendPipelines/genAi/cosmosPredict/lambda/constructPipeline.py` | Transforms workflow event into Batch job definition |
-| `backendPipelines/genAi/cosmosPredict/lambda/openPipeline.py` | Validates input, starts Step Functions execution |
-| `backendPipelines/genAi/cosmosPredict/lambda/pipelineEnd.py` | Cleanup and SFN task token callback |
-| `backendPipelines/genAi/cosmosPredict/container/Dockerfile` | GPU container with Cosmos-Predict1 framework |
-| `backendPipelines/genAi/cosmosPredict/container/entrypoint.sh` | Container entrypoint: JSON arg to __main__.py |
-| `backendPipelines/genAi/cosmosPredict/container/__main__.py` | VAMS wrapper: S3 I/O, metadata parsing, model routing |
-| `backendPipelines/genAi/cosmosPredict/container/model_manager.py` | EFS/S3/HuggingFace model caching cascade |
-| `backendPipelines/genAi/cosmosPredict/container/inference.py` | Routes to text2world.py or video2world.py inference scripts |
-| `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/cosmosPredictBuilder-nestedStack.ts` | CDK nested stack entry point |
-| `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/constructs/cosmosPredict-construct.ts` | Main CDK construct: Batch, EFS, S3, SFN, registration |
-| `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/lambdaBuilder/cosmosPredictFunctions.ts` | Lambda builder functions (5 builders) |
-| `documentation/docusaurus-site/docs/pipelines/nvidia-cosmos.md` | User-facing documentation |
+| File                                                                                           | Responsibility                                                                      |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosText2WorldPipeline.py`           | VAMS entry point for Text2World: extracts COSMOS_PREDICT_PROMPT from asset metadata |
+| `backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosVideo2WorldPipeline.py`          | VAMS entry point for Video2World: extracts COSMOS_PREDICT_PROMPT from file metadata |
+| `backendPipelines/genAi/cosmosPredict/lambda/constructPipeline.py`                             | Transforms workflow event into Batch job definition                                 |
+| `backendPipelines/genAi/cosmosPredict/lambda/openPipeline.py`                                  | Validates input, starts Step Functions execution                                    |
+| `backendPipelines/genAi/cosmosPredict/lambda/pipelineEnd.py`                                   | Cleanup and SFN task token callback                                                 |
+| `backendPipelines/genAi/cosmosPredict/container/Dockerfile`                                    | GPU container with Cosmos-Predict1 framework                                        |
+| `backendPipelines/genAi/cosmosPredict/container/entrypoint.sh`                                 | Container entrypoint: JSON arg to **main**.py                                       |
+| `backendPipelines/genAi/cosmosPredict/container/__main__.py`                                   | VAMS wrapper: S3 I/O, metadata parsing, model routing                               |
+| `backendPipelines/genAi/cosmosPredict/container/model_manager.py`                              | EFS/S3/HuggingFace model caching cascade                                            |
+| `backendPipelines/genAi/cosmosPredict/container/inference.py`                                  | Routes to text2world.py or video2world.py inference scripts                         |
+| `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/cosmosPredictBuilder-nestedStack.ts`     | CDK nested stack entry point                                                        |
+| `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/constructs/cosmosPredict-construct.ts`   | Main CDK construct: Batch, EFS, S3, SFN, registration                               |
+| `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/lambdaBuilder/cosmosPredictFunctions.ts` | Lambda builder functions (5 builders)                                               |
+| `documentation/docusaurus-site/docs/pipelines/nvidia-cosmos.md`                                | User-facing documentation                                                           |
 
 ### Modified Files
 
-| File | Change |
-|---|---|
-| `infra/config/config.ts` | Add CosmosPredict interface, defaults, validation |
-| `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` | Add useCosmosPredict to VPC endpoint conditions + EFS endpoint |
-| `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` | Instantiate CosmosPredictBuilderNestedStack |
-| `documentation/docusaurus-site/docs/deployment/configuration-reference.md` | Add config options |
-| `CLAUDE.md` | Update pipeline list and directory structure |
+| File                                                                       | Change                                                         |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `infra/config/config.ts`                                                   | Add CosmosPredict interface, defaults, validation              |
+| `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`                     | Add useCosmosPredict to VPC endpoint conditions + EFS endpoint |
+| `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`          | Instantiate CosmosPredictBuilderNestedStack                    |
+| `documentation/docusaurus-site/docs/deployment/configuration-reference.md` | Add config options                                             |
+| `CLAUDE.md`                                                                | Update pipeline list and directory structure                   |
 
 ---
 
@@ -50,9 +50,10 @@
 ### Task 1: Add CosmosPredict config interfaces and defaults
 
 **Files:**
-- Modify: `infra/config/config.ts`
 
-- [ ] **Step 1: Add CosmosPredict interfaces to ConfigPublic**
+-   Modify: `infra/config/config.ts`
+
+-   [ ] **Step 1: Add CosmosPredict interfaces to ConfigPublic**
 
 In `infra/config/config.ts`, add to the `pipelines` section of the `ConfigPublic` interface (after the `useSplatToolbox` block):
 
@@ -80,7 +81,7 @@ useCosmosPredict: {
 };
 ```
 
-- [ ] **Step 2: Add default population in getConfig()**
+-   [ ] **Step 2: Add default population in getConfig()**
 
 Add after the existing `useSplatToolbox` defaults block (around line 153):
 
@@ -154,7 +155,7 @@ if (config.app.pipelines.useCosmosPredict.models.video2world7B == undefined) {
 }
 ```
 
-- [ ] **Step 3: Add validation rules in getConfig()**
+-   [ ] **Step 3: Add validation rules in getConfig()**
 
 Add after the VPC auto-enable block (around line 388). First, add `useCosmosPredict` to the VPC auto-enable condition:
 
@@ -169,8 +170,7 @@ Then add Cosmos-specific validation:
 // Cosmos Predict validation
 if (config.app.pipelines.useCosmosPredict.enabled) {
     const cosmosModels = config.app.pipelines.useCosmosPredict.models;
-    const anyModelEnabled =
-        cosmosModels.text2world7B.enabled || cosmosModels.video2world7B.enabled;
+    const anyModelEnabled = cosmosModels.text2world7B.enabled || cosmosModels.video2world7B.enabled;
 
     if (!anyModelEnabled) {
         throw new Error(
@@ -211,12 +211,12 @@ if (config.app.pipelines.useCosmosPredict.enabled) {
 }
 ```
 
-- [ ] **Step 4: Verify CDK synth passes**
+-   [ ] **Step 4: Verify CDK synth passes**
 
 Run: `cd infra && npx cdk synth 2>&1 | head -20`
 Expected: Synthesizes without errors (useCosmosPredict defaults to disabled)
 
-- [ ] **Step 5: Commit**
+-   [ ] **Step 5: Commit**
 
 ```bash
 git add infra/config/config.ts
@@ -230,16 +230,17 @@ git commit -m "feat: add CosmosPredict config interfaces, defaults, and validati
 ### Task 2: Create vamsExecute Lambda for Text2World
 
 **Files:**
-- Create: `backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosText2WorldPipeline.py`
 
-- [ ] **Step 1: Create directory structure**
+-   Create: `backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosText2WorldPipeline.py`
+
+-   [ ] **Step 1: Create directory structure**
 
 ```bash
 mkdir -p backendPipelines/genAi/cosmosPredict/lambda
 mkdir -p backendPipelines/genAi/cosmosPredict/container
 ```
 
-- [ ] **Step 2: Write vamsExecuteCosmosText2WorldPipeline.py**
+-   [ ] **Step 2: Write vamsExecuteCosmosText2WorldPipeline.py**
 
 ```python
 """
@@ -342,7 +343,7 @@ def lambda_handler(event, context):
         }
 ```
 
-- [ ] **Step 3: Commit**
+-   [ ] **Step 3: Commit**
 
 ```bash
 git add backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosText2WorldPipeline.py
@@ -354,9 +355,10 @@ git commit -m "feat: add Cosmos Text2World vamsExecute Lambda"
 ### Task 3: Create vamsExecute Lambda for Video2World
 
 **Files:**
-- Create: `backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosVideo2WorldPipeline.py`
 
-- [ ] **Step 1: Write vamsExecuteCosmosVideo2WorldPipeline.py**
+-   Create: `backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosVideo2WorldPipeline.py`
+
+-   [ ] **Step 1: Write vamsExecuteCosmosVideo2WorldPipeline.py**
 
 ```python
 """
@@ -459,7 +461,7 @@ def lambda_handler(event, context):
         }
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add backendPipelines/genAi/cosmosPredict/lambda/vamsExecuteCosmosVideo2WorldPipeline.py
@@ -471,9 +473,10 @@ git commit -m "feat: add Cosmos Video2World vamsExecute Lambda"
 ### Task 4: Create constructPipeline Lambda (shared)
 
 **Files:**
-- Create: `backendPipelines/genAi/cosmosPredict/lambda/constructPipeline.py`
 
-- [ ] **Step 1: Write constructPipeline.py**
+-   Create: `backendPipelines/genAi/cosmosPredict/lambda/constructPipeline.py`
+
+-   [ ] **Step 1: Write constructPipeline.py**
 
 ```python
 """
@@ -554,7 +557,7 @@ def lambda_handler(event, context):
         }
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add backendPipelines/genAi/cosmosPredict/lambda/constructPipeline.py
@@ -566,9 +569,10 @@ git commit -m "feat: add Cosmos Predict constructPipeline Lambda"
 ### Task 5: Create openPipeline Lambda (shared)
 
 **Files:**
-- Create: `backendPipelines/genAi/cosmosPredict/lambda/openPipeline.py`
 
-- [ ] **Step 1: Write openPipeline.py**
+-   Create: `backendPipelines/genAi/cosmosPredict/lambda/openPipeline.py`
+
+-   [ ] **Step 1: Write openPipeline.py**
 
 ```python
 """
@@ -691,7 +695,7 @@ def lambda_handler(event, context):
         return {"statusCode": 500, "body": json.dumps({"message": error_msg})}
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add backendPipelines/genAi/cosmosPredict/lambda/openPipeline.py
@@ -703,9 +707,10 @@ git commit -m "feat: add Cosmos Predict openPipeline Lambda"
 ### Task 6: Create pipelineEnd Lambda (shared)
 
 **Files:**
-- Create: `backendPipelines/genAi/cosmosPredict/lambda/pipelineEnd.py`
 
-- [ ] **Step 1: Write pipelineEnd.py**
+-   Create: `backendPipelines/genAi/cosmosPredict/lambda/pipelineEnd.py`
+
+-   [ ] **Step 1: Write pipelineEnd.py**
 
 ```python
 """
@@ -754,7 +759,7 @@ def lambda_handler(event, context):
     return event
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add backendPipelines/genAi/cosmosPredict/lambda/pipelineEnd.py
@@ -768,9 +773,10 @@ git commit -m "feat: add Cosmos Predict pipelineEnd Lambda"
 ### Task 7: Create model_manager.py
 
 **Files:**
-- Create: `backendPipelines/genAi/cosmosPredict/container/model_manager.py`
 
-- [ ] **Step 1: Write model_manager.py**
+-   Create: `backendPipelines/genAi/cosmosPredict/container/model_manager.py`
+
+-   [ ] **Step 1: Write model_manager.py**
 
 ```python
 """
@@ -995,7 +1001,7 @@ def ensure_model_available(hf_model_id, efs_base_path, s3_bucket, hf_token):
     return efs_model_dir
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add backendPipelines/genAi/cosmosPredict/container/model_manager.py
@@ -1007,9 +1013,10 @@ git commit -m "feat: add Cosmos model manager with EFS/S3/HuggingFace cascade"
 ### Task 8: Create inference.py
 
 **Files:**
-- Create: `backendPipelines/genAi/cosmosPredict/container/inference.py`
 
-- [ ] **Step 1: Write inference.py**
+-   Create: `backendPipelines/genAi/cosmosPredict/container/inference.py`
+
+-   [ ] **Step 1: Write inference.py**
 
 ```python
 """
@@ -1129,7 +1136,7 @@ def generate_preview_gif(video_path, output_path):
     return output_path
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add backendPipelines/genAi/cosmosPredict/container/inference.py
@@ -1138,12 +1145,13 @@ git commit -m "feat: add Cosmos inference routing with multi-GPU torchrun"
 
 ---
 
-### Task 9: Create __main__.py (VAMS container wrapper)
+### Task 9: Create **main**.py (VAMS container wrapper)
 
 **Files:**
-- Create: `backendPipelines/genAi/cosmosPredict/container/__main__.py`
 
-- [ ] **Step 1: Write __main__.py**
+-   Create: `backendPipelines/genAi/cosmosPredict/container/__main__.py`
+
+-   [ ] **Step 1: Write **main**.py**
 
 ```python
 """
@@ -1360,7 +1368,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add backendPipelines/genAi/cosmosPredict/container/__main__.py
@@ -1372,10 +1380,11 @@ git commit -m "feat: add Cosmos VAMS container wrapper with S3 I/O and callbacks
 ### Task 10: Create Dockerfile and entrypoint.sh
 
 **Files:**
-- Create: `backendPipelines/genAi/cosmosPredict/container/Dockerfile`
-- Create: `backendPipelines/genAi/cosmosPredict/container/entrypoint.sh`
 
-- [ ] **Step 1: Write entrypoint.sh**
+-   Create: `backendPipelines/genAi/cosmosPredict/container/Dockerfile`
+-   Create: `backendPipelines/genAi/cosmosPredict/container/entrypoint.sh`
+
+-   [ ] **Step 1: Write entrypoint.sh**
 
 ```bash
 #!/bin/bash
@@ -1390,7 +1399,7 @@ cd /opt/ml/code
 exec python __main__.py "$@"
 ```
 
-- [ ] **Step 2: Write Dockerfile**
+-   [ ] **Step 2: Write Dockerfile**
 
 ```dockerfile
 FROM nvcr.io/nvidia/pytorch:24.10-py3
@@ -1451,7 +1460,7 @@ WORKDIR /opt/ml/code
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]
 ```
 
-- [ ] **Step 3: Commit**
+-   [ ] **Step 3: Commit**
 
 ```bash
 git add backendPipelines/genAi/cosmosPredict/container/Dockerfile \
@@ -1466,38 +1475,40 @@ git commit -m "feat: add Cosmos Predict container Dockerfile and entrypoint"
 ### Task 11: Create Lambda builders
 
 **Files:**
-- Create: `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/lambdaBuilder/cosmosPredictFunctions.ts`
 
-- [ ] **Step 1: Create directory structure**
+-   Create: `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/lambdaBuilder/cosmosPredictFunctions.ts`
+
+-   [ ] **Step 1: Create directory structure**
 
 ```bash
 mkdir -p infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/lambdaBuilder
 mkdir -p infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/constructs
 ```
 
-- [ ] **Step 2: Write cosmosPredictFunctions.ts**
+-   [ ] **Step 2: Write cosmosPredictFunctions.ts**
 
 Follow the exact pattern from `splatToolboxFunctions.ts` (5 builder functions). The file should export 5 functions:
 
-- `buildVamsExecuteCosmosText2WorldPipelineFunction` — handler: `vamsExecuteCosmosText2WorldPipeline.lambda_handler`, env: `OPEN_PIPELINE_FUNCTION_NAME`
-- `buildVamsExecuteCosmosVideo2WorldPipelineFunction` — handler: `vamsExecuteCosmosVideo2WorldPipeline.lambda_handler`, env: `OPEN_PIPELINE_FUNCTION_NAME`
-- `buildConstructPipelineFunction` — handler: `constructPipeline.lambda_handler`, no extra env vars
-- `buildOpenPipelineFunction` — handler: `openPipeline.lambda_handler`, env: `STATE_MACHINE_ARN`, `ALLOWED_INPUT_FILEEXTENSIONS`
-- `buildPipelineEndFunction` — handler: `pipelineEnd.lambda_handler`, IAM for `states:SendTaskSuccess`/`states:SendTaskFailure`
+-   `buildVamsExecuteCosmosText2WorldPipelineFunction` — handler: `vamsExecuteCosmosText2WorldPipeline.lambda_handler`, env: `OPEN_PIPELINE_FUNCTION_NAME`
+-   `buildVamsExecuteCosmosVideo2WorldPipelineFunction` — handler: `vamsExecuteCosmosVideo2WorldPipeline.lambda_handler`, env: `OPEN_PIPELINE_FUNCTION_NAME`
+-   `buildConstructPipelineFunction` — handler: `constructPipeline.lambda_handler`, no extra env vars
+-   `buildOpenPipelineFunction` — handler: `openPipeline.lambda_handler`, env: `STATE_MACHINE_ARN`, `ALLOWED_INPUT_FILEEXTENSIONS`
+-   `buildPipelineEndFunction` — handler: `pipelineEnd.lambda_handler`, IAM for `states:SendTaskSuccess`/`states:SendTaskFailure`
 
 All functions:
-- Runtime: `Config.LAMBDA_PYTHON_RUNTIME`
-- Code path: `backendPipelines/genAi/cosmosPredict/lambda`
-- Layers: `lambdaCommonBaseLayer`
-- Memory: `Config.LAMBDA_MEMORY_SIZE`
-- Timeout: 5 minutes
-- VPC: conditional on `config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas`
-- Security: all 4 required calls (`kmsKeyLambdaPermissionAddToResourcePolicy`, `lambdaFunctionSetup`, `globalLambdaEnvironmentsAndPermissions`, `suppressCdkNagErrorsByGrantReadWrite`)
-- Asset bucket permissions: `grantReadPermissionsToAllAssetBuckets`
+
+-   Runtime: `Config.LAMBDA_PYTHON_RUNTIME`
+-   Code path: `backendPipelines/genAi/cosmosPredict/lambda`
+-   Layers: `lambdaCommonBaseLayer`
+-   Memory: `Config.LAMBDA_MEMORY_SIZE`
+-   Timeout: 5 minutes
+-   VPC: conditional on `config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas`
+-   Security: all 4 required calls (`kmsKeyLambdaPermissionAddToResourcePolicy`, `lambdaFunctionSetup`, `globalLambdaEnvironmentsAndPermissions`, `suppressCdkNagErrorsByGrantReadWrite`)
+-   Asset bucket permissions: `grantReadPermissionsToAllAssetBuckets`
 
 Refer to `infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/lambdaBuilder/splatToolboxFunctions.ts` for the exact pattern and import paths.
 
-- [ ] **Step 3: Commit**
+-   [ ] **Step 3: Commit**
 
 ```bash
 git add infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/lambdaBuilder/cosmosPredictFunctions.ts
@@ -1509,11 +1520,12 @@ git commit -m "feat: add Cosmos Predict Lambda builder functions"
 ### Task 12: Create Cosmos Predict construct
 
 **Files:**
-- Create: `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/constructs/cosmosPredict-construct.ts`
+
+-   Create: `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/constructs/cosmosPredict-construct.ts`
 
 This is the largest CDK file. It creates all shared and per-model resources.
 
-- [ ] **Step 1: Write cosmosPredict-construct.ts**
+-   [ ] **Step 1: Write cosmosPredict-construct.ts**
 
 The construct should create:
 
@@ -1522,7 +1534,7 @@ The construct should create:
 1. **S3 Model Cache Bucket** — `vams-cosmos-model-cache-{account}-{region}`, KMS encrypted, TLS enforced, IA lifecycle at 90 days
 2. **EFS FileSystem** — encrypted with shared KMS key, elastic throughput, IA lifecycle at 30 days, mount targets in pipeline subnets, security group allowing NFS (2049) from Batch compute SG, removal policy RETAIN
 3. **ECR Repository + DockerImageAsset** — single image from `backendPipelines/genAi/cosmosPredict/container/`
-4. **IAM Roles** — container execution role and container job role (same pattern as SplatToolbox: S3 read/write on asset buckets + model cache bucket, EFS client mount, states:SendTask*, SSM GetParameter for HF_TOKEN)
+4. **IAM Roles** — container execution role and container job role (same pattern as SplatToolbox: S3 read/write on asset buckets + model cache bucket, EFS client mount, states:SendTask\*, SSM GetParameter for HF_TOKEN)
 5. **Batch Compute Environment** — via `BatchGpuPipelineConstruct`, instance types from config, launch template with 200GB gp3 EBS + EFS mount user data. **Warm instances**: if `config.app.pipelines.useCosmosPredict.useWarmInstances === true`, set `minVCpus = config.app.pipelines.useCosmosPredict.warmInstanceCount * 48` (48 vCPUs per g5.12xlarge). If `false` (default), set `minVCpus = 0` (scale to zero, cold start)
 6. **Batch Job Queue** — shared by all model types
 7. **Shared Lambda Functions** — constructPipeline, pipelineEnd (openPipeline may need to be per-model if STATE_MACHINE_ARN is an env var, or shared if passed in payload)
@@ -1530,6 +1542,7 @@ The construct should create:
 **Per-model resources (conditional on each model's enabled flag):**
 
 For each of text2world7B and video2world7B:
+
 1. **Batch Job Definition** — container image from shared ECR, vCPUs 48, memory 120000, GPUs 4, privileged, shared memory 8192, device mappings, env vars (MODEL_TYPE, AWS_REGION), secrets (HF_TOKEN from SSM), EFS mount at `/mnt/efs/cosmos-models`, S3_MODEL_BUCKET env var, timeout 28800
 2. **vamsExecute Lambda** — model-specific handler
 3. **openPipeline Lambda** — with model-specific STATE_MACHINE_ARN
@@ -1537,18 +1550,20 @@ For each of text2world7B and video2world7B:
 5. **Custom Resource** — pipeline + workflow auto-registration via importGlobalPipelineWorkflow
 
 Key CDK patterns to follow:
-- Use `BatchGpuPipelineConstruct` (from `../constructs/batch-gpu-pipeline.ts`) for compute environment, but extend it with EFS mount in the launch template user data
-- Reference `splatToolbox-construct.ts` for IAM roles, state machine definition, custom resource registration, and CDK Nag suppressions
-- Pass `S3_MODEL_BUCKET` bucket name as env var to job definition
-- For the EFS mount in launch template, add user data script:
-  ```bash
-  yum install -y amazon-efs-utils
-  mkdir -p /mnt/efs/cosmos-models
-  mount -t efs -o tls ${EFS_ID}:/ /mnt/efs/cosmos-models
-  echo "${EFS_ID}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
-  ```
+
+-   Use `BatchGpuPipelineConstruct` (from `../constructs/batch-gpu-pipeline.ts`) for compute environment, but extend it with EFS mount in the launch template user data
+-   Reference `splatToolbox-construct.ts` for IAM roles, state machine definition, custom resource registration, and CDK Nag suppressions
+-   Pass `S3_MODEL_BUCKET` bucket name as env var to job definition
+-   For the EFS mount in launch template, add user data script:
+    ```bash
+    yum install -y amazon-efs-utils
+    mkdir -p /mnt/efs/cosmos-models
+    mount -t efs -o tls ${EFS_ID}:/ /mnt/efs/cosmos-models
+    echo "${EFS_ID}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
+    ```
 
 **Props interface:**
+
 ```typescript
 interface CosmosPredictConstructProps {
     config: Config.Config;
@@ -1562,12 +1577,13 @@ interface CosmosPredictConstructProps {
 ```
 
 **Public properties:**
+
 ```typescript
 public readonly pipelineText2WorldVamsLambdaFunctionName?: string;
 public readonly pipelineVideo2WorldVamsLambdaFunctionName?: string;
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/constructs/cosmosPredict-construct.ts
@@ -1579,9 +1595,10 @@ git commit -m "feat: add Cosmos Predict CDK construct with Batch, EFS, S3, SFN"
 ### Task 13: Create nested stack wrapper
 
 **Files:**
-- Create: `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/cosmosPredictBuilder-nestedStack.ts`
 
-- [ ] **Step 1: Write cosmosPredictBuilder-nestedStack.ts**
+-   Create: `infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/cosmosPredictBuilder-nestedStack.ts`
+
+-   [ ] **Step 1: Write cosmosPredictBuilder-nestedStack.ts**
 
 ```typescript
 import * as cdk from "aws-cdk-lib";
@@ -1609,20 +1626,16 @@ export class CosmosPredictBuilderNestedStack extends cdk.NestedStack {
     constructor(scope: Construct, id: string, props: CosmosPredictBuilderNestedStackProps) {
         super(scope, id, props);
 
-        const cosmosPredictConstruct = new CosmosPredictConstruct(
-            this,
-            "CosmosPredictConstruct",
-            {
-                config: props.config,
-                vpc: props.vpc,
-                subnets: props.pipelineSubnets,
-                securityGroups: props.pipelineSecurityGroups,
-                storageResources: props.storageResources,
-                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
-            }
-        );
+        const cosmosPredictConstruct = new CosmosPredictConstruct(this, "CosmosPredictConstruct", {
+            config: props.config,
+            vpc: props.vpc,
+            subnets: props.pipelineSubnets,
+            securityGroups: props.pipelineSecurityGroups,
+            storageResources: props.storageResources,
+            lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+            importGlobalPipelineWorkflowFunctionName:
+                props.importGlobalPipelineWorkflowFunctionName,
+        });
 
         this.pipelineText2WorldVamsLambdaFunctionName =
             cosmosPredictConstruct.pipelineText2WorldVamsLambdaFunctionName ?? "";
@@ -1632,7 +1645,7 @@ export class CosmosPredictBuilderNestedStack extends cdk.NestedStack {
 }
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add infra/lib/nestedStacks/pipelines/genAi/cosmosPredict/cosmosPredictBuilder-nestedStack.ts
@@ -1646,9 +1659,10 @@ git commit -m "feat: add Cosmos Predict nested stack wrapper"
 ### Task 14: Update VPC endpoint conditions
 
 **Files:**
-- Modify: `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`
 
-- [ ] **Step 1: Add useCosmosPredict to VPC endpoint conditions**
+-   Modify: `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`
+
+-   [ ] **Step 1: Add useCosmosPredict to VPC endpoint conditions**
 
 In `vpcBuilder-nestedStack.ts`, find the pipeline-conditional VPC endpoint block (around line 540) and add `props.config.app.pipelines.useCosmosPredict.enabled ||` to the condition:
 
@@ -1666,7 +1680,7 @@ if (
 ) {
 ```
 
-- [ ] **Step 2: Add EFS VPC endpoint**
+-   [ ] **Step 2: Add EFS VPC endpoint**
 
 Inside the same condition block, after the existing ECR Docker endpoint, add an EFS endpoint:
 
@@ -1683,7 +1697,7 @@ if (props.config.app.pipelines.useCosmosPredict.enabled) {
 }
 ```
 
-- [ ] **Step 3: Commit**
+-   [ ] **Step 3: Commit**
 
 ```bash
 git add infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts
@@ -1695,15 +1709,16 @@ git commit -m "feat: add Cosmos Predict to VPC endpoint conditions + EFS endpoin
 ### Task 15: Update pipeline builder
 
 **Files:**
-- Modify: `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`
 
-- [ ] **Step 1: Add import**
+-   Modify: `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`
+
+-   [ ] **Step 1: Add import**
 
 ```typescript
 import { CosmosPredictBuilderNestedStack } from "./genAi/cosmosPredict/cosmosPredictBuilder-nestedStack";
 ```
 
-- [ ] **Step 2: Add conditional instantiation**
+-   [ ] **Step 2: Add conditional instantiation**
 
 After the SplatToolbox block (around line 108), add:
 
@@ -1738,7 +1753,7 @@ if (props.config.app.pipelines.useCosmosPredict.enabled) {
 }
 ```
 
-- [ ] **Step 3: Commit**
+-   [ ] **Step 3: Commit**
 
 ```bash
 git add infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts
@@ -1749,12 +1764,12 @@ git commit -m "feat: integrate Cosmos Predict pipeline into pipeline builder"
 
 ### Task 16: Verify CDK synth
 
-- [ ] **Step 1: Run CDK synth with Cosmos disabled (default)**
+-   [ ] **Step 1: Run CDK synth with Cosmos disabled (default)**
 
 Run: `cd infra && npx cdk synth 2>&1 | tail -5`
 Expected: Successful synthesis, no errors
 
-- [ ] **Step 2: Commit all remaining changes**
+-   [ ] **Step 2: Commit all remaining changes**
 
 ```bash
 git add -A
@@ -1768,26 +1783,28 @@ git commit -m "feat: complete Cosmos Predict CDK integration"
 ### Task 17: Create NVIDIA Cosmos documentation page
 
 **Files:**
-- Create: `documentation/docusaurus-site/docs/pipelines/nvidia-cosmos.md`
 
-- [ ] **Step 1: Write nvidia-cosmos.md**
+-   Create: `documentation/docusaurus-site/docs/pipelines/nvidia-cosmos.md`
+
+-   [ ] **Step 1: Write nvidia-cosmos.md**
 
 Create a comprehensive documentation page covering:
+
 1. Overview of NVIDIA Cosmos integration
 2. Prerequisites (HuggingFace account, license acceptance, GPU instance availability, SSM parameter for HF token)
 3. Configuration reference (all `useCosmosPredict.*` options with descriptions and defaults)
 4. Cosmos Predict sub-section:
-   - Text2World usage (setting COSMOS_PREDICT_PROMPT on asset metadata, triggering pipeline)
-   - Video2World usage (uploading video/image, setting COSMOS_PREDICT_PROMPT on file metadata)
-   - Prompt priority (metadata > inputParameters > none)
-   - Output format (5s MP4 video, 1280x704, 24fps, with GIF preview)
+    - Text2World usage (setting COSMOS_PREDICT_PROMPT on asset metadata, triggering pipeline)
+    - Video2World usage (uploading video/image, setting COSMOS_PREDICT_PROMPT on file metadata)
+    - Prompt priority (metadata > inputParameters > none)
+    - Output format (5s MP4 video, 1280x704, 24fps, with GIF preview)
 5. GPU instance recommendations table (7B: g5.12xlarge, 14B: p4d/p5)
 6. Model caching (how EFS+S3 works, first-run download behavior for all 3 model components including T5-11B)
 7. Troubleshooting (OOM, HF token errors, EFS mount issues)
 8. Future models placeholder (14B, Cosmos Predict2.5)
 9. "Built on NVIDIA Cosmos" attribution per licensing requirements
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add documentation/docusaurus-site/docs/pipelines/nvidia-cosmos.md
@@ -1799,22 +1816,24 @@ git commit -m "docs: add NVIDIA Cosmos pipeline documentation"
 ### Task 18: Generate architecture diagram
 
 **Files:**
-- Create: architecture diagram PNG in `documentation/` or `generated-diagrams/`
 
-- [ ] **Step 1: Generate diagram using AWS diagrams MCP tool**
+-   Create: architecture diagram PNG in `documentation/` or `generated-diagrams/`
+
+-   [ ] **Step 1: Generate diagram using AWS diagrams MCP tool**
 
 Use the `generate_diagram` MCP tool to create a professional architecture diagram showing the full pipeline flow:
-- VAMS UI -> API Gateway -> vamsExecute Lambda (T2W/V2W)
-- Step Functions state machine
-- constructPipeline Lambda -> Batch Job (g5.12xlarge, 4x A10G)
-- Batch container connections to: EFS (model weights), S3 Model Cache, S3 Asset Bucket (output), HuggingFace (first download)
-- pipelineEnd Lambda with SFN callback
+
+-   VAMS UI -> API Gateway -> vamsExecute Lambda (T2W/V2W)
+-   Step Functions state machine
+-   constructPipeline Lambda -> Batch Job (g5.12xlarge, 4x A10G)
+-   Batch container connections to: EFS (model weights), S3 Model Cache, S3 Asset Bucket (output), HuggingFace (first download)
+-   pipelineEnd Lambda with SFN callback
 
 Use AWS service icons for all components.
 
-- [ ] **Step 2: Add diagram reference to nvidia-cosmos.md**
+-   [ ] **Step 2: Add diagram reference to nvidia-cosmos.md**
 
-- [ ] **Step 3: Commit**
+-   [ ] **Step 3: Commit**
 
 ```bash
 git add documentation/ generated-diagrams/
@@ -1826,9 +1845,10 @@ git commit -m "docs: add Cosmos Predict architecture diagram"
 ### Task 19: Update configuration reference
 
 **Files:**
-- Modify: `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
 
-- [ ] **Step 1: Add Cosmos Predict config options**
+-   Modify: `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
+
+-   [ ] **Step 1: Add Cosmos Predict config options**
 
 Add after the existing pipeline configuration entries:
 
@@ -1848,7 +1868,7 @@ Add after the existing pipeline configuration entries:
 -   `app.pipelines.useCosmosPredict.models.video2world7B.maxVCpus` | default: 48 | # Maximum vCPUs for Batch compute environment
 ```
 
-- [ ] **Step 2: Commit**
+-   [ ] **Step 2: Commit**
 
 ```bash
 git add documentation/docusaurus-site/docs/deployment/configuration-reference.md
@@ -1860,11 +1880,13 @@ git commit -m "docs: add Cosmos Predict config options to configuration referenc
 ### Task 20: Update CLAUDE.md
 
 **Files:**
-- Modify: `CLAUDE.md`
 
-- [ ] **Step 1: Add Cosmos Predict to directory structure tree**
+-   Modify: `CLAUDE.md`
+
+-   [ ] **Step 1: Add Cosmos Predict to directory structure tree**
 
 In the directory structure section, add under `backendPipelines/`:
+
 ```
 ├── backendPipelines/
 │   ├── genAi/
@@ -1874,11 +1896,11 @@ In the directory structure section, add under `backendPipelines/`:
 │       └── splatToolbox/          # Gaussian Splat pipeline
 ```
 
-- [ ] **Step 2: Add to pipeline list in Architecture Summary**
+-   [ ] **Step 2: Add to pipeline list in Architecture Summary**
 
 Add to the Pipeline Architecture section or create a new entry in the processing pipelines list.
 
-- [ ] **Step 3: Commit**
+-   [ ] **Step 3: Commit**
 
 ```bash
 git add CLAUDE.md
@@ -1890,34 +1912,36 @@ git commit -m "docs: add Cosmos Predict pipeline to CLAUDE.md"
 ## Self-Review Checklist
 
 ### Spec Coverage
-- [x] CDK config with huggingFaceToken, models sub-sections, per-model enabled flags — Task 1
-- [x] Config validation (no models enabled error, HF token required, VPC auto-enable) — Task 1
-- [x] Text2World vamsExecute reads asset metadata for COSMOS_PREDICT_PROMPT — Task 2
-- [x] Video2World vamsExecute reads file metadata for COSMOS_PREDICT_PROMPT — Task 3
-- [x] Shared constructPipeline, openPipeline, pipelineEnd — Tasks 4-6
-- [x] Model manager with EFS/S3/HuggingFace cascade — Task 7
-- [x] All 3 model downloads: diffusion, tokenizer, T5-11B text encoder — Task 7 (get_required_models)
-- [x] Inference routing with always-on offloading flags — Task 8
-- [x] VAMS wrapper with S3 I/O, preview generation, task callbacks — Task 9
-- [x] Dockerfile with NGC base, conda env, framework install — Task 10
-- [x] Lambda builders (5 functions) — Task 11
-- [x] CDK construct with EFS, S3, Batch, SFN, registration — Task 12
-- [x] Nested stack wrapper — Task 13
-- [x] VPC endpoint update + EFS endpoint — Task 14
-- [x] Pipeline builder integration — Task 15
-- [x] Output stored back to VAMS via proper S3 paths — Task 9 (__main__.py)
-- [x] Preview GIF generation — Task 9 (__main__.py)
-- [x] Documentation page — Task 17
-- [x] Architecture diagram — Task 18
-- [x] Config reference update — Task 19
-- [x] CLAUDE.md update — Task 20
+
+-   [x] CDK config with huggingFaceToken, models sub-sections, per-model enabled flags — Task 1
+-   [x] Config validation (no models enabled error, HF token required, VPC auto-enable) — Task 1
+-   [x] Text2World vamsExecute reads asset metadata for COSMOS_PREDICT_PROMPT — Task 2
+-   [x] Video2World vamsExecute reads file metadata for COSMOS_PREDICT_PROMPT — Task 3
+-   [x] Shared constructPipeline, openPipeline, pipelineEnd — Tasks 4-6
+-   [x] Model manager with EFS/S3/HuggingFace cascade — Task 7
+-   [x] All 3 model downloads: diffusion, tokenizer, T5-11B text encoder — Task 7 (get_required_models)
+-   [x] Inference routing with always-on offloading flags — Task 8
+-   [x] VAMS wrapper with S3 I/O, preview generation, task callbacks — Task 9
+-   [x] Dockerfile with NGC base, conda env, framework install — Task 10
+-   [x] Lambda builders (5 functions) — Task 11
+-   [x] CDK construct with EFS, S3, Batch, SFN, registration — Task 12
+-   [x] Nested stack wrapper — Task 13
+-   [x] VPC endpoint update + EFS endpoint — Task 14
+-   [x] Pipeline builder integration — Task 15
+-   [x] Output stored back to VAMS via proper S3 paths — Task 9 (**main**.py)
+-   [x] Preview GIF generation — Task 9 (**main**.py)
+-   [x] Documentation page — Task 17
+-   [x] Architecture diagram — Task 18
+-   [x] Config reference update — Task 19
+-   [x] CLAUDE.md update — Task 20
 
 ### Type/Name Consistency
-- `modelType`: "text2world" / "video2world" — consistent across vamsExecute, constructPipeline, __main__.py, inference.py
-- `cosmosPrompt`: set in vamsExecute, passed through constructPipeline, used in __main__.py
-- `COSMOS_PREDICT_PROMPT`: metadata key checked in both vamsExecute Lambdas
-- `OPEN_PIPELINE_FUNCTION_NAME`: env var in both vamsExecute builders
-- `STATE_MACHINE_ARN`: env var in openPipeline builder
-- `EXTERNAL_SFN_TASK_TOKEN`: env var passed to container in Batch job override
-- `S3_MODEL_BUCKET`: env var passed to container
-- `HF_TOKEN`: secret from SSM in Batch job definition
+
+-   `modelType`: "text2world" / "video2world" — consistent across vamsExecute, constructPipeline, **main**.py, inference.py
+-   `cosmosPrompt`: set in vamsExecute, passed through constructPipeline, used in **main**.py
+-   `COSMOS_PREDICT_PROMPT`: metadata key checked in both vamsExecute Lambdas
+-   `OPEN_PIPELINE_FUNCTION_NAME`: env var in both vamsExecute builders
+-   `STATE_MACHINE_ARN`: env var in openPipeline builder
+-   `EXTERNAL_SFN_TASK_TOKEN`: env var passed to container in Batch job override
+-   `S3_MODEL_BUCKET`: env var passed to container
+-   `HF_TOKEN`: secret from SSM in Batch job definition

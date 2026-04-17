@@ -427,11 +427,21 @@ class IsaacVAMSConnector:
         if not success:
             return False
 
-        file_name = os.path.basename(file_key)
-        local_file = os.path.join(local_dir, file_name)
+        # Use the full relative path (not just basename) to match the CLI's
+        # download layout, which preserves subdirectory structure.
+        local_file = os.path.abspath(os.path.join(local_dir, file_key.lstrip("/")))
 
         if not os.path.isfile(local_file):
             logger.error("Downloaded file not found at %s", local_file)
+            return False
+
+        # Validate that the file is a supported USD format before opening as a stage
+        _USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
+        if not local_file.lower().endswith(_USD_EXTENSIONS):
+            logger.error(
+                "Cannot open non-USD file as stage: %s (supported: %s)",
+                local_file, ", ".join(_USD_EXTENSIONS),
+            )
             return False
 
         logger.info("Opening stage from %s", local_file)
@@ -464,11 +474,21 @@ class IsaacVAMSConnector:
         if not success:
             return False
 
-        file_name = os.path.basename(file_key)
-        local_file = os.path.join(local_dir, file_name)
+        # Use the full relative path (not just basename) to match the CLI's
+        # download layout, which preserves subdirectory structure.
+        local_file = os.path.abspath(os.path.join(local_dir, file_key.lstrip("/")))
 
         if not os.path.isfile(local_file):
             logger.error("Downloaded file not found at %s", local_file)
+            return False
+
+        # Validate that the file is a supported USD format before adding as a reference
+        _USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
+        if not local_file.lower().endswith(_USD_EXTENSIONS):
+            logger.error(
+                "Cannot add non-USD file as reference: %s (supported: %s)",
+                local_file, ", ".join(_USD_EXTENSIONS),
+            )
             return False
 
         stage = omni.usd.get_context().get_stage()
@@ -482,4 +502,138 @@ class IsaacVAMSConnector:
         references = prim.GetReferences()
         references.AddReference(local_file)
         logger.info("Added reference %s at prim %s", local_file, prim_path)
+        return True
+
+    def download_and_import_urdf(
+        self,
+        database_id: str,
+        asset_id: str,
+        file_key: str,
+        local_dir: Optional[str] = None,
+        fix_base: bool = True,
+        merge_fixed_joints: bool = False,
+        import_inertia_tensor: bool = True,
+    ) -> Optional[str]:
+        """
+        Download a URDF file from VAMS and import it into the current Isaac Sim stage.
+
+        Requires the ``isaacsim.asset.importer.urdf`` extension to be enabled in
+        Isaac Sim.
+
+        Args:
+            database_id: The database ID.
+            asset_id: The asset ID.
+            file_key: File key of the ``.urdf`` file within the asset.
+            local_dir: Local directory to download to. Uses temp dir if None.
+            fix_base: Create a fixed joint for the base link.
+            merge_fixed_joints: Consolidate links connected by fixed joints.
+            import_inertia_tensor: Import inertia tensor data from the URDF.
+
+        Returns:
+            The prim path of the imported robot, or None on failure.
+        """
+        _URDF_EXTENSIONS = (".urdf",)
+        if not file_key.lower().endswith(_URDF_EXTENSIONS):
+            logger.error("Not a URDF file: %s", file_key)
+            return None
+
+        if local_dir is None:
+            local_dir = tempfile.mkdtemp(prefix="vams_urdf_")
+
+        success = self.download_file(database_id, asset_id, file_key, local_dir)
+        if not success:
+            return None
+
+        local_file = os.path.abspath(os.path.join(local_dir, file_key.lstrip("/")))
+        if not os.path.isfile(local_file):
+            logger.error("Downloaded URDF file not found at %s", local_file)
+            return None
+
+        import omni.kit.commands
+        from isaacsim.asset.importer.urdf import _urdf
+
+        import_config = _urdf.ImportConfig()
+        import_config.set_fix_base(fix_base)
+        import_config.set_merge_fixed_joints(merge_fixed_joints)
+        import_config.set_import_inertia_tensor(import_inertia_tensor)
+
+        logger.info("Importing URDF from %s", local_file)
+        status, prim_path = omni.kit.commands.execute(
+            "URDFParseAndImportFile",
+            urdf_path=local_file,
+            import_config=import_config,
+        )
+        if prim_path:
+            logger.info("Imported URDF as prim %s", prim_path)
+        else:
+            logger.error("URDF import failed for %s", local_file)
+        return prim_path
+
+    def download_and_import_mjcf(
+        self,
+        database_id: str,
+        asset_id: str,
+        file_key: str,
+        local_dir: Optional[str] = None,
+        fix_base: bool = True,
+        merge_fixed_joints: bool = False,
+        import_inertia_tensor: bool = True,
+    ) -> bool:
+        """
+        Download a MJCF file from VAMS and import it into the current Isaac Sim stage.
+
+        Requires the ``isaacsim.asset.importer.mjcf`` extension to be enabled in
+        Isaac Sim.
+
+        Args:
+            database_id: The database ID.
+            asset_id: The asset ID.
+            file_key: File key of the ``.mjcf`` or ``.xml`` file within the asset.
+            local_dir: Local directory to download to. Uses temp dir if None.
+            fix_base: Create a fixed joint for the base link.
+            merge_fixed_joints: Consolidate links connected by fixed joints.
+            import_inertia_tensor: Import inertia tensor data from the MJCF.
+
+        Returns:
+            True if the import succeeded.
+        """
+        _MJCF_EXTENSIONS = (".mjcf", ".xml")
+        if not file_key.lower().endswith(_MJCF_EXTENSIONS):
+            logger.error("Not a MJCF file: %s", file_key)
+            return False
+
+        if local_dir is None:
+            local_dir = tempfile.mkdtemp(prefix="vams_mjcf_")
+
+        success = self.download_file(database_id, asset_id, file_key, local_dir)
+        if not success:
+            return False
+
+        local_file = os.path.abspath(os.path.join(local_dir, file_key.lstrip("/")))
+        if not os.path.isfile(local_file):
+            logger.error("Downloaded MJCF file not found at %s", local_file)
+            return False
+
+        import omni.kit.commands
+        from isaacsim.asset.importer.mjcf import _mjcf
+
+        import_config = _mjcf.ImportConfig()
+        import_config.set_fix_base(fix_base)
+        import_config.set_merge_fixed_joints(merge_fixed_joints)
+        import_config.set_import_inertia_tensor(import_inertia_tensor)
+
+        import re
+        _base = os.path.splitext(os.path.basename(file_key))[0]
+        _safe = re.sub(r"[^a-zA-Z0-9_]", "_", _base)
+        if _safe and _safe[0].isdigit():
+            _safe = "_" + _safe
+        prim_name = "/" + (_safe or "imported")
+        logger.info("Importing MJCF from %s as %s", local_file, prim_name)
+        omni.kit.commands.execute(
+            "MJCFCreateAsset",
+            mjcf_path=local_file,
+            import_config=import_config,
+            prim_path=prim_name,
+        )
+        logger.info("Imported MJCF as prim %s", prim_name)
         return True
