@@ -118,21 +118,33 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                 const camera = new BABYLON.ArcRotateCamera(
                     "camera",
                     0,
-                    Math.PI / 3,
-                    10,
+                    Math.PI / 6,
+                    0.5,
                     BABYLON.Vector3.Zero(),
                     scene
                 );
                 camera.attachControl(canvas, true);
 
-                // Fine-tune camera controls
-                camera.wheelPrecision = 50;
-                camera.pinchPrecision = 200;
-                camera.panningSensibility = 1000;
-                camera.angularSensibilityX = 1000;
-                camera.angularSensibilityY = 1000;
-                camera.minZ = 0.1;
-                camera.lowerRadiusLimit = 0.1;
+                // ULTRA AGGRESSIVE camera controls
+                camera.wheelPrecision = 500; // Fast zoom but not too aggressive
+                camera.pinchPrecision = 20; // Fast pinch zoom
+                camera.panningSensibility = 1000; // Slower panning (higher = slower)
+                camera.angularSensibilityX = 500; // Faster rotation
+                camera.angularSensibilityY = 500; // Faster rotation
+                camera.minZ = 0.0001;
+                camera.lowerRadiusLimit = 0.0001; // Almost no limit
+                camera.upperRadiusLimit = 5000;
+                camera.speed = 2; // Increase overall camera speed
+                
+                // Use percentage-based zoom for smoother experience at all distances
+                camera.wheelDeltaPercentage = 0.01; // 1% of current distance per wheel tick
+                
+                console.log("BabylonJS Camera Settings:", {
+                    wheelPrecision: camera.wheelPrecision,
+                    initialRadius: camera.radius,
+                    initialBeta: camera.beta,
+                    lowerRadiusLimit: camera.lowerRadiusLimit
+                });
 
                 // Handle window resize to maintain aspect ratio
                 const handleResize = () => {
@@ -190,7 +202,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                             "BabylonJS Gaussian Splat Viewer: Loading Gaussian Splat with SceneLoader..."
                         );
 
-                        BABYLON.SceneLoader.ImportMeshAsync("", "", response[1], scene)
+                        BABYLON.SceneLoader.ImportMeshAsync("", "", response[1], scene, null, ".spz")
                             .then((result: any) => {
                                 console.log(
                                     "BabylonJS Gaussian Splat Viewer: File loaded successfully, positioning camera"
@@ -199,15 +211,45 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                                 if (result.meshes.length > 0) {
                                     const mesh = result.meshes[0];
                                     const boundingInfo = mesh.getBoundingInfo();
-                                    const center = boundingInfo.boundingBox.center;
-                                    const radius = boundingInfo.boundingSphere.radius;
+                                    const mn = boundingInfo.boundingBox.minimumWorld;
+                                    const mx = boundingInfo.boundingBox.maximumWorld;
 
-                                    camera.setTarget(center);
-                                    camera.radius = Math.max(radius * 2, 5);
-
-                                    console.log(
-                                        "BabylonJS Gaussian Splat Viewer: Camera positioned for optimal viewing"
+                                    // No mesh transform - use createDefaultCameraOrLight to auto-fit
+                                    // which correctly handles the coordinate system
+                                    // has not yet applied the fractional-bits scale (typically
+                                    // 12 bits = 4096). Detect and divide out that scale factor.
+                                    const rawMaxHalf = Math.max(
+                                        (mx.x - mn.x) / 2,
+                                        (mx.y - mn.y) / 2,
+                                        (mx.z - mn.z) / 2
                                     );
+                                    const fractionalBits = 12; // SPZ default
+                                    const fbScale = rawMaxHalf > 10 ? (1 << fractionalBits) : 1;
+
+                                    const cx = ((mn.x + mx.x) / 2) / fbScale;
+                                    const cy = ((mn.y + mx.y) / 2) / fbScale;
+                                    const cz = ((mn.z + mx.z) / 2) / fbScale;
+                                    const hx = (mx.x - mn.x) / 2 / fbScale;
+                                    const hy = (mx.y - mn.y) / 2 / fbScale;
+                                    const hz = (mx.z - mn.z) / 2 / fbScale;
+                                    const maxHalf = Math.max(hx, hy, hz, 0.001);
+
+                                    // Use createDefaultCameraOrLight for all cases - matches reference script
+                                    scene.createDefaultCameraOrLight(true, true, true);
+                                    const cam = scene.activeCamera;
+                                    const scaledRadius = (cam.radius / fbScale) * 3.0;
+                                    cam.target = fbScale > 1 ? cam.target.scale(1 / fbScale) : cam.target;
+                                    cam.radius = scaledRadius;
+                                    cam.lowerRadiusLimit = scaledRadius * 0.0001;
+                                    cam.minZ = scaledRadius * 0.0001;
+                                    cam.maxZ = scaledRadius * 200;
+                                    cam.attachControl(scene.getEngine().getRenderingCanvas(), true);
+                                    cam.wheelDeltaPercentage = 0.01;
+                                    cam.panningSensibility = 1000;
+
+                                    console.log("BabylonJS Camera Auto-fit:", {
+                                        rawMaxHalf, fbScale, cx, cy, cz, maxHalf, fitRadius
+                                    });
                                 }
 
                                 setIsLoading(false);

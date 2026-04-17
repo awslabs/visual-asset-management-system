@@ -10,12 +10,13 @@ import { PlayCanvasGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 
 // Simplified camera controls using direct mouse/touch handling
-const createCameraControls = (app: any, camera: any, pc: any) => {
+// Accepts an optional initial distance; if not provided, defaults to 10
+const createCameraControls = (app: any, camera: any, pc: any, initialDistance = 10) => {
     let isMouseDown = false;
     let isPanning = false;
     let lastMouseX = 0;
     let lastMouseY = 0;
-    let cameraDistance = 10;
+    let cameraDistance = initialDistance;
     let cameraYaw = 0;
     let cameraPitch = 0.3;
     const target = new pc.Vec3(0, 0, 0);
@@ -63,7 +64,7 @@ const createCameraControls = (app: any, camera: any, pc: any) => {
         } else {
             // Rotate around target
             const rotateSpeed = 0.005;
-            cameraYaw += deltaX * rotateSpeed; // Fixed: + instead of - to match BabylonJS behavior
+            cameraYaw -= deltaX * rotateSpeed; // Reversed rotation direction
             cameraPitch = Math.max(
                 -Math.PI / 2 + 0.1,
                 Math.min(Math.PI / 2 - 0.1, cameraPitch + deltaY * rotateSpeed)
@@ -86,7 +87,7 @@ const createCameraControls = (app: any, camera: any, pc: any) => {
     const onWheel = (e: WheelEvent) => {
         const zoomSpeed = 0.001;
         const zoomDelta = e.deltaY * zoomSpeed * cameraDistance;
-        cameraDistance = Math.max(0.5, Math.min(100, cameraDistance + zoomDelta)); // Fixed: + instead of -
+        cameraDistance = Math.max(0.1, Math.min(100, cameraDistance + zoomDelta)); // Closer zoom: 0.1 instead of 0.5
         updateCameraPosition();
         e.preventDefault();
         e.stopPropagation();
@@ -116,7 +117,7 @@ const createCameraControls = (app: any, camera: any, pc: any) => {
             const deltaY = e.touches[0].clientY - lastTouchY;
 
             const rotateSpeed = 0.005;
-            cameraYaw += deltaX * rotateSpeed; // Fixed: + instead of - to match mouse controls
+            cameraYaw -= deltaX * rotateSpeed; // Reversed rotation direction
             cameraPitch = Math.max(
                 -Math.PI / 2 + 0.1,
                 Math.min(Math.PI / 2 - 0.1, cameraPitch + deltaY * rotateSpeed)
@@ -166,6 +167,11 @@ const createCameraControls = (app: any, camera: any, pc: any) => {
             canvas.removeEventListener("wheel", onWheel);
             canvas.removeEventListener("touchstart", onTouchStart);
             canvas.removeEventListener("touchmove", onTouchMove);
+        },
+        setTarget: (x: number, y: number, z: number, distance: number) => {
+            target.set(x, y, z);
+            cameraDistance = distance;
+            updateCameraPosition();
         },
     };
 };
@@ -350,9 +356,6 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                     asset: asset,
                                 });
 
-                                // Set initial rotation for proper orientation
-                                entity.setEulerAngles(0, 0, 0);
-
                                 // Add to scene
                                 app.root.addChild(entity);
 
@@ -362,28 +365,42 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                     entity.gsplat.instance &&
                                     entity.gsplat.instance.sorter
                                 ) {
-                                    entity.gsplat.instance.sorter.on("updated", () => {
-                                        // console.log("PlayCanvas Gaussian Splat Viewer: Splat sorting updated");
-                                    });
+                                    entity.gsplat.instance.sorter.on("updated", () => {});
                                 }
 
-                                // Focus camera on the loaded splat
-                                const distance = 10;
-                                camera.setPosition(distance, distance * 0.5, distance);
-                                camera.lookAt(0, 0, 0);
-
-                                console.log(
-                                    "PlayCanvas Gaussian Splat Viewer: Gaussian Splat loaded successfully"
-                                );
-
-                                // Hide loading indicator
-                                setIsLoading(false);
+                                // Auto-fit camera to the actual splat bounding box.
+                                // We wait one frame so the gsplat AABB is populated.
+                                app.once("update", () => {
+                                    const aabb = entity.gsplat?.meshInstance?.aabb;
+                                    if (aabb) {
+                                        const center = aabb.center;
+                                        const radius = aabb.halfExtents.length();
+                                        const fitDistance = Math.max(radius * 1.5, 0.5);
+                                        console.log(
+                                            "PlayCanvas Gaussian Splat Viewer: Auto-fit camera",
+                                            { center, radius, fitDistance }
+                                        );
+                                        if (cameraControlsRef.current) {
+                                            (cameraControlsRef.current as any).setTarget(
+                                                center.x, center.y, center.z, fitDistance
+                                            );
+                                        }
+                                        // Adjust far clip to scene scale
+                                        camera.camera.farClip = Math.max(radius * 20, 1000);
+                                        camera.camera.nearClip = Math.min(radius * 0.001, 0.01);
+                                    } else {
+                                        // Fallback: position at a reasonable default
+                                        camera.setPosition(0, 0, 5);
+                                        camera.lookAt(0, 0, 0);
+                                    }
+                                    setIsLoading(false);
+                                });
                             } catch (error) {
                                 console.error(
                                     "PlayCanvas Gaussian Splat Viewer: Error creating GSplat entity:",
                                     error
                                 );
-                                setIsLoading(false); // Hide loading on error
+                                setIsLoading(false);
                             }
                         });
 
