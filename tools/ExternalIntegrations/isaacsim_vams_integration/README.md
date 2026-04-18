@@ -130,8 +130,10 @@ Then search for "VAMS" and enable `vams.connector.isaacsim`.
 
 ### Option B: Command line
 
+### Ubuntu Example
+
 ```bash
-isaac-sim --ext-folder /path/to/isaacsim_vams_integration --enable vams.connector.isaacsim
+/opt/IsaacSim/isaac-sim.sh --ext-folder /path/to/isaacsim_vams_integration --enable vams.connector.isaacsim
 ```
 
 ### Option C: In your app .kit file
