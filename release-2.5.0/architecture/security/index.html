@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-architecture/security" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.9.2">
+<title data-rh="true">Security Architecture | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.5.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.5.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.5.0/architecture/security"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Security Architecture | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="Security Architecture"><meta data-rh="true" property="og:description" content="Security Architecture"><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.5.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.5.0/architecture/security"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.5.0/architecture/security" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.5.0/architecture/security" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Security Architecture","item":"https://awslabs.github.io/visual-asset-management-system/release-2.5.0/architecture/security"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.5.0/assets/css/styles.dd550158.css">
+<script src="/visual-asset-management-system/release-2.5.0/assets/js/runtime~main.53dbac25.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.5.0/assets/js/main.03899312.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}(),document.documentElement.setAttribute("data-announcement-bar-initially-dismissed",function(){try{return"true"===localStorage.getItem("docusaurus.announcement.dismiss")}catch(t){}return!1}())</script><div id="__docusaurus"><link rel="preload" as="image" href="/visual-asset-management-system/release-2.5.0/img/logo_dark.png"><link rel="preload" as="image" href="/visual-asset-management-system/release-2.5.0/img/logo.png"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><div class="theme-announcement-bar announcementBar_mb4j" style="background-color:#232f3e;color:#ffffff" role="banner"><div class="announcementBarPlaceholder_vyr4"></div><div class="content_knG7 announcementBarContent_xLdY">⭐ If you like VAMS, give it a star on <a target="_blank" rel="noopener noreferrer" href="https://github.com/awslabs/visual-asset-management-system">GitHub</a>! ⭐</div><button type="button" aria-label="Close" class="clean-btn close closeButton_CVFx announcementBarClose_gvF7"><svg viewBox="0 0 15 15" width="14" height="14"><g stroke="currentColor" stroke-width="3.1"><path d="M.75.75l13.5 13.5M14.25.75L.75 14.25"></path></g></svg></button></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/visual-asset-management-system/release-2.5.0/"><div class="navbar__logo"><img src="/visual-asset-management-system/release-2.5.0/img/logo_dark.png" alt="VAMS" class="themedComponent_mlkZ themedComponent--light_NVdE"><img src="/visual-asset-management-system/release-2.5.0/img/logo.png" alt="VAMS" class="themedComponent_mlkZ themedComponent--dark_xIcU"></div><b class="navbar__title text--truncate"></b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/visual-asset-management-system/release-2.5.0/">Documentation</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">AWS Solutions<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG menuWithAnnouncementBar_GW3s"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/visual-asset-management-system/release-2.5.0/"><span title="Visual Asset Management System (VAMS)" class="linkLabel_WmDU">Visual Asset Management System (VAMS)</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="true" href="/visual-asset-management-system/release-2.5.0/overview/solution-overview"><span title="Overview" class="categoryLinkLabel_W154">Overview</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/overview/solution-overview"><span title="Solution Overview" class="linkLabel_WmDU">Solution Overview</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/overview/benefits"><span title="Benefits" class="linkLabel_WmDU">Benefits</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/overview/use-cases"><span title="Use Cases" class="linkLabel_WmDU">Use Cases</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/overview/features"><span title="Features" class="linkLabel_WmDU">Features</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/overview/costs"><span title="Cost" class="linkLabel_WmDU">Cost</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.0/concepts/overview"><span title="Core Concepts" class="categoryLinkLabel_W154">Core Concepts</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/visual-asset-management-system/release-2.5.0/architecture/overview"><span title="Architecture" class="categoryLinkLabel_W154">Architecture</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/architecture/overview"><span title="Architecture Overview" class="linkLabel_WmDU">Architecture Overview</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/architecture/details"><span title="Detailed Architecture" class="linkLabel_WmDU">Detailed Architecture</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/architecture/aws-resources"><span title="AWS Resources Inventory" class="linkLabel_WmDU">AWS Resources Inventory</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/visual-asset-management-system/release-2.5.0/architecture/security"><span title="Security Architecture" class="linkLabel_WmDU">Security Architecture</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/architecture/networking"><span title="Network Architecture" class="linkLabel_WmDU">Network Architecture</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.0/architecture/data-model"><span title="Data Model" class="linkLabel_WmDU">Data Model</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.0/deployment/prerequisites"><span title="Deployment" class="categoryLinkLabel_W154">Deployment</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.0/user-guide/getting-started"><span title="User Guide" class="categoryLinkLabel_W154">User Guide</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.0/developer/setup"><span title="Developer Guide" class="categoryLinkLabel_W154">Developer Guide</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.0/additional/quotas"><span title="Additional" class="categoryLinkLabel_W154">Additional</span></a></div></li></ul></nav><button type="button" title="Collapse sidebar" aria-label="Collapse sidebar" class="button button--secondary button--outline collapseSidebarButton_PEFL"><svg width="20" height="20" aria-hidden="true" class="collapseSidebarButtonIcon_kv0_"><g fill="#7a7a7a"><path d="M9.992 10.023c0 .2-.062.399-.172.547l-4.996 7.492a.982.982 0 01-.828.454H1c-.55 0-1-.453-1-1 0-.2.059-.403.168-.551l4.629-6.942L.168 3.078A.939.939 0 010 2.528c0-.548.45-.997 1-.997h2.996c.352 0 .649.18.828.45L9.82 9.472c.11.148.172.347.172.55zm0 0"></path><path d="M19.98 10.023c0 .2-.058.399-.168.547l-4.996 7.492a.987.987 0 01-.828.454h-3c-.547 0-.996-.453-.996-1 0-.2.059-.403.168-.551l4.625-6.942-4.625-6.945a.939.939 0 01-.168-.55 1 1 0 01.996-.997h3c.348 0 .649.18.828.45l4.996 7.492c.11.148.168.347.168.55zm0 0"></path></g></svg></button></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/visual-asset-management-system/release-2.5.0/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">Architecture</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Security Architecture</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Security Architecture</h1></header>
+<p><img decoding="async" loading="lazy" alt="Security Architecture" src="/visual-asset-management-system/release-2.5.0/assets/images/security-ccf1760370fc49c45805587a249b8af4.jpeg" width="1280" height="720" class="img_ev3q"></p>
+<p>VAMS implements a defense-in-depth security architecture with multiple layers of protection for authentication, authorization, encryption, network isolation, and audit logging. This page describes each security control and how they work together.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="shared-responsibility">Shared Responsibility<a href="#shared-responsibility" class="hash-link" aria-label="Direct link to Shared Responsibility" title="Direct link to Shared Responsibility" translate="no">​</a></h2>
+<p>VAMS operates within the AWS shared responsibility model. AWS manages the security of the underlying cloud infrastructure, while VAMS implements security controls at the application layer. Customers are responsible for configuring deployment options (encryption, VPC, IP restrictions) according to their compliance requirements.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="authentication">Authentication<a href="#authentication" class="hash-link" aria-label="Direct link to Authentication" title="Direct link to Authentication" translate="no">​</a></h2>
+<p>VAMS supports three authentication mechanisms, all validated by a custom Lambda authorizer attached to the Amazon API Gateway V2 HttpApi.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="amazon-cognito">Amazon Cognito<a href="#amazon-cognito" class="hash-link" aria-label="Direct link to Amazon Cognito" title="Direct link to Amazon Cognito" translate="no">​</a></h3>
+<p>The default authentication provider. VAMS deploys an Amazon Cognito User Pool with configurable password policies, an app client for the web application, and an identity pool for federated identity.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Configuration</th><th>Description</th></tr></thead><tbody><tr><td><code>authProvider.useCognito.enabled</code></td><td>Enable Amazon Cognito as the auth provider</td></tr><tr><td><code>authProvider.useCognito.useSaml</code></td><td>Enable SAML federation for enterprise SSO</td></tr><tr><td><code>authProvider.useCognito.useUserPasswordAuthFlow</code></td><td>Enable username/password authentication flow</td></tr></tbody></table>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="saml-federation">SAML Federation<a href="#saml-federation" class="hash-link" aria-label="Direct link to SAML Federation" title="Direct link to SAML Federation" translate="no">​</a></h4>
+<p>SAML authentication enables federated access to VAMS through your organization&#x27;s identity provider (such as Auth0, Active Directory, or Google Workspace). When enabled, Amazon Cognito acts as a SAML service provider.</p>
+<p><strong>Configuration steps:</strong></p>
+<ol>
+<li class="">Set <code>authProvider.useCognito.useSaml</code> to <code>true</code> in <code>infra/config/config.json</code>.</li>
+<li class="">Edit <code>infra/config/saml-config.ts</code> with the following required fields:</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field</th><th>Description</th></tr></thead><tbody><tr><td><code>name</code></td><td>Identifies the SAML identity provider in the Amazon Cognito User Pool and in the web UI</td></tr><tr><td><code>cognitoDomainPrefix</code></td><td>DNS-compatible, globally unique string used as a subdomain of the Amazon Cognito sign-on URL (for example, <code>https://\{prefix\}.auth.\{region\}.amazoncognito.com/saml2/idpresponse</code>)</td></tr><tr><td><code>metadataContent</code></td><td>URL of your SAML metadata. Can also point to a local file if <code>metadataType</code> is changed to <code>cognito.UserPoolIdentityProviderSamlMetadataType.FILE</code></td></tr><tr><td><code>attributeMapping</code></td><td>Maps SAML attributes back to VAMS (email, fullname)</td></tr></tbody></table>
+<ol start="3">
+<li class="">Deploy or redeploy the CDK stack with <code>cdk deploy --all</code>.</li>
+</ol>
+<p><strong>After deployment</strong>, provide these stack outputs to your identity provider to establish trust:</p>
+<ul>
+<li class=""><strong>SAML IdP Response URL</strong> -- the Amazon Cognito SAML endpoint</li>
+<li class=""><strong>SP URN / Audience URI / SP entity ID</strong> -- the service provider identifier</li>
+<li class=""><strong>CloudFront Distribution URL</strong> (or ALB URL) -- for the callback URL list (include both with and without a trailing slash)</li>
+</ul>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>SAML Attribute Mapping</div><div class="admonitionContent_BuS1"><p>The default attribute mapping uses standard SAML claim URIs. Review <code>infra/config/saml-config.ts</code> to customize the mapping for your identity provider&#x27;s claim format.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="external-oauth-identity-provider">External OAuth Identity Provider<a href="#external-oauth-identity-provider" class="hash-link" aria-label="Direct link to External OAuth Identity Provider" title="Direct link to External OAuth Identity Provider" translate="no">​</a></h3>
+<p>When Amazon Cognito is not available, VAMS supports external OAuth identity providers. The custom Lambda authorizer validates JWT tokens against the configured JWKS endpoint.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Configuration</th><th>Description</th></tr></thead><tbody><tr><td><code>authProvider.useExternalOAuthIdp.enabled</code></td><td>Enable external OAuth IDP</td></tr><tr><td><code>authProvider.useExternalOAuthIdp.idpAuthProviderUrl</code></td><td>OAuth provider URL</td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="api-keys">API Keys<a href="#api-keys" class="hash-link" aria-label="Direct link to API Keys" title="Direct link to API Keys" translate="no">​</a></h3>
+<p>VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the <code>ApiKeyStorageTable</code>. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="custom-lambda-authorizer">Custom Lambda Authorizer<a href="#custom-lambda-authorizer" class="hash-link" aria-label="Direct link to Custom Lambda Authorizer" title="Direct link to Custom Lambda Authorizer" translate="no">​</a></h2>
+<p>VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, providing unified authentication across Amazon Cognito, external OAuth, and API key mechanisms.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="authorizer-capabilities">Authorizer Capabilities<a href="#authorizer-capabilities" class="hash-link" aria-label="Direct link to Authorizer Capabilities" title="Direct link to Authorizer Capabilities" translate="no">​</a></h3>
+<ul>
+<li class=""><strong>Unified Authentication</strong>: Supports Amazon Cognito, external OAuth, and API key JWT token verification in a single authorizer</li>
+<li class=""><strong>Hybrid JWT Libraries</strong>: Uses <code>joserfc</code> for Amazon Cognito (RFC-compliant JOSE) and <code>PyJWT</code> for external identity providers</li>
+<li class=""><strong>IP Range Restrictions</strong>: Optional IP-based access control with configurable IP range pairs (validated before JWT verification for performance)</li>
+<li class=""><strong>Payload Format Version 2.0</strong>: Simple boolean responses (<code>isAuthorized: true/false</code>)</li>
+<li class=""><strong>Comprehensive JWT Claims Context</strong>: All JWT claims are passed to downstream Lambda functions</li>
+<li class=""><strong>Public Key Caching</strong>: One-hour TTL for JWKS public keys to reduce external API calls</li>
+<li class=""><strong>Dedicated Lambda Layer</strong>: Isolated dependencies for security and performance</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="authorizer-configuration">Authorizer Configuration<a href="#authorizer-configuration" class="hash-link" aria-label="Direct link to Authorizer Configuration" title="Direct link to Authorizer Configuration" translate="no">​</a></h3>
+<p>The authorizer behavior is controlled through <code>authProvider.authorizerOptions</code> in the deployment configuration and the <code>CUSTOM_AUTHORIZER_IGNORED_PATHS</code> constant in <code>infra/config/config.ts</code>.</p>
+<p><strong>Default API routes:</strong></p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody><tr><td>Identity source</td><td><code>$request.header.Authorization</code></td></tr><tr><td>Cache TTL</td><td>30 seconds</td></tr><tr><td>Response type</td><td><code>SIMPLE</code> (payload format version 2.0)</td></tr></tbody></table>
+<p><strong>Ignored paths</strong> (<code>/api/amplify-config</code>, <code>/api/version</code>):</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody><tr><td>Identity source</td><td><code>$context.routeKey</code></td></tr><tr><td>Cache TTL</td><td>3600 seconds (1 hour)</td></tr><tr><td>Behavior</td><td>Bypasses JWT verification, allows immediate access</td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="authorizer-lambda-layer">Authorizer Lambda Layer<a href="#authorizer-lambda-layer" class="hash-link" aria-label="Direct link to Authorizer Lambda Layer" title="Direct link to Authorizer Lambda Layer" translate="no">​</a></h3>
+<p>The authorizer uses a dedicated Lambda layer with the following dependencies:</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#393A34"><span class="token plain">joserfc==1.6.1             # RFC-compliant JOSE (JWT/JWS/JWE) for Cognito</span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">PyJWT[crypto]==2.10.1      # External IDP JWT verification</span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">cryptography==45.0.6       # Cryptographic primitives</span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">requests==2.32.5           # HTTP requests for JWKS retrieval</span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">aws-lambda-powertools==3.19.0  # Lambda Powertools for logging</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="jwt-claims-context-integration">JWT Claims Context Integration<a href="#jwt-claims-context-integration" class="hash-link" aria-label="Direct link to JWT Claims Context Integration" title="Direct link to JWT Claims Context Integration" translate="no">​</a></h3>
+<p>The authorizer passes all JWT claims to downstream Lambda functions through the Amazon API Gateway context. Backend handlers access claims using the following precedence:</p>
+<div class="language-python codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-python codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#393A34"><span class="token comment" style="color:#999988;font-style:italic"># Standard API Gateway authorizer format</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">if</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&#x27;jwt&#x27;</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">in</span><span class="token plain"> event</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;requestContext&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;authorizer&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">:</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    claims </span><span class="token operator" style="color:#393A34">=</span><span class="token plain"> event</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;requestContext&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;authorizer&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;jwt&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;claims&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token comment" style="color:#999988;font-style:italic"># Custom Lambda authorizer format</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">elif</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&#x27;lambda&#x27;</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">in</span><span class="token plain"> event</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;requestContext&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;authorizer&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">:</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    claims </span><span class="token operator" style="color:#393A34">=</span><span class="token plain"> event</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;requestContext&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;authorizer&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;lambda&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token comment" style="color:#999988;font-style:italic"># Lambda cross-call format</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">elif</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&#x27;lambdaCrossCall&#x27;</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">in</span><span class="token plain"> event</span><span class="token punctuation" style="color:#393A34">:</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    claims </span><span class="token operator" style="color:#393A34">=</span><span class="token plain"> event</span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&#x27;lambdaCrossCall&#x27;</span><span class="token punctuation" style="color:#393A34">]</span><br></span></code></pre></div></div>
+<p><strong>Supported claims:</strong></p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Source</th><th>Claims</th></tr></thead><tbody><tr><td>Amazon Cognito</td><td><code>sub</code>, <code>cognito:username</code>, <code>email</code>, <code>token_use</code>, <code>aud</code>, <code>iss</code>, <code>exp</code></td></tr><tr><td>External OAuth IDP</td><td><code>sub</code>, <code>preferred_username</code>, <code>email</code>, <code>upn</code>, <code>username</code></td></tr><tr><td>VAMS custom</td><td><code>vams:tokens</code>, <code>vams:roles</code>, <code>vams:externalAttributes</code></td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>GovCloud Token Limitation</div><div class="admonitionContent_BuS1"><p>AWS GovCloud deployments with the GovCloud configuration enabled only support v1 of the Amazon Cognito Lambda triggers. This means only Access tokens (not ID tokens) can be used for VAMS API authentication in GovCloud.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="jwt-token-requirements">JWT Token Requirements<a href="#jwt-token-requirements" class="hash-link" aria-label="Direct link to JWT Token Requirements" title="Direct link to JWT Token Requirements" translate="no">​</a></h3>
+<p>All VAMS API calls require a valid JWT token with the following claims structure:</p>
+<div class="language-json codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-json codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#393A34"><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;claims&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">        </span><span class="token property" style="color:#36acaa">&quot;tokens&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&quot;&lt;username&gt;&quot;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">        </span><span class="token property" style="color:#36acaa">&quot;roles&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&quot;&lt;role1&gt;&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;&lt;role2&gt;&quot;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">        </span><span class="token property" style="color:#36acaa">&quot;externalAttributes&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">[</span><span class="token punctuation" style="color:#393A34">]</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><br></span></code></pre></div></div>
+<p>The <code>tokens</code> array must include the authenticated VAMS username. The <code>roles</code> and <code>externalAttributes</code> fields are optional as they are resolved at runtime from the VAMS authorization database.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="authorizer-customization">Authorizer Customization<a href="#authorizer-customization" class="hash-link" aria-label="Direct link to Authorizer Customization" title="Direct link to Authorizer Customization" translate="no">​</a></h3>
+<p>Organizations can customize the authorizer behavior by modifying:</p>
+<ol>
+<li class=""><strong>IP Validation Logic</strong>: Modify <code>is_ip_authorized()</code> for custom IP validation</li>
+<li class=""><strong>Path Handling</strong>: Update ignored paths in the <code>CUSTOM_AUTHORIZER_IGNORED_PATHS</code> constant in <code>infra/config/config.ts</code></li>
+<li class=""><strong>JWT Verification</strong>: Modify <code>verify_cognito_jwt()</code> (using joserfc) or <code>verify_external_jwt()</code> (using PyJWT)</li>
+<li class=""><strong>Claims Processing</strong>: Extend context generation to include additional custom claims</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="implementation-files">Implementation Files<a href="#implementation-files" class="hash-link" aria-label="Direct link to Implementation Files" title="Direct link to Implementation Files" translate="no">​</a></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Component</th><th>Path</th></tr></thead><tbody><tr><td>HTTP Authorizer</td><td><code>backend/backend/handlers/auth/apiGatewayAuthorizerHttp.py</code></td></tr><tr><td>WebSocket Authorizer</td><td><code>backend/backend/handlers/auth/apiGatewayAuthorizerWebsocket.py</code></td></tr><tr><td>CDK Lambda Builders</td><td><code>infra/lib/lambdaBuilder/authFunctions.ts</code></td></tr><tr><td>Dedicated Lambda Layer</td><td><code>backend/lambdaLayers/authorizer/</code></td></tr><tr><td>Configuration Constants</td><td><code>infra/config/config.ts</code></td></tr></tbody></table>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="authorization">Authorization<a href="#authorization" class="hash-link" aria-label="Direct link to Authorization" title="Direct link to Authorization" translate="no">​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="two-tier-casbin-abacrbac">Two-Tier Casbin ABAC/RBAC<a href="#two-tier-casbin-abacrbac" class="hash-link" aria-label="Direct link to Two-Tier Casbin ABAC/RBAC" title="Direct link to Two-Tier Casbin ABAC/RBAC" translate="no">​</a></h3>
+<p>VAMS uses the Casbin policy engine to enforce fine-grained attribute-based access control (ABAC) combined with role-based access control (RBAC).</p>
+<!-- -->
+<p><strong>Tier 1 -- API Route Authorization</strong> controls which API endpoints a user&#x27;s role can access. Policies use <code>api</code> and <code>web</code> object types to gate route-level access.</p>
+<p><strong>Tier 2 -- Object Entity Authorization</strong> controls which specific data entities a user can access. Policies use entity-type constraints (<code>database</code>, <code>asset</code>, <code>pipeline</code>, <code>workflow</code>, <code>tag</code>, <code>tagType</code>, <code>role</code>, <code>userRole</code>, <code>metadataSchema</code>, <code>apiKey</code>) with attribute-based rules.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="constraint-fields">Constraint Fields<a href="#constraint-fields" class="hash-link" aria-label="Direct link to Constraint Fields" title="Direct link to Constraint Fields" translate="no">​</a></h3>
+<p>The following fields can be used in ABAC policy rules:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field</th><th>Description</th></tr></thead><tbody><tr><td><code>databaseId</code></td><td>Database identifier</td></tr><tr><td><code>assetName</code></td><td>Asset name</td></tr><tr><td><code>assetType</code></td><td>Asset type classification</td></tr><tr><td><code>tags</code></td><td>Asset tags</td></tr><tr><td><code>tagName</code></td><td>Tag name</td></tr><tr><td><code>tagTypeName</code></td><td>Tag type name</td></tr><tr><td><code>roleName</code></td><td>Role name</td></tr><tr><td><code>userId</code></td><td>User identifier</td></tr><tr><td><code>pipelineId</code></td><td>Pipeline identifier</td></tr><tr><td><code>pipelineType</code></td><td>Pipeline type</td></tr><tr><td><code>pipelineExecutionType</code></td><td>Pipeline execution type (Lambda, SQS, EventBridge)</td></tr><tr><td><code>workflowId</code></td><td>Workflow identifier</td></tr><tr><td><code>metadataSchemaName</code></td><td>Metadata schema name</td></tr><tr><td><code>metadataSchemaEntityType</code></td><td>Metadata entity type</td></tr><tr><td><code>object__type</code></td><td>Entity type for Tier 2 enforcement</td></tr><tr><td><code>route__path</code></td><td>API route path for Tier 1 enforcement</td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="mfa-aware-roles">MFA-Aware Roles<a href="#mfa-aware-roles" class="hash-link" aria-label="Direct link to MFA-Aware Roles" title="Direct link to MFA-Aware Roles" translate="no">​</a></h3>
+<p>Roles can require MFA verification. When a role has <code>mfaRequired=True</code>, it is only active when the user&#x27;s authentication claims include <code>mfaEnabled=True</code>. This provides an additional security layer for privileged operations.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="policy-caching">Policy Caching<a href="#policy-caching" class="hash-link" aria-label="Direct link to Policy Caching" title="Direct link to Policy Caching" translate="no">​</a></h3>
+<p>The Casbin enforcer caches user policies with a 60-second TTL per user. This reduces Amazon DynamoDB reads while ensuring policy changes propagate within one minute.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="encryption">Encryption<a href="#encryption" class="hash-link" aria-label="Direct link to Encryption" title="Direct link to Encryption" translate="no">​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="encryption-at-rest">Encryption at Rest<a href="#encryption-at-rest" class="hash-link" aria-label="Direct link to Encryption at Rest" title="Direct link to Encryption at Rest" translate="no">​</a></h3>
+<p>All VAMS storage resources support encryption at rest:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Resource</th><th>Default Encryption</th><th>KMS CMK Encryption</th></tr></thead><tbody><tr><td>Amazon DynamoDB tables</td><td>AWS managed keys</td><td>Customer-managed KMS key</td></tr><tr><td>Amazon S3 buckets</td><td>Amazon S3 managed keys (SSE-S3)</td><td>Customer-managed KMS key (SSE-KMS)</td></tr><tr><td>Amazon SNS topics</td><td>N/A</td><td>Customer-managed KMS key</td></tr><tr><td>Amazon SQS queues</td><td>SQS managed encryption</td><td>Customer-managed KMS key</td></tr><tr><td>Amazon CloudWatch Logs</td><td>N/A</td><td>Customer-managed KMS key</td></tr><tr><td>Amazon OpenSearch</td><td>Service-managed</td><td>Customer-managed KMS key</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>Enabling KMS CMK Encryption</div><div class="admonitionContent_BuS1"><p>Set <code>useKmsCmkEncryption.enabled = true</code> in the deployment configuration. An external key can be imported via <code>useKmsCmkEncryption.optionalExternalCmkArn</code>. If no external key is provided, VAMS creates a new AWS KMS key with automatic key rotation enabled.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="kms-key-policy">KMS Key Policy<a href="#kms-key-policy" class="hash-link" aria-label="Direct link to KMS Key Policy" title="Direct link to KMS Key Policy" translate="no">​</a></h3>
+<p>The VAMS KMS key policy grants cryptographic operations to the following service principals:</p>
+<ul>
+<li class="">Amazon S3</li>
+<li class="">Amazon DynamoDB</li>
+<li class="">Amazon SQS</li>
+<li class="">Amazon SNS</li>
+<li class="">Amazon ECS and Amazon ECS Tasks</li>
+<li class="">Amazon EKS</li>
+<li class="">Amazon CloudWatch Logs</li>
+<li class="">AWS Lambda</li>
+<li class="">AWS STS</li>
+<li class="">AWS CloudFormation</li>
+<li class="">Account root principal (for custom resource Lambda roles)</li>
+<li class="">Amazon CloudFront (conditional)</li>
+<li class="">Amazon OpenSearch Service / Amazon OpenSearch Serverless (conditional)</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="encryption-in-transit">Encryption in Transit<a href="#encryption-in-transit" class="hash-link" aria-label="Direct link to Encryption in Transit" title="Direct link to Encryption in Transit" translate="no">​</a></h3>
+<p>All data in transit is encrypted using TLS:</p>
+<ul>
+<li class=""><strong>Amazon S3 bucket policies</strong> enforce TLS by denying all <code>s3:*</code> actions when <code>aws:SecureTransport=false</code></li>
+<li class=""><strong>Amazon SNS topics</strong> enforce SSL with the <code>enforceSSL</code> property</li>
+<li class=""><strong>Amazon SQS queues</strong> enforce SSL with the <code>enforceSSL</code> property</li>
+<li class=""><strong>Amazon API Gateway</strong> uses HTTPS endpoints exclusively</li>
+<li class=""><strong>Amazon CloudFront / Application Load Balancer</strong> terminates TLS at the edge</li>
+</ul>
+<p>The following bucket policy statement is applied to every Amazon S3 bucket in VAMS:</p>
+<div class="language-json codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-json codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#393A34"><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;Effect&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;Deny&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;Principal&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;*&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;Action&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;s3:*&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;Resource&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">&quot;arn:{partition}:s3:::bucket-name/*&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;arn:{partition}:s3:::bucket-name&quot;</span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;Condition&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">        </span><span class="token property" style="color:#36acaa">&quot;Bool&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"> </span><span class="token property" style="color:#36acaa">&quot;aws:SecureTransport&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;false&quot;</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><br></span></code></pre></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="content-security-policy-csp">Content Security Policy (CSP)<a href="#content-security-policy-csp" class="hash-link" aria-label="Direct link to Content Security Policy (CSP)" title="Direct link to Content Security Policy (CSP)" translate="no">​</a></h2>
+<p>VAMS generates a dynamic Content Security Policy for the web application based on the deployment configuration. The CSP is constructed at AWS CDK synthesis time and applied to the web distribution.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="base-csp-directives">Base CSP Directives<a href="#base-csp-directives" class="hash-link" aria-label="Direct link to Base CSP Directives" title="Direct link to Base CSP Directives" translate="no">​</a></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Directive</th><th>Sources</th></tr></thead><tbody><tr><td><code>base-uri</code></td><td><code>&#x27;none&#x27;</code></td></tr><tr><td><code>default-src</code></td><td><code>&#x27;none&#x27;</code></td></tr><tr><td><code>script-src</code></td><td><code>&#x27;self&#x27;</code>, <code>&#x27;unsafe-hashes&#x27;</code>, SHA-256 hashes for inline scripts</td></tr><tr><td><code>style-src</code></td><td><code>&#x27;self&#x27;</code>, <code>&#x27;unsafe-inline&#x27;</code></td></tr><tr><td><code>connect-src</code></td><td><code>&#x27;self&#x27;</code>, <code>blob:</code>, <code>data:</code>, API Gateway URL, Amazon S3 endpoint</td></tr><tr><td><code>worker-src</code></td><td><code>&#x27;self&#x27;</code>, <code>blob:</code>, <code>data:</code></td></tr><tr><td><code>img-src</code></td><td><code>&#x27;self&#x27;</code>, <code>blob:</code>, <code>data:</code>, Amazon S3 endpoint</td></tr><tr><td><code>media-src</code></td><td><code>&#x27;self&#x27;</code>, <code>blob:</code>, <code>data:</code>, Amazon S3 endpoint</td></tr><tr><td><code>object-src</code></td><td><code>&#x27;none&#x27;</code></td></tr><tr><td><code>frame-ancestors</code></td><td><code>&#x27;none&#x27;</code></td></tr><tr><td><code>font-src</code></td><td><code>&#x27;self&#x27;</code></td></tr><tr><td><code>manifest-src</code></td><td><code>&#x27;self&#x27;</code></td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="conditional-csp-sources">Conditional CSP Sources<a href="#conditional-csp-sources" class="hash-link" aria-label="Direct link to Conditional CSP Sources" title="Direct link to Conditional CSP Sources" translate="no">​</a></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Condition</th><th>Added Sources</th></tr></thead><tbody><tr><td>Amazon Cognito enabled</td><td>Cognito IDP and Identity endpoints in <code>connect-src</code></td></tr><tr><td>SAML enabled</td><td>Cognito auth domain in <code>connect-src</code></td></tr><tr><td>External OAuth IDP</td><td>IDP auth provider URL in <code>connect-src</code></td></tr><tr><td><code>allowUnsafeEvalFeatures = true</code></td><td><code>&#x27;unsafe-eval&#x27;</code> in <code>script-src</code> (required for certain 3D viewer plugins)</td></tr><tr><td>Amazon Location Service enabled</td><td>Maps endpoint in <code>connect-src</code></td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="extensible-csp">Extensible CSP<a href="#extensible-csp" class="hash-link" aria-label="Direct link to Extensible CSP" title="Direct link to Extensible CSP" translate="no">​</a></h3>
+<p>Additional CSP sources can be configured via <code>infra/config/csp/cspAdditionalConfig.json</code>. This JSON file supports adding entries to <code>connectSrc</code>, <code>scriptSrc</code>, <code>workerSrc</code>, <code>imgSrc</code>, <code>mediaSrc</code>, <code>fontSrc</code>, and <code>styleSrc</code> arrays.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="ip-range-restrictions">IP Range Restrictions<a href="#ip-range-restrictions" class="hash-link" aria-label="Direct link to IP Range Restrictions" title="Direct link to IP Range Restrictions" translate="no">​</a></h2>
+<p>The custom Lambda authorizer supports optional IP-based access control. When <code>authProvider.authorizerOptions.allowedIpRanges</code> is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="iam-least-privilege">IAM Least Privilege<a href="#iam-least-privilege" class="hash-link" aria-label="Direct link to IAM Least Privilege" title="Direct link to IAM Least Privilege" translate="no">​</a></h2>
+<p>Each Lambda function receives an individually scoped IAM execution role:</p>
+<ul>
+<li class=""><strong>Amazon DynamoDB permissions</strong> are granted per-table using <code>grantReadData()</code> or <code>grantReadWriteData()</code></li>
+<li class=""><strong>Amazon S3 permissions</strong> are granted per-bucket using <code>grantRead()</code> or <code>grantReadWrite()</code></li>
+<li class=""><strong>AWS KMS permissions</strong> are granted only when CMK encryption is enabled</li>
+<li class=""><strong>Amazon CloudWatch Logs</strong> permissions cover only the specific audit log groups</li>
+</ul>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>No Wildcard Resource ARNs</div><div class="admonitionContent_BuS1"><p>Lambda execution roles do not receive <code>Resource: &quot;*&quot;</code> for data operations. All permissions are scoped to specific table ARNs, bucket ARNs, or log group ARNs.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="iam-aspects">IAM Aspects<a href="#iam-aspects" class="hash-link" aria-label="Direct link to IAM Aspects" title="Direct link to IAM Aspects" translate="no">​</a></h3>
+<p>VAMS applies two AWS CDK aspects to all IAM roles in the stack:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Aspect</th><th>Purpose</th></tr></thead><tbody><tr><td><strong>IamRoleTransform</strong></td><td>Applies role name prefixes and permission boundaries from <code>cdk.json</code> settings</td></tr><tr><td><strong>LogRetentionAspect</strong></td><td>Forces one-year retention on all Amazon CloudWatch Log Groups</td></tr></tbody></table>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="cdk-nag-enforcement">CDK Nag Enforcement<a href="#cdk-nag-enforcement" class="hash-link" aria-label="Direct link to CDK Nag Enforcement" title="Direct link to CDK Nag Enforcement" translate="no">​</a></h2>
+<p>All VAMS stacks are checked against the AWS Solutions security rules (<code>AwsSolutionsChecks</code>) provided by the <code>cdk-nag</code> library. CDK Nag is always enabled and runs during AWS CDK synthesis.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="suppression-requirements">Suppression Requirements<a href="#suppression-requirements" class="hash-link" aria-label="Direct link to Suppression Requirements" title="Direct link to Suppression Requirements" translate="no">​</a></h3>
+<p>Every CDK Nag suppression must include a detailed justification explaining why the suppression is acceptable in the VAMS deployment context. Unjustified suppressions are not permitted.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="common-suppressed-rules">Common Suppressed Rules<a href="#common-suppressed-rules" class="hash-link" aria-label="Direct link to Common Suppressed Rules" title="Direct link to Common Suppressed Rules" translate="no">​</a></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Rule ID</th><th>Reason</th></tr></thead><tbody><tr><td><code>AwsSolutions-IAM5</code></td><td>Amazon S3 <code>grantReadWrite</code> generates wildcard actions; scoped to VAMS buckets</td></tr><tr><td><code>AwsSolutions-IAM4</code></td><td>Managed policies (<code>AWSLambdaBasicExecutionRole</code>, <code>AWSLambdaVPCAccessExecutionRole</code>) used for Lambda</td></tr><tr><td><code>AwsSolutions-L1</code></td><td>Lambda runtimes are explicitly managed (Python 3.12, Node.js 20.x)</td></tr><tr><td><code>AwsSolutions-COG3</code></td><td>Amazon Cognito AdvancedSecurityMode not available in AWS GovCloud</td></tr><tr><td><code>AwsSolutions-S1</code></td><td>Access logs bucket cannot log to itself</td></tr><tr><td><code>AwsSolutions-SQS3</code></td><td>Dead-letter queues not used for bucket sync queues (files easily re-driven)</td></tr></tbody></table>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="vpc-isolation">VPC Isolation<a href="#vpc-isolation" class="hash-link" aria-label="Direct link to VPC Isolation" title="Direct link to VPC Isolation" translate="no">​</a></h2>
+<p>When <code>useGlobalVpc.enabled = true</code>, all Lambda functions can be deployed into VPC isolated subnets with no direct internet access. VPC endpoints provide connectivity to AWS services. See the <a class="" href="/visual-asset-management-system/release-2.5.0/architecture/networking">Network Architecture</a> page for full details.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="fips-endpoints">FIPS Endpoints<a href="#fips-endpoints" class="hash-link" aria-label="Direct link to FIPS Endpoints" title="Direct link to FIPS Endpoints" translate="no">​</a></h2>
+<p>When <code>useFips = true</code> (typically in AWS GovCloud), the partition-aware service helper automatically selects FIPS-compliant endpoints for all AWS service calls. The service helper supports four AWS partitions:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Partition</th><th>Identifier</th></tr></thead><tbody><tr><td>Commercial</td><td><code>aws</code></td></tr><tr><td>GovCloud</td><td><code>aws-us-gov</code></td></tr><tr><td>China</td><td><code>aws-cn</code></td></tr><tr><td>Isolated</td><td><code>aws-iso</code></td></tr></tbody></table>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="blocked-file-types">Blocked File Types<a href="#blocked-file-types" class="hash-link" aria-label="Direct link to Blocked File Types" title="Direct link to Blocked File Types" translate="no">​</a></h2>
+<p>VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content:</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="blocked-extensions">Blocked Extensions<a href="#blocked-extensions" class="hash-link" aria-label="Direct link to Blocked Extensions" title="Direct link to Blocked Extensions" translate="no">​</a></h3>
+<p><code>.jar</code>, <code>.java</code>, <code>.com</code>, <code>.php</code>, <code>.reg</code>, <code>.pif</code>, <code>.bak</code>, <code>.dll</code>, <code>.exe</code>, <code>.nat</code>, <code>.cmd</code>, <code>.lnk</code>, <code>.docm</code>, <code>.vbs</code>, <code>.bat</code></p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="blocked-mime-types">Blocked MIME Types<a href="#blocked-mime-types" class="hash-link" aria-label="Direct link to Blocked MIME Types" title="Direct link to Blocked MIME Types" translate="no">​</a></h3>
+<p><code>application/java-archive</code>, <code>application/x-msdownload</code>, <code>application/x-sh</code>, <code>application/javascript</code>, <code>application/x-powershell</code>, <code>application/vbscript</code>, and additional potentially dangerous MIME types.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="audit-logging">Audit Logging<a href="#audit-logging" class="hash-link" aria-label="Direct link to Audit Logging" title="Direct link to Audit Logging" translate="no">​</a></h2>
+<p>VAMS maintains nine dedicated Amazon CloudWatch Log Groups for audit logging, each with 10-year retention:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Log Group</th><th>Events</th></tr></thead><tbody><tr><td>Authentication</td><td>Login attempts, token validation results</td></tr><tr><td>Authorization</td><td>Authorization decisions (allow/deny) with policy context</td></tr><tr><td>File Upload</td><td>File upload operations with user, file, and bucket details</td></tr><tr><td>File Download</td><td>File download operations</td></tr><tr><td>File Download Streamed</td><td>Streamed file download operations</td></tr><tr><td>Auth Other</td><td>Miscellaneous authentication events</td></tr><tr><td>Auth Changes</td><td>Role, constraint, and user-role modifications</td></tr><tr><td>Actions</td><td>General CRUD operations</td></tr><tr><td>Errors</td><td>Application errors and exceptions</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>Silent Failure Pattern</div><div class="admonitionContent_BuS1"><p>Audit logging uses a silent failure pattern. If writing to an audit log fails, the error is logged locally to the Lambda&#x27;s standard log group, but Lambda execution continues normally. This prevents audit logging failures from disrupting application operations.</p></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="aws-cloudtrail-integration">AWS CloudTrail Integration<a href="#aws-cloudtrail-integration" class="hash-link" aria-label="Direct link to AWS CloudTrail Integration" title="Direct link to AWS CloudTrail Integration" translate="no">​</a></h2>
+<p>When <code>addStackCloudTrailLogs = true</code>, VAMS deploys an AWS CloudTrail trail that logs:</p>
+<ul>
+<li class="">All AWS Lambda data events</li>
+<li class="">All Amazon S3 data events</li>
+<li class="">Trail data stored in the Access Logs bucket under <code>cloudtrail-logs/</code></li>
+<li class="">Trail data also sent to Amazon CloudWatch Logs for real-time analysis</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="s3-bucket-security">S3 Bucket Security<a href="#s3-bucket-security" class="hash-link" aria-label="Direct link to S3 Bucket Security" title="Direct link to S3 Bucket Security" translate="no">​</a></h2>
+<p>All Amazon S3 buckets in VAMS are configured with:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody><tr><td>Block Public Access</td><td><code>BLOCK_ALL</code></td></tr><tr><td>Object Ownership</td><td><code>OBJECT_WRITER</code></td></tr><tr><td>Versioning</td><td>Enabled</td></tr><tr><td>Server Access Logging</td><td>Enabled (to Access Logs bucket)</td></tr><tr><td>TLS Enforcement</td><td>Deny policy for non-secure transport</td></tr><tr><td>Lifecycle Rules</td><td>Abort incomplete multipart uploads after 7-14 days</td></tr><tr><td>Optional KMS Encryption</td><td>SSE-KMS with bucket key enabled</td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="additional-bucket-policies">Additional Bucket Policies<a href="#additional-bucket-policies" class="hash-link" aria-label="Direct link to Additional Bucket Policies" title="Direct link to Additional Bucket Policies" translate="no">​</a></h3>
+<p>Custom bucket policies can be applied to all VAMS Amazon S3 buckets via <code>infra/config/policy/s3AdditionalBucketPolicyConfig.json</code>. The policy statement&#x27;s <code>Resource</code> field is automatically updated to reference the target bucket ARN.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="govcloud-security-constraints">GovCloud Security Constraints<a href="#govcloud-security-constraints" class="hash-link" aria-label="Direct link to GovCloud Security Constraints" title="Direct link to GovCloud Security Constraints" translate="no">​</a></h2>
+<p>When deploying to AWS GovCloud with <code>govCloud.enabled = true</code>:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Constraint</th><th>Enforcement</th></tr></thead><tbody><tr><td>VPC required</td><td><code>useGlobalVpc.enabled</code> must be <code>true</code></td></tr><tr><td>No Amazon CloudFront</td><td><code>useCloudFront.enabled</code> must be <code>false</code></td></tr><tr><td>No Amazon Location Service</td><td><code>useLocationService.enabled</code> must be <code>false</code></td></tr><tr><td>FIPS endpoints</td><td>Automatically selected by service helper</td></tr></tbody></table>
+<p>When <code>govCloud.il6Compliant = true</code>:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Constraint</th><th>Enforcement</th></tr></thead><tbody><tr><td>No Amazon Cognito</td><td><code>useCognito.enabled</code> must be <code>false</code></td></tr><tr><td>No AWS WAF</td><td><code>useWaf</code> must be <code>false</code></td></tr><tr><td>AWS KMS CMK required</td><td><code>useKmsCmkEncryption.enabled</code> must be <code>true</code></td></tr></tbody></table>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="security-recommendations">Security Recommendations<a href="#security-recommendations" class="hash-link" aria-label="Direct link to Security Recommendations" title="Direct link to Security Recommendations" translate="no">​</a></h2>
+<p>The following recommendations should be reviewed with your organization&#x27;s security team before deploying VAMS to production:</p>
+<ol>
+<li class=""><strong>Audit frontend dependencies</strong> — Run <code>npm audit</code> in the <code>web/</code> directory prior to deploying the frontend to ensure all packages are up to date. Run <code>npm audit fix</code> to mitigate critical vulnerabilities.</li>
+<li class=""><strong>Use least-privilege IAM roles</strong> — When deploying to an AWS account, create an AWS IAM role for deployment that limits access to the least privilege necessary based on your internal security policies.</li>
+<li class=""><strong>Bootstrap CDK with minimal permissions</strong> — Run AWS CDK bootstrap with the least-privileged AWS IAM role needed to deploy CDK and VAMS environment components.</li>
+<li class=""><strong>Review token timeouts</strong> — Authentication access, ID, and file presigned URL token timeouts default to 1 hour per security best practices. Adjust as necessary for your organization&#x27;s requirements.</li>
+<li class=""><strong>Configure IP restrictions</strong> — Consider configuring IP range restrictions using <code>authorizerOptions.allowedIpRanges</code> in the <a class="" href="/visual-asset-management-system/release-2.5.0/deployment/configuration-reference">deployment configuration</a> to limit API access to known networks.</li>
+<li class=""><strong>Enable KMS encryption</strong> — For production deployments, enable customer-managed KMS encryption (<code>useKmsCmkEncryption.enabled: true</code>) for all storage resources.</li>
+<li class=""><strong>Use CloudFront with custom TLS</strong> — When using Amazon CloudFront, consider configuring a custom domain with your own TLS certificate rather than the default CloudFront domain.</li>
+<li class=""><strong>Review Content Security Policy</strong> — The CSP is dynamically generated based on deployment configuration. Review the generated policy headers for compliance with your organization&#x27;s standards.</li>
+<li class=""><strong>Enable audit logging review</strong> — Regularly review audit logs in Amazon CloudWatch for suspicious activity patterns such as repeated authorization failures or unusual file download volumes.</li>
+</ol>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Shared Responsibility</div><div class="admonitionContent_BuS1"><p>VAMS is provided under the AWS shared responsibility model. Any customization for customer use must go through a security review to confirm that modifications do not introduce new vulnerabilities. Any team implementing VAMS takes on the responsibility of ensuring their implementation has gone through a proper security review.</p></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="next-steps">Next Steps<a href="#next-steps" class="hash-link" aria-label="Direct link to Next Steps" title="Direct link to Next Steps" translate="no">​</a></h2>
+<ul>
+<li class=""><a class="" href="/visual-asset-management-system/release-2.5.0/architecture/networking">Network Architecture</a> -- VPC endpoints, subnet configuration, and deployment connectivity</li>
+<li class=""><a class="" href="/visual-asset-management-system/release-2.5.0/architecture/aws-resources">AWS Resources</a> -- Complete resource inventory</li>
+<li class=""><a class="" href="/visual-asset-management-system/release-2.5.0/architecture/overview">Architecture Overview</a> -- High-level system design</li>
+</ul></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/release-2.5.0/architecture/aws-resources"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">AWS Resources Inventory</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/release-2.5.0/architecture/networking"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Network Architecture</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#shared-responsibility" class="table-of-contents__link toc-highlight">Shared Responsibility</a></li><li><a href="#authentication" class="table-of-contents__link toc-highlight">Authentication</a><ul><li><a href="#amazon-cognito" class="table-of-contents__link toc-highlight">Amazon Cognito</a></li><li><a href="#external-oauth-identity-provider" class="table-of-contents__link toc-highlight">External OAuth Identity Provider</a></li><li><a href="#api-keys" class="table-of-contents__link toc-highlight">API Keys</a></li></ul></li><li><a href="#custom-lambda-authorizer" class="table-of-contents__link toc-highlight">Custom Lambda Authorizer</a><ul><li><a href="#authorizer-capabilities" class="table-of-contents__link toc-highlight">Authorizer Capabilities</a></li><li><a href="#authorizer-configuration" class="table-of-contents__link toc-highlight">Authorizer Configuration</a></li><li><a href="#authorizer-lambda-layer" class="table-of-contents__link toc-highlight">Authorizer Lambda Layer</a></li><li><a href="#jwt-claims-context-integration" class="table-of-contents__link toc-highlight">JWT Claims Context Integration</a></li><li><a href="#jwt-token-requirements" class="table-of-contents__link toc-highlight">JWT Token Requirements</a></li><li><a href="#authorizer-customization" class="table-of-contents__link toc-highlight">Authorizer Customization</a></li><li><a href="#implementation-files" class="table-of-contents__link toc-highlight">Implementation Files</a></li></ul></li><li><a href="#authorization" class="table-of-contents__link toc-highlight">Authorization</a><ul><li><a href="#two-tier-casbin-abacrbac" class="table-of-contents__link toc-highlight">Two-Tier Casbin ABAC/RBAC</a></li><li><a href="#constraint-fields" class="table-of-contents__link toc-highlight">Constraint Fields</a></li><li><a href="#mfa-aware-roles" class="table-of-contents__link toc-highlight">MFA-Aware Roles</a></li><li><a href="#policy-caching" class="table-of-contents__link toc-highlight">Policy Caching</a></li></ul></li><li><a href="#encryption" class="table-of-contents__link toc-highlight">Encryption</a><ul><li><a href="#encryption-at-rest" class="table-of-contents__link toc-highlight">Encryption at Rest</a></li><li><a href="#kms-key-policy" class="table-of-contents__link toc-highlight">KMS Key Policy</a></li><li><a href="#encryption-in-transit" class="table-of-contents__link toc-highlight">Encryption in Transit</a></li></ul></li><li><a href="#content-security-policy-csp" class="table-of-contents__link toc-highlight">Content Security Policy (CSP)</a><ul><li><a href="#base-csp-directives" class="table-of-contents__link toc-highlight">Base CSP Directives</a></li><li><a href="#conditional-csp-sources" class="table-of-contents__link toc-highlight">Conditional CSP Sources</a></li><li><a href="#extensible-csp" class="table-of-contents__link toc-highlight">Extensible CSP</a></li></ul></li><li><a href="#ip-range-restrictions" class="table-of-contents__link toc-highlight">IP Range Restrictions</a></li><li><a href="#iam-least-privilege" class="table-of-contents__link toc-highlight">IAM Least Privilege</a><ul><li><a href="#iam-aspects" class="table-of-contents__link toc-highlight">IAM Aspects</a></li></ul></li><li><a href="#cdk-nag-enforcement" class="table-of-contents__link toc-highlight">CDK Nag Enforcement</a><ul><li><a href="#suppression-requirements" class="table-of-contents__link toc-highlight">Suppression Requirements</a></li><li><a href="#common-suppressed-rules" class="table-of-contents__link toc-highlight">Common Suppressed Rules</a></li></ul></li><li><a href="#vpc-isolation" class="table-of-contents__link toc-highlight">VPC Isolation</a></li><li><a href="#fips-endpoints" class="table-of-contents__link toc-highlight">FIPS Endpoints</a></li><li><a href="#blocked-file-types" class="table-of-contents__link toc-highlight">Blocked File Types</a><ul><li><a href="#blocked-extensions" class="table-of-contents__link toc-highlight">Blocked Extensions</a></li><li><a href="#blocked-mime-types" class="table-of-contents__link toc-highlight">Blocked MIME Types</a></li></ul></li><li><a href="#audit-logging" class="table-of-contents__link toc-highlight">Audit Logging</a></li><li><a href="#aws-cloudtrail-integration" class="table-of-contents__link toc-highlight">AWS CloudTrail Integration</a></li><li><a href="#s3-bucket-security" class="table-of-contents__link toc-highlight">S3 Bucket Security</a><ul><li><a href="#additional-bucket-policies" class="table-of-contents__link toc-highlight">Additional Bucket Policies</a></li></ul></li><li><a href="#govcloud-security-constraints" class="table-of-contents__link toc-highlight">GovCloud Security Constraints</a></li><li><a href="#security-recommendations" class="table-of-contents__link toc-highlight">Security Recommendations</a></li><li><a href="#next-steps" class="table-of-contents__link toc-highlight">Next Steps</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.5.0/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.5.0/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.5.0/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.5.0/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/spatial/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Spatial Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/spatial/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/spatial/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
+</body>
+</html>
