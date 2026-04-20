@@ -24,7 +24,7 @@ Through a web interface, command-line tool, and REST API, VAMS enables any autho
 
 VAMS can store, manage, and version **any file type**. Out of the box, it includes built-in viewer and pipeline support for 3D meshes (glTF, OBJ, STL, FBX), CAD models (STEP, BREP), point clouds (E57, LAS, LAZ), USD scenes, gaussian splats, documents, images, video, and audio. Because the platform is extensible through custom viewer plugins and processing pipelines, this represents the current set of native integrations — not a limitation. Associated data such as textures, bills of materials, quality analysis data, and temporal (4D) change tracking can be managed as files or captured through the metadata system.
 
-As an **open-source project** (Apache 2.0), VAMS is designed for extensibility. Organizations can integrate new viewer plugins, upstream data sources, downstream consumers, and custom workflow pipelines — adapting the platform to their specific requirements without vendor lock-in. Several ISVs have built commercial products on top of VAMS, and enterprise customers across defense, energy, manufacturing, and construction have adopted and contributed to the solution.
+As an **open-source project**, VAMS is designed for extensibility. Organizations can integrate new viewer plugins, upstream data sources, downstream consumers, and custom workflow pipelines — adapting the platform to their specific requirements without vendor lock-in. Several ISVs have built commercial products on top of VAMS, and enterprise customers across defense, energy, manufacturing, and construction have adopted and contributed to the solution.
 
 _Use cases include:_
 
@@ -32,7 +32,7 @@ _Use cases include:_
 -   **Energy and Utilities** — Facility scanning, part replacement tracking, corrosion detection, and maintenance data management at terabyte scale
 -   **Construction and AEC** — Live LiDAR scans compared against design plans, BIM management, and build-to-spec verification
 -   **Manufacturing** — Digital twins of facilities, equipment fitting analysis, CAD centralization with metadata extraction
--   **Robotics and Physical AI** — Simulation environments, training data management, and reinforcement learning with NVIDIA Isaac Lab
+-   **Robotics and Physical AI** — Simulation environments, training data management, and AI model training or deployments with NVIDIA WFM/VLA/VLM models
 -   **Digital Twins** — Versioned facility scans, BIM models, and point clouds with automated viewer generation and knowledge graph integration
 -   **AR/VR/XR and Media** — Optimized 3D content distribution with format conversion, gaussian splatting, and LOD generation
 -   **AI and Machine Learning** — Managing and curating training datasets with metadata tagging and automated labeling pipelines
@@ -135,7 +135,7 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 
 ## Partner integrations
 
-**Open source:** Online 3D Viewer, CesiumJS, Potree, BabylonJS, PlayCanvas, Needle Engine, Three.js, Trimesh, CadQuery, Blender, 3D Reconstruction Toolkit, Garnet Framework, NVIDIA Isaac Lab
+**Open source:** Online 3D Viewer, CesiumJS, Potree, BabylonJS, PlayCanvas, Needle Engine, Three.js, Trimesh, CadQuery, Blender, 3D Reconstruction Toolkit, Garnet Framework, NVIDIA Isaac Lab / Cosmos / Gr00t
 
 **Licensed:** [RapidPipeline](https://rapidpipeline.com/), [VNTANA](https://www.vntana.com/), [Veerum](https://veerum.com/)
 
