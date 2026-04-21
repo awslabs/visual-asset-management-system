@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.6.0] (2026-07-30)
+
+### Major Change Summary:
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+### Bug Fixes
+
+### Chores
+
+### Known Outstanding Issues
+
+-   With multiple S3 bucket support, identical assetIds across different buckets/prefixes in different databases can cause lookup conflicts in comments and subscriptions. This only occurs with manual S3 changes, as VAMS-generated assetIds use unique GUIDs.
+-   Using the same pipeline ID in both GLOBAL and non-GLOBAL databases causes overlap conflicts.
+-   Pipeline metadata inputs have a size limit when sent to ECS pipelines. Assets or files with extensive metadata may exceed the 8K character ECS JSON input limit. A future pipeline overhaul will convert metadata input to a file-based approach.
+-   For assets with hundreds to thousands of files or very large files (TB-size), some API operations may time out after 29 seconds while the Lambda continues processing (up to 15 minutes). OpenSearch re-indexing with hundreds of thousands to millions of files may not complete within the 15-minute Lambda timeout and may require local or containerized re-indexing. Asynchronous methods and optional containerized processing are being evaluated.
+
+### Troubleshooting
+
 ## [2.5.0] (2026-04-21)
 
 ### Major Change Summary:
