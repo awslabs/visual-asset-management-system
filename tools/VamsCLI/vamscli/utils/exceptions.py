@@ -327,6 +327,11 @@ class AssetVersionRevertError(AssetVersionError):
     pass
 
 
+class AssetVersionArchiveError(AssetVersionError):
+    """Raised when archive/unarchive operation fails."""
+    pass
+
+
 # Asset link-related business logic exceptions
 class AssetLinkError(BusinessLogicError):
     """Base class for asset link errors."""
@@ -428,4 +433,139 @@ class WorkflowAlreadyRunningError(WorkflowError):
 
 class InvalidWorkflowDataError(WorkflowError):
     """Raised when workflow data is invalid."""
+    pass
+
+
+# Cognito user-related business logic exceptions
+class CognitoUserError(BusinessLogicError):
+    """Base class for Cognito user errors."""
+    pass
+
+
+class CognitoUserNotFoundError(CognitoUserError):
+    """Raised when a Cognito user is not found."""
+    pass
+
+
+class CognitoUserAlreadyExistsError(CognitoUserError):
+    """Raised when trying to create a user that already exists."""
+    pass
+
+
+class InvalidCognitoUserDataError(CognitoUserError):
+    """Raised when Cognito user data is invalid."""
+    pass
+
+
+class CognitoUserOperationError(CognitoUserError):
+    """Raised when Cognito user operations fail."""
+    pass
+
+
+# Role-related business logic exceptions
+class RoleError(BusinessLogicError):
+    """Base class for role-related errors."""
+    pass
+
+
+class RoleNotFoundError(RoleError):
+    """Raised when a role is not found."""
+    pass
+
+
+class RoleAlreadyExistsError(RoleError):
+    """Raised when trying to create a role that already exists."""
+    pass
+
+
+class RoleDeletionError(RoleError):
+    """Raised when role deletion fails due to dependencies."""
+    pass
+
+
+class InvalidRoleDataError(RoleError):
+    """Raised when role data is invalid."""
+    pass
+
+
+# Constraint-related business logic exceptions
+class ConstraintError(BusinessLogicError):
+    """Base class for constraint-related errors."""
+    pass
+
+
+class ConstraintNotFoundError(ConstraintError):
+    """Raised when a constraint is not found."""
+    pass
+
+
+class ConstraintAlreadyExistsError(ConstraintError):
+    """Raised when trying to create a constraint that already exists."""
+    pass
+
+
+class ConstraintDeletionError(ConstraintError):
+    """Raised when constraint deletion fails due to dependencies."""
+    pass
+
+
+class InvalidConstraintDataError(ConstraintError):
+    """Raised when constraint data is invalid."""
+    pass
+
+
+class TemplateImportError(ConstraintError):
+    """Raised when constraint template import fails."""
+    pass
+
+
+# API key-related business logic exceptions
+class ApiKeyError(BusinessLogicError):
+    """Base class for API key errors."""
+    pass
+
+
+class ApiKeyNotFoundError(ApiKeyError):
+    """Raised when an API key is not found."""
+    pass
+
+
+class ApiKeyCreationError(ApiKeyError):
+    """Raised when API key creation fails."""
+    pass
+
+
+class ApiKeyDeletionError(ApiKeyError):
+    """Raised when API key deletion fails."""
+    pass
+
+
+class ApiKeyUpdateError(ApiKeyError):
+    """Raised when API key update fails."""
+    pass
+
+
+# User role-related business logic exceptions
+class UserRoleError(BusinessLogicError):
+    """Base class for user role-related errors."""
+    pass
+
+
+class UserRoleNotFoundError(UserRoleError):
+    """Raised when a user role is not found."""
+    pass
+
+
+class UserRoleAlreadyExistsError(UserRoleError):
+    """Raised when trying to create a user role that already exists."""
+    pass
+
+
+class UserRoleDeletionError(UserRoleError):
+    """Raised when user role deletion fails."""
+    pass
+
+
+class InvalidUserRoleDataError(UserRoleError):
+    """Raised when user role data is invalid."""
     pass

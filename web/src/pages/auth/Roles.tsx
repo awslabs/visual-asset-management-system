@@ -5,9 +5,8 @@
 
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
 import ListPageNoDatabase from "../ListPageNoDatabase";
-import { fetchRoles } from "../../services/APIService";
+import { fetchRoles, deleteRole } from "../../services/APIService";
 import { Box } from "@cloudscape-design/components";
 import CreateRole from "./CreateRoles";
 import { useState } from "react";
@@ -25,14 +24,14 @@ export const RoleListDefinition = new ListDefinition({
         "mfaRequired",
     ],
     filterColumns: [{ name: "name", placeholder: "Name" }],
-    elementId: "name",
+    elementId: "roleName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `roles/${item.roleName}`, {});
-            return [true, response.message, ""];
+            const result: any = await deleteRole({ roleName: item.roleName });
+            return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response.data.message];
+            return [false, error?.message, error?.response?.data?.message];
         }
     },
     columnDefinitions: [
@@ -79,7 +78,11 @@ export const RoleListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: (props: any) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "description",
         }),
         new ColumnDefinition({

@@ -17,6 +17,7 @@ import {
     Icon,
 } from "@cloudscape-design/components";
 import { MetadataFilter } from "../types";
+import Synonyms from "../../../synonyms";
 
 interface MetadataFiltersProps {
     metadataFilters: MetadataFilter[];
@@ -154,7 +155,7 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
             header={
                 <Header
                     variant="h3"
-                    description="Filter by custom metadata fields attached to assets and files"
+                    description={`Filter by custom metadata fields attached to ${Synonyms.assets} and files`}
                 >
                     Metadata Filters
                 </Header>

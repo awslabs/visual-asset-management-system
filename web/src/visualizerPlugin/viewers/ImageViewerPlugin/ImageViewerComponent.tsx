@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from "react";
 import { Button } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
+import Synonyms from "../../../synonyms";
 import { ViewerPluginProps } from "../../core/types";
 
 const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
@@ -13,6 +14,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
     onDeletePreview,
     isPreviewFile = false,
 }) => {
@@ -30,7 +32,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                 assetId,
                 databaseId,
                 key: assetKey,
-                versionId: isPreviewFile ? "" : versionId || "",
+                assetVersionId: assetVersionId,
                 downloadType: "assetFile",
                 isPreviewFile,
             });
@@ -40,7 +42,8 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey || "",
-                    versionId: isPreviewFile ? "" : versionId || "", // Don't use versionId for preview files
+                    versionId: versionId,
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 
@@ -87,7 +90,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                 src={url}
                 style={{ maxWidth: "100%", maxHeight: "100%", height: "100%" }}
                 onError={fallback}
-                alt="Asset preview"
+                alt={`${Synonyms.Asset} preview`}
             />
             {onDeletePreview && (
                 <div style={{ marginTop: "10px" }}>

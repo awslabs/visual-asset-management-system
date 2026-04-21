@@ -811,8 +811,8 @@ class ReindexUtility:
     ) -> Dict:
         """Process all objects in a bucket and update AssetsMetadata table."""
         # Excluded patterns and prefixes from fileIndexer
-        excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads']
-        excluded_patterns = ['.previewFile.']
+        excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
+        excluded_patterns = [] # '.previewFile.' not included here as the fileIndexer processes these in a special way
         
         results = {
             'success': 0,

@@ -2,7 +2,7 @@ import * as React from "react";
 import PropertyFilter, { PropertyFilterProps } from "@cloudscape-design/components/property-filter";
 import Synonyms from "../../synonyms";
 import { Dispatch, ReducerAction, useEffect, useState } from "react";
-import { API } from "aws-amplify";
+import { searchAssets, fetchSearchMappings } from "../../services/APIService";
 import {
     PropertyFilterOperator,
     PropertyFilterProperty,
@@ -56,10 +56,11 @@ async function search(overrides: any, { dispatch, state }: SearchPropertyFilterP
     dispatch({ type: "search-results-requested" });
 
     try {
-        const result = await API.post("api", "search", {
-            "Content-type": "application/json",
-            body: body,
-        });
+        const [success, searchResult] = (await searchAssets(body)) as [boolean, any];
+        if (!success) {
+            throw new Error(searchResult || "Search failed");
+        }
+        const result = searchResult;
         const tableSortToPass = overrides.tableSort || state.tableSort;
         console.log("search function - dispatching tableSort:", tableSortToPass);
         dispatch({
@@ -225,7 +226,7 @@ function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
     const [properties, setProperties] = useState<PropertyFilterProperty[]>([]);
 
     useEffect(() => {
-        API.get("api", "search", {}).then((response) => {
+        fetchSearchMappings().then((response) => {
             const prefixes = "str bool date".split(" ");
             const result = Object.keys(response?.mappings?.properties || {})
                 .filter((x) => {

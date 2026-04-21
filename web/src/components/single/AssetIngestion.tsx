@@ -9,9 +9,11 @@ import {
     SpaceBetween,
     Grid,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { ingestAsset } from "../../services/APIService";
 import { useState } from "react";
 import { generateUUID } from "../../common/utils/utils";
+import { usePageTitle } from "../../hooks/usePageTitle";
+import Synonyms from "../../synonyms";
 
 // Interface for file upload part
 interface UploadPart {
@@ -34,6 +36,7 @@ interface FileUploadResponse {
 }
 
 export default function AssetIngestion() {
+    usePageTitle(`${Synonyms.Asset} Ingestion`);
     const [file, setFile] = useState<File | null>(null);
     const [errorMessage, setErrorMessage] = useState("");
     const [jsonBody, setJsonBody] = useState("");
@@ -176,11 +179,14 @@ export default function AssetIngestion() {
                 ],
             };
 
-            const response = await API.post("api", "/ingest-asset", {
-                body: completeBody,
-            });
+            const result = await ingestAsset(completeBody);
+            const [success, responseData] = result as [boolean, any];
 
-            let msg: any = (
+            if (!success) {
+                throw new Error(responseData || "Failed to complete upload");
+            }
+
+            const msg: any = (
                 <div>
                     <strong>Asset uploaded successfully.</strong>
                     <br />
@@ -190,7 +196,7 @@ export default function AssetIngestion() {
                     <br />
                     <strong>Asset Name:</strong> {jsonData.assetName}
                     <br />
-                    <strong>Message:</strong> {response.message}
+                    <strong>Message:</strong> {responseData}
                 </div>
             );
             setStatusMessage(msg);
@@ -264,9 +270,15 @@ export default function AssetIngestion() {
             };
 
             // Call the API to initialize the upload
-            const response = await API.post("api", "/ingest-asset", {
-                body: requestBody,
-            });
+            const initResult = await ingestAsset(requestBody);
+            const [initSuccess, initData] = initResult as [boolean, any];
+
+            if (!initSuccess) {
+                throw new Error(initData || "Failed to initialize upload");
+            }
+
+            // The init response has no .message, so initData is the full response object
+            const response = initData;
 
             // Store upload ID and file responses for the next stage
             setUploadId(response.uploadId);
@@ -304,7 +316,7 @@ export default function AssetIngestion() {
         }
     };
 
-    let defaultPlaceholder = `{
+    const defaultPlaceholder = `{
     "databaseId": "<database-name>",
     "assetName": "<name of asset>",
     "description": "<Enter Asset description here>",
@@ -314,7 +326,7 @@ export default function AssetIngestion() {
 
     return (
         <Box padding={{ top: "m", horizontal: "l" }}>
-            <Container header={<Header variant="h2">Asset Ingestion</Header>}>
+            <Container header={<Header variant="h2">{`${Synonyms.Asset} Ingestion`}</Header>}>
                 <SpaceBetween size="l">
                     <Grid gridDefinition={[{ colspan: 2 }, { colspan: 3 }]}>
                         <FormField label="Choose File">
@@ -336,7 +348,7 @@ export default function AssetIngestion() {
                                 showFileThumbnail
                             />
                         </FormField>
-                        <FormField label="Upload Asset">
+                        <FormField label={`Upload ${Synonyms.Asset}`}>
                             <Button
                                 variant="primary"
                                 onClick={() => {
@@ -345,12 +357,12 @@ export default function AssetIngestion() {
                                 loading={uploading}
                                 disabled={!file}
                             >
-                                {uploading ? "Uploading..." : "Upload Asset"}
+                                {uploading ? "Uploading..." : `Upload ${Synonyms.Asset}`}
                             </Button>
                         </FormField>
                     </Grid>
                     <Grid gridDefinition={[{ colspan: 3 }]}>
-                        <FormField label="JSON Body - Asset Data">
+                        <FormField label={`JSON Body - ${Synonyms.Asset} Data`}>
                             <Textarea
                                 onChange={({ detail }) => setJsonBody(detail.value)}
                                 value={jsonBody || defaultPlaceholder}
@@ -362,6 +374,7 @@ export default function AssetIngestion() {
                     <div style={{ marginTop: "1em" }}>{statusMessage}</div>
                 </SpaceBetween>
             </Container>
+            <div style={{ paddingBottom: "20px" }} />
         </Box>
     );
 }

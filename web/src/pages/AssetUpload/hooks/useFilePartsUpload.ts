@@ -55,7 +55,7 @@ export function useFilePartsUpload() {
             const pendingParts = partsToUpload.filter((part) => part.status === "pending");
             console.log(`Created queue with ${pendingParts.length} parts to upload`);
 
-            let completed = partsToUpload.filter((part) => part.status === "completed").length;
+            const completed = partsToUpload.filter((part) => part.status === "completed").length;
             setCompletedParts(completed);
 
             // Sequence-aware queue manager with proper concurrency control

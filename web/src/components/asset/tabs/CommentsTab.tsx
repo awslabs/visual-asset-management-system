@@ -5,15 +5,15 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { Box, Button, TextContent, Alert } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
 import { generateUUID } from "../../../common/utils/utils";
-import { fetchAllComments } from "../../../services/APIService";
+import { fetchAllComments, fetchAsset, createComment } from "../../../services/APIService";
 import JoditEditor from "jodit-react";
 import LoadingIcons from "react-loading-icons";
 import PopulateComments from "./comments/PopulateComments";
 import "./comments/Comments.css";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import { useStatusMessage } from "../../common/StatusMessage";
+import Synonyms from "../../../synonyms";
 
 interface CommentsTabProps {
     assetId: string;
@@ -94,7 +94,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
 
             const getUserId = async () => {
                 try {
-                    let userName = JSON.parse(localStorage.getItem("user")!).username;
+                    const userName = JSON.parse(localStorage.getItem("user")!).username;
                     setUserId(userName);
                 } catch {
                     setUserId("");
@@ -118,21 +118,26 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                             );
                         } else if (typeof items === "string" && items.includes("not found")) {
                             setError(
-                                "Comments data not found. The requested asset may have been deleted or you may not have permission to access it."
+                                `${Synonyms.Comments} data not found. The requested asset may have been deleted or you may not have permission to access it.`
                             );
                             showMessage({
                                 type: "error",
-                                message:
-                                    "Comments data not found. The requested asset may have been deleted or you may not have permission to access it.",
+                                message: `${Synonyms.Comments} data not found. The requested asset may have been deleted or you may not have permission to access it.`,
                                 dismissible: true,
                             });
                         }
                     } catch (error: any) {
                         console.error("Error fetching comments:", error);
-                        setError(`Failed to load comments: ${error.message || "Unknown error"}`);
+                        setError(
+                            `Failed to load ${Synonyms.comments}: ${
+                                error.message || "Unknown error"
+                            }`
+                        );
                         showMessage({
                             type: "error",
-                            message: `Failed to load comments: ${error.message || "Unknown error"}`,
+                            message: `Failed to load ${Synonyms.comments}: ${
+                                error.message || "Unknown error"
+                            }`,
                             dismissible: true,
                         });
                     } finally {
@@ -143,14 +148,10 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             };
 
             // Fetch the asset data to get version information
-            const fetchAsset = async () => {
+            const loadAsset = async () => {
                 if (assetId && databaseId) {
                     try {
-                        const response = await API.get(
-                            "api",
-                            `database/${databaseId}/assets/${assetId}`,
-                            {}
-                        );
+                        const response = await fetchAsset({ databaseId, assetId });
                         setAsset(response);
                     } catch (error: any) {
                         console.error("Error fetching asset:", error);
@@ -167,7 +168,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             };
 
             getUserId();
-            fetchAsset();
+            loadAsset();
             getData();
         }
     }, [isActive, reload, assetId, databaseId, displayItemsWhileLoading]);
@@ -230,19 +231,17 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
         setLoading(true);
         setShowLoadingIcon(true);
         try {
-            const response = await API.post(
-                "api",
-                `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-                {
-                    body: {
-                        commentBody: content,
-                    },
-                }
-            );
+            const response = await createComment({
+                assetId,
+                assetVersionIdAndCommentId,
+                body: {
+                    commentBody: content,
+                },
+            });
             console.log(response);
             showMessage({
                 type: "success",
-                message: "Comment added successfully",
+                message: `${Synonyms.Comment} added successfully`,
                 dismissible: true,
                 autoDismiss: true,
             });
@@ -251,8 +250,8 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             setShowLoadingIcon(false);
             const errorMessage =
                 e.response?.status === 403
-                    ? "Unable to add comment. You don't have permission to perform this action."
-                    : `Unable to add comment: ${e.message || "Unknown error"}`;
+                    ? `Unable to add ${Synonyms.comment}. You don't have permission to perform this action.`
+                    : `Unable to add ${Synonyms.comment}: ${e.message || "Unknown error"}`;
 
             showMessage({
                 type: "error",
@@ -273,7 +272,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
     if (error && !loading) {
         return (
             <ErrorBoundary componentName="Comments">
-                <Box padding={{ top: "m", horizontal: "l" }}>
+                <Box padding={{ top: "xxs" }}>
                     <div className="error-message">
                         {error}
                         <Button onClick={() => setReload(true)}>Retry</Button>
@@ -285,7 +284,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
 
     return (
         <ErrorBoundary componentName="Comments">
-            <Box padding={{ top: "m", horizontal: "l" }}>
+            <Box padding={{ top: "xxs" }}>
                 <div className="commentSectionDiv">
                     <table className="commentSectionTable commentSectionTableBorder">
                         <tbody>

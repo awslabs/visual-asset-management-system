@@ -7,6 +7,7 @@ import React, { useEffect, useState } from "react";
 import { Box, Button, SpaceBetween, Spinner } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
 import "./AssetPreviewThumbnail.css";
+import Synonyms from "../../../synonyms";
 
 interface AssetPreviewThumbnailProps {
     assetId: string;
@@ -87,7 +88,7 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
         console.log("No preview key available for rendering");
         return (
             <Box padding="s" textAlign="center">
-                <div>No preview available for this asset</div>
+                <div>{`No preview available for this ${Synonyms.asset}`}</div>
             </Box>
         );
     }
@@ -113,7 +114,7 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
                         <div className="asset-preview-thumbnail">
                             <img
                                 src={url}
-                                alt="Asset preview"
+                                alt={`${Synonyms.Asset} preview`}
                                 onError={handleImageError}
                                 onClick={() => onOpenFullPreview(url)}
                                 style={{
@@ -123,25 +124,28 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
                                 }}
                             />
                         </div>
-                        <div className="asset-preview-actions">
-                            <SpaceBetween direction="vertical" size="xs">
-                                <Button
-                                    iconName="external"
-                                    variant="link"
-                                    onClick={() => onOpenFullPreview(url)}
-                                >
-                                    View full preview
+                        <div
+                            className="asset-preview-actions"
+                            style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: "0px",
+                                marginTop: "0px",
+                            }}
+                        >
+                            <Button
+                                iconName="external"
+                                variant="link"
+                                onClick={() => onOpenFullPreview(url)}
+                            >
+                                View full preview
+                            </Button>
+                            {onDeletePreview && (
+                                <Button iconName="remove" variant="link" onClick={onDeletePreview}>
+                                    Delete preview file
                                 </Button>
-                                {onDeletePreview && (
-                                    <Button
-                                        iconName="remove"
-                                        variant="link"
-                                        onClick={onDeletePreview}
-                                    >
-                                        Delete Preview File
-                                    </Button>
-                                )}
-                            </SpaceBetween>
+                            )}
                         </div>
                     </>
                 )}

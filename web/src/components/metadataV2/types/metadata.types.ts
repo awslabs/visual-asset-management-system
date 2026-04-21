@@ -122,6 +122,9 @@ export interface MetadataContainerProps {
     onHasChangesChange?: (hasChanges: boolean) => void; // Callback when uncommitted changes state changes
     onValidationChange?: (isValid: boolean) => void; // Callback when validation state changes (e.g., required fields)
 
+    // Version filtering
+    assetVersionId?: string; // Optional version ID to fetch metadata for a specific version
+
     // Optional customization
     readOnly?: boolean;
     showBulkEdit?: boolean;

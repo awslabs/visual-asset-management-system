@@ -16,16 +16,16 @@ def clear_scene():
     scene = bpy.context.scene
 
     # delete all objects in scene
-    for deleteObject in bpy.data.objects:
+    for deleteObject in bpy.data.objects: # nosemgrep: list-modify-while-iterate
         bpy.data.objects.remove(deleteObject, do_unlink=True)
         
     # Delete all materials in scene
-    for material in bpy.data.materials:
+    for material in bpy.data.materials: # nosemgrep: list-modify-while-iterate
         material.user_clear()
         bpy.data.materials.remove(material)
 
     # delete unused cameras from data
-    for camera_test in bpy.data.cameras:
+    for camera_test in bpy.data.cameras: # nosemgrep: list-modify-while-iterate
         if camera_test.users == 0:
             bpy.data.cameras.remove(camera_test)
     

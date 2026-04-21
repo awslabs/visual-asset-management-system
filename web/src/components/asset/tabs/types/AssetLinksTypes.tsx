@@ -82,6 +82,7 @@ export interface AssetLinksState {
     searchResults: TreeNodeItem[];
     isSearching: boolean;
     restrictMetadataOutsideSchemas?: boolean; // Restrict adding metadata outside schemas
+    currentDatabaseId?: string; // The current asset's database ID, for cross-database indicators
     // Optional metadata change handler for upload mode
     onAssetLinkMetadataChange?: (
         assetId: string,

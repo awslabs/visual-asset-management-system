@@ -3,12 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/* Reduce Cloudscape table cell padding for preview thumbnail cells */
+td:has(.preview-thumbnail-container),
+td:has(.preview-thumbnail-container) > * {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    padding-inline-start: 0 !important;
+    padding-inline-end: 0 !important;
+}
+
 .preview-thumbnail-container {
     display: flex;
     justify-content: center;
     align-items: center;
     width: 100%;
-    height: 80px;
     overflow: hidden;
 }
 
@@ -47,7 +55,7 @@
     align-items: center;
     width: 100%;
     height: 100%;
-    color: #5f6b7a;
+    color: var(--vams-text-secondary);
     font-size: 12px;
     text-align: center;
 }

@@ -39,6 +39,10 @@ const defaultProps: Partial<CustomFeatureEnabledConfigNestedStackProps> = {};
 
 /**
  * Custom configuration for VAMS App Features Enabled.
+ * This nested stack manages the appFeaturesEnabled DynamoDB table by:
+ * 1. Deduplicating the input features to prevent duplicate key errors
+ * 2. Using PutItem (not BatchWriteItem) to overwrite existing entries
+ * This ensures the table always reflects the current deployment state without duplicate key errors.
  */
 export class CustomFeatureEnabledConfigNestedStack extends NestedStack {
     constructor(
@@ -51,97 +55,90 @@ export class CustomFeatureEnabledConfigNestedStack extends NestedStack {
         props = { ...defaultProps, ...props };
 
         /**
-         * Use the AWS SDK to add records to dynamoDB "App Features Enabled", e.g.
-         *
-         * @type {AwsCustomResource}
-         *
-         * @see https://docs.aws.amazon.com/cdk/api/latest/docs/@aws-cdk_custom-resources.AwsCustomResource.html
+         * Deduplicate features using Set to ensure no duplicate entries.
+         * This is a defensive measure in case duplicates are passed from core-stack.
          */
+        const uniqueFeatures = Array.from(new Set(props.featuresEnabled));
 
+        /**
+         * Convert unique features to DynamoDB item format
+         */
         const appFeatureItems: any[] = [];
-        props.featuresEnabled.forEach((feature) =>
+        uniqueFeatures.forEach((feature) =>
             appFeatureItems.push({
                 featureName: { S: feature },
             })
         );
 
-        this.insertMultipleRecord(props.appFeatureEnabledTable, appFeatureItems, props.kmsKey);
+        this.replaceTableRecords(props.appFeatureEnabledTable, appFeatureItems, props.kmsKey);
     }
 
-    //Note: Allows for 25 items to be written as part of BatchWriteItem. If more needed, batch over many different AwsCustomResource
-    //Third Party Blog: https://dev.to/elthrasher/exploring-aws-cdk-loading-dynamodb-with-custom-resources-jlf,
-    // https://kevin-van-ingen.medium.com/aws-cdk-custom-resources-for-dynamodb-inserts-2d79cb1ae395
-    private insertMultipleRecord(
+    /**
+     * Replace all records in the table with the new feature list.
+     *
+     * Strategy:
+     * 1. Use PutItem for each feature (overwrites if exists, creates if not)
+     * 2. This avoids duplicate key errors from BatchWriteItem
+     * 3. Items are already deduplicated before this method is called
+     *
+     * Note: For tables with many features (>25), this approach is more reliable
+     * than BatchWriteItem which has a 25-item limit and fails on duplicates.
+     *
+     * @param appFeatureEnabledTable - The DynamoDB table to update
+     * @param items - The new feature items to insert (already deduplicated)
+     * @param kmsKey - Optional KMS key for encryption
+     */
+    private replaceTableRecords(
         appFeatureEnabledTable: dynamodb.Table,
         items: any[],
         kmsKey?: kms.IKey
     ) {
-        //const records = this.constructBatchInsertObject(items, tableName);
-
-        const awsSdkCall: AwsSdkCall = {
-            service: "DynamoDB",
-            action: "batchWriteItem",
-            physicalResourceId: PhysicalResourceId.of(Date.now().toString()),
-            //parameters: records
-            parameters: {
-                RequestItems: {
-                    [appFeatureEnabledTable.tableName]: this.constructBatchInsertObject(items),
-                },
-            },
-        };
-
+        // Create policy statements for DynamoDB operations
         const customResourcePolicy = AwsCustomResourcePolicy.fromStatements([
             new PolicyStatement({
                 sid: "DynamoWriteAccess",
                 effect: Effect.ALLOW,
-                actions: ["dynamodb:BatchWriteItem"],
+                actions: ["dynamodb:PutItem"],
                 resources: [appFeatureEnabledTable.tableArn],
             }),
         ]);
 
+        // Add KMS permissions if encryption key is provided
         if (kmsKey) {
             customResourcePolicy.statements.push(kmsKeyPolicyStatementGenerator(kmsKey));
         }
 
-        const customResource: AwsCustomResource = new AwsCustomResource(
-            this,
-            "appFeatureEnabled_tablePopulate_custom_resource",
-            {
-                onCreate: awsSdkCall,
-                onUpdate: awsSdkCall,
-                installLatestAwsSdk: false,
-                policy: customResourcePolicy,
-                timeout: Duration.minutes(5),
-            }
-        );
+        // Create a custom resource for each unique feature
+        // Using PutItem instead of BatchWriteItem to avoid duplicate key errors
+        // PutItem will overwrite existing items with the same key
+        items.forEach((item, index) => {
+            const featureName = item.featureName.S;
 
-        customResource.node.addDependency(appFeatureEnabledTable);
-    }
-
-    // private constructBatchInsertObject(items: any[], tableName: string) {
-    //     const itemsAsDynamoPutRequest: any[] = [];
-    //     items.forEach(item => itemsAsDynamoPutRequest.push({
-    //     PutRequest: {
-    //         Item: item
-    //     }
-    //     }));
-    //     const records: DynamoInsert =
-    //         {
-    //         RequestItems: {}
-    //         };
-    //     records.RequestItems[tableName] = itemsAsDynamoPutRequest;
-    //     return records;
-    // }
-
-    private constructBatchInsertObject(items: any[]) {
-        const itemsAsDynamoPutRequest: any[] = [];
-        items.forEach((item) =>
-            itemsAsDynamoPutRequest.push({
-                PutRequest: {
+            const putItemCall: AwsSdkCall = {
+                service: "DynamoDB",
+                action: "putItem",
+                physicalResourceId: PhysicalResourceId.of(
+                    `${appFeatureEnabledTable.tableName}-${featureName}`
+                ),
+                parameters: {
+                    TableName: appFeatureEnabledTable.tableName,
                     Item: item,
                 },
-            })
-        );
-        return itemsAsDynamoPutRequest;
+            };
+
+            const customResource = new AwsCustomResource(
+                this,
+                `appFeatureEnabled_${featureName}_custom_resource`,
+                {
+                    onCreate: putItemCall,
+                    onUpdate: putItemCall,
+                    installLatestAwsSdk: false,
+                    policy: customResourcePolicy,
+                    timeout: Duration.minutes(5),
+                }
+            );
+
+            customResource.node.addDependency(appFeatureEnabledTable);
+        });
     }
 }

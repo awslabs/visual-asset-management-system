@@ -6,9 +6,8 @@
 import CreateConstraint from "./CreateConstraint";
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
 import ListPageNoDatabase from "../ListPageNoDatabase";
-import { fetchConstraints } from "../../services/APIService";
+import { fetchConstraints, deleteConstraint } from "../../services/APIService";
 
 export const ConstraintsListDefinition = new ListDefinition({
     pluralName: "constraints",
@@ -18,11 +17,11 @@ export const ConstraintsListDefinition = new ListDefinition({
     elementId: "name",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `auth/constraints/${item.constraintId}`, {});
-            return [true, response.message, ""];
+            const result: any = await deleteConstraint({ constraintId: item.constraintId });
+            return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response.data.message];
+            return [false, error?.message, error?.response?.data?.message];
         }
     },
     columnDefinitions: [
@@ -37,7 +36,11 @@ export const ConstraintsListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: (props: any) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "description",
         }),
     ],

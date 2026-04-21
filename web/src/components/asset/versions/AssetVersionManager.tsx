@@ -4,28 +4,28 @@
  */
 
 import React, { useState, useEffect, createContext, useContext, useMemo } from "react";
-import {
-    Box,
-    Button,
-    Container,
-    Header,
-    Pagination,
-    SpaceBetween,
-    Alert,
-    Spinner,
-    Table,
-    Modal,
-    Link,
-    SegmentedControl,
-    Toggle,
-    ColumnLayout,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
+import Pagination from "@cloudscape-design/components/pagination";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Alert from "@cloudscape-design/components/alert";
+import Spinner from "@cloudscape-design/components/spinner";
+import Table from "@cloudscape-design/components/table";
+import Modal from "@cloudscape-design/components/modal";
+import Link from "@cloudscape-design/components/link";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
+import Toggle from "@cloudscape-design/components/toggle";
+import ColumnLayout from "@cloudscape-design/components/column-layout";
 import { useParams } from "react-router";
 import { fetchAssetS3Files } from "../../../services/APIService";
 import { AssetVersionList } from "./components/AssetVersionList";
 import { FileVersionsList } from "./components/FileVersionsList";
 import { CreateAssetVersionModal } from "./components/CreateAssetVersionModal";
 import { RevertVersionModal } from "./components/RevertVersionModal";
+import { EditVersionModal } from "./components/EditVersionModal";
+import { ArchiveVersionModal } from "./components/ArchiveVersionModal";
 import { useAssetVersions } from "./hooks/useAssetVersions";
 import AssetVersionComparison, { EnhancedAssetVersionComparison } from "./AssetVersionComparison";
 
@@ -35,11 +35,12 @@ export interface AssetVersion {
     DateModified: string;
     Comment: string;
     description: string;
-    specifiedPipelines: string[];
     createdBy: string;
     isCurrent: boolean;
     fileCount: number;
     hasMetadata?: boolean; // Visual indicator for versions with metadata
+    versionAlias?: string;
+    isArchived?: boolean;
 }
 
 export interface FileVersion {
@@ -131,6 +132,9 @@ interface AssetVersionContextType {
     setFilePageSize: (size: number) => void;
     filteredFiles: FileVersion[];
     totalFiles: number;
+    // Show/hide archived versions toggle
+    showArchivedVersions: boolean;
+    setShowArchivedVersions: (show: boolean) => void;
 }
 
 export const AssetVersionContext = createContext<AssetVersionContextType | undefined>(undefined);
@@ -142,6 +146,10 @@ export const AssetVersionManager: React.FC = () => {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showRevertModal, setShowRevertModal] = useState(false);
     const [versionToRevert, setVersionToRevert] = useState<AssetVersion | null>(null);
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [versionToEdit, setVersionToEdit] = useState<AssetVersion | null>(null);
+    const [showArchiveModal, setShowArchiveModal] = useState(false);
+    const [versionToArchive, setVersionToArchive] = useState<AssetVersion | null>(null);
 
     // State for comparison mode
     const [compareMode, setCompareMode] = useState(false);
@@ -183,6 +191,8 @@ export const AssetVersionManager: React.FC = () => {
         setFilterText,
         sortingColumn,
         setSortingColumn,
+        showArchivedVersions,
+        setShowArchivedVersions,
     } = useAssetVersions(databaseId!, assetId!);
 
     // Debug effect to track re-renders
@@ -209,6 +219,18 @@ export const AssetVersionManager: React.FC = () => {
     const handleRevertVersion = (version: AssetVersion) => {
         setVersionToRevert(version);
         setShowRevertModal(true);
+    };
+
+    // Handle edit version
+    const handleEditVersion = (version: AssetVersion) => {
+        setVersionToEdit(version);
+        setShowEditModal(true);
+    };
+
+    // Handle archive version
+    const handleArchiveVersion = (version: AssetVersion) => {
+        setVersionToArchive(version);
+        setShowArchiveModal(true);
     };
 
     // Handle version selection for comparison
@@ -539,6 +561,9 @@ export const AssetVersionManager: React.FC = () => {
         setFilePageSize,
         filteredFiles: paginatedFiles,
         totalFiles,
+        // Show/hide archived versions toggle
+        showArchivedVersions,
+        setShowArchivedVersions,
     };
 
     return (
@@ -646,9 +671,10 @@ export const AssetVersionManager: React.FC = () => {
                                                                     alignItems: "center",
                                                                     gap: "8px",
                                                                     padding: "4px 8px",
-                                                                    backgroundColor: "#f2f8fd",
+                                                                    backgroundColor:
+                                                                        "var(--vams-bg-secondary)",
                                                                     borderRadius: "4px",
-                                                                    border: "1px solid #d1e4f8",
+                                                                    border: "1px solid var(--vams-border-default)",
                                                                 }}
                                                             >
                                                                 <span
@@ -659,6 +685,18 @@ export const AssetVersionManager: React.FC = () => {
                                                                         ? `${index + 1}.`
                                                                         : ""}{" "}
                                                                     Version {version.Version}
+                                                                    {version.versionAlias && (
+                                                                        <span
+                                                                            style={{
+                                                                                fontWeight:
+                                                                                    "normal",
+                                                                                color: "#5f6b7a",
+                                                                            }}
+                                                                        >
+                                                                            {" "}
+                                                                            ({version.versionAlias})
+                                                                        </span>
+                                                                    )}
                                                                 </span>
                                                                 <span>
                                                                     (
@@ -710,28 +748,44 @@ export const AssetVersionManager: React.FC = () => {
                                                     <p>The comparison will show:</p>
                                                     <ul>
                                                         <li>
-                                                            <span style={{ color: "#037f0c" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-success)",
+                                                                }}
+                                                            >
                                                                 Added files
                                                             </span>{" "}
                                                             - Files present in the second version
                                                             but not in the first
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "#d91515" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-error)",
+                                                                }}
+                                                            >
                                                                 Removed files
                                                             </span>{" "}
                                                             - Files present in the first version but
                                                             not in the second
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "#0972d3" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-info)",
+                                                                }}
+                                                            >
                                                                 Modified files
                                                             </span>{" "}
                                                             - Files present in both versions but
                                                             with different content
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "#5f6b7a" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-text-secondary)",
+                                                                }}
+                                                            >
                                                                 Unchanged files
                                                             </span>{" "}
                                                             - Files identical in both versions
@@ -750,28 +804,44 @@ export const AssetVersionManager: React.FC = () => {
                                                     </p>
                                                     <ul>
                                                         <li>
-                                                            <span style={{ color: "#037f0c" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-success)",
+                                                                }}
+                                                            >
                                                                 Added files
                                                             </span>{" "}
                                                             - New files added since the selected
                                                             version
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "#d91515" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-error)",
+                                                                }}
+                                                            >
                                                                 Removed files
                                                             </span>{" "}
                                                             - Files that existed in the selected
                                                             version but are no longer present
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "#0972d3" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-color-info)",
+                                                                }}
+                                                            >
                                                                 Modified files
                                                             </span>{" "}
                                                             - Files that have been changed since the
                                                             selected version
                                                         </li>
                                                         <li>
-                                                            <span style={{ color: "#5f6b7a" }}>
+                                                            <span
+                                                                style={{
+                                                                    color: "var(--vams-text-secondary)",
+                                                                }}
+                                                            >
                                                                 Unchanged files
                                                             </span>{" "}
                                                             - Files that remain the same
@@ -803,6 +873,8 @@ export const AssetVersionManager: React.FC = () => {
                     <AssetVersionList
                         onRevertVersion={handleRevertVersion}
                         onVersionSelect={handleCompareSelect}
+                        onEditVersion={handleEditVersion}
+                        onArchiveVersion={handleArchiveVersion}
                     />
 
                     {/* File Versions List - only show when a version is selected and not in compare mode */}
@@ -856,6 +928,34 @@ export const AssetVersionManager: React.FC = () => {
                         version={versionToRevert}
                         onSuccess={() => {
                             setShowRevertModal(false);
+                            refreshVersions();
+                        }}
+                    />
+                )}
+
+                {versionToEdit && (
+                    <EditVersionModal
+                        visible={showEditModal}
+                        onDismiss={() => setShowEditModal(false)}
+                        version={versionToEdit}
+                        databaseId={databaseId!}
+                        assetId={assetId!}
+                        onSuccess={() => {
+                            setShowEditModal(false);
+                            refreshVersions();
+                        }}
+                    />
+                )}
+
+                {versionToArchive && (
+                    <ArchiveVersionModal
+                        visible={showArchiveModal}
+                        onDismiss={() => setShowArchiveModal(false)}
+                        version={versionToArchive}
+                        databaseId={databaseId!}
+                        assetId={assetId!}
+                        onSuccess={() => {
+                            setShowArchiveModal(false);
                             refreshVersions();
                         }}
                     />

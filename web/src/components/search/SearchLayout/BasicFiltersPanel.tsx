@@ -17,6 +17,7 @@ import {
 } from "@cloudscape-design/components";
 import { SearchFilters } from "../types";
 import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
+import Synonyms from "../../../synonyms";
 
 interface BasicFiltersPanelProps {
     filters: SearchFilters;
@@ -223,7 +224,10 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             </Box>
             <SpaceBetween direction="vertical" size="m">
                 {/* Asset Name Filter */}
-                <FormField label="Asset Name" description="Search by asset name (exact)">
+                <FormField
+                    label={`${Synonyms.Asset} Name`}
+                    description={`Search by ${Synonyms.asset} name (exact)`}
+                >
                     <Input
                         value={filters.str_assetname?.value || ""}
                         onChange={({ detail }) => {
@@ -236,7 +240,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                                 });
                             }
                         }}
-                        placeholder="Enter asset name (e.g., MyAsset or My*)"
+                        placeholder={`Enter ${Synonyms.asset} name (e.g., My${Synonyms.Asset} or My*)`}
                         disabled={loading}
                         type="text"
                     />
@@ -244,11 +248,11 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
 
                 {/* Database Filter */}
                 <FormField
-                    label="Database"
+                    label={Synonyms.Database}
                     description={
                         databaseLocked
                             ? "Locked by URL parameter"
-                            : "Select one or more databases (empty = all)"
+                            : `Select one or more ${Synonyms.databases} (empty = all)`
                     }
                 >
                     <Multiselect
@@ -270,7 +274,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             }
                         }}
                         options={databaseOptions}
-                        placeholder="All databases"
+                        placeholder={`All ${Synonyms.databases}`}
                         disabled={loading || databaseLocked}
                         filteringType="auto"
                     />
@@ -279,7 +283,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 {/* Asset Type Filter - Only show for assets */}
                 {recordType === "asset" && (
                     <FormField
-                        label="Asset Type"
+                        label={`${Synonyms.Asset} Type`}
                         description="Select one or more types (empty = all)"
                     >
                         <Multiselect

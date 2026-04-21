@@ -348,3 +348,7 @@ Combined.pem
 #Kiro Misc
 .kiro/specs/*
 .kiro/settings/*
+
+#Claude
+.claude/settings.local.*
+docs/superpowers/*

@@ -12,11 +12,13 @@ import {
     Header,
     Spinner,
     Link,
+    Icon,
 } from "@cloudscape-design/components";
 import { AssetLinksContext } from "./AssetLinksTreeView";
 import { AssetLinkMetadata } from "./AssetLinkMetadata";
 import { fetchAsset } from "../../../../services/APIService";
 import "./AssetLinksDetailsPanel.css";
+import Synonyms from "../../../../synonyms";
 
 interface AssetLinksDetailsPanelProps {
     onCreateLink: (relationshipType: "related" | "parent" | "child") => void;
@@ -64,7 +66,7 @@ export function AssetLinksDetailsPanel({
             const { databaseId, assetId } = selectedNode.assetData;
             if (!databaseId || !assetId) {
                 setLinkedAssetDetails(null);
-                setAssetDetailsError("Missing asset information");
+                setAssetDetailsError(`Missing ${Synonyms.asset} information`);
                 lastFetchedAssetRef.current = null;
                 return;
             }
@@ -123,9 +125,9 @@ export function AssetLinksDetailsPanel({
                         assetKey
                     );
                 } else if (typeof assetDetails === "string" && assetDetails.includes("not found")) {
-                    setAssetDetailsError("Asset not found or access denied");
+                    setAssetDetailsError(`${Synonyms.Asset} not found or access denied`);
                 } else {
-                    setAssetDetailsError("Failed to load asset details");
+                    setAssetDetailsError(`Failed to load ${Synonyms.asset} details`);
                     console.error(
                         "[AssetLinksDetailsPanel] Invalid asset details returned for:",
                         assetKey,
@@ -142,7 +144,7 @@ export function AssetLinksDetailsPanel({
                     assetKey,
                     error
                 );
-                setAssetDetailsError("Failed to load asset details");
+                setAssetDetailsError(`Failed to load ${Synonyms.asset} details`);
             } finally {
                 if (!signal.aborted) {
                     setLoadingAssetDetails(false);
@@ -239,7 +241,7 @@ export function AssetLinksDetailsPanel({
     if (!selectedNode) {
         return (
             <Box textAlign="center" padding="xl">
-                <div>Select a relationship or asset to view details</div>
+                <div>{`Select a relationship or ${Synonyms.asset} to view details`}</div>
             </Box>
         );
     }
@@ -250,7 +252,7 @@ export function AssetLinksDetailsPanel({
             const relationshipType = selectedNode.relationshipType;
             const buttonText = `Create ${
                 relationshipType.charAt(0).toUpperCase() + relationshipType.slice(1)
-            } Asset Link`;
+            } ${Synonyms.Asset} Link`;
 
             return (
                 <Button variant="primary" onClick={() => onCreateLink(relationshipType)}>
@@ -279,10 +281,10 @@ export function AssetLinksDetailsPanel({
                 selectedNode.level !== undefined &&
                 selectedNode.level >= 2;
             const deleteButtonText = isSubChildNode
-                ? "Delete Sub-Child Asset Link"
-                : `Delete ${
-                      relationshipType.charAt(0).toUpperCase() + relationshipType.slice(1)
-                  } Asset Link`;
+                ? `Delete Sub-Child ${Synonyms.Asset} Link`
+                : `Delete ${relationshipType.charAt(0).toUpperCase() + relationshipType.slice(1)} ${
+                      Synonyms.Asset
+                  } Link`;
             buttons.push(
                 <Button
                     key="delete"
@@ -307,7 +309,7 @@ export function AssetLinksDetailsPanel({
                         variant="primary"
                         onClick={() => onCreateSubChildLink(selectedNode.assetData)}
                     >
-                        Create Sub-Child Asset Link
+                        Create Sub-Child {Synonyms.Asset} Link
                     </Button>
                 );
             }
@@ -319,7 +321,7 @@ export function AssetLinksDetailsPanel({
     };
 
     return (
-        <div className="asset-links-details-panel">
+        <div className="asset-links-details-inner">
             <div className="asset-links-details-header">
                 <div
                     style={{
@@ -362,7 +364,7 @@ export function AssetLinksDetailsPanel({
                                         rel="noopener noreferrer"
                                         fontSize="body-s"
                                     >
-                                        (View Asset)
+                                        {`(View ${Synonyms.Asset})`}
                                     </Link>
                                 </div>
                             )}
@@ -405,31 +407,59 @@ export function AssetLinksDetailsPanel({
                                 </div>
                             </div>
                         )}
+                    {/* Database info for asset nodes */}
+                    {selectedNode.type === "asset" && selectedNode.assetData?.databaseId && (
+                        <div className="asset-links-info-item">
+                            <div className="asset-links-info-label">{`${Synonyms.Database}:`}</div>
+                            <div className="asset-links-info-value">
+                                {selectedNode.assetData.databaseId}
+                                {state.currentDatabaseId &&
+                                    selectedNode.assetData.databaseId !==
+                                        state.currentDatabaseId && (
+                                        <span
+                                            style={{
+                                                marginLeft: "8px",
+                                                color: "var(--vams-color-warning, #ff9900)",
+                                            }}
+                                            title={`This ${Synonyms.asset} is in a different ${Synonyms.database}`}
+                                        >
+                                            <Icon name="status-warning" size="small" />{" "}
+                                            {`Cross-${Synonyms.database} link`}
+                                        </span>
+                                    )}
+                            </div>
+                        </div>
+                    )}
                     {selectedNode.relationshipType && (
                         <div className="asset-links-info-item">
-                            <div className="asset-links-info-label">Unauthorized Sub-Assets:</div>
+                            <div className="asset-links-info-label">{`Unauthorized Sub-${Synonyms.Assets}:`}</div>
                             <div className="asset-links-info-value">{getUnauthorizedCount()}</div>
                         </div>
                     )}
                     {/* Linked Asset Tags Section - Only show for asset nodes */}
                     {selectedNode.type === "asset" && (
                         <div className="asset-links-info-item">
-                            <div className="asset-links-info-label">Linked Asset Tags:</div>
+                            <div className="asset-links-info-label">{`Linked ${Synonyms.Asset} Tags:`}</div>
                             <div className="asset-links-info-value">
                                 {loadingAssetDetails ? (
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <Spinner />
-                                        <span>Loading asset details...</span>
+                                        <span>{`Loading ${Synonyms.asset} details...`}</span>
                                     </SpaceBetween>
                                 ) : assetDetailsError ? (
-                                    <span style={{ color: "#d13212", fontStyle: "italic" }}>
+                                    <span
+                                        style={{
+                                            color: "var(--vams-color-error)",
+                                            fontStyle: "italic",
+                                        }}
+                                    >
                                         {assetDetailsError}
                                     </span>
                                 ) : linkedAssetDetails ? (
                                     <span>{formatLinkedAssetTags(linkedAssetDetails.tags)}</span>
                                 ) : (
                                     <span style={{ fontStyle: "italic" }}>
-                                        No asset details available
+                                        {`No ${Synonyms.asset} details available`}
                                     </span>
                                 )}
                             </div>

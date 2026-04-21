@@ -125,6 +125,7 @@ export interface SearchResponse {
             }>;
         };
     };
+    aggregationTotal?: number;
 }
 
 export interface SearchPreferences {
@@ -386,6 +387,19 @@ export const FIELD_MAPPINGS: FieldMapping = {
         searchable: false,
     },
 };
+
+/**
+ * Get the best available total count from search results.
+ * Prefers aggregationTotal (true total from OpenSearch aggregations) over
+ * hits.total.value (which may be capped by the backend buffer window).
+ */
+export function getTotalResultCount(result: SearchResponse | null | undefined): number {
+    if (!result) return 0;
+    if (result.aggregationTotal != null && result.aggregationTotal > 0) {
+        return result.aggregationTotal;
+    }
+    return result.hits?.total?.value || 0;
+}
 
 export const DEFAULT_PREFERENCES: SearchPreferences = {
     viewMode: "table",

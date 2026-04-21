@@ -60,7 +60,12 @@ from .exceptions import (
     WorkflowNotFoundError,
     WorkflowExecutionError,
     WorkflowAlreadyRunningError,
-    InvalidWorkflowDataError
+    InvalidWorkflowDataError,
+    CognitoUserError,
+    CognitoUserNotFoundError,
+    CognitoUserAlreadyExistsError,
+    InvalidCognitoUserDataError,
+    CognitoUserOperationError
 )
 from .glb_combiner import (
     combine_glb_files,
@@ -131,6 +136,11 @@ __all__ = [
     'WorkflowExecutionError',
     'WorkflowAlreadyRunningError',
     'InvalidWorkflowDataError',
+    'CognitoUserError',
+    'CognitoUserNotFoundError',
+    'CognitoUserAlreadyExistsError',
+    'InvalidCognitoUserDataError',
+    'CognitoUserOperationError',
     'combine_glb_files',
     'combine_multiple_glbs',
     'build_transform_matrix_from_metadata',

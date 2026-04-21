@@ -4,7 +4,8 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Auth, Cache } from "aws-amplify";
+import { getDualValidAccessToken } from "../../../utils/authTokenUtils";
+import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { CesiumDependencyManager } from "./dependencies";
 
@@ -20,6 +21,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     assetKey,
     multiFileKeys,
     versionId,
+    assetVersionId,
     viewerMode,
     onViewerModeChange,
     onDeletePreview,
@@ -32,7 +34,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [initError, setInitError] = useState<string | null>(null);
     const [loadedTilesets, setLoadedTilesets] = useState<any[]>([]);
-    const [config] = useState(Cache.getItem("config"));
+    const [config] = useState(appCache.getItem("config"));
     const [cesiumLoaded, setCesiumLoaded] = useState(false);
 
     // Load Cesium dynamically on mount
@@ -71,6 +73,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     const [measurementMode, setMeasurementMode] = useState<"none" | "distance" | "area">("none");
     const [measurementPoints, setMeasurementPoints] = useState<any[]>([]);
     const [measurementEntities, setMeasurementEntities] = useState<any[]>([]);
+    const [dismissedVersionWarning, setDismissedVersionWarning] = useState(false);
     const [measurementResults, setMeasurementResults] = useState<
         Array<{ type: "distance" | "area"; value: number; unit: string; id: number }>
     >([]);
@@ -79,8 +82,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     // Helper function to get authentication headers
     const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
         try {
-            const session = await Auth.currentSession();
-            const idToken = session.getIdToken().getJwtToken();
+            const idToken = await getDualValidAccessToken();
             return {
                 Authorization: `Bearer ${idToken}`,
                 "Content-Type": "application/json",
@@ -104,9 +106,15 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
             const encodedFileKey = encodedSegments.join("/");
 
-            return `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+            let url = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+            if (assetVersionId) {
+                url += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+            }
+            // Note: versionId (S3 file version) is NOT passed for Cesium — tileset viewers
+            // require all files from the same version context, which only assetVersionId provides
+            return url;
         },
-        [config, databaseId, assetId]
+        [config, databaseId, assetId, assetVersionId]
     );
 
     // Global error handler for uncaught promise rejections
@@ -709,7 +717,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
         handler.setInputAction((event: any) => {
             // Try to pick from tileset first, then fallback to ellipsoid
-            let pickedPosition = viewerRef.current!.scene.pick(event.position);
+            const pickedPosition = viewerRef.current!.scene.pick(event.position);
 
             if (
                 pickedPosition &&
@@ -1008,15 +1016,21 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     justifyContent: "center",
                     height: "100%",
                     padding: "20px",
-                    backgroundColor: "#f5f5f5",
+                    backgroundColor: "var(--vams-bg-secondary)",
                 }}
             >
                 <div style={{ textAlign: "center" }}>
-                    <h3 style={{ color: "#d32f2f", marginBottom: "10px" }}>
+                    <h3 style={{ color: "var(--vams-color-error)", marginBottom: "10px" }}>
                         Error Loading 3D Tileset
                     </h3>
-                    <p style={{ color: "#666" }}>{error}</p>
-                    <p style={{ color: "#999", fontSize: "0.9em", marginTop: "10px" }}>
+                    <p style={{ color: "var(--vams-text-secondary)" }}>{error}</p>
+                    <p
+                        style={{
+                            color: "var(--vams-text-secondary)",
+                            fontSize: "0.9em",
+                            marginTop: "10px",
+                        }}
+                    >
                         Supported format: .json (3D Tileset definition files)
                     </p>
                 </div>
@@ -1033,14 +1047,14 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     justifyContent: "center",
                     height: "100%",
                     padding: "20px",
-                    backgroundColor: "#f5f5f5",
+                    backgroundColor: "var(--vams-bg-secondary)",
                 }}
             >
                 <div style={{ textAlign: "center" }}>
-                    <h3 style={{ color: "#666", marginBottom: "10px" }}>
+                    <h3 style={{ color: "var(--vams-text-secondary)", marginBottom: "10px" }}>
                         Loading Configuration...
                     </h3>
-                    <p style={{ color: "#999", fontSize: "0.9em" }}>
+                    <p style={{ color: "var(--vams-text-secondary)", fontSize: "0.9em" }}>
                         Waiting for VAMS configuration to load
                     </p>
                 </div>
@@ -1050,6 +1064,48 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
     return (
         <div style={{ position: "relative", width: "100%", height: "100%" }}>
+            {/* File version warning — Cesium only supports assetVersionId, not individual file versions */}
+            {versionId && !assetVersionId && !dismissedVersionWarning && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: "0",
+                        left: "0",
+                        right: "0",
+                        backgroundColor: "#e8f4fd",
+                        border: "1px solid #0972d3",
+                        borderRadius: "4px",
+                        padding: "8px 12px",
+                        margin: "8px",
+                        zIndex: 1001,
+                        fontSize: "0.85em",
+                        color: "#0972d3",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                    }}
+                >
+                    <span style={{ textAlign: "center", flex: 1 }}>
+                        Specific file versions cannot be viewed except for when looking at files
+                        under an asset version ID. Viewing the latest version of this file.
+                    </span>
+                    <button
+                        onClick={() => setDismissedVersionWarning(true)}
+                        style={{
+                            background: "none",
+                            border: "none",
+                            color: "#0972d3",
+                            cursor: "pointer",
+                            fontSize: "1.1em",
+                            fontWeight: "bold",
+                            padding: "0 0 0 12px",
+                        }}
+                    >
+                        ×
+                    </button>
+                </div>
+            )}
+
             {/* Display initialization errors at the top */}
             {initError && (
                 <div
@@ -1058,8 +1114,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                         top: "0",
                         left: "0",
                         right: "0",
-                        backgroundColor: "#ffebee",
-                        border: "1px solid #f44336",
+                        backgroundColor: "var(--vams-bg-secondary)",
+                        border: "1px solid var(--vams-color-error)",
                         borderRadius: "4px",
                         padding: "12px 16px",
                         margin: "8px",
@@ -1069,14 +1125,14 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 >
                     <div
                         style={{
-                            color: "#d32f2f",
+                            color: "var(--vams-color-error)",
                             fontWeight: "bold",
                             marginBottom: "4px",
                         }}
                     >
                         Cesium Initialization Error
                     </div>
-                    <div style={{ color: "#666" }}>{initError}</div>
+                    <div style={{ color: "var(--vams-text-secondary)" }}>{initError}</div>
                     <button
                         onClick={() => setInitError(null)}
                         style={{
@@ -1085,7 +1141,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                             right: "8px",
                             background: "none",
                             border: "none",
-                            color: "#d32f2f",
+                            color: "var(--vams-color-error)",
                             cursor: "pointer",
                             fontSize: "16px",
                             padding: "0",
@@ -1107,7 +1163,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                         left: "50%",
                         transform: "translate(-50%, -50%)",
                         zIndex: 1000,
-                        backgroundColor: "rgba(255, 255, 255, 0.9)",
+                        backgroundColor:
+                            "color-mix(in srgb, var(--vams-bg-primary) 90%, transparent)",
                         padding: "20px",
                         borderRadius: "8px",
                         textAlign: "center",
@@ -1115,7 +1172,13 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 >
                     <div>Loading 3D Tileset...</div>
                     {multiFileKeys && multiFileKeys.length > 1 && (
-                        <div style={{ fontSize: "0.9em", color: "#666", marginTop: "5px" }}>
+                        <div
+                            style={{
+                                fontSize: "0.9em",
+                                color: "var(--vams-text-secondary)",
+                                marginTop: "5px",
+                            }}
+                        >
                             Loading {multiFileKeys.length} tilesets
                         </div>
                     )}

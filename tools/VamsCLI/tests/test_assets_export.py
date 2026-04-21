@@ -1378,9 +1378,10 @@ class TestAssetExportWithDownload:
             ])
             
             assert result.exit_code == 0
-            
+
             # Verify JSON output includes download results
-            output_json = json.loads(result.output.strip())
+            # Use raw_decode to handle potential trailing RuntimeWarning from GC'd coroutines
+            output_json, _ = json.JSONDecoder().raw_decode(result.output.strip())
             assert 'downloadResults' in output_json
             assert output_json['downloadResults']['total_files'] == 1
             assert output_json['downloadResults']['successful_files'] == 1

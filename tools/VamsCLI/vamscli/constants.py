@@ -40,6 +40,9 @@ API_CREATE_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/createVersio
 API_REVERT_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}"
 API_GET_ASSET_VERSIONS = "/database/{databaseId}/assets/{assetId}/getVersions"
 API_GET_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}"
+API_ASSET_VERSION_BY_ID = "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}"
+API_ASSET_VERSION_ARCHIVE = "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive"
+API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive"
 
 # Database Management API Endpoints
 API_DATABASE = "/database"
@@ -66,6 +69,27 @@ API_ASSET_LINK_METADATA = "/asset-links/{assetLinkId}/metadata"
 API_ASSET_METADATA = "/database/{databaseId}/assets/{assetId}/metadata"
 API_FILE_METADATA = "/database/{databaseId}/assets/{assetId}/metadata/file"
 API_DATABASE_METADATA = "/database/{databaseId}/metadata"
+
+# Cognito User Management API Endpoints
+API_COGNITO_USERS = "/user/cognito"
+API_COGNITO_USER_BY_ID = "/user/cognito/{userId}"
+API_COGNITO_USER_RESET_PASSWORD = "/user/cognito/{userId}/resetPassword"
+
+# Role Management API Endpoints
+API_ROLES = "/roles"
+API_ROLE_BY_ID = "/roles/{roleId}"
+
+# Constraint Management API Endpoints
+API_CONSTRAINTS = "/auth/constraints"
+API_CONSTRAINT_BY_ID = "/auth/constraints/{constraintId}"
+API_CONSTRAINTS_TEMPLATE_IMPORT = "/auth/constraintsTemplateImport"
+
+# API Key Management API Endpoints
+API_AUTH_API_KEYS = "/auth/api-keys"
+API_AUTH_API_KEY = "/auth/api-keys/{apiKeyId}"
+
+# User Role Management API Endpoints
+API_USER_ROLES = "/user-roles"
 
 # Legacy Metadata API Endpoints (deprecated)
 API_ASSET_LINKS_METADATA = "/asset-links/{assetLinkId}/metadata"

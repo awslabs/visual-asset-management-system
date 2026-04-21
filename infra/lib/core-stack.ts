@@ -41,7 +41,7 @@ export interface EnvProps {
 
 export class CoreVAMSStack extends cdk.Stack {
     private enabledFeatures: string[] = [];
-    private webAppBuildPath = "../web/build";
+    private webAppBuildPath = "../web/dist";
 
     private vpc: ec2.IVpc;
     private subnetsIsolated: ec2.ISubnet[];
@@ -93,18 +93,6 @@ export class CoreVAMSStack extends cdk.Stack {
         //Setup GovCloud Feature Enabled
         if (props.config.app.govCloud.enabled) {
             this.enabledFeatures.push(VAMS_APP_FEATURES.GOVCLOUD);
-        }
-
-        //Setup ALB Feature Enabled
-        if (props.config.app.useAlb.enabled) {
-            this.enabledFeatures.push(VAMS_APP_FEATURES.ALBDEPLOY);
-        }
-
-        //Select auth provider
-        if (props.config.app.authProvider.useCognito.enabled) {
-            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_COGNITO);
-        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
-            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_EXTERNALOAUTHIDP);
         }
 
         if (props.config.app.webUi.allowUnsafeEvalFeatures) {
@@ -168,6 +156,13 @@ export class CoreVAMSStack extends cdk.Stack {
             trail.logAllS3DataEvents();
         }
 
+        //Select auth provider
+        if (props.config.app.authProvider.useCognito.enabled) {
+            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_COGNITO);
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_EXTERNALOAUTHIDP);
+        }
+
         //See if we have enabled SAML settings
         if (props.config.app.authProvider.useCognito.useSaml) {
             this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_COGNITO_SAML);
@@ -216,6 +211,15 @@ export class CoreVAMSStack extends cdk.Stack {
                     }
                 );
                 staticWebBuilderNestedStack.addDependency(storageResourcesNestedStack);
+
+                //Set features
+                if (props.config.app.useCloudFront.enabled) {
+                    this.enabledFeatures.push(VAMS_APP_FEATURES.CLOUDFRONTDEPLOY);
+                }
+
+                if (props.config.app.useAlb.enabled) {
+                    this.enabledFeatures.push(VAMS_APP_FEATURES.ALBDEPLOY);
+                }
 
                 //Write final output configurations (pulling forward from static web nested stacks)
                 const endPointURLParamsOutput = new cdk.CfnOutput(
@@ -467,15 +471,18 @@ export class CoreVAMSStack extends cdk.Stack {
         this.node.findAll().forEach((item) => {
             if (item instanceof cdk.aws_lambda.Function) {
                 const fn = item as cdk.aws_lambda.Function;
-                // python3.11 suppressed for CDK Bucket Deployment which is fixed to python 3.11 (https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_s3_deployment/README.html)
-                // python3.12 suppressed for all other lambdas. Latest version for non-breaking changes as of 10/2024.
+                //console.log(fn.runtime.name)
+                // python3.11 + 3.13 suppressed for CDK Bucket Deployment which is fixed to python 3.11 (https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_s3_deployment/README.html)
+                // python3.12 suppressed for all other lambdas. Latest version for non-breaking changes as of 03/2026.
                 // nodejs18.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
-                // nodejs20.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
+                // nodejs20.x + nodejs22.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
                 if (
                     fn.runtime.name === "python3.11" ||
                     fn.runtime.name === "python3.12" ||
+                    fn.runtime.name === "python3.13" ||
                     fn.runtime.name === "nodejs18.x" ||
-                    fn.runtime.name === "nodejs20.x"
+                    fn.runtime.name === "nodejs20.x" ||
+                    fn.runtime.name === "nodejs22.x"
                 ) {
                     //console.log(item.node.path,fn.runtime.name)
                     NagSuppressions.addResourceSuppressions(fn, [

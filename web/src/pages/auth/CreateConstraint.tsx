@@ -15,9 +15,10 @@ import {
     Table,
     Textarea,
 } from "@cloudscape-design/components";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
 import { Optional } from "@cloudscape-design/components/internal/types";
-import { API } from "aws-amplify";
 import { useEffect, useState } from "react";
+import { createConstraint } from "../../services/APIService";
 import { generateUUID } from "../../common/utils/utils";
 import RoleGroupPermissionsTable, { RoleGroupPermission } from "./RoleGroupPermissionsTable";
 import UserPermissionsTable, { UserPermission } from "./UserPermissionsTable";
@@ -251,7 +252,7 @@ export default function CreateConstraint({
         groupPermissions: RoleGroupPermission[],
         userPermissions: UserPermission[]
     ): Record<string, string | null> {
-        let response: Record<string, string | null> = {
+        const response: Record<string, string | null> = {
             groupError: null,
             userError: null,
         };
@@ -372,9 +373,7 @@ export default function CreateConstraint({
                             onClick={() => {
                                 setInProgress(true);
                                 console.log("sending state", formState);
-                                API.post("api", `auth/constraints/${formState.constraintId}`, {
-                                    body: formState,
-                                })
+                                createConstraint(formState)
                                     .then((res) => {
                                         console.log("create auth criteria", res);
                                         setOpen(false);
@@ -387,7 +386,7 @@ export default function CreateConstraint({
                                     })
                                     .catch((err) => {
                                         console.log("create auth criteria error", err);
-                                        let msg = `Unable to ${createOrUpdate} constraints. Error: Request failed with status code ${err.response.status}`;
+                                        const msg = `Unable to ${createOrUpdate} constraints. Error: Request failed with status code ${err.response.status}`;
                                         setFormError(msg);
                                     })
                                     .finally(() => {
@@ -460,49 +459,61 @@ export default function CreateConstraint({
                         />
                     </FormField>
 
-                    <FormField
-                        label="Role Group Permissions (OR)"
-                        constraintText="Required."
-                        stretch={true}
-                        errorText={
-                            validateGroupAndUserPermissions(
-                                formState.groupPermissions,
-                                formState.userPermissions
-                            )["groupError"]
-                        }
+                    <ExpandableSection
+                        headerText="Role Group Permissions"
+                        defaultExpanded={false}
+                        variant="default"
                     >
-                        <RoleGroupPermissionsTable
-                            permissions={formState.groupPermissions}
-                            setPermissions={(groupPermissions) =>
-                                setFormState({
-                                    ...formState,
-                                    groupPermissions,
-                                })
+                        <FormField
+                            label="Role Group Permissions (OR)"
+                            constraintText="Required."
+                            stretch={true}
+                            errorText={
+                                validateGroupAndUserPermissions(
+                                    formState.groupPermissions,
+                                    formState.userPermissions
+                                )["groupError"]
                             }
-                        />
-                    </FormField>
+                        >
+                            <RoleGroupPermissionsTable
+                                permissions={formState.groupPermissions}
+                                setPermissions={(groupPermissions) =>
+                                    setFormState({
+                                        ...formState,
+                                        groupPermissions,
+                                    })
+                                }
+                            />
+                        </FormField>
+                    </ExpandableSection>
 
-                    <FormField
-                        label="User Permissions (OR)"
-                        constraintText="Required."
-                        stretch={true}
-                        errorText={
-                            validateGroupAndUserPermissions(
-                                formState.groupPermissions,
-                                formState.userPermissions
-                            )["userError"]
-                        }
+                    <ExpandableSection
+                        headerText="User Permissions"
+                        defaultExpanded={false}
+                        variant="default"
                     >
-                        <UserPermissionsTable
-                            permissions={formState.userPermissions}
-                            setPermissions={(userPermissions) =>
-                                setFormState({
-                                    ...formState,
-                                    userPermissions,
-                                })
+                        <FormField
+                            label="User Permissions (OR)"
+                            constraintText="Required."
+                            stretch={true}
+                            errorText={
+                                validateGroupAndUserPermissions(
+                                    formState.groupPermissions,
+                                    formState.userPermissions
+                                )["userError"]
                             }
-                        />
-                    </FormField>
+                        >
+                            <UserPermissionsTable
+                                permissions={formState.userPermissions}
+                                setPermissions={(userPermissions) =>
+                                    setFormState({
+                                        ...formState,
+                                        userPermissions,
+                                    })
+                                }
+                            />
+                        </FormField>
+                    </ExpandableSection>
 
                     <FormField
                         label="Object Type"
@@ -527,425 +538,451 @@ export default function CreateConstraint({
                         />
                     </FormField>
 
-                    <FormField
-                        label="Criteria (AND)"
-                        constraintText="Required."
-                        stretch={true}
-                        errorText={validateCriteria(formState.criteriaAnd, formState.criteriaOr)}
+                    <ExpandableSection
+                        headerText="Criteria (AND)"
+                        defaultExpanded={false}
+                        variant="default"
                     >
-                        <Table
-                            onSelectionChange={({ detail }) =>
-                                setSelectedCriteriaAnd(detail.selectedItems)
-                            }
-                            trackBy="id"
-                            selectedItems={selectedCriteriaAnd}
-                            header={
-                                <Header
-                                    actions={
-                                        <SpaceBetween direction="horizontal" size="xs">
-                                            <Button onClick={addNewConstraintAnd}>
-                                                Add Criteria
-                                            </Button>
-                                            <Button
-                                                disabled={selectedCriteriaAnd.length === 0}
-                                                onClick={() => {
-                                                    const criteria = formState.criteriaAnd.filter(
-                                                        (x) => {
-                                                            return !selectedCriteriaAnd.find(
-                                                                (y) => y.id === x.id
-                                                            );
-                                                        }
-                                                    );
-
-                                                    setFormState({
-                                                        ...formState,
-                                                        criteriaAnd: criteria,
-                                                    });
-                                                    setSelectedCriteriaAnd([]);
-                                                }}
-                                            >
-                                                Remove Criteria
-                                            </Button>
-                                        </SpaceBetween>
-                                    }
-                                >
-                                    Criteria
-                                </Header>
-                            }
-                            columnDefinitions={[
-                                {
-                                    id: "field",
-                                    header: "Field",
-                                    minWidth: 136,
-                                    editConfig: {
-                                        ariaLabel: "Field Name",
-                                        editIconAriaLabel: "editable",
-                                        validation(item, value) {
-                                            if (value === undefined || value.length === 0) {
-                                                return "Field name is required";
-                                            }
-                                        },
-                                        editingCell: (item, { currentValue, setValue }) => {
-                                            const value = currentValue ?? item.field;
-                                            return (
-                                                <Select
-                                                    autoFocus={true}
-                                                    expandToViewport={true}
-                                                    selectedOption={
-                                                        formState.objectType
-                                                            ? fieldNamesToObjectTypeMapping[
-                                                                  formState.objectType
-                                                              ].find(
-                                                                  (option) => option.value === value
-                                                              ) ?? null
-                                                            : null
-                                                    }
-                                                    onChange={(event) => {
-                                                        setValue(
-                                                            event.detail.selectedOption.value ??
-                                                                item.field
-                                                        );
-                                                    }}
-                                                    options={
-                                                        formState.objectType
-                                                            ? fieldNamesToObjectTypeMapping[
-                                                                  formState.objectType
-                                                              ]
-                                                            : []
-                                                    }
-                                                />
-                                            );
-                                        },
-                                    },
-                                    cell: (item) => {
-                                        return formState.objectType
-                                            ? fieldNamesToObjectTypeMapping[
-                                                  formState.objectType
-                                              ].find((option) => option.value === item.field)?.label
-                                            : null;
-                                    },
-                                },
-                                {
-                                    id: "operator",
-                                    header: "Operator",
-                                    minWidth: 136,
-                                    editConfig: {
-                                        ariaLabel: "Operator",
-                                        editIconAriaLabel: "editable",
-                                        validation(item, value) {
-                                            if (value === undefined || value.length === 0) {
-                                                return "Operator is required";
-                                            }
-                                        },
-                                        editingCell: (item, { currentValue, setValue }) => {
-                                            const value = currentValue ?? item.operator;
-                                            return (
-                                                <Select
-                                                    autoFocus={true}
-                                                    expandToViewport={true}
-                                                    selectedOption={
-                                                        criteriaOperators.find(
-                                                            (option) => option.value === value
-                                                        ) ?? null
-                                                    }
-                                                    onChange={(event) => {
-                                                        setValue(
-                                                            event.detail.selectedOption.value ??
-                                                                item.operator
-                                                        );
-                                                    }}
-                                                    options={criteriaOperators}
-                                                />
-                                            );
-                                        },
-                                    },
-                                    cell: (item) => {
-                                        return criteriaOperators.find(
-                                            (option) => option.value === item.operator
-                                        )?.label;
-                                    },
-                                },
-                                {
-                                    id: "value",
-                                    header: "Criteria Values",
-                                    minWidth: 136,
-                                    cell: (e) => e.value,
-                                    editConfig: {
-                                        ariaLabel: "Criteria Values",
-                                        validation(item, newValue) {
-                                            function valid(value: string) {
-                                                return value !== undefined && value.length > 0;
-                                            }
-                                            if (!valid(newValue || item.value)) {
-                                                return "Criteria is required";
-                                            }
-                                        },
-                                        editIconAriaLabel: "editable",
-                                        errorIconAriaLabel: "Criteria Values Error",
-                                        editingCell: (item, { currentValue, setValue }) => {
-                                            return (
-                                                <Input
-                                                    autoFocus={true}
-                                                    value={currentValue ?? item.value}
-                                                    onChange={(event) =>
-                                                        setValue(event.detail.value)
-                                                    }
-                                                />
-                                            );
-                                        },
-                                    },
-                                },
-                            ]}
-                            items={formState.criteriaAnd}
-                            loadingText="Loading resources"
-                            submitEdit={(item, column, newValue) => {
-                                // do nothing
-                                console.log("submitEdit", item, column, newValue);
-                                if (column.id) {
-                                    item[column.id as keyof ConstraintCriteria] =
-                                        newValue as string;
-
-                                    const criteria = [
-                                        ...formState.criteriaAnd.filter((x) => x.id !== item.id),
-                                        item,
-                                    ];
-
-                                    setFormState({ ...formState, criteriaAnd: criteria });
-
-                                    // Update selection state to maintain correct references
-                                    const wasSelected = selectedCriteriaAnd.some(
-                                        (x) => x.id === item.id
-                                    );
-                                    if (wasSelected) {
-                                        setSelectedCriteriaAnd([
-                                            ...selectedCriteriaAnd.filter((x) => x.id !== item.id),
-                                            item,
-                                        ]);
-                                    }
+                        <FormField
+                            label="Criteria (AND)"
+                            constraintText="Required."
+                            stretch={true}
+                            errorText={validateCriteria(
+                                formState.criteriaAnd,
+                                formState.criteriaOr
+                            )}
+                        >
+                            <Table
+                                onSelectionChange={({ detail }) =>
+                                    setSelectedCriteriaAnd(detail.selectedItems)
                                 }
-                            }}
-                            selectionType="multi"
-                            empty={
-                                <Box textAlign="center" color="inherit">
-                                    <b>No resources</b>
-                                    <Box padding={{ bottom: "s" }} variant="p" color="inherit">
-                                        No resources to display.
-                                    </Box>
-                                    <Button onClick={addNewConstraintAnd}>Add Criteria</Button>
-                                </Box>
-                            }
-                        />
-                    </FormField>
+                                trackBy="id"
+                                selectedItems={selectedCriteriaAnd}
+                                header={
+                                    <Header
+                                        actions={
+                                            <SpaceBetween direction="horizontal" size="xs">
+                                                <Button onClick={addNewConstraintAnd}>
+                                                    Add Criteria
+                                                </Button>
+                                                <Button
+                                                    disabled={selectedCriteriaAnd.length === 0}
+                                                    onClick={() => {
+                                                        const criteria =
+                                                            formState.criteriaAnd.filter((x) => {
+                                                                return !selectedCriteriaAnd.find(
+                                                                    (y) => y.id === x.id
+                                                                );
+                                                            });
 
-                    <FormField
-                        label="Criteria (OR)"
-                        constraintText="Required."
-                        stretch={true}
-                        errorText={validateCriteria(formState.criteriaAnd, formState.criteriaOr)}
+                                                        setFormState({
+                                                            ...formState,
+                                                            criteriaAnd: criteria,
+                                                        });
+                                                        setSelectedCriteriaAnd([]);
+                                                    }}
+                                                >
+                                                    Remove Criteria
+                                                </Button>
+                                            </SpaceBetween>
+                                        }
+                                    >
+                                        Criteria
+                                    </Header>
+                                }
+                                columnDefinitions={[
+                                    {
+                                        id: "field",
+                                        header: "Field",
+                                        minWidth: 136,
+                                        editConfig: {
+                                            ariaLabel: "Field Name",
+                                            editIconAriaLabel: "editable",
+                                            validation(item, value) {
+                                                if (value === undefined || value.length === 0) {
+                                                    return "Field name is required";
+                                                }
+                                            },
+                                            editingCell: (item, { currentValue, setValue }) => {
+                                                const value = currentValue ?? item.field;
+                                                return (
+                                                    <Select
+                                                        autoFocus={true}
+                                                        expandToViewport={true}
+                                                        selectedOption={
+                                                            formState.objectType
+                                                                ? fieldNamesToObjectTypeMapping[
+                                                                      formState.objectType
+                                                                  ].find(
+                                                                      (option) =>
+                                                                          option.value === value
+                                                                  ) ?? null
+                                                                : null
+                                                        }
+                                                        onChange={(event) => {
+                                                            setValue(
+                                                                event.detail.selectedOption.value ??
+                                                                    item.field
+                                                            );
+                                                        }}
+                                                        options={
+                                                            formState.objectType
+                                                                ? fieldNamesToObjectTypeMapping[
+                                                                      formState.objectType
+                                                                  ]
+                                                                : []
+                                                        }
+                                                    />
+                                                );
+                                            },
+                                        },
+                                        cell: (item) => {
+                                            return formState.objectType
+                                                ? fieldNamesToObjectTypeMapping[
+                                                      formState.objectType
+                                                  ].find((option) => option.value === item.field)
+                                                      ?.label
+                                                : null;
+                                        },
+                                    },
+                                    {
+                                        id: "operator",
+                                        header: "Operator",
+                                        minWidth: 136,
+                                        editConfig: {
+                                            ariaLabel: "Operator",
+                                            editIconAriaLabel: "editable",
+                                            validation(item, value) {
+                                                if (value === undefined || value.length === 0) {
+                                                    return "Operator is required";
+                                                }
+                                            },
+                                            editingCell: (item, { currentValue, setValue }) => {
+                                                const value = currentValue ?? item.operator;
+                                                return (
+                                                    <Select
+                                                        autoFocus={true}
+                                                        expandToViewport={true}
+                                                        selectedOption={
+                                                            criteriaOperators.find(
+                                                                (option) => option.value === value
+                                                            ) ?? null
+                                                        }
+                                                        onChange={(event) => {
+                                                            setValue(
+                                                                event.detail.selectedOption.value ??
+                                                                    item.operator
+                                                            );
+                                                        }}
+                                                        options={criteriaOperators}
+                                                    />
+                                                );
+                                            },
+                                        },
+                                        cell: (item) => {
+                                            return criteriaOperators.find(
+                                                (option) => option.value === item.operator
+                                            )?.label;
+                                        },
+                                    },
+                                    {
+                                        id: "value",
+                                        header: "Criteria Values",
+                                        minWidth: 136,
+                                        cell: (e) => e.value,
+                                        editConfig: {
+                                            ariaLabel: "Criteria Values",
+                                            validation(item, newValue) {
+                                                function valid(value: string) {
+                                                    return value !== undefined && value.length > 0;
+                                                }
+                                                if (!valid(newValue || item.value)) {
+                                                    return "Criteria is required";
+                                                }
+                                            },
+                                            editIconAriaLabel: "editable",
+                                            errorIconAriaLabel: "Criteria Values Error",
+                                            editingCell: (item, { currentValue, setValue }) => {
+                                                return (
+                                                    <Input
+                                                        autoFocus={true}
+                                                        value={currentValue ?? item.value}
+                                                        onChange={(event) =>
+                                                            setValue(event.detail.value)
+                                                        }
+                                                    />
+                                                );
+                                            },
+                                        },
+                                    },
+                                ]}
+                                items={formState.criteriaAnd}
+                                loadingText="Loading resources"
+                                submitEdit={(item, column, newValue) => {
+                                    // do nothing
+                                    console.log("submitEdit", item, column, newValue);
+                                    if (column.id) {
+                                        item[column.id as keyof ConstraintCriteria] =
+                                            newValue as string;
+
+                                        const criteria = [
+                                            ...formState.criteriaAnd.filter(
+                                                (x) => x.id !== item.id
+                                            ),
+                                            item,
+                                        ];
+
+                                        setFormState({ ...formState, criteriaAnd: criteria });
+
+                                        // Update selection state to maintain correct references
+                                        const wasSelected = selectedCriteriaAnd.some(
+                                            (x) => x.id === item.id
+                                        );
+                                        if (wasSelected) {
+                                            setSelectedCriteriaAnd([
+                                                ...selectedCriteriaAnd.filter(
+                                                    (x) => x.id !== item.id
+                                                ),
+                                                item,
+                                            ]);
+                                        }
+                                    }
+                                }}
+                                selectionType="multi"
+                                empty={
+                                    <Box textAlign="center" color="inherit">
+                                        <b>No resources</b>
+                                        <Box padding={{ bottom: "s" }} variant="p" color="inherit">
+                                            No resources to display.
+                                        </Box>
+                                        <Button onClick={addNewConstraintAnd}>Add Criteria</Button>
+                                    </Box>
+                                }
+                            />
+                        </FormField>
+                    </ExpandableSection>
+
+                    <ExpandableSection
+                        headerText="Criteria (OR)"
+                        defaultExpanded={false}
+                        variant="default"
                     >
-                        <Table
-                            onSelectionChange={({ detail }) =>
-                                setSelectedCriteriaOr(detail.selectedItems)
-                            }
-                            trackBy="id"
-                            selectedItems={selectedCriteriaOr}
-                            header={
-                                <Header
-                                    actions={
-                                        <SpaceBetween direction="horizontal" size="xs">
-                                            <Button onClick={addNewConstraintOr}>
-                                                Add Criteria
-                                            </Button>
-                                            <Button
-                                                disabled={selectedCriteriaOr.length === 0}
-                                                onClick={() => {
-                                                    const criteria = formState.criteriaOr.filter(
-                                                        (x) => {
-                                                            return !selectedCriteriaOr.find(
-                                                                (y) => y.id === x.id
-                                                            );
-                                                        }
-                                                    );
-
-                                                    setFormState({
-                                                        ...formState,
-                                                        criteriaOr: criteria,
-                                                    });
-                                                    setSelectedCriteriaOr([]);
-                                                }}
-                                            >
-                                                Remove Criteria
-                                            </Button>
-                                        </SpaceBetween>
-                                    }
-                                >
-                                    Criteria
-                                </Header>
-                            }
-                            columnDefinitions={[
-                                {
-                                    id: "field",
-                                    header: "Field",
-                                    minWidth: 136,
-                                    editConfig: {
-                                        ariaLabel: "Field Name",
-                                        editIconAriaLabel: "editable",
-                                        validation(item, value) {
-                                            if (value === undefined || value.length === 0) {
-                                                return "Field name is required";
-                                            }
-                                        },
-                                        editingCell: (item, { currentValue, setValue }) => {
-                                            const value = currentValue ?? item.field;
-                                            return (
-                                                <Select
-                                                    autoFocus={true}
-                                                    expandToViewport={true}
-                                                    selectedOption={
-                                                        formState.objectType
-                                                            ? fieldNamesToObjectTypeMapping[
-                                                                  formState.objectType
-                                                              ].find(
-                                                                  (option) => option.value === value
-                                                              ) ?? null
-                                                            : null
-                                                    }
-                                                    onChange={(event) => {
-                                                        setValue(
-                                                            event.detail.selectedOption.value ??
-                                                                item.field
-                                                        );
-                                                    }}
-                                                    options={
-                                                        formState.objectType
-                                                            ? fieldNamesToObjectTypeMapping[
-                                                                  formState.objectType
-                                                              ]
-                                                            : []
-                                                    }
-                                                />
-                                            );
-                                        },
-                                    },
-                                    cell: (item) => {
-                                        return formState.objectType
-                                            ? fieldNamesToObjectTypeMapping[
-                                                  formState.objectType
-                                              ].find((option) => option.value === item.field)?.label
-                                            : null;
-                                    },
-                                },
-                                {
-                                    id: "operator",
-                                    header: "Operator",
-                                    minWidth: 136,
-                                    editConfig: {
-                                        ariaLabel: "Operator",
-                                        editIconAriaLabel: "editable",
-                                        validation(item, value) {
-                                            if (value === undefined || value.length === 0) {
-                                                return "Operator is required";
-                                            }
-                                        },
-                                        editingCell: (item, { currentValue, setValue }) => {
-                                            const value = currentValue ?? item.operator;
-                                            return (
-                                                <Select
-                                                    autoFocus={true}
-                                                    expandToViewport={true}
-                                                    selectedOption={
-                                                        criteriaOperators.find(
-                                                            (option) => option.value === value
-                                                        ) ?? null
-                                                    }
-                                                    onChange={(event) => {
-                                                        setValue(
-                                                            event.detail.selectedOption.value ??
-                                                                item.operator
-                                                        );
-                                                    }}
-                                                    options={criteriaOperators}
-                                                />
-                                            );
-                                        },
-                                    },
-                                    cell: (item) => {
-                                        return criteriaOperators.find(
-                                            (option) => option.value === item.operator
-                                        )?.label;
-                                    },
-                                },
-                                {
-                                    id: "value",
-                                    header: "Criteria Values",
-                                    minWidth: 136,
-                                    cell: (e) => e.value,
-                                    editConfig: {
-                                        ariaLabel: "Criteria Values",
-                                        validation(item, newValue) {
-                                            function valid(value: string) {
-                                                return value !== undefined && value.length > 0;
-                                            }
-                                            if (!valid(newValue || item.value)) {
-                                                return "Criteria is required";
-                                            }
-                                        },
-                                        editIconAriaLabel: "editable",
-                                        errorIconAriaLabel: "Criteria Values Error",
-                                        editingCell: (item, { currentValue, setValue }) => {
-                                            return (
-                                                <Input
-                                                    autoFocus={true}
-                                                    value={currentValue ?? item.value}
-                                                    onChange={(event) =>
-                                                        setValue(event.detail.value)
-                                                    }
-                                                />
-                                            );
-                                        },
-                                    },
-                                },
-                            ]}
-                            items={formState.criteriaOr}
-                            loadingText="Loading resources"
-                            submitEdit={(item, column, newValue) => {
-                                // do nothing
-                                console.log("submitEdit", item, column, newValue);
-                                if (column.id) {
-                                    item[column.id as keyof ConstraintCriteria] =
-                                        newValue as string;
-
-                                    const criteria = [
-                                        ...formState.criteriaOr.filter((x) => x.id !== item.id),
-                                        item,
-                                    ];
-
-                                    setFormState({ ...formState, criteriaOr: criteria });
-
-                                    // Update selection state to maintain correct references
-                                    const wasSelected = selectedCriteriaOr.some(
-                                        (x) => x.id === item.id
-                                    );
-                                    if (wasSelected) {
-                                        setSelectedCriteriaOr([
-                                            ...selectedCriteriaOr.filter((x) => x.id !== item.id),
-                                            item,
-                                        ]);
-                                    }
+                        <FormField
+                            label="Criteria (OR)"
+                            constraintText="Required."
+                            stretch={true}
+                            errorText={validateCriteria(
+                                formState.criteriaAnd,
+                                formState.criteriaOr
+                            )}
+                        >
+                            <Table
+                                onSelectionChange={({ detail }) =>
+                                    setSelectedCriteriaOr(detail.selectedItems)
                                 }
-                            }}
-                            selectionType="multi"
-                            empty={
-                                <Box textAlign="center" color="inherit">
-                                    <b>No resources</b>
-                                    <Box padding={{ bottom: "s" }} variant="p" color="inherit">
-                                        No resources to display.
+                                trackBy="id"
+                                selectedItems={selectedCriteriaOr}
+                                header={
+                                    <Header
+                                        actions={
+                                            <SpaceBetween direction="horizontal" size="xs">
+                                                <Button onClick={addNewConstraintOr}>
+                                                    Add Criteria
+                                                </Button>
+                                                <Button
+                                                    disabled={selectedCriteriaOr.length === 0}
+                                                    onClick={() => {
+                                                        const criteria =
+                                                            formState.criteriaOr.filter((x) => {
+                                                                return !selectedCriteriaOr.find(
+                                                                    (y) => y.id === x.id
+                                                                );
+                                                            });
+
+                                                        setFormState({
+                                                            ...formState,
+                                                            criteriaOr: criteria,
+                                                        });
+                                                        setSelectedCriteriaOr([]);
+                                                    }}
+                                                >
+                                                    Remove Criteria
+                                                </Button>
+                                            </SpaceBetween>
+                                        }
+                                    >
+                                        Criteria
+                                    </Header>
+                                }
+                                columnDefinitions={[
+                                    {
+                                        id: "field",
+                                        header: "Field",
+                                        minWidth: 136,
+                                        editConfig: {
+                                            ariaLabel: "Field Name",
+                                            editIconAriaLabel: "editable",
+                                            validation(item, value) {
+                                                if (value === undefined || value.length === 0) {
+                                                    return "Field name is required";
+                                                }
+                                            },
+                                            editingCell: (item, { currentValue, setValue }) => {
+                                                const value = currentValue ?? item.field;
+                                                return (
+                                                    <Select
+                                                        autoFocus={true}
+                                                        expandToViewport={true}
+                                                        selectedOption={
+                                                            formState.objectType
+                                                                ? fieldNamesToObjectTypeMapping[
+                                                                      formState.objectType
+                                                                  ].find(
+                                                                      (option) =>
+                                                                          option.value === value
+                                                                  ) ?? null
+                                                                : null
+                                                        }
+                                                        onChange={(event) => {
+                                                            setValue(
+                                                                event.detail.selectedOption.value ??
+                                                                    item.field
+                                                            );
+                                                        }}
+                                                        options={
+                                                            formState.objectType
+                                                                ? fieldNamesToObjectTypeMapping[
+                                                                      formState.objectType
+                                                                  ]
+                                                                : []
+                                                        }
+                                                    />
+                                                );
+                                            },
+                                        },
+                                        cell: (item) => {
+                                            return formState.objectType
+                                                ? fieldNamesToObjectTypeMapping[
+                                                      formState.objectType
+                                                  ].find((option) => option.value === item.field)
+                                                      ?.label
+                                                : null;
+                                        },
+                                    },
+                                    {
+                                        id: "operator",
+                                        header: "Operator",
+                                        minWidth: 136,
+                                        editConfig: {
+                                            ariaLabel: "Operator",
+                                            editIconAriaLabel: "editable",
+                                            validation(item, value) {
+                                                if (value === undefined || value.length === 0) {
+                                                    return "Operator is required";
+                                                }
+                                            },
+                                            editingCell: (item, { currentValue, setValue }) => {
+                                                const value = currentValue ?? item.operator;
+                                                return (
+                                                    <Select
+                                                        autoFocus={true}
+                                                        expandToViewport={true}
+                                                        selectedOption={
+                                                            criteriaOperators.find(
+                                                                (option) => option.value === value
+                                                            ) ?? null
+                                                        }
+                                                        onChange={(event) => {
+                                                            setValue(
+                                                                event.detail.selectedOption.value ??
+                                                                    item.operator
+                                                            );
+                                                        }}
+                                                        options={criteriaOperators}
+                                                    />
+                                                );
+                                            },
+                                        },
+                                        cell: (item) => {
+                                            return criteriaOperators.find(
+                                                (option) => option.value === item.operator
+                                            )?.label;
+                                        },
+                                    },
+                                    {
+                                        id: "value",
+                                        header: "Criteria Values",
+                                        minWidth: 136,
+                                        cell: (e) => e.value,
+                                        editConfig: {
+                                            ariaLabel: "Criteria Values",
+                                            validation(item, newValue) {
+                                                function valid(value: string) {
+                                                    return value !== undefined && value.length > 0;
+                                                }
+                                                if (!valid(newValue || item.value)) {
+                                                    return "Criteria is required";
+                                                }
+                                            },
+                                            editIconAriaLabel: "editable",
+                                            errorIconAriaLabel: "Criteria Values Error",
+                                            editingCell: (item, { currentValue, setValue }) => {
+                                                return (
+                                                    <Input
+                                                        autoFocus={true}
+                                                        value={currentValue ?? item.value}
+                                                        onChange={(event) =>
+                                                            setValue(event.detail.value)
+                                                        }
+                                                    />
+                                                );
+                                            },
+                                        },
+                                    },
+                                ]}
+                                items={formState.criteriaOr}
+                                loadingText="Loading resources"
+                                submitEdit={(item, column, newValue) => {
+                                    // do nothing
+                                    console.log("submitEdit", item, column, newValue);
+                                    if (column.id) {
+                                        item[column.id as keyof ConstraintCriteria] =
+                                            newValue as string;
+
+                                        const criteria = [
+                                            ...formState.criteriaOr.filter((x) => x.id !== item.id),
+                                            item,
+                                        ];
+
+                                        setFormState({ ...formState, criteriaOr: criteria });
+
+                                        // Update selection state to maintain correct references
+                                        const wasSelected = selectedCriteriaOr.some(
+                                            (x) => x.id === item.id
+                                        );
+                                        if (wasSelected) {
+                                            setSelectedCriteriaOr([
+                                                ...selectedCriteriaOr.filter(
+                                                    (x) => x.id !== item.id
+                                                ),
+                                                item,
+                                            ]);
+                                        }
+                                    }
+                                }}
+                                selectionType="multi"
+                                empty={
+                                    <Box textAlign="center" color="inherit">
+                                        <b>No resources</b>
+                                        <Box padding={{ bottom: "s" }} variant="p" color="inherit">
+                                            No resources to display.
+                                        </Box>
+                                        <Button onClick={addNewConstraintOr}>Add Criteria</Button>
                                     </Box>
-                                    <Button onClick={addNewConstraintOr}>Add Criteria</Button>
-                                </Box>
-                            }
-                        />
-                    </FormField>
+                                }
+                            />
+                        </FormField>
+                    </ExpandableSection>
                 </SpaceBetween>
             </Form>
         </Modal>

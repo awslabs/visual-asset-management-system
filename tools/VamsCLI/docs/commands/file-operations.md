@@ -373,6 +373,7 @@ List files in an asset with filtering, pagination, and performance optimization 
 
 -   `--prefix`: Filter files by prefix
 -   `--include-archived`: Include archived files
+-   `--asset-version-id`: Filter files by a specific asset version (returns the file list stored in that version snapshot instead of current S3 state)
 
 **Performance Options:**
 
@@ -414,6 +415,19 @@ vamscli file list -d my-db -a my-asset --prefix "models/"
 
 # Include archived files
 vamscli file list -d my-db -a my-asset --include-archived
+```
+
+**Asset Version Filtering:**
+
+```bash
+# List files from a specific asset version snapshot
+vamscli file list -d my-db -a my-asset --asset-version-id ver-123
+
+# Combine with basic mode for fastest version listing (pure DynamoDB, no S3 calls)
+vamscli file list -d my-db -a my-asset --asset-version-id ver-123 --basic
+
+# Version filtering with auto-pagination
+vamscli file list -d my-db -a my-asset --asset-version-id ver-123 --auto-paginate
 ```
 
 **Auto-Pagination (Recommended for Complete Listings):**
@@ -459,16 +473,20 @@ vamscli file list --json-input '{"database_id": "my-db", "asset_id": "my-asset",
 
 # Auto-paginate with JSON input
 vamscli file list --json-input '{"database_id": "my-db", "asset_id": "my-asset", "auto_paginate": true, "max_items": 5000}'
+
+# Version filtering with JSON input
+vamscli file list --json-input '{"database_id": "my-db", "asset_id": "my-asset", "asset_version_id": "ver-123", "basic": true}'
 ```
 
 **Parameter Behavior:**
 
-| Parameter          | Auto-Paginate Mode               | Manual Mode                      | Passed to API? |
-| ------------------ | -------------------------------- | -------------------------------- | -------------- |
-| `--page-size`      | ✅ Optional (controls page size) | ✅ Optional (controls page size) | ✅ YES         |
-| `--max-items`      | ✅ Controls total limit          | ❌ Ignored (shows warning)       | ❌ NO          |
-| `--starting-token` | ❌ Not allowed                   | ✅ Optional (next page)          | ✅ YES         |
-| `--basic`          | ✅ Optional                      | ✅ Optional                      | ✅ YES         |
+| Parameter            | Auto-Paginate Mode               | Manual Mode                      | Passed to API? |
+| -------------------- | -------------------------------- | -------------------------------- | -------------- |
+| `--page-size`        | ✅ Optional (controls page size) | ✅ Optional (controls page size) | ✅ YES         |
+| `--max-items`        | ✅ Controls total limit          | ❌ Ignored (shows warning)       | ❌ NO          |
+| `--starting-token`   | ❌ Not allowed                   | ✅ Optional (next page)          | ✅ YES         |
+| `--basic`            | ✅ Optional                      | ✅ Optional                      | ✅ YES         |
+| `--asset-version-id` | ✅ Optional                      | ✅ Optional                      | ✅ YES         |
 
 **Performance Comparison:**
 
@@ -478,6 +496,8 @@ vamscli file list --json-input '{"database_id": "my-db", "asset_id": "my-asset",
 | **Basic mode**            | ~100x faster | Quick directory scans, file counting, existence checks                      |
 | **Auto-paginate**         | Automatic    | Get complete listings without manual token management                       |
 | **Auto-paginate + Basic** | Fastest      | Large directories (1000+ files) where metadata isn't needed                 |
+| **Version + Basic**       | Very fast    | Retrieve a version snapshot file list (pure DynamoDB, no S3 calls)          |
+| **Version + Full**        | Fast         | Version snapshot with S3 cross-reference and preview file processing        |
 
 **When to Use Basic Mode:**
 
@@ -586,7 +606,7 @@ vamscli file move --json-input '{"database_id": "my-db", "asset_id": "my-asset",
 
 ### `vamscli file copy`
 
-Copy a file within an asset or to another asset.
+Copy a file within an asset, to another asset, or across databases.
 
 **Required Options:**
 
@@ -598,6 +618,7 @@ Copy a file within an asset or to another asset.
 **Options:**
 
 -   `--dest-asset`: Destination asset ID (for cross-asset copy)
+-   `--dest-database`: Destination database ID (for cross-database copy). Defaults to source database.
 -   `--json-input`: JSON input with all parameters
 -   `--json-output`: Output API response as JSON
 
@@ -607,11 +628,17 @@ Copy a file within an asset or to another asset.
 # Copy within same asset
 vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/copy.gltf"
 
-# Copy to another asset
+# Copy to another asset in the same database
 vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf" --dest-asset other-asset
+
+# Copy to another asset in a different database
+vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf" --dest-asset other-asset --dest-database other-db
 
 # Copy with JSON input
 vamscli file copy --json-input '{"database_id": "my-db", "asset_id": "my-asset", "source": "/file.gltf", "dest": "/copy.gltf"}'
+
+# Cross-database copy with JSON input
+vamscli file copy --json-input '{"database_id": "src-db", "asset_id": "src-asset", "source": "/file.gltf", "dest": "/file.gltf", "dest_asset": "dest-asset", "dest_database": "dest-db"}'
 ```
 
 ### `vamscli file archive`
@@ -829,7 +856,7 @@ vamscli file delete-auxiliary --json-input '{"database_id": "my-db", "asset_id":
 -   **Folder Management**: Create and organize files in folder structures
 -   **Path-based Operations**: Use file paths for precise file targeting
 -   **Prefix Operations**: Bulk operations on files under specific prefixes
--   **Cross-asset Operations**: Copy files between assets in the same database
+-   **Cross-asset Operations**: Copy files between assets in the same database or across databases
 
 ### File Lifecycle
 

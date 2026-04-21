@@ -14,16 +14,19 @@ interface PreviewThumbnailCellProps {
     databaseId: string;
     onOpenFullPreview: (previewUrl: string, assetName: string, previewKey: string) => void;
     assetName: string;
+    /** If present in the search index record, skip the fetchAsset API call */
+    previewFileKey?: string;
 }
 
 /**
  * Component that displays a thumbnail preview of an asset in the search results
  */
-export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
+const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
     assetId,
     databaseId,
     onOpenFullPreview,
     assetName,
+    previewFileKey,
 }) => {
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -73,7 +76,28 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
 
                     // Preview not cached, but we have asset details
                     setAssetPreviewKey(assetPreviewKey);
+                } else if (previewFileKey !== undefined) {
+                    // previewFileKey from search index record — skip the fetchAsset API call
+                    if (!previewFileKey) {
+                        // Empty string means no preview
+                        cacheManager.setAsset(assetCacheKey, {
+                            previewKey: "",
+                            downloadType: "assetPreview",
+                        });
+                        setError(true);
+                        setLoading(false);
+                        return;
+                    }
+                    assetPreviewKey = previewFileKey;
+                    downloadType = "assetPreview";
+
+                    cacheManager.setAsset(assetCacheKey, {
+                        previewKey: assetPreviewKey,
+                        downloadType: downloadType,
+                    });
+                    setAssetPreviewKey(assetPreviewKey);
                 } else {
+                    // No previewFileKey on the index record (older document) — fall back to API call
                     // Reset states when we need to fetch
                     setUrl(null);
                     setLoading(true);
@@ -85,7 +109,6 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                         assetId,
                         showArchived: false,
                     });
-                    console.log(`[DEBUG] fetchAsset returned:`, assetDetails);
 
                     if (!assetDetails || typeof assetDetails === "string") {
                         console.error("Error fetching asset details:", assetDetails);
@@ -100,14 +123,10 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                         assetDetails.previewLocation?.key ||
                         assetDetails.previewFile;
 
-                    console.log(`[DEBUG] Extracted preview key: ${assetPreviewKey}`);
-
                     if (!assetPreviewKey) {
-                        console.log(`No preview key found for asset ${assetId}`);
-
                         // Cache that this asset has no preview to avoid repeated API calls
                         cacheManager.setAsset(assetCacheKey, {
-                            previewKey: "", // Empty string indicates no preview
+                            previewKey: "",
                             downloadType: "assetPreview",
                         });
 
@@ -120,13 +139,11 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                     downloadType =
                         assetDetails.previewFile === assetPreviewKey ? "assetFile" : "assetPreview";
 
-                    console.log(`[DEBUG] About to call setAsset with key: ${assetCacheKey}`);
                     // Cache the asset details
                     cacheManager.setAsset(assetCacheKey, {
                         previewKey: assetPreviewKey,
                         downloadType: downloadType,
                     });
-                    console.log(`[DEBUG] setAsset completed`);
 
                     setAssetPreviewKey(assetPreviewKey);
                 }
@@ -195,7 +212,7 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
             setError(true);
             setLoading(false);
         }
-    }, [assetId, databaseId]);
+    }, [assetId, databaseId, previewFileKey]);
 
     // Handle image load error
     const handleImageError = () => {
@@ -204,11 +221,11 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
 
     // If we're not loading and there's an error or no URL, show blank
     if (!loading && (error || !url)) {
-        return <Box padding="s" />;
+        return <div />;
     }
 
     return (
-        <Box padding="s" className="preview-thumbnail-container">
+        <div style={{ padding: "2px 0", height: "auto" }} className="preview-thumbnail-container">
             {loading && (
                 <div className="preview-thumbnail-loading">
                     <Spinner size="normal" />
@@ -232,8 +249,20 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                     />
                 </div>
             )}
-        </Box>
+        </div>
     );
 };
+
+export const PreviewThumbnailCell = React.memo(
+    PreviewThumbnailCellInner,
+    (prevProps, nextProps) => {
+        // Compare only data props, not callback references
+        return (
+            prevProps.assetId === nextProps.assetId &&
+            prevProps.databaseId === nextProps.databaseId &&
+            prevProps.assetName === nextProps.assetName
+        );
+    }
+);
 
 export default PreviewThumbnailCell;

@@ -10,7 +10,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 10px 0;
-    border-bottom: 1px solid #eaeded;
+    border-bottom: 1px solid var(--vams-border-default);
     margin-bottom: 10px;
 }
 
@@ -30,12 +30,16 @@
 }
 
 .file-info-content {
-    padding: 20px 0;
+    padding: 10px 0 0 0;
 }
 
 .file-info-item {
     display: flex;
     margin-bottom: 12px;
+}
+
+.file-info-item:last-child {
+    margin-bottom: 0;
 }
 
 .file-info-label {
@@ -51,12 +55,12 @@
 .file-info-future-space {
     margin-top: 30px;
     min-height: 200px;
-    border: 1px dashed #eaeded;
+    border: 1px dashed var(--vams-border-default);
     border-radius: 4px;
     display: flex;
     justify-content: center;
     align-items: center;
-    color: #aab7b8;
+    color: var(--vams-text-secondary);
 }
 
 .multi-select-info {
@@ -66,10 +70,10 @@
 .selected-files-list {
     max-height: 300px;
     overflow-y: auto;
-    border: 1px solid #eaeded;
+    border: 1px solid var(--vams-border-default);
     border-radius: 4px;
     padding: 8px;
-    background-color: #f8f9fa;
+    background-color: var(--vams-bg-secondary);
 }
 
 .selected-file-item {
@@ -78,8 +82,8 @@
     padding: 4px 8px;
     margin-bottom: 4px;
     border-radius: 3px;
-    background-color: white;
-    border: 1px solid #e9ecef;
+    background-color: var(--vams-bg-primary);
+    border: 1px solid var(--vams-border-default);
 }
 
 .selected-file-item:last-child {
@@ -95,14 +99,14 @@
 
 .selected-file-path {
     font-size: 12px;
-    color: #495057;
+    color: var(--vams-text-secondary);
     word-break: break-all;
     flex: 1;
 }
 
 .archived-file-label {
-    background-color: #d13212;
-    color: #ffffff;
+    background-color: var(--vams-color-error);
+    color: var(--vams-bg-primary);
     font-weight: bold;
     padding: 2px 8px;
     border-radius: 4px;
@@ -112,8 +116,8 @@
 }
 
 .not-included-label {
-    background-color: #ffc107;
-    color: #212529;
+    background-color: var(--vams-color-warning);
+    color: #000716;
     font-weight: bold;
     padding: 2px 8px;
     border-radius: 4px;
@@ -122,23 +126,53 @@
     font-size: 12px;
 }
 
-/* Metadata section styling - with single spacer bar above */
-.file-metadata-section {
-    margin-top: 24px;
-    padding-top: 16px;
-    border-top: 1px solid #eaeded;
-    transition: opacity 0.3s ease-in-out, transform 0.2s ease-in-out;
-    opacity: 1;
-    transform: translateY(0);
+/* Two-column body: details on left, metadata on right */
+.file-info-body {
+    flex: 1;
+    overflow-y: auto;
 }
 
-.file-metadata-section.loading {
-    opacity: 0.7;
-    transform: translateY(4px);
+.file-info-body--with-metadata {
+    display: flex;
+    flex-direction: row;
+    gap: 0;
+    min-height: 0;
 }
 
-.file-metadata-section.error {
-    opacity: 0.9;
+.file-info-body--with-metadata > .file-info-content {
+    flex: 0 0 auto;
+    width: 440px;
+    min-width: 340px;
+    overflow-y: auto;
+    padding-right: 16px;
+}
+
+.file-metadata-side-panel {
+    flex: 1;
+    min-width: 0;
+    border-left: 1px solid var(--vams-border-default);
+    padding-left: 16px;
+    overflow-y: auto;
+}
+
+/* Responsive: stack vertically on narrow panels */
+@media (max-width: 900px) {
+    .file-info-body--with-metadata {
+        flex-direction: column;
+    }
+
+    .file-info-body--with-metadata > .file-info-content {
+        width: 100%;
+        padding-right: 0;
+        padding-bottom: 16px;
+    }
+
+    .file-metadata-side-panel {
+        border-left: none;
+        border-top: 1px solid var(--vams-border-default);
+        padding-left: 0;
+        padding-top: 16px;
+    }
 }
 
 /* FileMetadata component styling within FileDetailsPanel */
@@ -165,7 +199,7 @@
 .file-details-metadata .awsui-container-header {
     margin-bottom: 16px;
     padding-bottom: 8px;
-    border-bottom: 1px solid #eaeded;
+    border-bottom: 1px solid var(--vams-border-default);
 }
 
 .file-details-metadata .awsui-container-content {
@@ -204,7 +238,7 @@
 .file-details-metadata .awsui-select:focus,
 .file-details-metadata .awsui-textarea:focus {
     box-shadow: 0 0 0 2px rgba(0, 126, 185, 0.25);
-    border-color: #007eb9;
+    border-color: var(--vams-color-info);
 }
 
 /* Responsive behavior for smaller screens */
@@ -226,9 +260,8 @@
     }
 }
 
-/* Ensure scrollable behavior when content exceeds height */
-.file-info-content {
-    padding: 20px 0;
+/* When not in two-column mode, content takes full width and scrolls */
+.file-info-body:not(.file-info-body--with-metadata) > .file-info-content {
     flex: 1;
     overflow-y: auto;
 }

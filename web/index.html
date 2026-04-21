@@ -1,0 +1,71 @@
+<!--
+  ~ Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  ~ SPDX-License-Identifier: Apache-2.0
+  -->
+
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <link rel="apple-touch-icon" sizes="76x76" href="/apple-touch-icon.png" />
+        <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+        <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+        <link rel="manifest" href="/site.webmanifest" />
+        <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5" />
+        <meta name="msapplication-TileColor" content="#da532c" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+        />
+        <meta name="HandheldFriendly" content="true" />
+        <meta name="theme-color" content="#000000" />
+        <meta name="description" content="Visual Asset Management System" />
+        <!--
+            COI Service Worker: Adds COOP/COEP headers for cross-origin isolation.
+            IMPORTANT: This script MUST be served from the root (not a subdirectory)
+            to ensure the service worker can control all pages on the site.
+            Required for SharedArrayBuffer and WASM features.
+        -->
+        <script src="/coi-serviceworker.js"></script>
+        <script type="application/javascript">
+            // Check if SharedArrayBuffer is available (required for WASM)
+            if (typeof SharedArrayBuffer !== "undefined") {
+                console.log(" SharedArrayBuffer is available");
+                console.log(" crossOriginIsolated:", window.crossOriginIsolated);
+            } else {
+                console.warn(" SharedArrayBuffer is NOT available - WASM will not work");
+                console.warn("  crossOriginIsolated:", window.crossOriginIsolated);
+                console.warn("  COOP/COEP headers may not be set correctly");
+            }
+
+            window.addEventListener("error", function (e) {
+                // prevent React's listener from firing
+                if (e.message.startsWith("ResizeObserver loop completed with undelivered")) {
+                    e.stopImmediatePropagation();
+                    console.log("error caught", e);
+                    // prevent the browser's console error message
+                    e.preventDefault();
+                }
+            });
+        </script>
+        <title>VAMS - Visual Asset Management System</title>
+        <script>
+            // Apply theme immediately before render to prevent flash
+            // Default to dark mode if no preference is saved
+            (function () {
+                var theme = localStorage.getItem("vams-theme-preference") || "dark";
+                if (theme === "dark") {
+                    document.documentElement.classList.add("awsui-dark-mode");
+                    document.documentElement.style.backgroundColor = "#0f1b2a";
+                    document.documentElement.style.colorScheme = "dark";
+                }
+            })();
+        </script>
+    </head>
+    <body>
+        <noscript>You need to enable JavaScript to run this app.</noscript>
+        <div id="headerWrapper"></div>
+        <div id="root"></div>
+        <script type="module" src="/src/index.tsx"></script>
+    </body>
+</html>

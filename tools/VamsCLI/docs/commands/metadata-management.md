@@ -55,6 +55,7 @@ List all metadata for an asset.
 
 **Options:**
 
+-   `--asset-version-id`: Retrieve metadata from a specific asset version snapshot instead of current state
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
@@ -68,6 +69,9 @@ vamscli metadata asset list -d my-database -a my-asset --json-output
 
 # List with specific profile
 vamscli metadata asset list -d my-database -a my-asset --profile production
+
+# List metadata from a specific asset version snapshot
+vamscli metadata asset list -d my-database -a my-asset --asset-version-id ver-123
 ```
 
 **CLI Output Format:**
@@ -223,26 +227,34 @@ vamscli metadata asset delete -d my-database -a my-asset --json-input '["old_fie
 
 ### `vamscli metadata file list`
 
-List all metadata for a specific file within an asset.
+List all metadata or attributes for a specific file within an asset.
 
 **Required Options:**
 
 -   `-d, --database-id`: Database ID containing the asset (required)
 -   `-a, --asset-id`: Asset ID containing the file (required)
--   `-f, --file-id`: File ID to list metadata for (required)
+-   `--file-path`: Relative file path (required)
+-   `--type`: Type of data to retrieve - `metadata` or `attribute` (required)
 
 **Options:**
 
+-   `--asset-version-id`: Retrieve metadata from a specific asset version snapshot instead of current state
 -   `--json-output`: Output raw JSON response
 
 **Examples:**
 
 ```bash
 # List file metadata
-vamscli metadata file list -d my-database -a my-asset -f file-uuid
+vamscli metadata file list -d my-database -a my-asset --file-path "models/file.gltf" --type metadata
+
+# List file attributes
+vamscli metadata file list -d my-database -a my-asset --file-path "models/file.gltf" --type attribute
 
 # List with JSON output
-vamscli metadata file list -d my-database -a my-asset -f file-uuid --json-output
+vamscli metadata file list -d my-database -a my-asset --file-path "models/file.gltf" --type metadata --json-output
+
+# List metadata from a specific asset version snapshot
+vamscli metadata file list -d my-database -a my-asset --file-path "models/file.gltf" --type metadata --asset-version-id ver-123
 ```
 
 **CLI Output Format:**

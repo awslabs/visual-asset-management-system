@@ -22,6 +22,7 @@ import {
     NewAssetLinksContextType,
 } from "../types/AssetLinksTypes";
 import { fetchAsset, fetchtagTypes } from "../../../../services/APIService";
+import Synonyms from "../../../../synonyms";
 import "./AssetLinksTreeView.css";
 
 // Create a context that will be overridden by the main component
@@ -108,7 +109,7 @@ function TreeItem({ item }: TreeItemProps) {
             const tagsWithType = tags.map((tag) => {
                 if (tagTypes && tagTypes.length > 0) {
                     for (const tagType of tagTypes) {
-                        var tagTypeName = tagType.tagTypeName;
+                        let tagTypeName = tagType.tagTypeName;
 
                         if (tagType && tagType.required === "True") {
                             tagTypeName += " [R]";
@@ -195,6 +196,22 @@ function TreeItem({ item }: TreeItemProps) {
 
                 <span className="asset-links-tree-item-name">
                     {item.name}
+                    {/* Show cross-database indicator */}
+                    {item.type === "asset" &&
+                        item.assetData?.databaseId &&
+                        state.currentDatabaseId &&
+                        item.assetData.databaseId !== state.currentDatabaseId && (
+                            <span
+                                className="asset-links-cross-db"
+                                title={`This ${Synonyms.asset} is in a different ${Synonyms.database}`}
+                                style={{
+                                    color: "var(--vams-color-warning, #ff9900)",
+                                    marginLeft: "4px",
+                                }}
+                            >
+                                ({Synonyms.Database}: {item.assetData.databaseId})
+                            </span>
+                        )}
                     {/* Show alias ID for parent/child relationships */}
                     {item.type === "asset" &&
                         item.assetData?.assetLinkAliasId &&
@@ -238,7 +255,7 @@ function SearchResults() {
     if (state.searchResults.length === 0) {
         return (
             <Box textAlign="center" padding="m">
-                <div>No assets match your search</div>
+                <div>{`No ${Synonyms.assets} match your search`}</div>
             </Box>
         );
     }
@@ -276,7 +293,22 @@ function SearchResults() {
                     <span className="asset-links-search-result-icon">
                         <Icon name="settings" />
                     </span>
-                    <span className="asset-links-search-result-name">{item.name}</span>
+                    <span className="asset-links-search-result-name">
+                        {item.name}
+                        {item.type === "asset" &&
+                            item.assetData?.databaseId &&
+                            state.currentDatabaseId &&
+                            item.assetData.databaseId !== state.currentDatabaseId && (
+                                <span
+                                    style={{
+                                        color: "var(--vams-color-warning, #ff9900)",
+                                        marginLeft: "4px",
+                                    }}
+                                >
+                                    ({Synonyms.Database}: {item.assetData.databaseId})
+                                </span>
+                            )}
+                    </span>
                     <span className="asset-links-search-result-type">
                         {item.relationshipType
                             ? item.relationshipType.charAt(0).toUpperCase() +
@@ -305,7 +337,7 @@ export function AssetLinksTreeView() {
             <Container>
                 <Box textAlign="center" padding="m">
                     <Spinner size="normal" />
-                    <div>Loading asset relationships...</div>
+                    <div>{`Loading ${Synonyms.asset} relationships...`}</div>
                 </Box>
             </Container>
         );
@@ -341,31 +373,20 @@ export function AssetLinksTreeView() {
     if (isUploadMode) {
         const treeData = (state as any).treeData || [];
         return (
-            <Container
-                header={
-                    <Header variant="h2" description="Manage asset relationships for the new asset">
-                        Asset Relationships
-                    </Header>
-                }
-            >
-                <SpaceBetween direction="vertical" size="m">
-                    <div className="asset-links-tree">
-                        {treeData.map((rootNode: TreeNodeItem) => (
-                            <TreeItem key={rootNode.id} item={rootNode} />
-                        ))}
+            <div className="asset-links-tree-container">
+                <div className="asset-links-tree">
+                    {treeData.map((rootNode: TreeNodeItem) => (
+                        <TreeItem key={rootNode.id} item={rootNode} />
+                    ))}
+                </div>
+                <div className="asset-links-tree-footer">
+                    <div className="selection-note">
+                        {treeData.every((node: TreeNodeItem) => node.children.length === 0)
+                            ? `No ${Synonyms.asset} relationships defined yet. Select a relationship type and click "Create" to add.`
+                            : `Select a relationship or ${Synonyms.asset} to view details`}
                     </div>
-
-                    {treeData.every((node: TreeNodeItem) => node.children.length === 0) && (
-                        <div className="empty-state">
-                            <p>No asset relationships defined yet.</p>
-                            <p>
-                                Select a relationship type above and click "Create Link" to add
-                                relationships.
-                            </p>
-                        </div>
-                    )}
-                </SpaceBetween>
-            </Container>
+                </div>
+            </div>
         );
     }
 
@@ -376,8 +397,8 @@ export function AssetLinksTreeView() {
                 <div className="asset-links-search-container">
                     <TextFilter
                         filteringText={state.searchTerm || ""}
-                        filteringPlaceholder="Search assets"
-                        filteringAriaLabel="Search assets"
+                        filteringPlaceholder={`Search ${Synonyms.assets}`}
+                        filteringAriaLabel={`Search ${Synonyms.assets}`}
                         onChange={({ detail }) =>
                             dispatch({
                                 type: "SET_SEARCH_TERM",
@@ -393,7 +414,7 @@ export function AssetLinksTreeView() {
                     <Button
                         iconName="refresh"
                         variant="icon"
-                        ariaLabel="Refresh asset relationships"
+                        ariaLabel={`Refresh ${Synonyms.asset} relationships`}
                         onClick={() => dispatch({ type: "REFRESH_DATA", payload: null })}
                         disabled={state.loading}
                     />
@@ -440,9 +461,9 @@ export function AssetLinksTreeView() {
                     </div>
                 )}
                 <div className="selection-note">
-                    Select a asset link relationship to view details
+                    {`Select an ${Synonyms.asset} link relationship to view details`}
                     <br />
-                    Ctrl+click on an asset to open it in a new window
+                    {`Ctrl+click on an ${Synonyms.asset} to open it in a new window`}
                 </div>
             </div>
         </div>

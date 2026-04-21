@@ -241,7 +241,7 @@ def run_training(config: PipelineConfig, s3: S3Client, node_info: dict, job_conf
     cmd = build_training_command(config, checkpoint_dir, node_info)
     print(f"Executing: {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, cwd="/workspace/isaaclab", capture_output=False)
+    result = subprocess.run(cmd, cwd="/workspace/isaaclab", capture_output=False) # nosemgrep: dangerous-subprocess-use-audit
 
     if result.returncode != 0:
         print(f"ERROR: Training failed with exit code {result.returncode}")
@@ -262,7 +262,7 @@ def run_evaluation(config: PipelineConfig, s3: S3Client, job_config: dict):
     cmd = build_evaluation_command(config, policy_path)
     print(f"Executing: {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, cwd="/workspace/isaaclab", capture_output=False)
+    result = subprocess.run(cmd, cwd="/workspace/isaaclab", capture_output=False) # nosemgrep: dangerous-subprocess-use-audit
 
     if result.returncode != 0:
         print(f"ERROR: Evaluation failed with exit code {result.returncode}")

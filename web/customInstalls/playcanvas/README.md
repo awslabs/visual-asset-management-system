@@ -92,7 +92,7 @@ The dynamic loading is handled automatically by the viewer component. No changes
 To update the PlayCanvas library:
 
 1. Update the version in `customInstalls/playcanvas/package.json`
-2. Run `npm install` or `yarn install` in the main web directory
+2. Run `npm install` in the main web directory
 3. The postinstall script will automatically:
     - Install the new version in the local customInstalls directory
     - Build a new webpack bundle

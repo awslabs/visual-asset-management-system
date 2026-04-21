@@ -360,8 +360,20 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
             if default_bucket_id:
                 database_data['defaultBucketId'] = default_bucket_id
             else:
-                click.echo("No bucket ID provided. Please select from available buckets:")
-                database_data['defaultBucketId'] = prompt_bucket_selection(api_client)
+                if json_output:
+                    # For JSON output, return error in JSON format
+                    import sys
+                    error_result = {
+                        "error": "Missing required parameter",
+                        "message": "--default-bucket-id is required when using --json-output",
+                        "databaseId": database_id
+                    }
+                    output_result(error_result, json_output=True)
+                    sys.exit(1)
+                else:
+                    # For CLI output, show interactive bucket selection
+                    click.echo("No bucket ID provided. Please select from available buckets:")
+                    database_data['defaultBucketId'] = prompt_bucket_selection(api_client)
             
             # Add new configuration fields if provided
             if restrict_metadata_outside_schemas:
@@ -623,20 +635,33 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
     try:
         # Require confirmation for deletion
         if not confirm:
-            click.secho("⚠️  Database deletion requires explicit confirmation!", fg='yellow', bold=True)
-            click.echo("This action will delete the database and cannot be undone.")
-            click.echo("The database must not contain any active assets, workflows, or pipelines.")
-            click.echo()
-            click.echo("Use --confirm flag to proceed with deletion.")
-            raise click.ClickException("Confirmation required for database deletion")
+            if json_output:
+                # For JSON output, return error in JSON format
+                error_result = {
+                    "error": "Confirmation required",
+                    "message": "Database deletion requires the --confirm flag",
+                    "databaseId": database_id
+                }
+                output_result(error_result, json_output=True)
+                raise click.ClickException("Confirmation required for database deletion")
+            else:
+                # For CLI output, show helpful message
+                click.secho("⚠️  Database deletion requires explicit confirmation!", fg='yellow', bold=True)
+                click.echo("This action will delete the database and cannot be undone.")
+                click.echo("The database must not contain any active assets, workflows, or pipelines.")
+                click.echo()
+                click.echo("Use --confirm flag to proceed with deletion.")
+                raise click.ClickException("Confirmation required for database deletion")
         
-        # Additional confirmation prompt for safety
-        click.secho(f"⚠️  You are about to delete database '{database_id}'", fg='red', bold=True)
-        click.echo("This action cannot be undone!")
-        
-        if not click.confirm("Are you sure you want to proceed?"):
-            click.echo("Deletion cancelled.")
-            return None
+        # If --confirm is provided, skip the additional prompt in JSON mode
+        if not json_output:
+            # Additional confirmation prompt for safety (CLI mode only)
+            click.secho(f"⚠️  You are about to delete database '{database_id}'", fg='red', bold=True)
+            click.echo("This action cannot be undone!")
+            
+            if not click.confirm("Are you sure you want to proceed?"):
+                click.echo("Deletion cancelled.")
+                return None
         
         output_status(f"Deleting database '{database_id}'...", json_output)
         

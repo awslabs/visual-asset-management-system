@@ -7,36 +7,39 @@ import botocore
 import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
+from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.validators import validate
-from common.constants import STANDARD_JSON_RESPONSE
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
+from models.common import (
+    APIGatewayProxyResponseV2,
+    internal_error,
+    success,
+    validation_error,
+    authorization_error,
+    general_error,
+    VAMSGeneralErrorResponse
+)
 
-claims_and_roles = {}
 logger = safeLogger(service="WorkflowService")
 
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
 sf_client = boto3.client('stepfunctions')
-main_rest_response = STANDARD_JSON_RESPONSE
-workflow_database = None
-unitTest = {
-    "body": {
-        "databaseId": "Unit_Test"
-    }
-}
-unitTest['body'] = json.dumps(unitTest['body'])
 
 try:
     workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
-except:
+    if not workflow_database:
+        logger.exception("Failed loading environment variables")
+        raise Exception("Failed Loading Environment Variables")
+except Exception as e:
     logger.exception("Failed loading environment variables")
-    main_rest_response['body'] = json.dumps({"message": "Failed Loading Environment Variables"})
+    raise e
 
 
-def get_all_workflows(queryParams, showDeleted=False):
+def get_all_workflows(queryParams, showDeleted=False, claims_and_roles=None):
     deserializer = TypeDeserializer()
     paginator = dynamodb_client.get_paginator('scan')
     operator = "NOT_CONTAINS"
@@ -68,11 +71,11 @@ def get_all_workflows(queryParams, showDeleted=False):
         if 'autoTriggerOnFileExtensionsUpload' not in deserialized_document:
             deserialized_document['autoTriggerOnFileExtensionsUpload'] = ''
 
-        # Add Casbin Enforcer to check if the current user has permissions to GET the workflow:
+        # Add Casbin Enforcer to check if the current user has permissions to GET the workflow (Tier 2):
         deserialized_document.update({
             "object__type": "workflow"
         })
-        if len(claims_and_roles["tokens"]) > 0:
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(deserialized_document, "GET"):
                 items.append(deserialized_document)
@@ -88,7 +91,7 @@ def get_all_workflows(queryParams, showDeleted=False):
     }
 
 
-def get_workflows(databaseId, query_params, showDeleted=False):
+def get_workflows(databaseId, query_params, showDeleted=False, claims_and_roles=None):
     paginator = dynamodb.meta.client.get_paginator('query')
 
     if showDeleted:
@@ -113,12 +116,12 @@ def get_workflows(databaseId, query_params, showDeleted=False):
         # Ensure autoTriggerOnFileExtensionsUpload field exists (return empty string if missing)
         if 'autoTriggerOnFileExtensionsUpload' not in item:
             item['autoTriggerOnFileExtensionsUpload'] = ''
-        
-        # Add Casbin Enforcer to check if the current user has permissions to GET the workflow:
+
+        # Add Casbin Enforcer to check if the current user has permissions to GET the workflow (Tier 2):
         item.update({
             "object__type": "workflow"
         })
-        if len(claims_and_roles["tokens"]) > 0:
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(item, "GET"):
                 result['Items'].append(item)
@@ -132,7 +135,7 @@ def get_workflows(databaseId, query_params, showDeleted=False):
     }
 
 
-def get_workflow(databaseId, workflowId, showDeleted=False):
+def get_workflow(databaseId, workflowId, showDeleted=False, claims_and_roles=None):
     table = dynamodb.Table(workflow_database)
     if showDeleted:
         databaseId = databaseId + "#deleted"
@@ -144,12 +147,12 @@ def get_workflow(databaseId, workflowId, showDeleted=False):
         # Ensure autoTriggerOnFileExtensionsUpload field exists (return empty string if missing)
         if 'autoTriggerOnFileExtensionsUpload' not in workflow:
             workflow['autoTriggerOnFileExtensionsUpload'] = ''
-        
-        # Add Casbin Enforcer to check if the current user has permissions to GET the workflow:
+
+        # Add Casbin Enforcer to check if the current user has permissions to GET the workflow (Tier 2):
         workflow.update({
             "object__type": "workflow"
         })
-        if len(claims_and_roles["tokens"]) > 0:
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(workflow, "GET"):
                 allowed = True
@@ -160,7 +163,7 @@ def get_workflow(databaseId, workflowId, showDeleted=False):
     }
 
 
-def delete_workflow(databaseId, workflowId):
+def delete_workflow(databaseId, workflowId, claims_and_roles=None):
     response = {
         'statusCode': 404,
         'message': 'Record not found'
@@ -173,11 +176,11 @@ def delete_workflow(databaseId, workflowId):
     workflow = db_response.get('Item', {})
     if workflow:
         allowed = False
-        # Add Casbin Enforcer to check if the current user has permissions to DELETE the workflow:
+        # Add Casbin Enforcer to check if the current user has permissions to DELETE the workflow (Tier 2):
         workflow.update({
             "object__type": "workflow"
         })
-        if len(claims_and_roles["tokens"]) > 0:
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(workflow, "DELETE"):
                 allowed = True
@@ -201,172 +204,164 @@ def delete_workflow(databaseId, workflowId):
 
 
 def delete_stepfunction(workflowArn):
-
-    logger.info("Deleting StepFunctions: "+workflowArn)
+    logger.info("Deleting StepFunctions: " + workflowArn)
     response = sf_client.delete_state_machine(
         stateMachineArn=workflowArn
     )
     logger.info("StepFunctions Response: ")
     logger.info(response)
-
     return response
 
-def get_handler(event, response, pathParameters, queryParameters, showDeleted):
-    if 'workflowId' not in pathParameters:
-        if 'databaseId' in pathParameters:
+
+def get_handler(event, path_parameters, query_parameters, show_deleted, claims_and_roles):
+    """Handler for GET workflow requests"""
+    try:
+        if 'workflowId' not in path_parameters:
+            if 'databaseId' in path_parameters:
+                logger.info("Validating Parameters")
+                (valid, message) = validate({
+                    'databaseId': {
+                        'value': path_parameters['databaseId'],
+                        'validator': 'ID',
+                        'allowGlobalKeyword': True
+                    }
+                })
+                if not valid:
+                    logger.error(message)
+                    return validation_error(body={'message': message}, event=event)
+
+                logger.info("Listing Workflows for Database: " + path_parameters['databaseId'])
+                result = get_workflows(path_parameters['databaseId'], query_parameters, show_deleted, claims_and_roles)
+                return success(body={'message': result['message']})
+            else:
+                logger.info("Listing All Workflows")
+                result = get_all_workflows(query_parameters, show_deleted, claims_and_roles)
+                return success(body={'message': result['message']})
+        else:
+            if 'databaseId' not in path_parameters:
+                return validation_error(body={'message': 'No database ID in API Call'}, event=event)
 
             logger.info("Validating Parameters")
             (valid, message) = validate({
                 'databaseId': {
-                    'value': pathParameters['databaseId'],
+                    'value': path_parameters['databaseId'],
                     'validator': 'ID',
                     'allowGlobalKeyword': True
+                },
+                'workflowId': {
+                    'value': path_parameters['workflowId'],
+                    'validator': 'ID'
                 }
             })
-
             if not valid:
                 logger.error(message)
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
+                return validation_error(body={'message': message}, event=event)
 
-            logger.info("Listing Workflows for Database: "+pathParameters['databaseId'])
-            result = get_workflows(pathParameters['databaseId'], queryParameters, showDeleted)
-            response['body'] = json.dumps({"message": result['message']})
-            response['statusCode'] = result['statusCode']
-            logger.info(response)
-            return response
-        else:
-            logger.info("Listing All Workflows")
-            result = get_all_workflows(queryParameters, showDeleted)
-            response['body'] = json.dumps({"message": result['message']})
-            response['statusCode'] = result['statusCode']
-            logger.info(response)
-            return response
-    else:
-        if 'databaseId' not in pathParameters:
-            message = "No database ID in API Call"
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            logger.error(response)
-            return response
+            logger.info("Getting Workflow: " + path_parameters['workflowId'])
+            result = get_workflow(path_parameters['databaseId'], path_parameters['workflowId'], show_deleted, claims_and_roles)
+            if result['statusCode'] == 200:
+                return success(body={'message': result['message']})
+            else:
+                return validation_error(status_code=result['statusCode'], body={'message': result['message']}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error in get_handler: {e}")
+        return internal_error(event=event)
+
+
+def delete_handler(event, path_parameters, claims_and_roles):
+    """Handler for DELETE workflow requests"""
+    try:
+        if 'databaseId' not in path_parameters:
+            return validation_error(body={'message': 'No database ID in API Call'}, event=event)
+        if 'workflowId' not in path_parameters:
+            return validation_error(body={'message': 'No workflow ID in API Call'}, event=event)
 
         logger.info("Validating Parameters")
         (valid, message) = validate({
             'databaseId': {
-                'value': pathParameters['databaseId'],
+                'value': path_parameters['databaseId'],
                 'validator': 'ID',
                 'allowGlobalKeyword': True
             },
             'workflowId': {
-                'value': pathParameters['workflowId'],
+                'value': path_parameters['workflowId'],
                 'validator': 'ID'
             }
         })
-
         if not valid:
             logger.error(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
+            return validation_error(body={'message': message}, event=event)
 
-        logger.info("Getting Workflow: "+pathParameters['workflowId'])
-        result = get_workflow(pathParameters['databaseId'], pathParameters['workflowId'], showDeleted)
-        response['body'] = json.dumps({"message": result['message']})
-        response['statusCode'] = result['statusCode']
-        logger.info(response)
-        return response
+        logger.info("Deleting Workflow: " + path_parameters['workflowId'])
+        result = delete_workflow(path_parameters['databaseId'], path_parameters['workflowId'], claims_and_roles)
+        return APIGatewayProxyResponseV2(
+            isBase64Encoded=False,
+            statusCode=result['statusCode'],
+            headers={
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache, no-store',
+            },
+            body=json.dumps({'message': result['message']})
+        )
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error in delete_handler: {e}")
+        return internal_error(event=event)
 
 
-def delete_handler(event, response, pathParameters):
-    if 'databaseId' not in pathParameters:
-        message = "No database ID in API Call"
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        logger.error(response)
-        return response
-    if 'workflowId' not in pathParameters:
-        message = "No workflow ID in API Call"
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        logger.error(response)
-        return response
-
-    logger.info("Validating Parameters")
-    (valid, message) = validate({
-        'databaseId': {
-            'value': pathParameters['databaseId'],
-            'validator': 'ID',
-            'allowGlobalKeyword': True
-        },
-        'workflowId': {
-            'value': pathParameters['workflowId'],
-            'validator': 'ID'
-        }
-    })
-
-    if not valid:
-        logger.error(message)
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        return response
-
-    logger.info("Deleting Workflow: "+pathParameters['workflowId'])
-    result = delete_workflow(pathParameters['databaseId'], pathParameters['workflowId'])
-    response['body'] = json.dumps({"message": result['message']})
-    response['statusCode'] = result['statusCode']
-    logger.info(response)
-    return response
-
-def lambda_handler(event, context):
-    global claims_and_roles
-    response = STANDARD_JSON_RESPONSE
-    claims_and_roles = request_to_claims(event)
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for workflow service API"""
     logger.info(event)
-    pathParameters = event.get('pathParameters', {})
-    queryParameters = event.get('queryStringParameters', {})
-    showDeleted = False
-    if 'showDeleted' in queryParameters:
-        showDeleted = queryParameters['showDeleted']
-
-    validate_pagination_info(queryParameters) 
 
     try:
-        httpMethod = event['requestContext']['http']['method']
-        logger.info(httpMethod)
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
 
+        # Check if method is allowed on API (Tier 1)
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
-        if httpMethod == 'GET' and method_allowed_on_api:
-            return get_handler(event, response, pathParameters, queryParameters, showDeleted)
-        if httpMethod == 'DELETE' and method_allowed_on_api:
-            return delete_handler(event, response, pathParameters)
+        if not method_allowed_on_api:
+            return authorization_error()
+
+        # Get path and query parameters
+        path_parameters = event.get('pathParameters', {})
+        query_parameters = event.get('queryStringParameters', {})
+        show_deleted = False
+        if 'showDeleted' in query_parameters:
+            show_deleted = query_parameters['showDeleted']
+
+        validate_pagination_info(query_parameters)
+
+        http_method = event['requestContext']['http']['method']
+        logger.info(http_method)
+
+        if http_method == 'GET':
+            return get_handler(event, path_parameters, query_parameters, show_deleted, claims_and_roles)
+        elif http_method == 'DELETE':
+            return delete_handler(event, path_parameters, claims_and_roles)
         else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
+            return authorization_error(body={'message': 'Method not allowed'})
+
     except botocore.exceptions.ClientError as err:
-        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException':
+        if err.response['Error']['Code'] in ('LimitExceededException', 'ThrottlingException'):
             logger.exception("Throttling Error")
-            response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
-            response['body'] = json.dumps({"message": "ThrottlingException: Too many requests within a given period."})
-            return response
+            return general_error(
+                status_code=err.response['ResponseMetadata']['HTTPStatusCode'],
+                body={'message': 'ThrottlingException: Too many requests within a given period.'},
+                event=event
+            )
         else:
             logger.exception(err)
-            response['statusCode'] = 500
-            response['body'] = json.dumps({"message": "Internal Server Error"})
-            return response
+            return internal_error(event=event)
     except Exception as e:
         logger.exception(e)
-        response['statusCode'] = 500
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
-
-
-if __name__ == "__main__":
-    test_response = lambda_handler(None, None)
-    logger.info(test_response)
+        return internal_error(event=event)

@@ -5,9 +5,8 @@
 
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
 import ListPageNoDatabase from "../ListPageNoDatabase";
-import { fetchSubscriptionRules } from "../../services/APIService";
+import { fetchSubscriptionRules, deleteSubscription } from "../../services/APIService";
 import { Link } from "@cloudscape-design/components";
 import CreateSubscription from "./CreateSubscription";
 import { useState } from "react";
@@ -24,7 +23,7 @@ export const SubscriptionListDefinition = new ListDefinition({
     singularNameTitleCase: "Subscription",
     visibleColumns: ["eventName", "entityName", "entityValue", "subscribers"],
     filterColumns: [{ name: "name", placeholder: "Name" }],
-    elementId: "name",
+    elementId: "entityId",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         console.log(item);
         ruleBody.entityName = item.entityName;
@@ -32,13 +31,11 @@ export const SubscriptionListDefinition = new ListDefinition({
         ruleBody.subscribers = item.subscribers;
         ruleBody.eventName = item.eventName;
         try {
-            const response: any = await API.del("api", "subscriptions", {
-                body: ruleBody,
-            });
-            return [true, response.message, ""];
+            const result: any = await deleteSubscription(ruleBody);
+            return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response.data.message];
+            return [false, error?.message, error?.response?.data?.message];
         }
     },
     columnDefinitions: [
@@ -78,7 +75,11 @@ export const SubscriptionListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "subscribers",
             header: "Subscribers",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: (props: any) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "subscribers",
         }),
     ],

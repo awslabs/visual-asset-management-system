@@ -1,6 +1,6 @@
 Amazon VAMS
 
-Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 ---
 
@@ -35,9 +35,7 @@ This software includes third party software subject to the following copyrights:
 
 | Package                             | Version        | License                 |
 | :---------------------------------- | :------------- | :---------------------- |
-| @aws-amplify/auth                   | 5.6.15         | Apache-2.0              |
-| @aws-amplify/core                   | 5.8.14         | Apache-2.0              |
-| @aws-amplify/ui-react               | ^2.1.5         | Apache-2.0              |
+| @aws-amplify/ui-react               | ^6.15.2        | Apache-2.0              |
 | @aws-sdk/client-s3                  | ^3.400.0       | Apache-2.0              |
 | @aws-sdk/lib-storage                | ^3.400.0       | Apache-2.0              |
 | @aws-sdk/s3-request-presigner       | ^3.400.0       | Apache-2.0              |
@@ -57,8 +55,7 @@ This software includes third party software subject to the following copyrights:
 | @types/three                        | ^0.180.0       | MIT                     |
 | @types/wicg-file-system-access      | 2020.9.6       | MIT                     |
 | arraybuffer-to-buffer               | ^0.0.7         | MIT                     |
-| aws-amplify                         | 5.3.27         | Apache-2.0              |
-| aws-amplify-react                   | ^5.1.9         | Apache-2.0              |
+| aws-amplify                         | ^6.0.0         | Apache-2.0              |
 | axios                               | ^1.6.0         | MIT                     |
 | buffer                              | ^6.0.3         | MIT                     |
 | del-cli                             | ^5.0.0         | MIT                     |
@@ -90,7 +87,7 @@ This software includes third party software subject to the following copyrights:
 | react-pdf                           | ^10.1.0        | MIT                     |
 | react-router                        | ^6.0.0         | MIT                     |
 | react-router-dom                    | ^6.0.0         | MIT                     |
-| react-scripts                       | 5.0.1          | MIT                     |
+| vite                                | ^6.2.0         | MIT                     |
 | react-syntax-highlighter            | ^15.5.0        | MIT                     |
 | sanitize-html                       | ^2.11.0        | MIT                     |
 | semver                              | ^7.5.2         | ISC                     |
@@ -110,18 +107,23 @@ This software includes third party software subject to the following copyrights:
 
 **3D Visualization Libraries**
 
-| Package            | Version                                                    | License      |
-| :----------------- | :--------------------------------------------------------- | :----------- |
-| @babylonjs/core    | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)    | Apache-2.0   |
-| @babylonjs/loaders | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders) | Apache-2.0   |
-| cesium             | [1.118.0](https://github.com/CesiumGS/cesium)              | Apache-2.0   |
-| online-3d-viewer   | [0.16.0](https://github.com/kovacsv/Online3DViewer)        | MIT          |
-| playcanvas         | [2.11.8](https://github.com/playcanvas/engine)             | MIT          |
-| potree             | [develop-latest](https://github.com/potree/potree)         | BSD-2-Clause |
-| web-ifc            | [0.0.39](https://github.com/IFCjs/web-ifc)                 | MPL-2.0      |
-| draco              | [1.5.6](https://github.com/google/draco)                   | Apache-2.0   |
-| rhino3dm           | [7.15.0](https://github.com/mcneel/rhino3dm)               | MIT          |
-| pickr              | [1.8.2](https://github.com/Simonwep/pickr)                 | MIT          |
+| Package              | Version                                                      | License               |
+| :------------------- | :----------------------------------------------------------- | :-------------------- |
+| @babylonjs/core      | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)      | Apache-2.0            |
+| @babylonjs/loaders   | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders)   | Apache-2.0            |
+| @needle-tools/engine | [3.x.x](https://www.npmjs.com/package/@needle-tools/engine)  | Apache-2.0 (Modified) |
+| cesium               | [1.118.0](https://github.com/CesiumGS/cesium)                | Apache-2.0            |
+| online-3d-viewer     | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
+| playcanvas           | [2.11.8](https://github.com/playcanvas/engine)               | MIT                   |
+| potree               | [develop-latest](https://github.com/potree/potree)           | BSD-2-Clause          |
+| three.js             | [0.182.0](https://threejs.org/)                              | MIT                   |
+| opencascade.js       | [2.0.0-beta.2](https://github.com/donalffons/opencascade.js) | LGPL-2.1\*            |
+| web-ifc              | [0.0.39](https://github.com/IFCjs/web-ifc)                   | MPL-2.0               |
+| draco                | [1.5.6](https://github.com/google/draco)                     | Apache-2.0            |
+| rhino3dm             | [7.15.0](https://github.com/mcneel/rhino3dm)                 | MIT                   |
+| pickr                | [1.8.2](https://github.com/Simonwep/pickr)                   | MIT                   |
+
+\* **OpenCascade Technology (OCCT) License Note**: opencascade.js is an optional dependency that is dynamically loaded only when CAD format support is explicitly enabled for the Three.js viewer. The library provides support for STEP (.stp, .step), IGES (.iges), and BREP (.brep) file formats. LGPL-2.1 license terms apply only when this optional feature is enabled. The feature is disabled by default and must be explicitly enabled by organizations that choose to use it. The library is not bundled with VAMS and is loaded on-demand from a CDN when needed.
 
 ---
 
@@ -196,6 +198,27 @@ This software includes third party software subject to the following copyrights:
 | Blender         | [master-latest](https://github.com/blender)                                                                                                               | GENAI 3D METADATA GENERATION | GNU GPLv3    |
 | SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                | MIT          |
 
+### Preview 3D Thumbnail Pipeline
+
+**Preview 3D Thumbnail Pipeline Dependencies**
+
+| Name     | Version  | License             | Notes                                             |
+| :------- | :------- | :------------------ | :------------------------------------------------ |
+| pyvista  | >=0.44.2 | MIT                 | 3D rendering and visualization                    |
+| vtk      | >=9.4.0  | BSD-3-Clause        | Visualization Toolkit (rendering backend)         |
+| trimesh  | >=4.5.0  | MIT                 | Mesh loading (GLB, GLTF, OBJ, FBX, PLY, STL, DRC) |
+| numpy    | >=1.26.4 | BSD-3-Clause        | Numerical computing                               |
+| scipy    | >=1.14.0 | BSD-3-Clause        | Scientific computing (used by trimesh)            |
+| laspy    | >=2.5.4  | BSD-2-Clause        | LAS/LAZ point cloud format support                |
+| pye57    | >=0.4.17 | MIT                 | E57 point cloud format support                    |
+| cadquery | >=2.4.0  | Apache-2.0/LGPL-2.1 | STEP/STP CAD file tessellation                    |
+| imageio  | >=2.36.0 | BSD-2-Clause        | GIF/image I/O                                     |
+| Pillow   | >=11.0.0 | HPND                | Image optimization and processing                 |
+| DracoPy  | >=1.4.0  | Apache-2.0          | Draco compressed mesh (.drc) support              |
+| open3d   | >=0.19.0 | MIT                 | PCD and FARO point cloud format support           |
+| usd-core | >=24.8   | Modified Apache-2.0 | OpenUSD Python bindings for USD/USDA/USDC/USDZ    |
+| boto3    | >=1.35.0 | Apache-2.0          | AWS SDK for Python                                |
+
 ### Isaac Lab Training Pipeline
 
 **Isaac Lab Training Pipeline Dependencies**
@@ -222,6 +245,62 @@ Copyright (c) 2025, ETH Zurich
 Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES
 All rights reserved.
 ```
+
+### NVIDIA Cosmos Predict Pipeline
+
+| Name                           | Version | License                   | Purpose                                                                    |
+| :----------------------------- | :------ | :------------------------ | :------------------------------------------------------------------------- |
+| NVIDIA Cosmos-Predict1         | 1.0     | Apache-2.0                | Cosmos Predict v1 framework (inference code)                               |
+| Cosmos-Predict1-7B-Text2World  | 1.0     | NVIDIA Open Model License | Text-to-video diffusion model (~45GB)                                      |
+| Cosmos-Predict1-7B-Video2World | 1.0     | NVIDIA Open Model License | Video/image-to-video diffusion model (~45GB)                               |
+| cosmos-oss                     | 0.1.0   | Apache-2.0                | Cosmos Predict v2.5 core framework package                                 |
+| Cosmos-Predict2.5-2B           | 2.5     | NVIDIA Open Model License | 2B unified world generation model (v2.5 flow-matching, ~5-10GB)            |
+| Cosmos-Predict2.5-14B          | 2.5     | NVIDIA Open Model License | 14B unified world generation model (v2.5 flow-matching, ~5-10GB)           |
+| Cosmos-Tokenize1-CV8x8x8-720p  | 1.0     | NVIDIA Open Model License | Video tokenizer (~5GB, shared across v1 and v2.5)                          |
+| google-t5/t5-11b               | 11B     | Apache-2.0                | Text encoder for prompt processing (~85GB, shared across v1 and v2.5)      |
+| meta-llama/Llama-Guard-3-8B    | 3.0     | Meta Llama 3 Community    | Safety guardrail for content moderation (~16GB, shared across v1 and v2.5) |
+| NVIDIA Cosmos-Guardrail1       | 1.0     | NVIDIA Open Model License | Content safety blocklist and face filter (~1GB, shared across v1 and v2.5) |
+| NVIDIA Transformer Engine      | 2.2.0   | Apache-2.0                | Optimized transformer computation (updated for v2.5)                       |
+| flash-attn                     | 2.7.3   | BSD-3-Clause              | Flash attention for v2.5 flow-matching architecture                        |
+| NVIDIA APEX                    | latest  | BSD-3-Clause              | Mixed precision training utilities                                         |
+| PyTorch                        | 2.6.0   | BSD-3-Clause              | Deep learning framework                                                    |
+| boto3                          | latest  | Apache-2.0                | AWS SDK for Python                                                         |
+| huggingface_hub                | latest  | Apache-2.0                | Model download from HuggingFace Hub                                        |
+
+### NVIDIA Cosmos Reason Pipeline
+
+| Name              | Version | License                   | Purpose                                                      |
+| :---------------- | :------ | :------------------------ | :----------------------------------------------------------- |
+| Cosmos-Reason2-2B | 2.0     | NVIDIA Open Model License | Vision Language Model for video/image analysis (~5GB)        |
+| Cosmos-Reason2-8B | 2.0     | NVIDIA Open Model License | Larger Vision Language Model with improved reasoning (~16GB) |
+| vLLM              | latest  | Apache-2.0                | Efficient VLM inference engine for Cosmos Reason             |
+| PyTorch           | 2.6.0   | BSD-3-Clause              | Deep learning framework                                      |
+| boto3             | latest  | Apache-2.0                | AWS SDK for Python                                           |
+| huggingface_hub   | latest  | Apache-2.0                | Model download from HuggingFace Hub                          |
+
+### NVIDIA Cosmos Transfer Pipeline
+
+| Name                      | Version | License                   | Purpose                                                       |
+| :------------------------ | :------ | :------------------------ | :------------------------------------------------------------ |
+| Cosmos-Transfer2.5-2B     | 2.5     | NVIDIA Open Model License | Video transformation with control signal conditioning (~20GB) |
+| video-depth-anything      | latest  | Apache-2.0                | Depth map generation for depth control signals (~2GB)         |
+| sam2                      | latest  | Apache-2.0                | Semantic segmentation for segmentation control signals (~5GB) |
+| NVIDIA Transformer Engine | 2.2.0   | Apache-2.0                | Optimized transformer computation                             |
+| PyTorch                   | 2.6.0   | BSD-3-Clause              | Deep learning framework                                       |
+| boto3                     | latest  | Apache-2.0                | AWS SDK for Python                                            |
+| huggingface_hub           | latest  | Apache-2.0                | Model download from HuggingFace Hub                           |
+
+**Container Base Image**
+
+The Cosmos Predict Pipeline uses the NVIDIA NGC PyTorch container image (`nvcr.io/nvidia/pytorch:24.10-py3`) which is subject to the [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license).
+
+**NVIDIA Cosmos Attribution Requirement**
+
+Per the NVIDIA Open Model License, applications using NVIDIA Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"**. See the [NVIDIA Cosmos License](https://developer.nvidia.com/cosmos-license) for full terms.
+
+**HuggingFace Model Access**
+
+All six models listed above are gated on HuggingFace and require explicit license acceptance and access request before download. The Meta Llama-Guard-3-8B model requires separate acceptance of the Meta Llama 3 Community License.
 
 ---
 

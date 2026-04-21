@@ -15,6 +15,7 @@ interface FilePreviewThumbnailProps {
     onOpenFullPreview: (previewUrl: string) => void;
     isPreviewFile?: boolean;
     onDeletePreview?: () => void;
+    assetVersionId?: string;
 }
 
 /**
@@ -28,6 +29,7 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
     onOpenFullPreview,
     isPreviewFile = false,
     onDeletePreview,
+    assetVersionId,
 }) => {
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -55,6 +57,8 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
                     assetId,
                     key: fileKey,
                     versionId: "",
+                    assetVersionId: assetVersionId,
+                    // nosemgrep: useless-ternary
                     downloadType: isPreviewFile ? "assetFile" : "assetFile", // Using "assetFile" for both regular files and preview files
                 });
 
@@ -77,7 +81,7 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
         };
 
         loadPreviewImage();
-    }, [assetId, databaseId, fileKey]);
+    }, [assetId, databaseId, fileKey, assetVersionId]);
 
     // Handle image load error
     const handleImageError = () => {
@@ -125,25 +129,28 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
                                 }}
                             />
                         </div>
-                        <div className="asset-preview-actions">
-                            <SpaceBetween direction="vertical" size="xs">
-                                <Button
-                                    iconName="external"
-                                    variant="link"
-                                    onClick={() => onOpenFullPreview(url)}
-                                >
-                                    View full preview
+                        <div
+                            className="asset-preview-actions"
+                            style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: "0px",
+                                marginTop: "0px",
+                            }}
+                        >
+                            <Button
+                                iconName="external"
+                                variant="link"
+                                onClick={() => onOpenFullPreview(url)}
+                            >
+                                View full preview
+                            </Button>
+                            {onDeletePreview && (
+                                <Button iconName="remove" variant="link" onClick={onDeletePreview}>
+                                    Delete preview file
                                 </Button>
-                                {onDeletePreview && (
-                                    <Button
-                                        iconName="remove"
-                                        variant="link"
-                                        onClick={onDeletePreview}
-                                    >
-                                        Delete Preview File
-                                    </Button>
-                                )}
-                            </SpaceBetween>
+                            )}
                         </div>
                     </>
                 )}

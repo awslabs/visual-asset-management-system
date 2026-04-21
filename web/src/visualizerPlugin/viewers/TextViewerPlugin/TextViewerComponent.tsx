@@ -6,7 +6,8 @@
 import React, { useEffect, useState } from "react";
 import { Button, SpaceBetween, Toggle, Select, SelectProps } from "@cloudscape-design/components";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
-import { docco, github } from "react-syntax-highlighter/dist/esm/styles/hljs";
+import { docco } from "react-syntax-highlighter/dist/esm/styles/hljs";
+import { vs2015 } from "react-syntax-highlighter/dist/esm/styles/hljs";
 import json from "react-syntax-highlighter/dist/esm/languages/hljs/json";
 import xml from "react-syntax-highlighter/dist/esm/languages/hljs/xml";
 import plaintext from "react-syntax-highlighter/dist/esm/languages/hljs/plaintext";
@@ -39,16 +40,27 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
 }) => {
-    const [state, setState] = useState<TextViewerState>({
+    const [state, setState] = useState<TextViewerState>(() => ({
         content: "",
         loading: true,
         error: null,
         language: "plaintext",
         showLineNumbers: true,
         wrapLines: true,
-        theme: "light",
-    });
+        theme: document.body.classList.contains("awsui-dark-mode") ? "dark" : "light",
+    }));
+
+    // Watch for global theme changes and sync the text viewer theme
+    useEffect(() => {
+        const observer = new MutationObserver(() => {
+            const isDark = document.body.classList.contains("awsui-dark-mode");
+            setState((prev) => ({ ...prev, theme: isDark ? "dark" : "light" }));
+        });
+        observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        return () => observer.disconnect();
+    }, []);
 
     // Determine language from file extension
     const getLanguageFromExtension = (filename: string): string => {
@@ -86,7 +98,7 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId,
                     databaseId,
                     key: assetKey,
-                    versionId: versionId || "",
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 
@@ -94,7 +106,8 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey || "",
-                    versionId: versionId || "",
+                    versionId: versionId,
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 
@@ -198,16 +211,24 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                     textAlign: "center",
                 }}
             >
-                <div style={{ color: "#d13212", marginBottom: "10px", fontSize: "16px" }}>
+                <div
+                    style={{
+                        color: "var(--vams-color-error)",
+                        marginBottom: "10px",
+                        fontSize: "16px",
+                    }}
+                >
                     Error loading file
                 </div>
-                <div style={{ color: "#687078", fontSize: "14px" }}>{state.error}</div>
+                <div style={{ color: "var(--vams-text-secondary)", fontSize: "14px" }}>
+                    {state.error}
+                </div>
             </div>
         );
     }
 
     const formattedContent = formatContent(state.content, state.language);
-    const selectedTheme = state.theme === "light" ? docco : github;
+    const selectedTheme = state.theme === "light" ? docco : vs2015;
 
     return (
         <div
@@ -215,15 +236,15 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                 display: "flex",
                 flexDirection: "column",
                 height: "100%",
-                backgroundColor: "#fafafa",
+                backgroundColor: "var(--vams-bg-secondary)",
             }}
         >
             {/* Controls */}
             <div
                 style={{
                     padding: "12px 16px",
-                    borderBottom: "1px solid #e9ebed",
-                    backgroundColor: "white",
+                    borderBottom: "1px solid var(--vams-border-default)",
+                    backgroundColor: "var(--vams-bg-primary)",
                 }}
             >
                 <SpaceBetween direction="horizontal" size="m">
@@ -293,7 +314,7 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                 style={{
                     flex: 1,
                     overflow: "auto",
-                    backgroundColor: state.theme === "light" ? "white" : "#2d3748",
+                    backgroundColor: state.theme === "light" ? "var(--vams-bg-primary)" : "#1e1e1e",
                 }}
             >
                 <SyntaxHighlighter

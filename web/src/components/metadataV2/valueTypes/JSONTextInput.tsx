@@ -190,9 +190,9 @@ export const JSONTextInput: React.FC<JSONTextInputProps> = ({
                                 right: "8px",
                                 padding: "4px 8px",
                                 fontSize: "11px",
-                                border: "1px solid #ccc",
+                                border: "1px solid var(--vams-border-default)",
                                 borderRadius: "4px",
-                                background: "#f5f5f5",
+                                background: "var(--vams-bg-secondary)",
                                 cursor: disabled ? "not-allowed" : "pointer",
                                 zIndex: 1,
                             }}
@@ -210,15 +210,21 @@ export const JSONTextInput: React.FC<JSONTextInputProps> = ({
             )}
 
             {type === "GEOPOINT" && !validationError && inputValue && (
-                <div style={{ fontSize: "11px", color: "#666" }}>✓ Valid GeoJSON Point format</div>
+                <div style={{ fontSize: "11px", color: "var(--vams-text-secondary)" }}>
+                    ✓ Valid GeoJSON Point format
+                </div>
             )}
 
             {type === "GEOJSON" && !validationError && inputValue && (
-                <div style={{ fontSize: "11px", color: "#666" }}>✓ Valid GeoJSON format</div>
+                <div style={{ fontSize: "11px", color: "var(--vams-text-secondary)" }}>
+                    ✓ Valid GeoJSON format
+                </div>
             )}
 
             {type === "JSON" && !validationError && inputValue && (
-                <div style={{ fontSize: "11px", color: "#666" }}>✓ Valid JSON format</div>
+                <div style={{ fontSize: "11px", color: "var(--vams-text-secondary)" }}>
+                    ✓ Valid JSON format
+                </div>
             )}
         </SpaceBetween>
     );

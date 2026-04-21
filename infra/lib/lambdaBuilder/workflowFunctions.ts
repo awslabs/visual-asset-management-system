@@ -486,6 +486,18 @@ export function buildWorkflowRole(
                 actions: ["iam:PassRole"],
                 resources: [IAMArn("*" + config.name + "*").role],
             }),
+            // SQS SendMessage permission for SQS pipeline types
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["sqs:SendMessage"],
+                resources: [IAMArn("*" + config.name + "*").sqs],
+            }),
+            // EventBridge PutEvents permission for EventBridge pipeline types
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["events:PutEvents"],
+                resources: [IAMArn("*" + config.name + "*").eventBus, IAMArn("default").eventBus],
+            }),
         ],
     });
 

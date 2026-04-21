@@ -299,10 +299,21 @@ def delete(ctx: click.Context, tag_type_name: str, confirm: bool, json_output: b
     try:
         # Require confirmation for deletion
         if not confirm:
-            if not json_output:
+            if json_output:
+                # For JSON output, return error in JSON format
+                import sys
+                error_result = {
+                    "error": "Confirmation required",
+                    "message": "Tag type deletion requires the --confirm flag",
+                    "tagTypeName": tag_type_name
+                }
+                output_result(error_result, json_output=True)
+                sys.exit(1)
+            else:
+                # For CLI output, show helpful message
                 click.secho("⚠️  Tag type deletion requires explicit confirmation!", fg='yellow', bold=True)
                 click.echo("Use --confirm flag to proceed with tag type deletion.")
-            raise click.ClickException("Confirmation required for tag type deletion")
+                raise click.ClickException("Confirmation required for tag type deletion")
         
         output_status(f"Deleting tag type '{tag_type_name}'...", json_output)
         

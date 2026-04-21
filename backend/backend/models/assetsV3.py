@@ -30,8 +30,8 @@ class CurrentVersionModel(BaseModel, extra='ignore'):
     DateModified: str
     Comment: str = ""
     description: str = ""
-    specifiedPipelines: List[str] = []
     createdBy: str = "system"
+    versionAlias: Optional[str] = None
 
 class AssetVersionListItemModel(BaseModel, extra='ignore'):
     """Model for individual version items in version lists"""
@@ -39,10 +39,13 @@ class AssetVersionListItemModel(BaseModel, extra='ignore'):
     DateModified: str
     Comment: str = ""
     description: str = ""
-    specifiedPipelines: List[str] = []
     createdBy: str = "system"
     isCurrent: bool = False
     fileCount: int = 0  # Number of available files for this version
+    versionAlias: Optional[str] = None
+    isArchived: bool = False
+    assetId: Optional[str] = None
+    databaseId: Optional[str] = None
 
 ######################## Create Asset API Models ##########################
 class CreateAssetRequestModel(BaseModel, extra='ignore'):
@@ -335,7 +338,8 @@ class AssetFileItemModel(BaseModel, extra='ignore'):
     versionId: Optional[str] = None  # S3 version ID (None in basic mode)
     storageClass: Optional[str] = None  # To identify archived files
     isArchived: bool = False  # Computed field based on metadata
-    currentAssetVersionFileVersionMismatch: bool = False  # Indicates if file version doesn't match asset version
+    currentAssetVersionFileVersionMismatch: Optional[bool] = False  # Indicates if file version doesn't match asset version
+    isPermanentlyDeleted: Optional[bool] = False  # True when file no longer exists in S3 (all versions removed)
     primaryType: Optional[str] = None  # Primary type metadata from S3
     previewFile: Optional[str] = ""  # Path to preview file for this file
 
@@ -347,6 +351,7 @@ class ListAssetFilesRequestModel(BaseModel, extra='ignore'):
     prefix: Optional[str] = None
     includeArchived: Optional[bool] = Field(default=False)  # Show archived files
     basic: Optional[bool] = Field(default=False)  # Skip expensive lookups (head_object, preview files, version checks)
+    assetVersionId: Optional[str] = None  # Filter files by specific asset version
 
 class ListAssetFilesResponseModel(BaseModel, extra='ignore'):
     """Response model for listing asset files"""
@@ -368,6 +373,7 @@ class FileVersionModel(BaseModel, extra='ignore'):
     etag: Optional[str] = None
     isArchived: bool = False
     currentAssetVersionFileVersionMismatch: Optional[bool] = None  # Indicates if file version doesn't match asset version
+    assetVersionIds: Optional[List[Dict]] = None  # Asset versions containing this file version, each with 'id' and 'label'
 
 class FileInfoResponseModel(BaseModel, extra='ignore'):
     """Response model for detailed file information"""
@@ -391,10 +397,34 @@ class MoveFileRequestModel(BaseModel, extra='ignore'):
     destinationPath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
 
 class CopyFileRequestModel(BaseModel, extra='ignore'):
-    """Request model for copying files within same database"""
+    """Request model for copying files within or across databases"""
     sourcePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     destinationPath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
-    destinationAssetId: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    destinationAssetId: Optional[str] = Field(None, min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
+    destinationDatabaseId: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+
+    @root_validator
+    def validate_fields(cls, values):
+        logger.info("Validating CopyFileRequestModel parameters")
+        validation_dict = {}
+
+        if values.get('destinationAssetId'):
+            validation_dict['destinationAssetId'] = {
+                'value': values['destinationAssetId'],
+                'validator': 'ASSET_ID'
+            }
+        if values.get('destinationDatabaseId'):
+            validation_dict['destinationDatabaseId'] = {
+                'value': values['destinationDatabaseId'],
+                'validator': 'ID'
+            }
+
+        if validation_dict:
+            (valid, message) = validate(validation_dict)
+            if not valid:
+                raise ValueError(message)
+
+        return values
 
 class ArchiveFileRequestModel(BaseModel, extra='ignore'):
     """Request model for archiving files (soft delete)"""
@@ -716,6 +746,7 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
     useLatestFiles: bool = False  # If true, use latest files in S3 bucket
     files: Optional[List[AssetFileVersionItemModel]] = None  # List of files and their S3 versions
     comment: str = Field(min_length=1, max_length=256, strip_whitespace=True)  # Required comment for the version
+    versionAlias: Optional[str] = Field(None, max_length=64)  # Optional alias for the version
     
     @root_validator
     def validate_fields(cls, values):
@@ -747,6 +778,31 @@ class RevertAssetVersionRequestModel(BaseModel, extra='ignore'):
     comment: str = Field(min_length=1, max_length=256, strip_whitespace=True)  # comment for the new version
     revertMetadata: Optional[bool] = Field(default=False)  # Whether to revert metadata/attributes as well
 
+class UpdateAssetVersionRequestModel(BaseModel, extra='ignore'):
+    """Request model for updating an asset version (comment and/or alias).
+
+    - comment: If provided, must be a non-empty string (1-1024 chars).
+    - versionAlias: If provided, can be empty string (to clear alias) or up to 64 chars.
+    - At least one of comment or versionAlias must be present in the request.
+    """
+    comment: Optional[str] = Field(None, min_length=1, max_length=1024, strip_whitespace=True)
+    versionAlias: Optional[str] = Field(None, max_length=64)
+
+    @root_validator
+    def validate_fields(cls, values):
+        comment = values.get('comment')
+        version_alias = values.get('versionAlias')
+
+        # Ensure at least one field is provided for update
+        if comment is None and version_alias is None:
+            raise ValueError("At least one of 'comment' or 'versionAlias' must be provided")
+
+        # Strip whitespace from versionAlias if provided (allow empty string to clear)
+        if version_alias is not None:
+            values['versionAlias'] = version_alias.strip()
+
+        return values
+
 class GetAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for getting a specific asset version"""
     assetVersionId: str = Field(min_length=1, strip_whitespace=True)  # The version ID to get
@@ -756,6 +812,7 @@ class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     maxItems: Optional[int] = Field(default=1000, ge=1)
     pageSize: Optional[int] = Field(default=1000, ge=1)
     startingToken: Optional[str] = None
+    showArchived: Optional[bool] = Field(default=False)
 
 class AssetVersionFileModel(BaseModel, extra='ignore'):
     """Model for a file in an asset version response"""
@@ -779,11 +836,12 @@ class AssetVersionResponseModel(BaseModel, extra='ignore'):
     """Response model for a specific asset version"""
     assetId: str
     assetVersionId: str
+    databaseId: Optional[str] = None
     dateCreated: str
     comment: Optional[str] = None
     files: List[AssetVersionFileModel] = []
     createdBy: Optional[str] = None
-    versionedMetadata: List[AssetVersionMetadataItemModel] = []  # NEW FIELD
+    versionedMetadata: List[AssetVersionMetadataItemModel] = []
 
 class AssetVersionsListResponseModel(BaseModel, extra='ignore'):
     """Response model for listing asset versions"""
@@ -791,12 +849,12 @@ class AssetVersionsListResponseModel(BaseModel, extra='ignore'):
     NextToken: Optional[str] = None
 
 class AssetVersionOperationResponseModel(BaseModel, extra='ignore'):
-    """Response model for asset version operations (create, revert)"""
+    """Response model for asset version operations (create, revert, update, archive, unarchive)"""
     success: bool
     message: str
     assetId: str
     assetVersionId: str
-    operation: Literal["create", "revert"]
+    operation: Literal["create", "revert", "update", "archive", "unarchive"]
     timestamp: str
     skippedFiles: Optional[List[str]] = None  # Files that couldn't be processed
 
@@ -805,17 +863,26 @@ class DownloadAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for downloading asset files or previews"""
     downloadType: Literal["assetFile", "assetPreview"]
     key: Optional[str] = Field(None, min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
-    versionId: Optional[str] = None  # For assetFile only, get specific version
-    
+    versionId: Optional[str] = None  # For assetFile only, get specific S3 version
+    assetVersionId: Optional[str] = None  # Resolve S3 versionId from asset version snapshot
+    assetVersionIdAlias: Optional[str] = None  # Resolve via version alias
+
     @root_validator
     def validate_fields(cls, values):
         download_type = values.get('downloadType')
         version_id = values.get('versionId')
-        
-        # Version ID only allowed for assetFile downloads
-        if download_type == "assetPreview" and version_id:
-            raise ValueError("versionId is not allowed for assetPreview downloads")
-            
+        asset_version_id = values.get('assetVersionId')
+        asset_version_id_alias = values.get('assetVersionIdAlias')
+
+        # Count how many version params are set
+        version_params = [p for p in [version_id, asset_version_id, asset_version_id_alias] if p]
+        if len(version_params) > 1:
+            raise ValueError("Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified")
+
+        # Version parameters not allowed for assetPreview downloads
+        if download_type == "assetPreview" and version_params:
+            raise ValueError("Version parameters are not allowed for assetPreview downloads")
+
         return values
 
 class DownloadAssetResponseModel(BaseModel, extra='ignore'):

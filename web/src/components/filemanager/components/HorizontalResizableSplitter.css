@@ -10,7 +10,7 @@
 .horizontal-resizable-top-panel {
     flex-shrink: 0;
     overflow: auto;
-    border-bottom: 1px solid #eaeded;
+    border-bottom: 1px solid var(--vams-border-default);
     position: relative;
 }
 
@@ -34,27 +34,27 @@
 }
 
 .horizontal-resizable-splitter:hover {
-    background-color: #e9ecef;
+    background-color: var(--vams-border-default);
 }
 
 .horizontal-resizable-splitter.dragging {
-    background-color: #007bff;
+    background-color: var(--vams-color-info);
 }
 
 .horizontal-splitter-handle {
     height: 2px;
     width: 40px;
-    background-color: #dee2e6;
+    background-color: var(--vams-border-default);
     border-radius: 1px;
     transition: background-color 0.2s ease;
 }
 
 .horizontal-resizable-splitter:hover .horizontal-splitter-handle {
-    background-color: #6c757d;
+    background-color: var(--vams-text-secondary);
 }
 
 .horizontal-resizable-splitter.dragging .horizontal-splitter-handle {
-    background-color: #ffffff;
+    background-color: var(--vams-bg-primary);
 }
 
 /* Prevent text selection during drag */
@@ -82,24 +82,24 @@ body.dragging * {
 
 .horizontal-resizable-top-panel::-webkit-scrollbar-track,
 .horizontal-resizable-bottom-panel::-webkit-scrollbar-track {
-    background: #f1f1f1;
+    background: var(--vams-scrollbar-track);
     border-radius: 4px;
 }
 
 .horizontal-resizable-top-panel::-webkit-scrollbar-thumb,
 .horizontal-resizable-bottom-panel::-webkit-scrollbar-thumb {
-    background: #c1c1c1;
+    background: var(--vams-scrollbar-thumb);
     border-radius: 4px;
 }
 
 .horizontal-resizable-top-panel::-webkit-scrollbar-thumb:hover,
 .horizontal-resizable-bottom-panel::-webkit-scrollbar-thumb:hover {
-    background: #a8a8a8;
+    background: var(--vams-text-secondary);
 }
 
 /* Firefox scrollbar styling */
 .horizontal-resizable-top-panel,
 .horizontal-resizable-bottom-panel {
     scrollbar-width: thin;
-    scrollbar-color: #c1c1c1 #f1f1f1;
+    scrollbar-color: var(--vams-scrollbar-thumb) var(--vams-scrollbar-track);
 }

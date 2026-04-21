@@ -315,7 +315,6 @@ def create_asset_version_record(asset):
             'comment': current_version.get('Comment', f'Asset migration - Version {current_version.get("Version", "0")}'),
             'description': current_version.get('description', ''),
             'createdBy': current_version.get('CreatedBy', 'SYSTEM_USER'),
-            'specifiedPipelines': current_version.get('specifiedPipelines', []),
         }
         
         return version_record
@@ -332,7 +331,6 @@ def create_asset_version_record(asset):
             'comment': top_version.get('Comment', f'Asset migration'),
             'description': top_version.get('description', ''),
             'createdBy': top_version.get('CreatedBy', 'SYSTEM_USER'),
-            'specifiedPipelines': top_version.get('specifiedPipelines', []),
         }
         
         return version_record
@@ -350,7 +348,6 @@ def create_asset_version_record(asset):
             'comment': 'Initial asset creation - Migration generated version',
             'description': '',
             'createdBy': 'system-migration',
-            'specifiedPipelines': [],
         }
         
         return version_record

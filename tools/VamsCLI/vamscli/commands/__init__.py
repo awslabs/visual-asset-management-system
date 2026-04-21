@@ -15,9 +15,11 @@ from .metadata import metadata
 from .metadata_schema import metadata_schema
 from .features import features
 from .search import search
+from .user import user
+from .roleUserConstraints import role
 
 __all__ = [
     'setup', 'auth', 'assets', 'assets_export', 'asset_version', 'asset_links', 
     'file', 'profile', 'database', 'tag', 
-    'tag_type', 'metadata', 'metadata_schema', 'features', 'search'
+    'tag_type', 'metadata', 'metadata_schema', 'features', 'search', 'user', 'role'
 ]

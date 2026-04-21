@@ -126,7 +126,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
             (valid, message) = validate({
                 'criteriaAndValue': {
                     'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX'
+                    'validator': 'REGEX',
+                    'allowGlobalKeyword': True
                 }
             })
             if not valid:
@@ -144,7 +145,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
             (valid, message) = validate({
                 'criteriaOrValue': {
                     'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX'
+                    'validator': 'REGEX',
+                    'allowGlobalKeyword': True
                 }
             })
             if not valid:
@@ -222,6 +224,135 @@ class ConstraintOperationResponseModel(BaseModel, extra='ignore'):
     message: str
     constraintId: str
     operation: Literal["create", "update", "delete"]
+    timestamp: str
+
+
+######################## Constraint Template Import Models ##########################
+
+class TemplateVariableDefinition(BaseModel, extra='ignore'):
+    """Variable definition within a permission template"""
+    name: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    required: Optional[bool] = True
+    description: Optional[str] = Field(None, max_length=512)
+    default: Optional[str] = None
+
+
+class TemplateConstraintPermission(BaseModel, extra='ignore'):
+    """Permission entry within a template constraint (template format)"""
+    action: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    type: str = Field(default="allow", min_length=1, max_length=256, strip_whitespace=True)
+
+
+class TemplateConstraintDefinition(BaseModel, extra='ignore'):
+    """A single constraint definition within a permission template"""
+    name: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    objectType: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    criteriaAnd: Optional[List[ConstraintCriteriaModel]] = []
+    criteriaOr: Optional[List[ConstraintCriteriaModel]] = []
+    groupPermissions: List[TemplateConstraintPermission]
+
+
+class TemplateMetadata(BaseModel, extra='ignore'):
+    """Metadata about a permission template"""
+    name: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    description: Optional[str] = Field(None, max_length=512)
+    version: Optional[str] = Field(default="1.0", max_length=50)
+
+
+class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
+    """Request model for importing constraints from a permission template"""
+    template: Optional[TemplateMetadata] = None
+    variables: Optional[List[TemplateVariableDefinition]] = []
+    variableValues: dict  # {"DATABASE_ID": "my-db", "ROLE_NAME": "my-admin"}
+    constraints: List[TemplateConstraintDefinition]
+
+    @root_validator
+    def validate_template_import(cls, values):
+        """Validate template import request"""
+        from common.constants import (
+            ALLOWED_CONSTRAINT_PERMISSIONS,
+            ALLOWED_CONSTRAINT_PERMISSION_TYPES,
+            ALLOWED_CONSTRAINT_OBJECT_TYPES,
+            ALLOWED_CONSTRAINT_OPERATORS
+        )
+
+        variable_values = values.get('variableValues', {})
+
+        # Validate ROLE_NAME is provided (required for groupId)
+        if 'ROLE_NAME' not in variable_values:
+            raise ValueError("variableValues must include 'ROLE_NAME' (used as groupId for all constraints)")
+
+        # Validate ROLE_NAME format
+        (valid, message) = validate({
+            'ROLE_NAME': {
+                'value': variable_values['ROLE_NAME'],
+                'validator': 'OBJECT_NAME'
+            }
+        })
+        if not valid:
+            raise ValueError(f"Invalid ROLE_NAME: {message}")
+
+        # Validate all required variables are provided
+        for var_def in values.get('variables', []):
+            if var_def.required and var_def.name not in variable_values:
+                if var_def.default is not None:
+                    variable_values[var_def.name] = var_def.default
+                else:
+                    raise ValueError(
+                        f"Required variable '{var_def.name}' not provided in variableValues. "
+                        f"Description: {var_def.description}"
+                    )
+
+        # Validate constraints
+        constraints = values.get('constraints', [])
+        if not constraints:
+            raise ValueError("At least one constraint is required")
+
+        for constraint in constraints:
+            # Validate objectType
+            if constraint.objectType not in ALLOWED_CONSTRAINT_OBJECT_TYPES:
+                raise ValueError(
+                    f"Invalid objectType '{constraint.objectType}'. "
+                    f"Allowed: {', '.join(ALLOWED_CONSTRAINT_OBJECT_TYPES)}"
+                )
+
+            # Validate criteria exist
+            if not constraint.criteriaAnd and not constraint.criteriaOr:
+                raise ValueError(
+                    f"Constraint '{constraint.name}' must have at least one criteriaAnd or criteriaOr"
+                )
+
+            # Validate operators in criteria
+            for criteria in (constraint.criteriaAnd or []) + (constraint.criteriaOr or []):
+                if criteria.operator not in ALLOWED_CONSTRAINT_OPERATORS:
+                    raise ValueError(
+                        f"Invalid operator '{criteria.operator}'. "
+                        f"Allowed: {', '.join(ALLOWED_CONSTRAINT_OPERATORS)}"
+                    )
+
+            # Validate permissions
+            for perm in constraint.groupPermissions:
+                if perm.action not in ALLOWED_CONSTRAINT_PERMISSIONS:
+                    raise ValueError(
+                        f"Invalid permission action '{perm.action}'. "
+                        f"Allowed: {', '.join(ALLOWED_CONSTRAINT_PERMISSIONS)}"
+                    )
+                if perm.type not in ALLOWED_CONSTRAINT_PERMISSION_TYPES:
+                    raise ValueError(
+                        f"Invalid permission type '{perm.type}'. "
+                        f"Allowed: {', '.join(ALLOWED_CONSTRAINT_PERMISSION_TYPES)}"
+                    )
+
+        return values
+
+
+class ImportConstraintsTemplateResponseModel(BaseModel, extra='ignore'):
+    """Response model for template import operations"""
+    success: bool
+    message: str
+    constraintsCreated: int
+    constraintIds: List[str]
     timestamp: str
 
 

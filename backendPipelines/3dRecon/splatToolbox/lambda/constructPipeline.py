@@ -29,7 +29,7 @@ def is_duplicate_job(job_name, input_file_path, aux_bucket, aux_key, expiration_
     """
     try:
         # Create a unique identifier for this job
-        job_hash = hashlib.md5(f"{job_name}:{input_file_path}".encode('utf-8')).hexdigest()
+        job_hash = hashlib.md5(f"{job_name}:{input_file_path}".encode('utf-8')).hexdigest() # nosec B324
         lock_key = f"{aux_key}/locks/{job_hash}"
         
         try:

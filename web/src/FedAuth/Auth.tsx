@@ -4,9 +4,12 @@
  */
 
 import React, { PropsWithChildren, Suspense, useEffect, useState } from "react";
-import { API, Cache, Hub, Amplify, Auth as AmplifyAuth } from "aws-amplify";
+import { Amplify } from "aws-amplify";
+import { fetchAuthSession, getCurrentUser, signOut, signInWithRedirect } from "aws-amplify/auth";
+import { Hub } from "aws-amplify/utils";
+import { appCache } from "../services/appCache";
 import { OAuth2Client, OAuth2Token, generateCodeVerifier } from "@badgateway/oauth2-client";
-import { getSecureConfig, getAmplifyConfig } from "../services/APIService";
+import { getSecureConfig, getAmplifyConfig, fetchLoginProfile } from "../services/APIService";
 import { default as vamsConfig } from "../config";
 import { Authenticator } from "@aws-amplify/ui-react";
 import {
@@ -14,12 +17,14 @@ import {
     getExternalOAuth2Token,
     externalTokenValidation,
     setExternalOauth2Token,
+    externalOAuthTokenProvider,
 } from "../utils/authTokenUtils";
 
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import loginBgImageSrc from "../resources/img/login_bg.png";
-import logoDarkImageSrc from "../resources/img/logo_dark.svg";
+import logoDarkImageSrc from "../../logo_dark.png";
 
 import LoadingScreen from "../components/loading/LoadingScreen";
 import { Alert } from "@cloudscape-design/components";
@@ -29,10 +34,12 @@ import { Heading, useTheme } from "@aws-amplify/ui-react";
 
 import { GlobalHeader } from "./../common/GlobalHeader";
 import { Header } from "./../authenticator/Header";
-import { Footer } from "./../authenticator/Footer";
+import { Footer, PageFooter } from "./../authenticator/Footer";
 import { SignInHeader } from "./../authenticator/SignInHeader";
 import { SignInFooter } from "./../authenticator/SignInFooter";
-import { isAxiosError } from "../common/typeUtils";
+import { useThemeSettings } from "../hooks/useThemeSettings";
+import { TopNavigation } from "@cloudscape-design/components";
+import logoWhite from "../../logo_white.png";
 
 /**
  * Additional configuration needed to use federated identities
@@ -134,7 +141,7 @@ interface Config {
     locationServiceApiUrl?: string;
 
     /**
-     * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
+     * Content Security Policy to apply (generally for ALB deployment where CSP may not be injected)
      */
     contentSecurityPolicy?: string;
 
@@ -145,65 +152,46 @@ interface Config {
 }
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
-    //console.log('configureAmplify', config, vamsConfig);
-
     let api_path = vamsConfig.DEV_API_ENDPOINT === "" ? config.api : vamsConfig.DEV_API_ENDPOINT;
-
-    //if API path doesn't end in a /, add one
     if (api_path != undefined && api_path.length > 0 && api_path[api_path.length - 1] !== "/") {
         api_path = api_path + "/";
     }
-
     localStorage.setItem("api_path", api_path);
-    //console.log('apiPath', localStorage.getItem('api_path'));
 
     console.log("DISABLE COGNITO ENV", window.DISABLE_COGNITO);
     console.log("COGNITO_FEDERATED ENV", window.COGNITO_FEDERATED);
 
-    Amplify.configure({
-        Auth: {
-            mandatorySignIn: window["DISABLE_COGNITO"] ? false : true,
-            region: config.region,
-            userPoolId: window.DISABLE_COGNITO ? "XX-XXXX-X_abcd1234" : config.cognitoUserPoolId,
-            userPoolWebClientId: window.DISABLE_COGNITO ? "1" : config.cognitoAppClientId,
-            identityPoolId: window.DISABLE_COGNITO ? undefined : config.cognitoIdentityPoolId,
-            cookieStorage: {
-                domain: " ", // process.env.REACT_APP_COOKIE_DOMAIN, // Use a single space ' ' for host-only cookies
-                expires: null, // null means session cookies
-                path: "/",
-                secure: vamsConfig.DEV_API_ENDPOINT === "" ? true : false, // for developing on localhost over http: set to false
-                sameSite: "lax",
-            },
-            oauth: {
-                domain: config.cognitoFederatedConfig?.customCognitoAuthDomain,
-                scope: ["openid", "email", "profile"], //  process.env.REACT_APP_USER_POOL_SCOPES.split(','),
-                redirectSignIn: window.location.origin, // config.cognitoFederatedConfig?.redirectSignIn,
-                redirectSignOut: window.location.origin, // config.cognitoFederatedConfig?.redirectSignOut,
-                responseType: "code",
-            },
-        },
-        API: {
-            endpoints: [
-                {
-                    name: "api",
-                    endpoint: api_path,
-                    region: config.region,
-                    custom_header: async () => {
-                        if (window.DISABLE_COGNITO) {
-                            const accessToken = getExternalOAuth2Token().accessToken;
-                            return { Authorization: `Bearer ${accessToken}` };
-                        } else {
-                            return {
-                                Authorization: `Bearer ${(await AmplifyAuth.currentSession())
-                                    .getAccessToken()
-                                    .getJwtToken()}`,
-                            };
-                        }
+    if (window.DISABLE_COGNITO) {
+        // External OAuth mode: configure Amplify with custom TokenProvider
+        Amplify.configure(
+            {},
+            {
+                Auth: {
+                    tokenProvider: externalOAuthTokenProvider,
+                },
+            }
+        );
+    } else {
+        // Cognito mode: standard Amplify v6 configuration
+        // identityPoolId intentionally omitted — VAMS uses Bearer token auth only
+        Amplify.configure({
+            Auth: {
+                Cognito: {
+                    userPoolId: config.cognitoUserPoolId,
+                    userPoolClientId: config.cognitoAppClientId,
+                    loginWith: {
+                        oauth: {
+                            domain: config.cognitoFederatedConfig?.customCognitoAuthDomain || "",
+                            scopes: ["openid", "email", "profile"],
+                            redirectSignIn: [window.location.origin],
+                            redirectSignOut: [window.location.origin],
+                            responseType: "code",
+                        },
                     },
                 },
-            ],
-        },
-    });
+            },
+        });
+    }
 
     setAmpInit(true);
 }
@@ -230,9 +218,10 @@ const cognitoAuthenticatorComponents = {
 
 interface CognitoFederatedLoginProps {
     onLogin: () => void;
+    logoSrc?: string;
 }
 
-const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin }) => {
+const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin, logoSrc }) => {
     const { tokens } = useTheme();
 
     return (
@@ -241,9 +230,9 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin }) => {
                 <div className={styles.centeredBox}>
                     <Heading level={3} padding={`${tokens.space.xl} ${tokens.space.xl} 0`}>
                         <img
-                            style={{ width: "100%" }}
-                            src={logoDarkImageSrc}
-                            alt="Visual Asset Management System Logo"
+                            style={{ width: "100%", maxWidth: "390px" }}
+                            src={logoSrc || logoDarkImageSrc}
+                            alt={`${vamsConfig.APP_NAME} Logo`}
                         />
                     </Heading>
                     <button
@@ -281,6 +270,50 @@ export function getOAuth2Client(): OAuth2Client | null {
     return oauth2Client || null;
 }
 
+const LoginHeader: React.FC = () => {
+    const { theme, setTheme } = useThemeSettings();
+    return (
+        <div id="loginHeaderWrapper">
+            <TopNavigation
+                identity={{
+                    href: "/",
+                    logo: {
+                        src: logoWhite,
+                        alt: vamsConfig.APP_NAME,
+                    },
+                }}
+                utilities={[
+                    {
+                        type: "menu-dropdown",
+                        text: "Settings",
+                        iconName: "settings",
+                        onItemClick: (e) => {
+                            const id = e?.detail?.id;
+                            if (id === "theme-light") setTheme("light");
+                            if (id === "theme-dark") setTheme("dark");
+                        },
+                        items: [
+                            {
+                                id: "theme-light",
+                                text: theme === "light" ? "✓ Light Theme" : "Light Theme",
+                            },
+                            {
+                                id: "theme-dark",
+                                text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme",
+                            },
+                        ],
+                    },
+                ]}
+                i18nStrings={{
+                    searchIconAriaLabel: "Search",
+                    searchDismissIconAriaLabel: "Close search",
+                    overflowMenuTriggerText: "More",
+                }}
+            />
+        </div>
+    );
+};
+
 const Auth: React.FC<AuthProps> = (props) => {
     //External Oauth Configuration Function
     function configureOAuthClient(config: Config) {
@@ -310,8 +343,25 @@ const Auth: React.FC<AuthProps> = (props) => {
         }
     }
 
-    const [config, setConfig] = useState(Cache.getItem("config"));
-    let [authError, setauthError] = useState<string | null>(() =>
+    const { theme } = useThemeSettings();
+    const [loginLogoSrc, setLoginLogoSrc] = useState(
+        document.body.classList.contains("awsui-dark-mode") ? logoWhite : logoDarkImageSrc
+    );
+
+    // Watch for theme changes via body class mutation to keep logo in sync
+    useEffect(() => {
+        const updateLogo = () => {
+            const isDark = document.body.classList.contains("awsui-dark-mode");
+            setLoginLogoSrc(isDark ? logoWhite : logoDarkImageSrc);
+        };
+        updateLogo();
+        const observer = new MutationObserver(updateLogo);
+        observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        return () => observer.disconnect();
+    }, []);
+
+    const [config, setConfig] = useState(appCache.getItem("config"));
+    const [authError, setauthError] = useState<string | null>(() =>
         localStorage.getItem("auth_error")
     );
 
@@ -328,6 +378,21 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Fetch && Setup Initial global configurations
     useEffect(() => {
         if (config) {
+            // If config is an error object, don't process further — the error page will render
+            if (config._configError) {
+                return;
+            }
+
+            // Validate that config is a proper object with required fields
+            // This prevents crashes from corrupted cache data (e.g., from interrupted API calls)
+            // Note: region can be empty for external IDP configurations (no Cognito)
+            if (typeof config !== "object" || Array.isArray(config) || !config.api) {
+                console.error("Invalid config detected, clearing cache and refetching:", config);
+                appCache.removeItem("config");
+                setConfig(null);
+                return;
+            }
+
             //Set global variables for cognito mode or external OAUTH.
             //If config.config.cognitoUserPoolId is undefined or empty, then disable cognito and setup external oauth
             if (
@@ -354,9 +419,29 @@ const Auth: React.FC<AuthProps> = (props) => {
             //Configure Amplify
             configureAmplify(config, setAmpInit);
         } else {
-            getAmplifyConfig().then(async (config) => {
-                Cache.setItem("config", config);
-                setConfig(config);
+            getAmplifyConfig().then(async (fetchedConfig) => {
+                // Check if getAmplifyConfig returned an error object
+                if (fetchedConfig?._configError) {
+                    setConfig(fetchedConfig);
+                    return;
+                }
+                // Validate we got a proper config with required fields
+                if (
+                    fetchedConfig &&
+                    typeof fetchedConfig === "object" &&
+                    !Array.isArray(fetchedConfig) &&
+                    fetchedConfig.api
+                ) {
+                    appCache.setItem("config", fetchedConfig);
+                    setConfig(fetchedConfig);
+                } else {
+                    console.error("Failed to fetch valid config from API:", fetchedConfig);
+                    setConfig({
+                        _configError: true,
+                        _errorMessage:
+                            "The API returned a configuration response but it is missing required fields (e.g., 'api' endpoint).",
+                    });
+                }
             });
         }
     }, [ampInit, config, setConfig]);
@@ -366,11 +451,11 @@ const Auth: React.FC<AuthProps> = (props) => {
     useEffect(() => {
         if (!ampInit) return;
 
-        AmplifyAuth.currentAuthenticatedUser()
+        getCurrentUser()
             .then((currentUser) => {
                 if (!localStorage.getItem("user")) {
                     // No valid user session state
-                    AmplifyAuth.signOut()
+                    signOut()
                         .then(() => {
                             console.log("User signed out - invalid session state");
                         })
@@ -408,7 +493,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         // Failed to refresh the token
                         console.error(error);
                         // Reset amplify info
-                        AmplifyAuth.signOut()
+                        signOut()
                             .then(() => {
                                 console.log("User signed out - Unable to refresh token");
                             })
@@ -434,13 +519,18 @@ const Auth: React.FC<AuthProps> = (props) => {
         if (!ampInit) return;
 
         if (window.DISABLE_COGNITO === false) {
-            const amplifyHubLIstener = Hub.listen("auth", ({ payload: { event, data } }) => {
-                switch (event) {
-                    case "signIn":
-                        localStorage.setItem("user", JSON.stringify({ username: data.username }));
-                        setisLoggedIn(true);
+            const amplifyHubLIstener = Hub.listen("auth", ({ payload }) => {
+                switch (payload.event) {
+                    case "signedIn":
+                        getCurrentUser().then((user) => {
+                            localStorage.setItem(
+                                "user",
+                                JSON.stringify({ username: user.username })
+                            );
+                            setisLoggedIn(true);
+                        });
                         break;
-                    case "signOut":
+                    case "signedOut":
                         setisLoggedIn(false);
                         resetSession();
                         break;
@@ -448,11 +538,11 @@ const Auth: React.FC<AuthProps> = (props) => {
             });
 
             //Check/set for being logged for subsequent page loads
-            AmplifyAuth.currentAuthenticatedUser()
+            getCurrentUser()
                 .then((currentUser) => {
                     localStorage.setItem(
                         "user",
-                        JSON.stringify({ username: currentUser.getUsername() })
+                        JSON.stringify({ username: currentUser.username })
                     );
                     setisLoggedIn(true);
                     console.log("Cognito Page Load - Login set for Page Load");
@@ -508,20 +598,28 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Both Effect
     //Once logged in, get/set other configuration and profile information
     useEffect(() => {
-        //Secure Config Fetch - fetch if either featuresEnabled OR locationServiceApiUrl is missing
-        if (config && (!config.featuresEnabled || !config.locationServiceApiUrl) && isLoggedIn) {
+        //Secure Config Fetch - fetch if featuresEnabled, locationServiceApiUrl, or webDeployedUrl is missing
+        if (
+            config &&
+            (!config.featuresEnabled ||
+                !config.locationServiceApiUrl ||
+                config.webDeployedUrl === undefined) &&
+            isLoggedIn
+        ) {
             getSecureConfig()
                 .then((value) => {
                     config.featuresEnabled = value.featuresEnabled;
                     config.locationServiceApiUrl = value.locationServiceApiUrl;
-                    Cache.setItem("config", config);
+                    config.webDeployedUrl = value.webDeployedUrl || "";
+                    appCache.setItem("config", config);
+                    // nosemgrep: calling-set-state-on-current-state
                     setConfig(config);
                 })
                 .catch((error: Error) => {
                     console.error("Error getting secure-config:", error.message);
 
                     // if response status code was 401 unauthorized, token may be invalid, so sign out
-                    if (isAxiosError(error) && error.response?.status === 401) {
+                    if ((error as any).status === 401) {
                         signOutWithError();
                     }
                 });
@@ -530,21 +628,23 @@ const Auth: React.FC<AuthProps> = (props) => {
 
         //Hit login profile end-point to fetch and update latest backend login profiles
         //This could also update roles behind the scenes if configured to synchronize with external systems
-        let loginProfile = Cache.getItem("loginProfile");
+        let loginProfile = appCache.getItem("loginProfile");
         if (isLoggedIn && !loginProfile) {
             const user = JSON.parse(localStorage.getItem("user")!);
-            API.post("api", `auth/loginProfile/${user.username}`, {})
-                .then((value) => {
-                    loginProfile = {};
-                    loginProfile.userId = value.message.Items[0].userId;
-                    loginProfile.email = value.message.Items[0].email;
-                    Cache.setItem("loginProfile", loginProfile);
+            fetchLoginProfile({ username: user.username })
+                .then((result) => {
+                    if (result[0] === true && result[1]?.Items?.[0]) {
+                        loginProfile = {};
+                        loginProfile.userId = result[1].Items[0].userId;
+                        loginProfile.email = result[1].Items[0].email;
+                        appCache.setItem("loginProfile", loginProfile);
+                    }
                 })
                 .catch((error: Error) => {
                     console.error("Error getting login-profile:", error.message);
 
                     // if response status code was 401 unauthorized, token may be invalid, so sign out
-                    if (isAxiosError(error) && error.response?.status === 401) {
+                    if ((error as any).status === 401) {
                         signOutWithError();
                     }
                 });
@@ -554,7 +654,7 @@ const Auth: React.FC<AuthProps> = (props) => {
     }, [config, isLoggedIn]);
 
     //External OAUTH Function for handling sign-in
-    const handleExternalOauthSignIn = async (require_mfa: boolean = false) => {
+    const handleExternalOauthSignIn = async (require_mfa = false) => {
         // Sign in
         setIsLoading(true);
 
@@ -640,13 +740,97 @@ const Auth: React.FC<AuthProps> = (props) => {
 
         if (window.DISABLE_COGNITO === false) {
             // Schedule check and refresh (when needed) of JWT's every 5 min:
-            const i = setInterval(() => AmplifyAuth.currentSession(), 5 * 60 * 1000);
+            const i = setInterval(() => fetchAuthSession(), 5 * 60 * 1000);
             return () => clearInterval(i);
         }
     }, [ampInit]);
 
     //Initial loading screen when going through config init
-    if (config === null || !ampInit) {
+    if (config === null) {
+        return (
+            <CenteredBox>
+                <p className="explanation">One moment please ...</p>
+            </CenteredBox>
+        );
+    }
+
+    // Show error page if config failed to load
+    if (config._configError) {
+        return (
+            <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+                <LoginHeader />
+                <div
+                    style={{
+                        flex: 1,
+                        display: "flex",
+                        alignItems: "flex-start",
+                        justifyContent: "center",
+                        paddingTop: "5vh",
+                    }}
+                >
+                    <div className={styles.container}>
+                        <div className={styles.centeredBox}>
+                            <Heading level={3}>
+                                <img
+                                    style={{ width: "100%", maxWidth: "390px" }}
+                                    src={loginLogoSrc}
+                                    alt={`${vamsConfig.APP_NAME} Logo`}
+                                />
+                            </Heading>
+                            <Alert
+                                type="error"
+                                statusIconAriaLabel="Error"
+                                header="Configuration Error"
+                            >
+                                {config._errorMessage || "Failed to load VAMS configuration."}
+                                <br />
+                                <br />
+                                <strong>Possible causes:</strong>
+                                <ul style={{ margin: "8px 0", paddingLeft: "20px" }}>
+                                    <li>The backend API is not responding</li>
+                                    <li>Network connectivity issues</li>
+                                    <li>The page was reloaded during initialization</li>
+                                </ul>
+                                <strong>Try:</strong>
+                                <ul style={{ margin: "8px 0", paddingLeft: "20px" }}>
+                                    <li>Refreshing the page</li>
+                                    <li>Clearing your browser cache and cookies</li>
+                                    <li>Contacting your administrator if the issue persists</li>
+                                </ul>
+                            </Alert>
+                            <Box padding={{ top: "l" }}>
+                                <Button
+                                    variant="primary"
+                                    onClick={() => {
+                                        // Clear the cached config and reload
+                                        appCache.removeItem("config");
+                                        window.location.reload();
+                                    }}
+                                >
+                                    Retry
+                                </Button>
+                            </Box>
+                        </div>
+                    </div>
+                    <img
+                        alt="background texture"
+                        src={loginBgImageSrc}
+                        style={{
+                            position: "fixed",
+                            top: 0,
+                            width: "100vw",
+                            left: 0,
+                            zIndex: "-100",
+                        }}
+                    />
+                </div>
+                <PageFooter />
+            </div>
+        );
+    }
+
+    // Wait for Amplify to initialize
+    if (!ampInit) {
         return (
             <CenteredBox>
                 <p className="explanation">One moment please ...</p>
@@ -662,45 +846,52 @@ const Auth: React.FC<AuthProps> = (props) => {
     //External OAUTH Login Page Return
     if (window.DISABLE_COGNITO === true && !isLoggedIn && ampInit) {
         return (
-            <>
+            <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+                <LoginHeader />
                 <GlobalHeader authorizationHeader={true} />
                 <div
                     style={{
+                        flex: 1,
                         display: "flex",
-                        alignItems: "center",
+                        alignItems: "flex-start",
                         justifyContent: "center",
+                        paddingTop: "5vh",
                     }}
                 >
                     <div className={styles.container}>
                         <div className={styles.centeredBox}>
                             <Heading level={3}>
                                 <img
-                                    style={{ width: "100%" }}
-                                    src={logoDarkImageSrc}
-                                    alt="Visual Asset Management System Logo"
+                                    style={{ width: "100%", maxWidth: "390px" }}
+                                    src={loginLogoSrc}
+                                    alt={`${vamsConfig.APP_NAME} Logo`}
                                 />
                             </Heading>
-                            <Button variant="primary" onClick={() => handleExternalOauthSignIn()}>
-                                Log in with SSO
-                            </Button>
-                            {config.externalOAuthIdpScopeMfa != undefined &&
-                            config.externalOAuthIdpScopeMfa != "undefined" &&
-                            config.externalOAuthIdpScopeMfa != "" ? (
-                                <>
-                                    <Box
-                                        fontWeight="normal"
-                                        padding={{ top: "xxs", bottom: "xxs" }}
-                                    >
-                                        <span>or</span>
-                                    </Box>
+                            <Box padding={{ top: "l" }}>
+                                <SpaceBetween direction="vertical" size="s" alignItems="center">
                                     <Button
-                                        variant="normal"
-                                        onClick={() => handleExternalOauthSignIn(true)}
+                                        variant="primary"
+                                        onClick={() => handleExternalOauthSignIn()}
                                     >
-                                        Log in with MFA
+                                        Log in with SSO
                                     </Button>
-                                </>
-                            ) : null}
+                                    {config.externalOAuthIdpScopeMfa &&
+                                    config.externalOAuthIdpScopeMfa !== "undefined" &&
+                                    config.externalOAuthIdpScopeMfa.trim() !== "" ? (
+                                        <>
+                                            <Box fontWeight="normal">
+                                                <span>or</span>
+                                            </Box>
+                                            <Button
+                                                variant="normal"
+                                                onClick={() => handleExternalOauthSignIn(true)}
+                                            >
+                                                Log in with MFA
+                                            </Button>
+                                        </>
+                                    ) : null}
+                                </SpaceBetween>
+                            </Box>
                         </div>
                         {authError ? (
                             <div className={styles.alertError}>
@@ -722,7 +913,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                         }}
                     />
                 </div>
-            </>
+                <PageFooter />
+            </div>
         );
     }
 
@@ -731,30 +923,56 @@ const Auth: React.FC<AuthProps> = (props) => {
         if (window.COGNITO_FEDERATED === false) {
             //Non-federated login
             return (
-                <>
+                <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+                    <LoginHeader />
                     <GlobalHeader authorizationHeader={true} />
-                    <Authenticator
-                        components={cognitoAuthenticatorComponents}
-                        loginMechanisms={["username"]}
-                        hideSignUp={true}
-                    />
-                </>
+                    <div
+                        style={{
+                            flex: 1,
+                            display: "flex",
+                            justifyContent: "center",
+                            alignItems: "flex-start",
+                            paddingTop: "5vh",
+                        }}
+                    >
+                        <Authenticator
+                            components={cognitoAuthenticatorComponents}
+                            loginMechanisms={["username"]}
+                            hideSignUp={true}
+                        />
+                    </div>
+                    <PageFooter />
+                </div>
             );
         } else {
             //Federated Login
             return (
-                <>
+                <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+                    <LoginHeader />
                     <GlobalHeader authorizationHeader={true} />
-                    <FedLoginBox
-                        onLogin={() =>
-                            AmplifyAuth.federatedSignIn({
-                                customProvider:
-                                    config.cognitoFederatedConfig
-                                        ?.customFederatedIdentityProviderName,
-                            })
-                        }
-                    />
-                </>
+                    <div
+                        style={{
+                            flex: 1,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                        }}
+                    >
+                        <FedLoginBox
+                            logoSrc={loginLogoSrc}
+                            onLogin={() =>
+                                signInWithRedirect({
+                                    provider: {
+                                        custom:
+                                            config.cognitoFederatedConfig
+                                                ?.customFederatedIdentityProviderName || "",
+                                    },
+                                })
+                            }
+                        />
+                    </div>
+                    <PageFooter />
+                </div>
             );
         }
     }
@@ -781,10 +999,10 @@ const parseJwt = (
 ): {
     sub: string;
 } => {
-    var jsonPayload = "{}";
-    var base64Url = accessToken.split(".")[1];
+    let jsonPayload = "{}";
+    const base64Url = accessToken.split(".")[1];
     if (base64Url) {
-        var base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+        const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
         jsonPayload = decodeURIComponent(
             window
                 .atob(base64)
@@ -800,7 +1018,7 @@ const parseJwt = (
 };
 
 let refreshTimer: NodeJS.Timeout | null;
-const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
+const startAccessTokenRefreshTimer = (startNewTimer = false) => {
     // If there was a previous refresh timer, the boolean param will clear it
     if (startNewTimer && refreshTimer) {
         clearTimeout(refreshTimer);
@@ -842,9 +1060,9 @@ const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
     }
 };
 
-const signOutWithError = (key: string = "auth_error", value: string = "Unauthorized") => {
+const signOutWithError = (key = "auth_error", value = "Unauthorized") => {
     // Reset amplify info
-    AmplifyAuth.signOut()
+    signOut()
         .then(() => {
             console.log("User signed out");
         })
@@ -860,7 +1078,7 @@ const resetSession = () => {
     localStorage.removeItem("oauth2_token");
     localStorage.removeItem("user");
     localStorage.removeItem("email");
-    Cache.removeItem("loginProfile");
+    appCache.removeItem("loginProfile");
 };
 
 // Wrapper for setExternalOauth2Token that also handles timer restart and error clearing

@@ -7,7 +7,7 @@ cffi==2.0.0 ; python_version >= "3.13" and python_version < "4" and platform_pyt
 charset-normalizer==3.4.3 ; python_version >= "3.13" and python_version < "4"
 colorama==0.4.6 ; python_version >= "3.13" and python_version < "4"
 coverage==7.1.0 ; python_version >= "3.13" and python_version < "4"
-cryptography==46.0.2 ; python_version >= "3.13" and python_version < "4"
+cryptography==46.0.6 ; python_version >= "3.13" and python_version < "4"
 docopt==0.6.2 ; python_version >= "3.13" and python_version < "4"
 flake8==6.0.0 ; python_version >= "3.13" and python_version < "4"
 idna==3.10 ; python_version >= "3.13" and python_version < "4"

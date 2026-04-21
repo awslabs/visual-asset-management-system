@@ -36,6 +36,10 @@ export interface FileMetadataProps {
     showHeader?: boolean;
     /** Whether to show validation errors */
     showErrors?: boolean;
+    /** Optional asset version ID to fetch metadata for a specific version */
+    assetVersionId?: string;
+    /** Whether metadata is read-only */
+    readOnly?: boolean;
     /** Callback for error handling */
     onError?: (error: string) => void;
     /** Callback for loading state changes */
@@ -61,6 +65,8 @@ export default function FileMetadata({
     className,
     showHeader = true,
     showErrors = true,
+    assetVersionId,
+    readOnly,
     onError,
     onLoading,
     onValidationChange,
@@ -83,6 +89,8 @@ export default function FileMetadata({
             filePath={prefix}
             fileType="metadata"
             mode="online"
+            assetVersionId={assetVersionId}
+            readOnly={readOnly}
         />
     );
 

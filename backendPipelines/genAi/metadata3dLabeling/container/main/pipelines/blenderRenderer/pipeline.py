@@ -157,11 +157,11 @@ def allconvert_blenderrenderer_pipeline(input_file_path: str, output_dir: str) -
                            '-noaudio',
                            '-E', 'CYCLES', #Run with CYCLES engine for non-GPU
                            '-P', 'main/blenderAppScripts/renderScene.py',
-                           '--', 
+                           '--',
                            input_file_path,
                            output_dir]
-    
-    subprocess.run(BLENDER_JOIN_CMD)
+
+    subprocess.run(BLENDER_JOIN_CMD) # nosemgrep: dangerous-subprocess-use-audit
 
     # Get an array of all file names in output directory
     output_files = os.listdir(output_dir)

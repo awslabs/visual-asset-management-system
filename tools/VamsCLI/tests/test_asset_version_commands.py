@@ -482,7 +482,6 @@ class TestAssetVersionListCommand:
                         'DateModified': '2024-01-02T00:00:00Z',
                         'Comment': 'Latest version',
                         'description': 'Updated model',
-                        'specifiedPipelines': [],
                         'createdBy': 'user@example.com',
                         'isCurrent': True,
                         'fileCount': 3
@@ -492,7 +491,6 @@ class TestAssetVersionListCommand:
                         'DateModified': '2024-01-01T00:00:00Z',
                         'Comment': 'Initial version',
                         'description': 'First upload',
-                        'specifiedPipelines': ['pipeline1'],
                         'createdBy': 'user@example.com',
                         'isCurrent': False,
                         'fileCount': 2
@@ -531,7 +529,6 @@ class TestAssetVersionListCommand:
                         'DateModified': '2024-01-02T00:00:00Z',
                         'Comment': 'Latest version',
                         'description': 'Updated model',
-                        'specifiedPipelines': [],
                         'createdBy': 'user@example.com',
                         'isCurrent': True,
                         'fileCount': 3
@@ -567,7 +564,6 @@ class TestAssetVersionListCommand:
                         'DateModified': '2024-01-01T00:00:00Z',
                         'Comment': 'Initial version',
                         'description': 'First upload',
-                        'specifiedPipelines': [],
                         'createdBy': 'user@example.com',
                         'isCurrent': False,
                         'fileCount': 2

@@ -23,6 +23,11 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
     imageAssetPath: string;
     dockerfileName: string;
     batchJobDefinitionName: string;
+    /**
+     * Ephemeral storage size in GiB for the Fargate container.
+     * Fargate supports 21-200 GiB. Default is 60 GiB.
+     */
+    ephemeralStorageGiB?: number;
 }
 
 const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
@@ -77,7 +82,7 @@ export class BatchFargatePipelineConstruct extends Construct {
             container: new batch.EcsFargateContainerDefinition(this, "PipelineBatchContainer", {
                 cpu: 16,
                 memory: cdk.Size.mebibytes(65536),
-                ephemeralStorageSize: cdk.Size.gibibytes(60),
+                ephemeralStorageSize: cdk.Size.gibibytes(props.ephemeralStorageGiB ?? 60),
                 image: containerImage,
                 environment: {
                     AWS_REGION: region,

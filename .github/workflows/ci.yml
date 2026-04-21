@@ -80,18 +80,13 @@ jobs:
                       vams/tools/VamsCLI/coverage.xml
               if: always()
 
-            - name: Run yarn install web directory
-              uses: Borales/actions-yarn@v4.2.0
-              with:
-                  dir: "vams/web"
-                  cmd: install
+            - name: Run npm install web directory
+              working-directory: vams/web
+              run: npm install
 
-            #####
-            # - name: Run yarn audit web directory
-            #   uses: Borales/actions-yarn@v4.2.0
-            #   with:
-            #       dir: "vams/web"
-            #       cmd: audit
+            # - name: Run npm audit web directory
+            #   working-directory: vams/web
+            #   run: npm audit
 
             # - name: Web test
             #   working-directory: vams/web

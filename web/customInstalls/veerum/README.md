@@ -66,7 +66,7 @@ Enable the VEERUM viewer for VAMS web install:
 
 ### Automatic Installation
 
-The installation happens automatically during `yarn install` in the main web directory via the postinstall script.
+The installation happens automatically during `npm install` in the main web directory via the postinstall script.
 
 ### Manual Installation
 
@@ -483,7 +483,7 @@ Located at: `web/src/visualizerPlugin/config/viewerConfig.json`
 
 After completing the prerequisites and enabling the viewer:
 
-1. Run `yarn install` in the VAMS `/web` directory
+1. Run `npm install` in the VAMS `/web` directory
 2. The postinstall script will automatically run `veerumInstall.js`
 3. Continue with subsequent build commands
 

@@ -141,7 +141,13 @@ def handle_head_request(event, claims_and_roles):
         return general_error(body={'message': message}, status_code=404, event=event)
     
     asset_object.update({"object__type": "asset"})
-    
+
+    # Check if asset is distributable
+    if not asset_object.get('isDistributable', False):
+        message = "Asset is not currently allowing file distribution"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=403, event=event)
+
     # Check authorization
     operation_allowed_on_asset = False
     if len(claims_and_roles["tokens"]) > 0:
@@ -149,10 +155,10 @@ def handle_head_request(event, claims_and_roles):
         if casbin_enforcer.enforceAPI(event, "GET"):
             if casbin_enforcer.enforce(asset_object, "GET"):
                 operation_allowed_on_asset = True
-    
+
     if not operation_allowed_on_asset:
         return authorization_error()
-    
+
     # Get the location of the base asset key
     assetLocationKey = asset_object.get('assetLocation', {}).get("Key")
     if not assetLocationKey:
@@ -303,6 +309,18 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         asset_object.update({"object__type": "asset"})
 
         logger.info(asset_object)
+
+        # Check if asset is distributable
+        if not asset_object.get('isDistributable', False):
+            message = "Asset is not currently allowing file distribution"
+            logger.error(message)
+            streaming_headers = {
+                'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Origin': '*',
+            }
+            error_response = general_error(body={"message": message}, status_code=403, event=event)
+            error_response['headers'].update(streaming_headers)
+            return error_response
 
         # Check API authorization
         if len(claims_and_roles["tokens"]) > 0:

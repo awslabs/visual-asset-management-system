@@ -6,6 +6,7 @@ import {
     calculateTotalAssetSize,
     addFiles,
     mergeFiles,
+    getParentFolderPaths,
 } from "./FileManagerUtils";
 
 // Helper function to flatten the file tree into an array for shift-selection
@@ -229,7 +230,13 @@ export function fileManagerReducer(
 
         case "DOWNLOAD_FILE":
             const handleDownloadFile = async () => {
-                await downloadFile(state.assetId, state.databaseId, action.payload.key);
+                await downloadFile(
+                    state.assetId,
+                    state.databaseId,
+                    action.payload.key,
+                    action.payload.versionId || "",
+                    action.payload.assetVersionId || state.assetVersionId
+                );
             };
             handleDownloadFile();
             return state;
@@ -549,8 +556,6 @@ export function fileManagerReducer(
             // Expand all parent folders leading to a specific file path
             const targetPath = action.payload.path;
 
-            // Import the helper function to get parent folder paths
-            const { getParentFolderPaths } = require("./FileManagerUtils");
             const parentPaths = getParentFolderPaths(targetPath);
 
             console.log("📂 EXPAND_PATH_TO_ITEM: Expanding folders for path:", targetPath);
@@ -581,6 +586,13 @@ export function fileManagerReducer(
                 flattenedItems: updatedFlattenedItems,
             };
         }
+
+        case "SET_READ_ONLY":
+            return {
+                ...state,
+                readOnly: action.payload.readOnly,
+                assetVersionId: action.payload.assetVersionId,
+            };
 
         default:
             return state;

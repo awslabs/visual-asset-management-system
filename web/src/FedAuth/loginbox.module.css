@@ -13,17 +13,119 @@
     justify-content: center;
     align-items: center;
     padding: 2rem;
-    border: 1px solid #ccc;
+    border: 1px solid var(--vams-border-default);
     border-radius: 4px;
-    background-color: #ffffff;
+    background-color: var(--vams-bg-primary);
 }
 .button {
     margin-bottom: 1rem;
 }
 .link {
-    color: #007bff;
+    color: var(--vams-color-info);
     text-decoration: none;
 }
 .alertError {
     margin-top: 2rem;
+}
+
+/* Amplify Authenticator dark mode overrides (global, not module-scoped) */
+:global(.awsui-dark-mode) :global([data-amplify-authenticator]) {
+    /* Core colors */
+    --amplify-colors-background-primary: var(--vams-bg-secondary);
+    --amplify-colors-background-secondary: var(--vams-bg-hover);
+    --amplify-colors-font-primary: var(--vams-text-heading);
+    --amplify-colors-font-secondary: var(--vams-text-secondary);
+    --amplify-colors-font-tertiary: var(--vams-text-secondary);
+    --amplify-colors-border-primary: var(--vams-border-default);
+    --amplify-colors-border-secondary: var(--vams-border-default);
+    --amplify-colors-border-focus: var(--vams-color-info);
+
+    /* Authenticator container */
+    --amplify-components-authenticator-router-background-color: var(--vams-bg-secondary);
+    --amplify-components-authenticator-router-border-color: var(--vams-border-default);
+    --amplify-components-authenticator-router-box-shadow: none;
+    --amplify-components-authenticator-modal-background-color: var(--vams-bg-primary);
+    --amplify-components-authenticator-state-inactive-background-color: var(--vams-bg-hover);
+    --amplify-components-authenticator-or-container-color: var(--vams-text-secondary);
+
+    /* Text and headings */
+    --amplify-components-text-color: var(--vams-text-heading);
+    --amplify-components-heading-color: var(--vams-text-heading);
+
+    /* Form fields */
+    --amplify-components-fieldcontrol-border-color: var(--vams-border-input);
+    --amplify-components-fieldcontrol-color: var(--vams-text-heading);
+    --amplify-components-fieldcontrol-background-color: var(--vams-bg-input);
+    --amplify-components-field-label-color: var(--vams-text-heading);
+
+    /* Buttons */
+    --amplify-components-button-color: var(--vams-text-heading);
+    --amplify-components-button-primary-background-color: var(--vams-color-info);
+    --amplify-components-button-primary-color: #ffffff;
+    --amplify-components-button-link-color: var(--vams-color-info);
+
+    /* Tabs */
+    --amplify-components-tabs-item-active-color: var(--vams-color-info);
+    --amplify-components-tabs-item-active-border-color: var(--vams-color-info);
+    --amplify-components-tabs-item-color: var(--vams-text-secondary);
+    --amplify-components-tabs-border-color: var(--vams-border-default);
+
+    /* Input text and placeholder */
+    --amplify-components-input-color: var(--vams-text-heading);
+    --amplify-components-input-background-color: var(--vams-bg-input);
+    --amplify-components-input-border-color: var(--vams-border-input);
+
+    /* Password field show/hide button icon */
+    --amplify-components-passwordfield-button-color: var(--vams-text-heading);
+    --amplify-components-button-outlined-color: var(--vams-text-heading);
+
+    /* Placeholder text */
+    --amplify-components-fieldcontrol-placeholder-color: var(--vams-text-secondary);
+}
+
+/* Force input text color in dark mode — some Amplify inputs don't use CSS vars */
+:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global(input) {
+    color: var(--vams-text-heading) !important;
+}
+
+:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global(input::placeholder) {
+    color: var(--vams-text-disabled) !important;
+}
+
+/* Password visibility toggle icon */
+:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global(button) :global(svg) {
+    color: var(--vams-text-heading);
+    fill: var(--vams-text-heading);
+}
+
+/* Sign In button — loading and active states */
+:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global(.amplify-button--primary),
+:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global(button[type="submit"]) {
+    background-color: var(--vams-color-info) !important;
+    color: #ffffff !important;
+}
+
+:global(.awsui-dark-mode)
+    :global([data-amplify-authenticator])
+    :global(button[type="submit"]):global(:disabled),
+:global(.awsui-dark-mode)
+    :global([data-amplify-authenticator])
+    :global(button[type="submit"]):global([data-loading="true"]) {
+    background-color: var(--vams-color-info) !important;
+    opacity: 0.7;
+    color: #ffffff !important;
+}
+
+/* Amplify form container and footer backgrounds */
+:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global([data-amplify-router]) {
+    background-color: var(--vams-bg-secondary) !important;
+    border-color: var(--vams-border-default) !important;
+}
+
+:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global([data-amplify-footer]) {
+    background-color: var(--vams-bg-secondary);
+}
+
+:global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global([data-amplify-form]) {
+    background-color: var(--vams-bg-secondary);
 }

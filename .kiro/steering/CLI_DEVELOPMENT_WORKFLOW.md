@@ -622,29 +622,29 @@ When making changes, update the appropriate documentation files:
 
 #### **Documentation File Mapping:**
 
--   **Setup/Auth changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **Asset management changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **File operation changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **Database changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **Tag management changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **... additional command type changes** → Update relevant command guides in `docs/commands/` and troubleshooting guides in `docs/troubleshooting/`
--   **Global patterns/JSON changes** → Update relevant command guides in `docs/commands/`
--   **Network/SSL issues** → Update relevant troubleshooting guides in `docs/troubleshooting/`
--   **Installation/setup process** → Update `docs/INSTALLATION.md`
--   **Authentication system** → Update `docs/AUTHENTICATION.md`
--   **Development process** → Update `docs/DEVELOPMENT.md`
--   **Major feature additions** → Update main `README.md`
--   **System-wide rule changes** → Update `CLI_DEVELOPMENT_WORKFLOW.md` (this file)
+All CLI documentation lives in the Docusaurus documentation site at `documentation/docusaurus-site/docs/cli/`.
+
+**Docusaurus documentation site** (`documentation/docusaurus-site/docs/cli/`):
+
+-   **Command changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/commands/`
+-   **New command group** → Create new page in `cli/commands/`, update `cli/command-reference.md`, and add to `sidebars.ts`
+-   **Installation/auth changes** → Update `cli/getting-started.md` and `cli/installation.md`
+-   **Automation patterns** → Update `cli/automation.md`
+-   **API changes** → Update relevant `documentation/docusaurus-site/docs/api/` page and `documentation/VAMS_API.yaml`
+-   **Permission changes** → Update `documentation/docusaurus-site/docs/concepts/permissions-model.md`
+
+**Docusaurus documentation style**: Use `:::note`/`:::warning` admonitions, escape `\{curly braces\}` outside code blocks, `bash` language tags on code blocks. See `documentation/CLAUDE.md` for the full documentation style guide.
 
 #### **Documentation Update Checklist:**
 
--   [ ] **Update Command Documentation**: Add/modify examples in appropriate `docs/commands/` file
--   [ ] **Update Troubleshooting**: Add error scenarios to appropriate `docs/troubleshooting/` file
--   [ ] **Update Supporting Documentation**: Update `docs/INSTALLATION.md`, `docs/AUTHENTICATION.md`, or `docs/DEVELOPMENT.md` if needed
--   [ ] **Update Main README**: Update `tools/VamsCLI/README.md` overview and links if needed
--   [ ] **Update CLI_DEVELOPMENT_WORKFLOW.md**: If system-wide rules, standards, or patterns change
--   [ ] **Cross-Reference Check**: Verify all internal documentation links work across the new structure
+-   [ ] **Update Docusaurus CLI docs**: Add/modify in `documentation/docusaurus-site/docs/cli/commands/`
+-   [ ] **Update CLI command reference index**: Update `documentation/docusaurus-site/docs/cli/command-reference.md` if new command group
+-   [ ] **Update main README**: Update `tools/VamsCLI/README.md` if needed
+-   [ ] **Update sidebars.ts**: If new pages were added to Docusaurus CLI section
+-   [ ] **Build verification**: Run `cd documentation/docusaurus-site && npm run build` to verify
+-   [ ] **Cross-Reference Check**: Verify all internal documentation links work
 -   [ ] **Accuracy Check**: Ensure all documented features actually exist in code
+-   [ ] **External Tool Integrations**: If CLI commands, parameters, output formats, or authentication flows changed, review and update the external connectors at `tools/ExternalIntegrations/` that wrap the CLI (Isaac Sim Python wrapper in `isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py`, ArcGIS Pro C# wrapper in `arcgispro-connector-for-vams/Services/VamsCliService.cs`)
 
 #### **New Documentation Structure:**
 
@@ -925,6 +925,14 @@ This workflow document itself MUST be updated whenever system-wide standards, im
 -   **Error Handling Standards**: If new error handling patterns are required
 -   **Testing Framework Changes**: If testing patterns or requirements change
 -   **Documentation Structure Changes**: If the documentation file structure changes
+
+#### **Cross-Steering File Synchronization:**
+
+When updating this workflow document, also update the corresponding files:
+
+1. Update **both** `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` and `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md` (they must stay in sync)
+2. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
+3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, DOCUMENTATION_WORKFLOW.md)
 
 #### **Workflow Maintenance Responsibility:**
 
@@ -1375,6 +1383,7 @@ All commands with `--json-output` parameter MUST output ONLY valid JSON with no 
 -   [ ] **No CLI Formatting**: No colored text, emojis, or CLI-specific formatting in JSON mode
 -   [ ] **Pure JSON Only**: Only `json.dumps()` output should be sent to stdout
 -   [ ] **JSON Error Format**: Errors must be JSON-formatted when `--json-output` is enabled
+-   [ ] **No Interactive Prompts**: Never use `click.confirm()`, `click.prompt()`, or any interactive input in JSON mode
 -   [ ] **Use JSON Utilities**: Use `vamscli.utils.json_output` helper functions
 
 #### **Correct JSON Output Pattern:**
@@ -1407,6 +1416,8 @@ def my_command(ctx: click.Context, json_output: bool):
             cli_formatter=lambda r: format_cli_output(r)
         )
 
+        return result
+
     except SomeBusinessLogicError as e:
         # Error output (JSON or CLI formatted)
         output_error(
@@ -1415,6 +1426,108 @@ def my_command(ctx: click.Context, json_output: bool):
             error_type="Business Logic Error",
             helpful_message="Use 'vamscli related-command' for more info."
         )
+        raise click.ClickException(str(e))
+```
+
+#### **Correct Confirmation Handling Pattern (for commands with --confirm flag):**
+
+```python
+@command_group.command()
+@click.option('--confirm', is_flag=True, help='Confirm deletion')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def delete(ctx: click.Context, confirm: bool, json_output: bool):
+    """Delete a resource (requires confirmation)."""
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        # Require confirmation for deletion
+        if not confirm:
+            if json_output:
+                # For JSON output, return error in JSON format
+                error_result = {
+                    "error": "Confirmation required",
+                    "message": "Deletion requires the --confirm flag",
+                    "resourceId": resource_id
+                }
+                output_result(error_result, json_output=True)
+                raise click.ClickException("Confirmation required for deletion")
+            else:
+                # For CLI output, show helpful message
+                click.secho("⚠️  Deletion requires explicit confirmation!", fg='yellow', bold=True)
+                click.echo("Use --confirm flag to proceed with deletion.")
+                raise click.ClickException("Confirmation required for deletion")
+
+        # Additional confirmation prompt for safety (skip in JSON mode)
+        if not json_output:
+            click.secho(f"⚠️  You are about to delete '{resource_id}'", fg='red', bold=True)
+            click.echo("This action cannot be undone!")
+
+            if not click.confirm("Are you sure you want to proceed?"):
+                click.echo("Deletion cancelled.")
+                return None
+
+        output_status(f"Deleting '{resource_id}'...", json_output)
+
+        # Perform deletion
+        result = api_client.delete_resource(resource_id)
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Resource deleted successfully!",
+            cli_formatter=lambda r: f"Resource: {resource_id}"
+        )
+
+        return result
+
+    except ResourceNotFoundError as e:
+        output_error(e, json_output, error_type="Resource Not Found")
+        raise click.ClickException(str(e))
+```
+
+#### **Correct Interactive Prompt Pattern (for delete commands without --confirm flag):**
+
+```python
+@command_group.command()
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def delete(ctx: click.Context, json_output: bool):
+    """Delete a resource (interactive confirmation)."""
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        # Confirmation prompt for safety (skip in JSON mode)
+        if not json_output:
+            click.secho(f"⚠️  You are about to delete '{resource_id}'", fg='yellow', bold=True)
+            click.echo("This will remove the resource and all associated data.")
+
+            if not click.confirm("Are you sure you want to proceed?"):
+                click.echo("Deletion cancelled.")
+                return None
+
+        output_status(f"Deleting '{resource_id}'...", json_output)
+
+        # Perform deletion
+        result = api_client.delete_resource(resource_id)
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Resource deleted successfully!",
+            cli_formatter=lambda r: f"Resource: {resource_id}"
+        )
+
+        return result
+
+    except ResourceNotFoundError as e:
+        output_error(e, json_output, error_type="Resource Not Found")
         raise click.ClickException(str(e))
 ```
 
@@ -1449,6 +1562,35 @@ def bad_mixed_output(json_output: bool):
     result = api_call()
     if json_output:
         click.echo("Success!")  # VIOLATION - text before JSON
+        click.echo(json.dumps(result, indent=2))
+
+# ❌ INCORRECT - Interactive prompt in JSON mode
+@command.command()
+@click.option('--json-output', is_flag=True)
+def bad_interactive_prompt(json_output: bool):
+    # VIOLATION - click.confirm() runs even in JSON mode
+    if not click.confirm("Are you sure?"):
+        return
+    result = api_call()
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+
+# ❌ INCORRECT - Missing JSON error for confirmation
+@command.command()
+@click.option('--confirm', is_flag=True)
+@click.option('--json-output', is_flag=True)
+def bad_confirm_handling(confirm: bool, json_output: bool):
+    if not confirm:
+        # VIOLATION - No JSON error format
+        click.echo("Use --confirm flag")
+        raise click.ClickException("Confirmation required")
+
+    # VIOLATION - click.confirm() runs even when --confirm is provided with --json-output
+    if not click.confirm("Are you sure?"):
+        return
+
+    result = api_call()
+    if json_output:
         click.echo(json.dumps(result, indent=2))
 ```
 

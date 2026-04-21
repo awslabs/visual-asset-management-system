@@ -13,8 +13,6 @@ import {
 } from "./constructs/cognito-web-native-construct";
 import { DynamoDbAuthDefaultsAdminConstructStack } from "./constructs/dynamodb-authdefaults-admin-construct";
 import { DynamoDbAuthDefaultsROConstructStack } from "./constructs/dynamodb-authdefaults-ro-construct";
-import { DynamoDbAuthDefaultsBasicConstructStack } from "./constructs/dynamodb-authdefaults-basic-construct";
-import { DynamoDbAuthDefaultsPipelineConstructStack } from "./constructs/dynamodb-authdefaults-pipeline-construct";
 import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
 import { Stack, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";

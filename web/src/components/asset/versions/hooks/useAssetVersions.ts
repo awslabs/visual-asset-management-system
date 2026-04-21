@@ -20,6 +20,9 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
     // State for filtering
     const [filterText, setFilterText] = useState<string>("");
 
+    // State for showing archived versions
+    const [showArchivedVersions, setShowArchivedVersions] = useState<boolean>(false);
+
     // State for sorting
     const [sortingColumn, setSortingColumn] = useState<{
         sortingField: string;
@@ -53,6 +56,7 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
                 databaseId,
                 assetId,
                 pageSize: 100, // Fetch 100 at a time from backend
+                showArchived: true, // Always fetch all versions, filter locally
             });
 
             console.log("Fetched all asset versions:", response);
@@ -73,6 +77,9 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
 
     // Compute filtered versions
     const filteredVersions = allVersions.filter((version) => {
+        // Archive filter: hide archived versions unless showArchivedVersions is true
+        if (!showArchivedVersions && version.isArchived) return false;
+
         if (filterText.trim() === "") return true;
 
         const lowerFilter = filterText.toLowerCase();
@@ -255,5 +262,7 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
         setFilterText: handleFilterChange,
         sortingColumn,
         setSortingColumn: handleSortingChange,
+        showArchivedVersions,
+        setShowArchivedVersions,
     };
 };

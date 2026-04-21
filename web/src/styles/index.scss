@@ -7,6 +7,10 @@ html,
 body {
     touch-action: none;
     overflow-x: hidden;
+    background-color: var(--vams-bg-primary);
+    color: var(--vams-text-primary);
+    margin: 0;
+    padding: 0;
 }
 
 /* Firefox-specific rule to enable scrolling */
@@ -23,7 +27,8 @@ body {
         "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    padding-bottom: 20px;
+    background-color: var(--vams-bg-primary);
+    color: var(--vams-text-primary);
 }
 
 code {
@@ -52,7 +57,13 @@ code {
 }
 
 #root {
-    margin-top: 0px;
+    margin: 0;
+    padding: 0;
+}
+
+/* Reduce gap between tab bar and tab content in TabbedContainer on ViewAsset */
+#root [class*="tabs-content-wrapper"][class*="with-paddings"] > [class*="tabs-content"] {
+    padding-block-start: 6px !important;
 }
 
 #root div[class^="awsui_drawer-content"] {
@@ -91,7 +102,7 @@ code {
 
 .view-edit-asset-container h5 {
     font-size: 14px;
-    color: #545b64;
+    color: var(--vams-text-secondary);
     text-align: left;
     line-height: 22px;
     font-weight: 400;
@@ -114,7 +125,7 @@ code {
 
 .visualizer-segment-control button {
     font-size: 14px;
-    color: #16191f;
+    color: var(--vams-text-primary);
     text-align: center;
     line-height: 22px;
     font-weight: 700;
@@ -229,7 +240,7 @@ code {
     margin: 0;
     text-align: center;
     width: 100%;
-    background-color: #ffffff99;
+    background-color: var(--vams-bg-primary);
 }
 
 .carousel {
@@ -291,11 +302,11 @@ code {
     width: 30px;
     height: 30px;
     border-radius: 50%;
-    background-color: #fff;
+    background-color: var(--vams-bg-primary);
     opacity: 0.5;
     margin: 10px;
     cursor: pointer;
-    border: solid 1px #ccc;
+    border: solid 1px var(--vams-border-default);
 }
 
 .carousel input:checked + .slide-container .slide-image {
@@ -323,4 +334,24 @@ code {
 .react-flow__node-input,
 .react-flow__node-output {
     width: 300px !important;
+}
+
+/* MapLibre GL popup dark mode overrides */
+.maplibregl-popup-content {
+    background-color: var(--vams-bg-primary) !important;
+    color: var(--vams-text-primary) !important;
+}
+
+.maplibregl-popup-tip {
+    border-top-color: var(--vams-bg-primary) !important;
+}
+
+.maplibregl-popup-close-button {
+    color: var(--vams-text-primary) !important;
+    font-size: 18px;
+}
+
+.maplibregl-popup-close-button:hover {
+    background-color: var(--vams-bg-hover) !important;
+    color: var(--vams-text-heading) !important;
 }

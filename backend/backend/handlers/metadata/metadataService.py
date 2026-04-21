@@ -26,6 +26,7 @@ from common.metadataSchemaValidation import (
     enrich_metadata_with_schema
 )
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from handlers.assets.assetVersions import validate_asset_version_exists, get_asset_metadata_version
 from models.metadata import (
     # Asset Link Metadata Models
     AssetLinkMetadataPathRequestModel,
@@ -1431,16 +1432,23 @@ def handle_asset_link_metadata_delete(event):
 
 def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, claims_and_roles: dict) -> GetAssetMetadataResponseModel:
     """Get metadata for an asset - Returns ALL records (pagination ignored)
-    
+
     Args:
         database_id: The database ID
         asset_id: The asset ID
         query_params: Query parameters (ignored - for backward compatibility)
         claims_and_roles: User claims and roles
-        
+
     Returns:
         GetAssetMetadataResponseModel with ALL metadata records
     """
+    # Check if querying a specific version
+    asset_version_id = query_params.get('assetVersionId')
+    if asset_version_id:
+        return get_asset_metadata_from_version(
+            database_id, asset_id, asset_version_id, query_params, claims_and_roles
+        )
+
     try:
         # Validate asset exists and check authorization
         asset = validate_asset_exists(database_id, asset_id)
@@ -1545,6 +1553,111 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
     except Exception as e:
         logger.exception(f"Error getting asset metadata: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving metadata")
+
+
+def get_asset_metadata_from_version(database_id: str, asset_id: str, asset_version_id: str,
+                                    query_params: dict, claims_and_roles: dict) -> GetAssetMetadataResponseModel:
+    """Get asset metadata from a specific version snapshot"""
+    try:
+        # Validate asset exists and check authorization
+        asset = validate_asset_exists(database_id, asset_id)
+        asset.update({"object__type": "asset"})
+
+        if not check_entity_authorization(asset, "GET", claims_and_roles):
+            raise PermissionError("Not authorized to view metadata for this asset")
+
+        # Validate asset version exists before querying metadata
+        validate_asset_version_exists(database_id, asset_id, asset_version_id)
+
+        # Get metadata snapshot for this version
+        metadata_items_raw = get_asset_metadata_version(database_id, asset_id, asset_version_id)
+
+        if not metadata_items_raw:
+            logger.info(f"No metadata found for version {asset_version_id}")
+            return GetAssetMetadataResponseModel(
+                metadata=[],
+                restrictMetadataOutsideSchemas=False
+            )
+
+        # Filter for asset-level metadata only (filePath="/") and type="metadata"
+        asset_metadata = [item for item in metadata_items_raw if item.filePath == "/" and item.type == "metadata"]
+
+        # Convert to dict format for schema enrichment
+        metadata_list = []
+        for item in asset_metadata:
+            metadata_list.append({
+                'metadataKey': item.metadataKey,
+                'metadataValue': item.metadataValue,
+                'metadataValueType': item.metadataValueType
+            })
+
+        # Apply schema enrichment (same as current flow)
+        restrict_metadata_outside_schemas = False
+        try:
+            database_ids = [database_id, 'GLOBAL']
+
+            aggregated_schema = get_aggregated_schemas(
+                database_ids=database_ids,
+                entity_type='assetMetadata',
+                file_path=None,
+                dynamodb_client=dynamodb_client,
+                schema_table_name=metadata_schema_table_v2_name
+            )
+
+            schemas_exist = len(aggregated_schema) > 0
+            if schemas_exist:
+                try:
+                    db_config = get_database_config(database_id)
+                    db_restricts = db_config.get('restrictMetadataOutsideSchemas', False) == True
+                    restrict_metadata_outside_schemas = db_restricts
+                except Exception as e:
+                    logger.warning(f"Error fetching database config for restriction check: {e}")
+                    restrict_metadata_outside_schemas = False
+
+            enriched_metadata = enrich_metadata_with_schema(metadata_list, aggregated_schema)
+
+            response_models = []
+            for item in enriched_metadata:
+                response_models.append(AssetMetadataResponseModel(
+                    databaseId=database_id,
+                    assetId=asset_id,
+                    metadataKey=item['metadataKey'],
+                    metadataValue=item['metadataValue'],
+                    metadataValueType=item['metadataValueType'],
+                    metadataSchemaName=item.get('metadataSchemaName'),
+                    metadataSchemaField=item.get('metadataSchemaField'),
+                    metadataSchemaRequired=item.get('metadataSchemaRequired'),
+                    metadataSchemaSequence=item.get('metadataSchemaSequence'),
+                    metadataSchemaDefaultValue=item.get('metadataSchemaDefaultValue'),
+                    metadataSchemaDependsOn=item.get('metadataSchemaDependsOn'),
+                    metadataSchemaMultiFieldConflict=item.get('metadataSchemaMultiFieldConflict'),
+                    metadataSchemaControlledListKeys=item.get('metadataSchemaControlledListKeys')
+                ))
+
+            metadata_list = response_models
+        except Exception as e:
+            logger.warning(f"Error enriching version metadata with schema: {e}")
+            metadata_list = [AssetMetadataResponseModel(
+                databaseId=database_id,
+                assetId=asset_id,
+                metadataKey=item['metadataKey'],
+                metadataValue=item['metadataValue'],
+                metadataValueType=item['metadataValueType']
+            ) for item in metadata_list]
+            restrict_metadata_outside_schemas = False
+
+        return GetAssetMetadataResponseModel(
+            metadata=metadata_list,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+        )
+
+    except PermissionError as p:
+        raise p
+    except VAMSGeneralErrorResponse:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting asset metadata from version: {e}")
+        raise VAMSGeneralErrorResponse("Error retrieving metadata from version")
 
 
 def create_asset_metadata(database_id: str, asset_id: str, request_model: CreateAssetMetadataRequestModel, claims_and_roles: dict) -> BulkOperationResponseModel:
@@ -2319,7 +2432,8 @@ def handle_asset_metadata_get(event):
             query_request_model = parse(query_parameters, model=GetAssetMetadataRequestModel)
             query_params = {
                 'pageSize': query_request_model.pageSize,
-                'startingToken': query_request_model.startingToken
+                'startingToken': query_request_model.startingToken,
+                'assetVersionId': query_request_model.assetVersionId
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
@@ -2492,6 +2606,14 @@ def handle_asset_metadata_delete(event):
 
 def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, query_params: dict, claims_and_roles: dict):
     """Get metadata or attributes for a file - Returns ALL records (pagination ignored)"""
+    # Check if querying a specific version
+    asset_version_id = query_params.get('assetVersionId')
+    if asset_version_id:
+        return get_file_metadata_from_version(
+            database_id, asset_id, file_path, metadata_type,
+            asset_version_id, query_params, claims_and_roles
+        )
+
     try:
         # No S3 validation for GET - metadata can exist even if file doesn't
         asset = validate_asset_exists(database_id, asset_id)
@@ -2613,6 +2735,115 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
     except Exception as e:
         logger.exception(f"Error getting file metadata: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving metadata")
+
+
+def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: str,
+                                   metadata_type: str, asset_version_id: str,
+                                   query_params: dict, claims_and_roles: dict):
+    """Get file metadata/attributes from a specific version snapshot"""
+    try:
+        asset = validate_asset_exists(database_id, asset_id)
+        asset.update({"object__type": "asset"})
+
+        if not check_entity_authorization(asset, "GET", claims_and_roles):
+            raise PermissionError("Not authorized to view metadata for this file")
+
+        # Validate asset version exists before querying metadata
+        validate_asset_version_exists(database_id, asset_id, asset_version_id)
+
+        metadata_items_raw = get_asset_metadata_version(database_id, asset_id, asset_version_id)
+
+        if not metadata_items_raw:
+            logger.info(f"No metadata found for version {asset_version_id}")
+            return GetFileMetadataResponseModel(
+                metadata=[],
+                restrictMetadataOutsideSchemas=False
+            )
+
+        # Filter for this specific file and type
+        file_metadata = [
+            item for item in metadata_items_raw
+            if item.filePath == file_path and item.type == metadata_type
+        ]
+
+        metadata_list = []
+        for item in file_metadata:
+            metadata_list.append({
+                'metadataKey': item.metadataKey,
+                'metadataValue': item.metadataValue,
+                'metadataValueType': item.metadataValueType
+            })
+
+        # Apply schema enrichment
+        restrict_metadata_outside_schemas = False
+        try:
+            database_ids = [database_id, 'GLOBAL']
+            entity_type = 'fileMetadata' if metadata_type == 'metadata' else 'fileAttribute'
+
+            aggregated_schema = get_aggregated_schemas(
+                database_ids=database_ids,
+                entity_type=entity_type,
+                file_path=file_path,
+                dynamodb_client=dynamodb_client,
+                schema_table_name=metadata_schema_table_v2_name
+            )
+
+            schemas_exist = len(aggregated_schema) > 0
+            if schemas_exist:
+                try:
+                    db_config = get_database_config(database_id)
+                    db_restricts = db_config.get('restrictMetadataOutsideSchemas', False) == True
+                    restrict_metadata_outside_schemas = db_restricts
+                except Exception as e:
+                    logger.warning(f"Error fetching database config for restriction check: {e}")
+                    restrict_metadata_outside_schemas = False
+
+            enriched_metadata = enrich_metadata_with_schema(metadata_list, aggregated_schema)
+
+            response_models = []
+            for item in enriched_metadata:
+                response_models.append(FileMetadataResponseModel(
+                    databaseId=database_id,
+                    assetId=asset_id,
+                    filePath=file_path,
+                    metadataKey=item['metadataKey'],
+                    metadataValue=item['metadataValue'],
+                    metadataValueType=item['metadataValueType'],
+                    metadataSchemaName=item.get('metadataSchemaName'),
+                    metadataSchemaField=item.get('metadataSchemaField'),
+                    metadataSchemaRequired=item.get('metadataSchemaRequired'),
+                    metadataSchemaSequence=item.get('metadataSchemaSequence'),
+                    metadataSchemaDefaultValue=item.get('metadataSchemaDefaultValue'),
+                    metadataSchemaDependsOn=item.get('metadataSchemaDependsOn'),
+                    metadataSchemaMultiFieldConflict=item.get('metadataSchemaMultiFieldConflict'),
+                    metadataSchemaControlledListKeys=item.get('metadataSchemaControlledListKeys')
+                ))
+
+            metadata_list = response_models
+        except Exception as e:
+            logger.warning(f"Error enriching version file metadata with schema: {e}")
+            metadata_list = [FileMetadataResponseModel(
+                databaseId=database_id,
+                assetId=asset_id,
+                filePath=file_path,
+                metadataKey=item['metadataKey'],
+                metadataValue=item['metadataValue'],
+                metadataValueType=item['metadataValueType']
+            ) for item in metadata_list]
+            restrict_metadata_outside_schemas = False
+
+        return GetFileMetadataResponseModel(
+            metadata=metadata_list,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+        )
+
+    except PermissionError as p:
+        raise p
+    except VAMSGeneralErrorResponse:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting file metadata from version: {e}")
+        raise VAMSGeneralErrorResponse("Error retrieving file metadata from version")
 
 
 def create_file_metadata(database_id: str, asset_id: str, request_model: CreateFileMetadataRequestModel, claims_and_roles: dict):
@@ -3434,7 +3665,7 @@ def handle_file_metadata_get(event):
             file_path = file_path[len(path_request_model.assetId)+1:]
             logger.info(f"Stripped assetId prefix from filePath: {query_request_model.filePath} -> {file_path}")
         
-        query_params = {'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken}
+        query_params = {'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:

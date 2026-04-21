@@ -15,6 +15,7 @@ import {
 } from "@cloudscape-design/components";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
+import Synonyms from "../../synonyms";
 
 const FileUploadTableColumnDefinitions = [
     {
@@ -80,6 +81,7 @@ interface FileUploadTableProps {
     onRemoveItem?: (index: number) => void;
     onRemoveAll?: () => void;
     allowRemoval?: boolean;
+    displayMode?: "selection" | "upload";
 }
 
 /**
@@ -284,13 +286,14 @@ export const FileUploadTable = ({
     onRemoveItem,
     onRemoveAll,
     allowRemoval = false,
+    displayMode = "upload",
 }: FileUploadTableProps) => {
     let visibleContent = ["filesize", "status", "progress"];
 
     // If no custom column definitions are provided, add actions column if needed
     if (!columnDefinitions) {
         // Start with the default column definitions
-        let customColumnDefinitions = [...FileUploadTableColumnDefinitions];
+        const customColumnDefinitions = [...FileUploadTableColumnDefinitions];
 
         // Find the index of the status column to insert version ID before it
         const statusColumnIndex = customColumnDefinitions.findIndex((col) => col.id === "status");
@@ -304,7 +307,7 @@ export const FileUploadTable = ({
             if (filepathColumnIndex !== -1) {
                 customColumnDefinitions[filepathColumnIndex] = {
                     ...customColumnDefinitions[filepathColumnIndex],
-                    header: "Asset Preview Path",
+                    header: `${Synonyms.Asset} Preview Path`,
                 };
             }
 
@@ -424,6 +427,14 @@ export const FileUploadTable = ({
         }
 
         columnDefinitions = customColumnDefinitions;
+    }
+
+    // Filter columns based on displayMode
+    if (displayMode === "selection") {
+        // In selection mode, only show filepath, filesize, and actions (no progress or status)
+        columnDefinitions = columnDefinitions.filter(
+            (col) => col.id === "filepath" || col.id === "filesize" || col.id === "actions"
+        );
     }
 
     if (columnDefinitions) {
