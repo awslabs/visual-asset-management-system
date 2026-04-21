@@ -36,6 +36,8 @@ import {
     Form,
     Link,
     Table,
+    Popover,
+    Icon,
 } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import DatabaseSelector from "../../components/selectors/DatabaseSelector";
@@ -62,15 +64,16 @@ import {
     formatValidationErrors,
     ValidationResult,
 } from "../../utils/fileExtensionValidation";
+import { usePageTitle } from "../../hooks/usePageTitle";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
-var tags: any[] = [];
-var tagTypes: TagType[] = [];
-var assetOptions: { label: string; value: string }[] = [];
-var assetTags: string[] = [];
+let tags: any[] = [];
+let tagTypes: TagType[] = [];
+const assetOptions: { label: string; value: string }[] = [];
+let assetTags: string[] = [];
 
 export class AssetDetail {
-    isMultiFile: boolean = false;
+    isMultiFile = false;
     assetId?: string;
     assetName?: string;
     databaseId?: string;
@@ -522,7 +525,29 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                     />
                 </FormField>
 
-                <FormField label="Is Distributable?">
+                <FormField
+                    label={
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                            Is Distributable?
+                            <Popover
+                                dismissButton={false}
+                                position="top"
+                                size="medium"
+                                triggerType="custom"
+                                content={
+                                    <Box padding="s">
+                                        <strong>Distributable:</strong> Indicates whether the asset
+                                        is enabled to allow file downloads.
+                                    </Box>
+                                }
+                            >
+                                <span style={{ cursor: "help", color: "var(--vams-color-info)" }}>
+                                    <Icon name="status-info" size="small" />
+                                </span>
+                            </Popover>
+                        </span>
+                    }
+                >
                     <Select
                         options={isDistributableOptions}
                         selectedOption={
@@ -1027,7 +1052,7 @@ const AssetFileInfo = ({
                     >
                         <SpaceBetween direction="vertical" size="m">
                             <FormField
-                                label="Asset Files"
+                                label={`${Synonyms.Asset} Files`}
                                 description={
                                     assetDetailState.Asset
                                         ? `Total Files to Upload: ${assetDetailState.Asset.length}`
@@ -1115,7 +1140,7 @@ const AssetFileInfo = ({
                         </SpaceBetween>
 
                         <FileUpload
-                            label="Asset Overall Preview File (Optional)"
+                            label={`${Synonyms.Asset} Overall Preview File (Optional)`}
                             disabled={false}
                             setFile={handlePreviewFileSelection}
                             fileFormats={previewFileFormatsStr}
@@ -1137,6 +1162,7 @@ const AssetFileInfo = ({
                             allowRemoval={true}
                             onRemoveItem={handleRemoveFile}
                             onRemoveAll={handleRemoveAllFiles}
+                            displayMode="selection"
                         />
                     </Box>
                 )}
@@ -1188,8 +1214,14 @@ const AssetUploadReview = ({
                 <ColumnLayout columns={2} variant="text-grid">
                     <SpaceBetween direction="vertical" size="xl">
                         {/* Left Column: Asset Name, Database, Description */}
-                        <DisplayKV label="Asset Name" value={assetDetailState.assetName || ""} />
-                        <DisplayKV label="Database" value={assetDetailState.databaseId || ""} />
+                        <DisplayKV
+                            label={`${Synonyms.Asset} Name`}
+                            value={assetDetailState.assetName || ""}
+                        />
+                        <DisplayKV
+                            label={Synonyms.Database}
+                            value={assetDetailState.databaseId || ""}
+                        />
                         <DisplayKV label="Description" value={assetDetailState.description || ""} />
                     </SpaceBetween>
 
@@ -1220,11 +1252,11 @@ const AssetUploadReview = ({
                                 Object.keys(assetDetailState.assetLinksFe).map((linkType) => {
                                     let label = linkType;
                                     if (linkType === "parents") {
-                                        label = "Parent Assets";
+                                        label = `Parent ${Synonyms.Assets}`;
                                     } else if (linkType === "child") {
-                                        label = "Child Assets";
+                                        label = `Child ${Synonyms.Assets}`;
                                     } else if (linkType === "related") {
-                                        label = "Related Assets";
+                                        label = `Related ${Synonyms.Assets}`;
                                     }
 
                                     const formattedValue =
@@ -1279,14 +1311,14 @@ const AssetUploadReview = ({
                             cell: (item: FileUploadTableItem) => {
                                 if (item.index === 99999) return "Preview File";
                                 if (item.name.includes(".previewFile.")) return "Preview File";
-                                return "Asset File";
+                                return `${Synonyms.Asset} File`;
                             },
                             sortingField: "type",
                             sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) => {
                                 const getType = (item: FileUploadTableItem) => {
                                     if (item.index === 99999) return "Preview File";
                                     if (item.name.includes(".previewFile.")) return "Preview File";
-                                    return "Asset File";
+                                    return `${Synonyms.Asset} File`;
                                 };
                                 return getType(a).localeCompare(getType(b));
                             },
@@ -1339,10 +1371,43 @@ const UploadForm = () => {
         tags = [];
 
         fetchTags().then((res) => {
+            tags.length = 0; // Clear existing array without losing reference
             if (res && Array.isArray(res)) {
-                Object.values(res).map((x: any) => {
-                    tags.push({ label: `${x.tagName} (${x.tagTypeName})`, value: x.tagName });
-                });
+                // Group tags by tag type, sorted alphabetically
+                const grouped: Record<
+                    string,
+                    { tagTypeName: string; required: string; tagItems: any[] }
+                > = {};
+                const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
+                for (const x of res) {
+                    const typeName = x.tagTypeName || "Uncategorized";
+                    if (!grouped[typeName]) {
+                        const typeInfo = storedTypes.find((t: any) => t.tagTypeName === typeName);
+                        grouped[typeName] = {
+                            tagTypeName: typeName,
+                            required: typeInfo?.required || "False",
+                            tagItems: [],
+                        };
+                    }
+                    grouped[typeName].tagItems.push(x);
+                }
+                // Sort groups alphabetically, filter out empty groups, build grouped options
+                Object.values(grouped)
+                    .filter((group) => group.tagItems.length > 0)
+                    .sort((a, b) => a.tagTypeName.localeCompare(b.tagTypeName))
+                    .forEach((group) => {
+                        tags.push({
+                            label:
+                                group.required === "True"
+                                    ? `${group.tagTypeName} [required]`
+                                    : group.tagTypeName,
+                            options: group.tagItems
+                                .sort((a: any, b: any) =>
+                                    (a.tagName || "").localeCompare(b.tagName || "")
+                                )
+                                .map((t: any) => ({ label: t.tagName, value: t.tagName })),
+                        });
+                    });
             }
         });
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {
@@ -1573,6 +1638,7 @@ const UploadForm = () => {
 };
 
 export default function AssetUploadPage() {
+    usePageTitle(`Create ${Synonyms.Asset}`);
     const [state, dispatch] = useReducer(assetDetailReducer, {
         isMultiFile: false,
         isDistributable: true,
@@ -1590,6 +1656,7 @@ export default function AssetUploadPage() {
                         <UploadForm />
                     </div>
                 </Grid>
+                <div style={{ paddingBottom: "20px" }} />
             </Box>
         </AssetDetailContext.Provider>
     );

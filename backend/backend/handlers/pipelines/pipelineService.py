@@ -6,95 +6,136 @@ import boto3
 import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
-from common.constants import STANDARD_JSON_RESPONSE
+from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.validators import validate
 from botocore.exceptions import ClientError
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
+from models.common import (
+    APIGatewayProxyResponseV2,
+    success,
+    validation_error,
+    authorization_error,
+    internal_error,
+    general_error,
+    VAMSGeneralErrorResponse,
+)
+from models.pipelines import PipelineResponseModel, GetPipelinesResponseModel
 
-claims_and_roles = {}
-logger = safeLogger(service="PipelineService")
+logger = safeLogger(service_name="PipelineService")
 
+# Configure AWS clients
 dynamodb = boto3.resource('dynamodb')
 dynamodbClient = boto3.client('dynamodb')
 lambda_client = boto3.client('lambda')
 
-main_rest_response = STANDARD_JSON_RESPONSE
-pipeline_database = None
-unitTest = {
-    "body": {
-        "databaseId": "Unit_Test"
-    }
-}
-unitTest['body'] = json.dumps(unitTest['body'])
-
+# Load environment variables
 try:
-    pipeline_database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
-except:
+    pipeline_database = os.environ.get("PIPELINE_STORAGE_TABLE_NAME")
+    workflow_database = os.environ.get("WORKFLOW_STORAGE_TABLE_NAME")
+
+    if not pipeline_database:
+        logger.exception("Failed loading environment variables")
+        raise Exception("Failed Loading Environment Variables")
+except Exception as e:
     logger.exception("Failed loading environment variables")
-    main_rest_response['body'] = json.dumps({"message": "Failed Loading Environment Variables"})
+    raise e
 
 
-def get_all_pipelines(queryParams, showDeleted=False):
+#######################
+# Utility Functions
+#######################
+
+def _item_to_response_model(item):
+    """Convert a DynamoDB item to a PipelineResponseModel"""
+    # Parse userProvidedResource if present
+    user_resource = {}
+    if item.get('userProvidedResource'):
+        try:
+            user_resource = json.loads(item['userProvidedResource']) if isinstance(item['userProvidedResource'], str) else item['userProvidedResource']
+        except (json.JSONDecodeError, TypeError):
+            user_resource = {}
+
+    return PipelineResponseModel(
+        pipelineId=item.get('pipelineId', ''),
+        databaseId=item.get('databaseId'),
+        pipelineType=item.get('pipelineType'),
+        pipelineExecutionType=item.get('pipelineExecutionType', 'Lambda'),
+        description=item.get('description'),
+        assetType=item.get('assetType'),
+        outputType=item.get('outputType'),
+        waitForCallback=item.get('waitForCallback', 'Disabled'),
+        taskTimeout=item.get('taskTimeout'),
+        taskHeartbeatTimeout=item.get('taskHeartbeatTimeout'),
+        userProvidedResource=item.get('userProvidedResource'),
+        lambdaName=user_resource.get('resourceId') if user_resource.get('resourceType', 'Lambda') == 'Lambda' else None,
+        sqsQueueUrl=user_resource.get('resourceId') if user_resource.get('resourceType') == 'SQS' else None,
+        eventBridgeBusArn=user_resource.get('resourceId') if user_resource.get('resourceType') == 'EventBridge' else None,
+        eventBridgeSource=user_resource.get('eventSource') if user_resource.get('resourceType') == 'EventBridge' else None,
+        eventBridgeDetailType=user_resource.get('eventDetailType') if user_resource.get('resourceType') == 'EventBridge' else None,
+        inputParameters=item.get('inputParameters'),
+        enabled=item.get('enabled', True),
+        dateCreated=item.get('dateCreated'),
+        dateUpdated=item.get('dateUpdated'),
+    )
+
+
+def get_all_pipelines(query_params, show_deleted=False, claims_and_roles=None):
+    """Get all pipelines across all databases with Casbin filtering"""
     deserializer = TypeDeserializer()
 
     paginator = dynamodbClient.get_paginator('scan')
     operator = "NOT_CONTAINS"
-    if showDeleted:
+    if show_deleted:
         operator = "CONTAINS"
-    filter = {
+    db_filter = {
         "databaseId": {
             "AttributeValueList": [{"S": "#deleted"}],
             "ComparisonOperator": f"{operator}"
         }
     }
-    pageIterator = paginator.paginate(
+    page_iterator = paginator.paginate(
         TableName=pipeline_database,
-        ScanFilter=filter,
+        ScanFilter=db_filter,
         PaginationConfig={
-            'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']),
-            'StartingToken': queryParams['startingToken']
+            'MaxItems': int(query_params['maxItems']),
+            'PageSize': int(query_params['pageSize']),
+            'StartingToken': query_params['startingToken']
         }
     ).build_full_result()
 
     logger.info("Fetching results")
-    result = {}
     items = []
-    for item in pageIterator['Items']:
+    for item in page_iterator['Items']:
         deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
 
-        # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline:
-        deserialized_document.update({
-            "object__type": "pipeline"
-        })
-        if len(claims_and_roles["tokens"]) > 0:
+        # Tier 2: Object-level Casbin check
+        deserialized_document.update({"object__type": "pipeline"})
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(deserialized_document, "GET"):
-                items.append(deserialized_document)
+                items.append(_item_to_response_model(deserialized_document))
 
-    result['Items'] = items
+    result = GetPipelinesResponseModel(Items=items)
 
-    if 'NextToken' in pageIterator:
-        result['NextToken'] = pageIterator['NextToken']
+    if 'NextToken' in page_iterator:
+        result.NextToken = page_iterator['NextToken']
 
-    return {
-        "statusCode": 200,
-        "message": result
-    }
+    return result
 
 
-def get_pipelines(databaseId, query_params, showDeleted=False):
+def get_pipelines(database_id, query_params, show_deleted=False, claims_and_roles=None):
+    """Get all pipelines for a specific database with Casbin filtering"""
     paginator = dynamodb.meta.client.get_paginator('query')
 
-    if showDeleted:
-        databaseId = databaseId + "#deleted"
+    if show_deleted:
+        database_id = database_id + "#deleted"
 
     page_iterator = paginator.paginate(
         TableName=pipeline_database,
-        KeyConditionExpression=Key('databaseId').eq(databaseId),
+        KeyConditionExpression=Key('databaseId').eq(database_id),
         ScanIndexForward=False,
         PaginationConfig={
             'MaxItems': int(query_params['maxItems']),
@@ -103,262 +144,363 @@ def get_pipelines(databaseId, query_params, showDeleted=False):
         }
     ).build_full_result()
 
-    result = {
-        "Items": []
-    }
-
+    items = []
     for item in page_iterator['Items']:
-        # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline:
-        item.update({
-            "object__type": "pipeline"
-        })
-        if len(claims_and_roles["tokens"]) > 0:
+        # Tier 2: Object-level Casbin check
+        item.update({"object__type": "pipeline"})
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(item, "GET"):
-                result['Items'].append(item)
+                items.append(_item_to_response_model(item))
+
+    result = GetPipelinesResponseModel(Items=items)
 
     if "NextToken" in page_iterator:
-        result["NextToken"] = page_iterator["NextToken"]
+        result.NextToken = page_iterator["NextToken"]
 
-    return {
-        "statusCode": 200,
-        "message": result
-    }
+    return result
 
 
-def get_pipeline(databaseId, pipelineId, showDeleted=False):
+def get_pipeline(database_id, pipeline_id, show_deleted=False, claims_and_roles=None):
+    """Get a single pipeline by ID with Casbin check"""
     table = dynamodb.Table(pipeline_database)
-    if showDeleted:
-        databaseId = databaseId + "#deleted"
-    db_response = table.get_item(Key={'databaseId': databaseId, 'pipelineId': pipelineId})
+    if show_deleted:
+        database_id = database_id + "#deleted"
+    db_response = table.get_item(Key={'databaseId': database_id, 'pipelineId': pipeline_id})
     pipeline = db_response.get("Item", {})
-    allowed = False
 
     if pipeline:
-        # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline:
-        pipeline.update({
-            "object__type": "pipeline"
-        })
-        if len(claims_and_roles["tokens"]) > 0:
+        # Tier 2: Object-level Casbin check
+        pipeline.update({"object__type": "pipeline"})
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(pipeline, "GET"):
-                allowed = True
+                return _item_to_response_model(pipeline)
 
-    return {
-        "statusCode": 200 if pipeline and allowed else 404,
-        "message": pipeline if allowed else {}
-    }
+    return None
 
 
-def delete_pipeline(databaseId, pipelineId):
-    response = {
-        'statusCode': 404,
-        'message': 'Record not found'
-    }
-    table = dynamodb.Table(pipeline_database)
-    if "#deleted" in databaseId:
-        return response
-    
-    db_response = table.get_item(Key={'databaseId': databaseId, 'pipelineId': pipelineId})
-    pipeline = db_response.get("Item", {})
-
-    if pipeline:
-        allowed = False
-        # Add Casbin Enforcer to check if the current user has permissions to DELETE the pipeline:
-        pipeline.update({
-            "object__type": "pipeline"
-        })
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(pipeline, "DELETE"):
-                allowed = True
-
-        if allowed:
-            logger.info("Deleting pipeline: ")
-            logger.info(pipeline)
-            userResource = json.loads(pipeline['userProvidedResource'])
-            if userResource['isProvided'] == False:
-                if pipeline['pipelineExecutionType'] == 'Lambda':
-                    delete_lambda(userResource['resourceId'])
-
-            pipeline['databaseId'] = databaseId + "#deleted"
-
-            table.put_item(
-                Item=pipeline
-            )
-            result = table.delete_item(Key={'databaseId': databaseId, 'pipelineId': pipelineId})
-            logger.info(result)
-            response['statusCode'] = 200
-            response['message'] = "Pipeline deleted"
-        else:
-            response['statusCode'] = 403
-            response['message'] = "Action not allowed"
-    return response
-
-
-def delete_lambda(functionName):
-    logger.info("Deleting lambda: " + functionName)
+def delete_lambda(function_name):
+    """Delete a Lambda function"""
+    logger.info("Deleting lambda: " + function_name)
     try:
-        lambda_client.delete_function(
-            FunctionName=functionName,
-        )
+        lambda_client.delete_function(FunctionName=function_name)
     except Exception as e:
         logger.exception("Failed to delete lambda")
         logger.exception(e)
 
 
-def get_handler(event, response, pathParameters, queryParameters, showDeleted):
-    if 'pipelineId' not in pathParameters:
-        if 'databaseId' in pathParameters:
+def _get_workflows_using_pipeline(database_id: str, pipeline_id: str) -> list:
+    """Check if a pipeline is referenced by any active (non-deleted) workflows.
+
+    Args:
+        database_id: The database ID to scan workflows for.
+        pipeline_id: The pipeline ID to look for.
+
+    Returns:
+        List of workflow IDs that reference this pipeline.
+    """
+    if not workflow_database:
+        return []
+
+    workflow_table = dynamodb.Table(workflow_database)
+    referencing_workflows = []
+
+    try:
+        # Query workflows for this database
+        response = workflow_table.query(
+            KeyConditionExpression=Key('databaseId').eq(database_id)
+        )
+
+        for item in response.get('Items', []):
+            specified = item.get('specifiedPipelines', {})
+            functions = specified.get('functions', []) if isinstance(specified, dict) else []
+            for fn in functions:
+                fn_name = fn.get('name', '') if isinstance(fn, dict) else ''
+                if fn_name == pipeline_id:
+                    referencing_workflows.append(item.get('workflowId', 'unknown'))
+                    break
+
+        # Handle pagination
+        while 'LastEvaluatedKey' in response:
+            response = workflow_table.query(
+                KeyConditionExpression=Key('databaseId').eq(database_id),
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            for item in response.get('Items', []):
+                specified = item.get('specifiedPipelines', {})
+                functions = specified.get('functions', []) if isinstance(specified, dict) else []
+                for fn in functions:
+                    fn_name = fn.get('name', '') if isinstance(fn, dict) else ''
+                    if fn_name == pipeline_id:
+                        referencing_workflows.append(item.get('workflowId', 'unknown'))
+                        break
+
+    except Exception as e:
+        logger.warning(f"Error checking workflows for pipeline {pipeline_id}: {e}")
+
+    return referencing_workflows
+
+
+def _scan_all_workflows_for_pipeline(pipeline_id: str) -> list:
+    """Scan all workflows across all databases for references to a GLOBAL pipeline.
+
+    This uses a table scan since GLOBAL pipelines can be referenced by workflows
+    in any database.  Only called for GLOBAL pipeline deletions.
+
+    Args:
+        pipeline_id: The pipeline ID to search for.
+
+    Returns:
+        List of workflow IDs that reference this pipeline.
+    """
+    if not workflow_database:
+        return []
+
+    workflow_table = dynamodb.Table(workflow_database)
+    referencing_workflows = []
+
+    try:
+        scan_kwargs = {}
+        while True:
+            response = workflow_table.scan(**scan_kwargs)
+            for item in response.get('Items', []):
+                # Skip deleted workflows
+                if '#deleted' in item.get('databaseId', ''):
+                    continue
+                specified = item.get('specifiedPipelines', {})
+                functions = specified.get('functions', []) if isinstance(specified, dict) else []
+                for fn in functions:
+                    fn_name = fn.get('name', '') if isinstance(fn, dict) else ''
+                    if fn_name == pipeline_id:
+                        referencing_workflows.append(item.get('workflowId', 'unknown'))
+                        break
+            if 'LastEvaluatedKey' not in response:
+                break
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    except Exception as e:
+        logger.warning(f"Error scanning all workflows for pipeline {pipeline_id}: {e}")
+
+    return referencing_workflows
+
+
+def delete_pipeline(database_id, pipeline_id, claims_and_roles=None):
+    """Delete a pipeline, including auto-created Lambda cleanup"""
+    table = dynamodb.Table(pipeline_database)
+
+    if "#deleted" in database_id:
+        return {'statusCode': 404, 'message': 'Record not found'}
+
+    db_response = table.get_item(Key={'databaseId': database_id, 'pipelineId': pipeline_id})
+    pipeline = db_response.get("Item", {})
+
+    if not pipeline:
+        return {'statusCode': 404, 'message': 'Record not found'}
+
+    # Check if pipeline is used by any active workflows.
+    # For GLOBAL pipelines, workflows in any database may reference them,
+    # so we scan all non-deleted workflows.
+    referencing_workflows = _get_workflows_using_pipeline(database_id, pipeline_id)
+    if database_id == "GLOBAL" and not referencing_workflows:
+        referencing_workflows = _scan_all_workflows_for_pipeline(pipeline_id)
+    if referencing_workflows:
+        workflow_list = ', '.join(referencing_workflows[:5])
+        suffix = f" and {len(referencing_workflows) - 5} more" if len(referencing_workflows) > 5 else ""
+        return {
+            'statusCode': 400,
+            'message': f'Cannot delete pipeline. It is currently used by workflow(s): {workflow_list}{suffix}. '
+                       f'Remove the pipeline from these workflows before deleting.'
+        }
+
+    # Tier 2: Object-level Casbin check
+    pipeline.update({"object__type": "pipeline"})
+    if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(pipeline, "DELETE"):
+            return {'statusCode': 403, 'message': 'Action not allowed'}
+
+    logger.info("Deleting pipeline: ")
+    logger.info(pipeline)
+
+    # Only attempt Lambda deletion for Lambda-type pipelines with auto-created functions
+    user_resource = {}
+    if pipeline.get('userProvidedResource'):
+        try:
+            user_resource = json.loads(pipeline['userProvidedResource']) if isinstance(pipeline['userProvidedResource'], str) else pipeline['userProvidedResource']
+        except (json.JSONDecodeError, TypeError):
+            user_resource = {}
+
+    resource_type = user_resource.get('resourceType', 'Lambda')
+    is_provided = user_resource.get('isProvided', True)
+
+    if resource_type == 'Lambda' and not is_provided:
+        delete_lambda(user_resource.get('resourceId', ''))
+
+    # Soft-delete: move to #deleted namespace
+    pipeline['databaseId'] = database_id + "#deleted"
+    table.put_item(Item=pipeline)
+    result = table.delete_item(Key={'databaseId': database_id, 'pipelineId': pipeline_id})
+    logger.info(result)
+
+    return {'statusCode': 200, 'message': 'Pipeline deleted'}
+
+
+#######################
+# Route Handlers
+#######################
+
+def get_handler(event, path_parameters, query_parameters, show_deleted, claims_and_roles):
+    """Handler for GET requests - list or single pipeline"""
+    try:
+        if 'pipelineId' not in path_parameters:
+            if 'databaseId' in path_parameters:
+                # GET /database/{databaseId}/pipelines
+                logger.info("Validating Parameters")
+                (valid, message) = validate({
+                    'databaseId': {
+                        'value': path_parameters['databaseId'],
+                        'validator': 'ID',
+                        'allowGlobalKeyword': True
+                    },
+                })
+                if not valid:
+                    logger.error(message)
+                    return validation_error(body={'message': message}, event=event)
+
+                logger.info("Listing Pipelines for Database: " + path_parameters['databaseId'])
+                result = get_pipelines(path_parameters['databaseId'], query_parameters, show_deleted, claims_and_roles)
+                return success(body={'message': result.dict()})
+            else:
+                # GET /pipelines (all)
+                logger.info("Listing All Pipelines")
+                result = get_all_pipelines(query_parameters, show_deleted, claims_and_roles)
+                return success(body={'message': result.dict()})
+        else:
+            # GET /database/{databaseId}/pipelines/{pipelineId}
+            if 'databaseId' not in path_parameters:
+                return validation_error(body={'message': 'No database ID in API Call'}, event=event)
+
             logger.info("Validating Parameters")
             (valid, message) = validate({
                 'databaseId': {
-                    'value': pathParameters['databaseId'],
+                    'value': path_parameters['databaseId'],
                     'validator': 'ID',
                     'allowGlobalKeyword': True
                 },
+                'pipelineId': {
+                    'value': path_parameters['pipelineId'],
+                    'validator': 'ID'
+                }
             })
             if not valid:
                 logger.error(message)
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
-            logger.info("Listing Pipelines for Database: " + pathParameters['databaseId'])
-            result = get_pipelines(pathParameters['databaseId'], queryParameters, showDeleted)
-            response['body'] = json.dumps({"message": result['message']})
-            response['statusCode'] = result['statusCode']
-            logger.info(response)
-            return response
-        else:
-            logger.info("Listing All Pipelines")
-            result = get_all_pipelines(queryParameters, showDeleted)
-            response['body'] = json.dumps({"message": result['message']})
-            response['statusCode'] = result['statusCode']
-            logger.info(response)
-            return response
-    else:
-        if 'databaseId' not in pathParameters:
-            message = "No database ID in API Call"
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            logger.error(response)
-            return response
+                return validation_error(body={'message': message}, event=event)
 
-        logger.info("Validating Parameters")
-        (valid, message) = validate({
-            'databaseId': {
-                'value': pathParameters['databaseId'],
-                'validator': 'ID',
-                'allowGlobalKeyword': True
-            },
-            'pipelineId': {
-                'value': pathParameters['pipelineId'],
-                'validator': 'ID'
-            }
-        })
-        if not valid:
-            logger.error(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
+            logger.info("Getting Pipeline: " + path_parameters['pipelineId'])
+            pipeline = get_pipeline(path_parameters['databaseId'], path_parameters['pipelineId'], show_deleted, claims_and_roles)
+            if pipeline:
+                return success(body={'message': pipeline.dict()})
+            else:
+                return validation_error(status_code=404, body={'message': {}}, event=event)
 
-        logger.info("Getting Pipeline: "+pathParameters['pipelineId'])
-        result = get_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'], showDeleted)
-        response['body'] = json.dumps({"message": result['message']})
-        response['statusCode'] = result['statusCode']
-        logger.info(response)
-        return response
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error in get_handler: {e}")
+        return internal_error(event=event)
 
 
-def delete_handler(event, response, pathParameters, queryParameters):
-    logger.info("Validating Parameters")
-    for parameter in ['databaseId', 'pipelineId']:
-        if parameter not in pathParameters:
-            message = "Missing required parameter in API Call"
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            logger.error(response)
-            return response
-        (valid, message) = validate({
-            parameter: {
-                'value': pathParameters[parameter],
-                'validator': 'ID',
-                'allowGlobalKeyword': True
-            }
-        })
-        if not valid:
-            logger.error(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
-
-    logger.info("Deleting Pipeline: "+pathParameters['pipelineId'])
-    result = delete_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'])
-    response['body'] = json.dumps({"message": result['message']})
-    response['statusCode'] = result['statusCode']
-    logger.info(response)
-    return response
-
-
-def lambda_handler(event, context):
-    global claims_and_roles
-    response = STANDARD_JSON_RESPONSE
-    claims_and_roles = request_to_claims(event)
-    logger.info(event)
-    pathParameters = event.get('pathParameters', {})
-    queryParameters = event.get('queryStringParameters', {})
-
-    # Enhanced parameter validation for query parameters
+def delete_handler(event, path_parameters, claims_and_roles):
+    """Handler for DELETE requests"""
     try:
-        # Validate showDeleted parameter if present
-        showDeleted = False
-        if 'showDeleted' in queryParameters:
-            show_deleted_value = queryParameters['showDeleted']
+        logger.info("Validating Parameters")
+        for parameter in ['databaseId', 'pipelineId']:
+            if parameter not in path_parameters:
+                return validation_error(body={'message': 'Missing required parameter in API Call'}, event=event)
+            (valid, message) = validate({
+                parameter: {
+                    'value': path_parameters[parameter],
+                    'validator': 'ID',
+                    'allowGlobalKeyword': True
+                }
+            })
+            if not valid:
+                logger.error(message)
+                return validation_error(body={'message': message}, event=event)
+
+        logger.info("Deleting Pipeline: " + path_parameters['pipelineId'])
+        result = delete_pipeline(path_parameters['databaseId'], path_parameters['pipelineId'], claims_and_roles)
+        return APIGatewayProxyResponseV2(
+            isBase64Encoded=False,
+            statusCode=result['statusCode'],
+            headers={
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache, no-store',
+            },
+            body=json.dumps({'message': result['message']})
+        )
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Error in delete_handler: {e}")
+        return internal_error(event=event)
+
+
+#######################
+# Lambda Handler
+#######################
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for pipeline service API"""
+    logger.info(event)
+
+    try:
+        path_parameters = event.get('pathParameters', {}) or {}
+        query_parameters = event.get('queryStringParameters', {}) or {}
+
+        # Parse showDeleted parameter
+        show_deleted = False
+        if 'showDeleted' in query_parameters:
+            show_deleted_value = query_parameters['showDeleted']
             if isinstance(show_deleted_value, str):
                 if show_deleted_value.lower() in ['true', '1', 'yes']:
-                    showDeleted = True
+                    show_deleted = True
                 elif show_deleted_value.lower() in ['false', '0', 'no']:
-                    showDeleted = False
+                    show_deleted = False
                 else:
-                    response['statusCode'] = 400
-                    response['body'] = json.dumps({"message": "showDeleted parameter must be a valid boolean value (true/false)"})
-                    return response
+                    return validation_error(
+                        body={'message': 'showDeleted parameter must be a valid boolean value (true/false)'},
+                        event=event
+                    )
             else:
-                showDeleted = bool(show_deleted_value)
+                show_deleted = bool(show_deleted_value)
 
-        validate_pagination_info(queryParameters)
+        validate_pagination_info(query_parameters)
 
-    except Exception as e:
-        logger.exception(f"Error validating query parameters: {e}")
-        response['statusCode'] = 400
-        response['body'] = json.dumps({"message": "Invalid query parameters"})
-        return response
-
-    try:
         http_method = event['requestContext']['http']['method']
         logger.info(http_method)
 
+        # Tier 1: API-level authorization
+        claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
-        if http_method == 'GET' and method_allowed_on_api:
-            return get_handler(event, response, pathParameters, queryParameters, showDeleted)
-        elif http_method == 'DELETE' and method_allowed_on_api:
-            return delete_handler(event, response, pathParameters, queryParameters)
+        if not method_allowed_on_api:
+            return authorization_error()
+
+        # Route to appropriate handler
+        if http_method == 'GET':
+            return get_handler(event, path_parameters, query_parameters, show_deleted, claims_and_roles)
+        elif http_method == 'DELETE':
+            return delete_handler(event, path_parameters, claims_and_roles)
         else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
+            return authorization_error(body={'message': 'Method not allowed'})
+
     except Exception as e:
-        response['statusCode'] = 500
-        logger.exception(e)
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
-
-
-if __name__ == "__main__":
-    test_response = lambda_handler(None, None)
-    logger.info(test_response)
+        logger.exception(f"Unhandled error in lambda_handler: {e}")
+        return internal_error(event=event)

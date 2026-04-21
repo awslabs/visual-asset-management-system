@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
     Modal,
     Box,
@@ -11,11 +11,16 @@ import {
     Pagination,
     TextContent,
     Popover,
+    SegmentedControl,
 } from "@cloudscape-design/components";
 import { TableProps } from "@cloudscape-design/components/table";
 import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
+import { appCache } from "../../../services/appCache";
 import { generatePresignedUrls } from "../../../services/FileOperationsService";
+import { getDualValidAccessToken } from "../../../utils/authTokenUtils";
 import { FileTree } from "../types/FileManagerTypes";
+
+type UrlMode = "presigned" | "stream";
 
 interface ShareUrlsModalProps {
     visible: boolean;
@@ -23,6 +28,7 @@ interface ShareUrlsModalProps {
     selectedFiles: FileTree[];
     databaseId: string;
     assetId: string;
+    assetVersionId?: string;
 }
 
 interface UrlItem {
@@ -39,6 +45,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
     selectedFiles,
     databaseId,
     assetId,
+    assetVersionId,
 }) => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -46,158 +53,206 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage] = useState(10);
     const [allCopied, setAllCopied] = useState(false);
+    const [urlMode, setUrlMode] = useState<UrlMode>("presigned");
+    // Base URL toggle is disabled until backend supports website base URL routing for API stream
+    const [useBaseUrl] = useState(false);
+    const [tokenCopied, setTokenCopied] = useState(false);
     const DEFAULT_EXPIRATION_MESSAGE =
         "These URLs provide temporary access to the selected files. They will expire based on system expiration configuration.";
+    const STREAM_URL_MESSAGE =
+        "These URLs require an Authorization header with a Bearer token (e.g. 'Bearer <token>'). They do not expire and can be used in downstream applications as long as the caller has separately authenticated to VAMS.";
     const [expirationMessage, setExpirationMessage] = useState<string>(DEFAULT_EXPIRATION_MESSAGE);
 
-    // Generate URLs when modal becomes visible
+    // Stabilize selectedFiles reference to prevent useEffect re-triggers
+    const selectedFilesRef = useRef(selectedFiles);
+    const prevVisibleRef = useRef(false);
     useEffect(() => {
-        if (visible && selectedFiles.length > 0) {
-            generateUrls();
-        }
-    }, [visible, selectedFiles]);
+        selectedFilesRef.current = selectedFiles;
+    }, [selectedFiles]);
 
-    const generateUrls = async () => {
-        setIsLoading(true);
-        setError(null);
-        setUrls([]);
+    // Collect files from selected items (shared between both modes)
+    const collectSelectedFiles = (): {
+        key: string;
+        name: string;
+        versionId?: string;
+        relativePath: string;
+    }[] => {
+        const filesToShare: {
+            key: string;
+            name: string;
+            versionId?: string;
+            relativePath: string;
+        }[] = [];
 
-        try {
-            // Process both files and folders
-            const filesToShare: {
-                key: string;
-                name: string;
-                versionId?: string;
-                relativePath: string;
-            }[] = [];
+        const collectFilesFromFolder = (folder: FileTree) => {
+            for (const subItem of folder.subTree) {
+                const subItemIsFolder =
+                    subItem.isFolder === true ||
+                    (subItem.isFolder === undefined &&
+                        (subItem.subTree.length > 0 || subItem.keyPrefix.endsWith("/")));
 
-            // Enhanced function to collect all files from a folder recursively
-            const collectFilesFromFolder = (folder: FileTree, isRootAsset: boolean = false) => {
-                console.log(
-                    `Collecting files from folder: ${folder.name} (level: ${folder.level}, isRootAsset: ${isRootAsset})`
-                );
-
-                for (const subItem of folder.subTree) {
-                    // Determine if this subItem is a folder
-                    const subItemIsFolder =
-                        subItem.isFolder === true ||
-                        (subItem.isFolder === undefined &&
-                            (subItem.subTree.length > 0 || subItem.keyPrefix.endsWith("/")));
-
-                    if (subItemIsFolder) {
-                        console.log(`Found subfolder: ${subItem.name}, recursing...`);
-                        // Recursively process subfolders
-                        collectFilesFromFolder(subItem, false);
-                    } else {
-                        // This is a file - add it to the list
-                        // Skip files that are empty or have invalid keys
-                        if (subItem.keyPrefix && subItem.name && subItem.keyPrefix.trim() !== "") {
-                            console.log(`Adding file: ${subItem.name} (key: ${subItem.keyPrefix})`);
-
-                            // Format the relative path for display
-                            let displayPath = subItem.relativePath || "/";
-
-                            // Clean up the path for better display
-                            if (displayPath === "/" || displayPath === "") {
-                                displayPath = "/"; // Root level
-                            } else if (displayPath.startsWith("/")) {
-                                // Remove leading slash for cleaner display
-                                displayPath = displayPath.substring(1);
-                            }
-
-                            // If it's just the filename, show it as root level
-                            if (displayPath === subItem.name) {
-                                displayPath = "/";
-                            } else if (displayPath.endsWith("/" + subItem.name)) {
-                                // Remove the filename from the path to show just the folder
-                                displayPath = displayPath.substring(
-                                    0,
-                                    displayPath.length - subItem.name.length - 1
-                                );
-                                if (displayPath === "") {
-                                    displayPath = "/";
-                                }
-                            }
-
-                            filesToShare.push({
-                                key: subItem.keyPrefix,
-                                name: subItem.name,
-                                versionId: subItem.versionId,
-                                relativePath: displayPath,
-                            });
-                        } else {
-                            console.warn(`Skipping invalid file entry:`, subItem);
-                        }
-                    }
-                }
-            };
-
-            // Process each selected item
-            for (const item of selectedFiles) {
-                // Determine if this item is a folder
-                const itemIsFolder =
-                    item.isFolder === true ||
-                    (item.isFolder === undefined &&
-                        (item.subTree.length > 0 || item.keyPrefix.endsWith("/")));
-
-                // Check if this is the root asset (level 0 or root path)
-                const isRootAsset =
-                    item.level === 0 ||
-                    item.relativePath === "/" ||
-                    item.relativePath === "" ||
-                    item.keyPrefix === "/" ||
-                    item.keyPrefix === "";
-
-                console.log(
-                    `Processing item: ${item.name} (isFolder: ${itemIsFolder}, isRootAsset: ${isRootAsset}, level: ${item.level})`
-                );
-
-                if (itemIsFolder || isRootAsset) {
-                    // For folders (including root asset), collect all files within
-                    collectFilesFromFolder(item, isRootAsset);
+                if (subItemIsFolder) {
+                    collectFilesFromFolder(subItem);
                 } else {
-                    // Regular file - add it directly
-                    if (item.keyPrefix && item.name && item.keyPrefix.trim() !== "") {
-                        console.log(`Adding direct file: ${item.name} (key: ${item.keyPrefix})`);
-
-                        // Format the relative path for display
-                        let displayPath = item.relativePath || "/";
-
-                        // Clean up the path for better display
+                    if (subItem.keyPrefix && subItem.name && subItem.keyPrefix.trim() !== "") {
+                        let displayPath = subItem.relativePath || "/";
                         if (displayPath === "/" || displayPath === "") {
-                            displayPath = "/"; // Root level
+                            displayPath = "/";
                         } else if (displayPath.startsWith("/")) {
-                            // Remove leading slash for cleaner display
                             displayPath = displayPath.substring(1);
                         }
-
-                        // If it's just the filename, show it as root level
-                        if (displayPath === item.name) {
+                        if (displayPath === subItem.name) {
                             displayPath = "/";
-                        } else if (displayPath.endsWith("/" + item.name)) {
-                            // Remove the filename from the path to show just the folder
+                        } else if (displayPath.endsWith("/" + subItem.name)) {
                             displayPath = displayPath.substring(
                                 0,
-                                displayPath.length - item.name.length - 1
+                                displayPath.length - subItem.name.length - 1
                             );
                             if (displayPath === "") {
                                 displayPath = "/";
                             }
                         }
-
                         filesToShare.push({
-                            key: item.keyPrefix,
-                            name: item.name,
-                            versionId: item.versionId,
+                            key: subItem.keyPrefix,
+                            name: subItem.name,
+                            versionId: subItem.versionId,
                             relativePath: displayPath,
                         });
-                    } else {
-                        console.warn(`Skipping invalid direct file entry:`, item);
                     }
                 }
             }
+        };
 
-            console.log(`Total files collected for sharing: ${filesToShare.length}`);
+        for (const item of selectedFilesRef.current) {
+            const itemIsFolder =
+                item.isFolder === true ||
+                (item.isFolder === undefined &&
+                    (item.subTree.length > 0 || item.keyPrefix.endsWith("/")));
+            const isRootAsset =
+                item.level === 0 ||
+                item.relativePath === "/" ||
+                item.relativePath === "" ||
+                item.keyPrefix === "/" ||
+                item.keyPrefix === "";
+
+            if (itemIsFolder || isRootAsset) {
+                collectFilesFromFolder(item);
+            } else {
+                if (item.keyPrefix && item.name && item.keyPrefix.trim() !== "") {
+                    let displayPath = item.relativePath || "/";
+                    if (displayPath === "/" || displayPath === "") {
+                        displayPath = "/";
+                    } else if (displayPath.startsWith("/")) {
+                        displayPath = displayPath.substring(1);
+                    }
+                    if (displayPath === item.name) {
+                        displayPath = "/";
+                    } else if (displayPath.endsWith("/" + item.name)) {
+                        displayPath = displayPath.substring(
+                            0,
+                            displayPath.length - item.name.length - 1
+                        );
+                        if (displayPath === "") {
+                            displayPath = "/";
+                        }
+                    }
+                    filesToShare.push({
+                        key: item.keyPrefix,
+                        name: item.name,
+                        versionId: item.versionId,
+                        relativePath: displayPath,
+                    });
+                }
+            }
+        }
+
+        return filesToShare;
+    };
+
+    // Check if webDeployedUrl is available in config
+    const config = appCache.getItem("config");
+    const webDeployedUrl = config?.webDeployedUrl;
+    const hasWebDeployedUrl = !!webDeployedUrl && webDeployedUrl.trim() !== "";
+
+    // Generate stream URLs locally (no API call needed)
+    const generateStreamUrls = useCallback(
+        (baseUrlMode: boolean) => {
+            setIsLoading(false);
+            setError(null);
+
+            let apiBase: string;
+            if (baseUrlMode && hasWebDeployedUrl) {
+                // Use deployed website base URL with /api/ prefix
+                let baseUrl = webDeployedUrl!.trim();
+                if (baseUrl.endsWith("/")) {
+                    baseUrl = baseUrl.slice(0, -1);
+                }
+                apiBase = `${baseUrl}/api/`;
+            } else {
+                // Use direct API Gateway URL
+                const cfg = appCache.getItem("config");
+                if (!cfg?.api) {
+                    setError("API configuration not available");
+                    return;
+                }
+                apiBase = cfg.api;
+            }
+
+            const filesToShare = collectSelectedFiles();
+            if (filesToShare.length === 0) {
+                setError("No valid files found to share");
+                return;
+            }
+
+            const urlItems: UrlItem[] = filesToShare.map((file) => {
+                // Encode each path segment individually to preserve slashes
+                const pathSegments = file.key.split("/");
+                const encodedFileKey = pathSegments
+                    .map((segment) => encodeURIComponent(segment))
+                    .join("/");
+
+                let streamUrl = `${apiBase}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                if (assetVersionId) {
+                    streamUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
+                }
+
+                return {
+                    fileName: file.name,
+                    filePath: file.relativePath,
+                    url: streamUrl,
+                    copied: false,
+                };
+            });
+
+            setUrls(urlItems);
+            setExpirationMessage(STREAM_URL_MESSAGE);
+        },
+        [databaseId, assetId, assetVersionId]
+    );
+
+    // Generate URLs when modal becomes visible or mode/settings change
+    useEffect(() => {
+        if (!visible) {
+            prevVisibleRef.current = false;
+            return;
+        }
+        if (selectedFilesRef.current.length > 0) {
+            prevVisibleRef.current = true;
+            if (urlMode === "presigned") {
+                generatePresignedUrlsForFiles();
+            } else {
+                generateStreamUrls(useBaseUrl);
+            }
+        }
+    }, [visible, urlMode, useBaseUrl]);
+
+    const generatePresignedUrlsForFiles = async () => {
+        setIsLoading(true);
+        setError(null);
+        setUrls([]);
+
+        try {
+            const filesToShare = collectSelectedFiles();
 
             if (filesToShare.length === 0) {
                 setError("No valid files found to share");
@@ -209,6 +264,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
             const [success, response] = await generatePresignedUrls({
                 databaseId,
                 assetId,
+                assetVersionId,
                 files: filesToShare,
             });
 
@@ -322,6 +378,18 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
         );
     };
 
+    const handleCopyAuthToken = async () => {
+        try {
+            const token = await getDualValidAccessToken();
+            await navigator.clipboard.writeText(token);
+            setTokenCopied(true);
+            setTimeout(() => setTokenCopied(false), 2000);
+        } catch (err) {
+            console.log("Failed to copy auth token:", err);
+            setError("Failed to retrieve auth token. You may need to re-authenticate.");
+        }
+    };
+
     const columnDefinitions: TableProps.ColumnDefinition<UrlItem>[] = [
         {
             id: "fileName",
@@ -337,7 +405,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
                     style={{
                         fontFamily: "monospace",
                         fontSize: "0.9em",
-                        color: "#666",
+                        color: "var(--vams-text-secondary)",
                     }}
                     title={item.filePath}
                 >
@@ -402,7 +470,14 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
                     (u) => u.fileName === item.fileName && u.url === item.url
                 );
                 return item.error ? (
-                    <Button iconName="refresh" onClick={() => generateUrls()}>
+                    <Button
+                        iconName="refresh"
+                        onClick={() =>
+                            urlMode === "presigned"
+                                ? generatePresignedUrlsForFiles()
+                                : generateStreamUrls(useBaseUrl)
+                        }
+                    >
                         Retry
                     </Button>
                 ) : (
@@ -452,7 +527,35 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
             }
         >
             <SpaceBetween direction="vertical" size="m">
-                <Box>{expirationMessage}</Box>
+                <SegmentedControl
+                    selectedId={urlMode}
+                    onChange={({ detail }) => setUrlMode(detail.selectedId as UrlMode)}
+                    options={[
+                        {
+                            id: "presigned",
+                            text: "URLs (Embedded Auth)",
+                        },
+                        {
+                            id: "stream",
+                            text: "URLs (API Stream)",
+                        },
+                    ]}
+                />
+                <Alert
+                    type={urlMode === "presigned" ? "info" : "warning"}
+                    action={
+                        urlMode === "stream" ? (
+                            <Button
+                                iconName={tokenCopied ? "status-positive" : "copy"}
+                                onClick={handleCopyAuthToken}
+                            >
+                                {tokenCopied ? "Token Copied!" : "Copy My Auth Token"}
+                            </Button>
+                        ) : undefined
+                    }
+                >
+                    {expirationMessage}
+                </Alert>
 
                 {error && (
                     <Alert type="error" dismissible onDismiss={() => setError(null)}>

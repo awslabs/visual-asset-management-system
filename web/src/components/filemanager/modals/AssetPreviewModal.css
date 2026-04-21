@@ -16,7 +16,7 @@
     align-items: center;
     overflow: auto;
     margin: 0 auto;
-    background-color: #f8f8f8;
+    background-color: var(--vams-bg-secondary);
     border-radius: 4px;
     padding: 16px;
 }
@@ -32,7 +32,7 @@
     justify-content: center;
     margin-top: 16px;
     padding: 8px;
-    border-top: 1px solid #eaeded;
+    border-top: 1px solid var(--vams-border-default);
 }
 
 .asset-preview-loading,
@@ -43,11 +43,11 @@
     align-items: center;
     height: 100%;
     width: 100%;
-    color: #5f6b7a;
+    color: var(--vams-text-secondary);
 }
 
 .asset-preview-error {
-    color: #d13212;
+    color: var(--vams-color-error);
 }
 
 /* Viewer mode styles */

@@ -17,7 +17,6 @@ import { useParams } from "react-router";
 import CommentTableList from "../components/list/CommentTableList";
 import PropTypes, { object } from "prop-types";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
-import RelatedTableList from "../components/list/RelatedTableList";
 import Synonyms from "../synonyms";
 
 export default function CommentListPage(props: any) {
@@ -31,7 +30,6 @@ export default function CommentListPage(props: any) {
         fetchElements,
         fetchAllElements,
         onCreateCallback,
-        isRelatedTable,
         editEnabled,
         onSelection,
         selectedItems,
@@ -97,15 +95,6 @@ export default function CommentListPage(props: any) {
                     </div>
                 </Grid>
                 <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
-                    {isRelatedTable && (
-                        <RelatedTableList
-                            allItems={allItems}
-                            loading={loading}
-                            listDefinition={listDefinition}
-                            databaseId={databaseId}
-                            setReload={setReload}
-                        />
-                    )}
                     <CommentTableList
                         allItems={allItems}
                         loading={loading}
@@ -154,6 +143,5 @@ CommentListPage.propTypes = {
     onCreateCallback: PropTypes.func,
     onSelection: PropTypes.func,
     selectedItems: PropTypes.arrayOf(object),
-    isRelatedTable: PropTypes.bool,
     editEnabled: PropTypes.bool,
 };

@@ -31,6 +31,7 @@ export function EnhancedFileManager({
     assetName,
     assetFiles = [],
     filePathToNavigate,
+    assetVersionId,
 }: EnhancedFileManagerProps) {
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
@@ -70,6 +71,8 @@ export function EnhancedFileManager({
         totalAssetSize: 0,
         paginationTokens: { basic: null, detailed: null },
         expandedFolders: new Set<string>(),
+        readOnly: !!assetVersionId,
+        assetVersionId: assetVersionId,
     };
 
     const [state, dispatch] = useReducer(fileManagerReducer, initialState);
@@ -172,6 +175,34 @@ export function EnhancedFileManager({
         }
     }, [assetId]);
 
+    // Handle assetVersionId changes - reset and reload files for the selected version
+    const prevVersionIdRef = useRef(assetVersionId);
+    useEffect(() => {
+        // Update readOnly state and assetVersionId based on version selection
+        dispatch({
+            type: "SET_READ_ONLY",
+            payload: { readOnly: !!assetVersionId, assetVersionId },
+        });
+
+        if (prevVersionIdRef.current !== assetVersionId && hasInitializedRef.current) {
+            console.log(
+                "🔄 Asset version changed to:",
+                assetVersionId || "LATEST (Non-Versioned)",
+                "- reloading..."
+            );
+            prevVersionIdRef.current = assetVersionId;
+
+            // Reset tracking flags
+            hasInitializedRef.current = false;
+            loadingRef.current = false;
+
+            // Trigger refresh to reload files for the selected version
+            dispatch({ type: "REFRESH_FILES", payload: null });
+        } else {
+            prevVersionIdRef.current = assetVersionId;
+        }
+    }, [assetVersionId]);
+
     // Function to load files with streaming pagination
     const loadFilesStreaming = useCallback(
         async (basic: boolean, showArchived: boolean) => {
@@ -185,6 +216,7 @@ export function EnhancedFileManager({
                     assetId,
                     includeArchived: showArchived,
                     basic,
+                    assetVersionId,
                 });
 
                 for await (const page of stream) {
@@ -242,7 +274,7 @@ export function EnhancedFileManager({
                 }
             }
         },
-        [databaseId, assetId]
+        [databaseId, assetId, assetVersionId]
     );
 
     // Initial load of files with streaming
@@ -393,6 +425,8 @@ export function EnhancedFileManager({
                 await loadFilesStreaming(false, state.showArchived);
 
                 // loadingRef is reset in loadFilesStreaming when detailed phase completes
+                // Mark as initialized so subsequent version/refresh changes can trigger reloads
+                hasInitializedRef.current = true;
             } catch (error) {
                 console.error("Error refreshing files:", error);
                 dispatch({
@@ -401,6 +435,7 @@ export function EnhancedFileManager({
                 });
                 // Reset on error
                 loadingRef.current = false;
+                hasInitializedRef.current = true;
             }
         };
 

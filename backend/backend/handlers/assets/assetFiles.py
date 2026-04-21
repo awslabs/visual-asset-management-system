@@ -5,6 +5,7 @@ import os
 import boto3
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from boto3.dynamodb.conditions import Key
@@ -27,6 +28,7 @@ from models.assetsV3 import (
     SetPrimaryFileRequestModel, SetPrimaryFileResponseModel, CreateFolderRequestModel, CreateFolderResponseModel,
     DeleteAssetPreviewResponseModel, DeleteAuxiliaryPreviewAssetFilesRequestModel, DeleteAuxiliaryPreviewAssetFilesResponseModel
 )
+from handlers.assets.assetVersions import validate_asset_version_exists, get_all_asset_versions
 
 # Configure AWS clients with retry configuration
 region = os.environ.get('AWS_REGION', 'us-east-1')
@@ -49,11 +51,11 @@ logger = safeLogger(service_name="AssetFiles")
 try:
     s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_database_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"] 
-    asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
+    asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
+    asset_aux_bucket_name = os.environ.get("S3_ASSET_AUXILIARY_BUCKET", "")
     asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
     file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
-    send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
+    send_email_function_name = os.environ.get("SEND_EMAIL_FUNCTION_NAME", "")
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -108,7 +110,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         asset = response.get('Item', {})
         
         if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found in database. Note: Files cannot be moved cross-database.")
+            raise VAMSGeneralErrorResponse("Asset not found in database.")
         
         # Check permissions
         asset["object__type"] = "asset"
@@ -704,23 +706,16 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
     return archived_files
 
 def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claims_and_roles: Dict) -> bool:
-    """Validate permissions for operations involving multiple assets
-    
+    """Validate permissions for operations involving multiple assets (same or cross-database)
+
     Args:
         source_asset: Source asset dictionary
         dest_asset: Destination asset dictionary
         claims_and_roles: The claims and roles from the request
-        
+
     Returns:
         True if user has permissions on both assets, False otherwise
-        
-    Raises:
-        VAMSGeneralErrorResponse: If assets are in different databases
     """
-    # Ensure both assets are in the same database
-    if source_asset['databaseId'] != dest_asset['databaseId']:
-        raise VAMSGeneralErrorResponse("Cross-database operations are not allowed")
-    
     # Check permissions on both assets
     source_asset["object__type"] = "asset"
     dest_asset["object__type"] = "asset"
@@ -782,13 +777,14 @@ def process_preview_files(
     source_asset_id: str = None,
     source_database_id: str = None,
     dest_asset_id: str = None,
-    dest_database_id: str = None
+    dest_database_id: str = None,
+    dest_bucket: str = None
 ) -> List[str]:
     """Process preview files for move, copy, or rename operations
-    
+
     Args:
         operation: Operation type ('move', 'copy', or 'rename')
-        bucket: The S3 bucket
+        bucket: The source S3 bucket
         source_key: Source file key
         dest_key: Destination file key
         base_key: Base key for relative path calculation
@@ -796,10 +792,13 @@ def process_preview_files(
         source_database_id: Source database ID (for copy operations)
         dest_asset_id: Destination asset ID (for copy operations)
         dest_database_id: Destination database ID (for copy operations)
-        
+        dest_bucket: Destination S3 bucket (defaults to source bucket if not provided)
+
     Returns:
         List of affected preview file paths (source and destination for move/rename)
     """
+    if not dest_bucket:
+        dest_bucket = bucket
     affected_preview_files = []
     
     # Find preview files for the source file
@@ -828,7 +827,7 @@ def process_preview_files(
             operation_success = copy_s3_object(
                 bucket,
                 preview_file,
-                bucket,
+                dest_bucket,
                 preview_dest,
                 source_asset_id=source_asset_id,
                 source_database_id=source_database_id,
@@ -915,10 +914,18 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                     MaxKeys=100  # Limit to 100 versions
                 )
                 
+                # Build a set of delete marker version IDs from the SAME response
+                # to avoid redundant list_object_versions calls per version
+                delete_marker_version_ids = {
+                    marker['VersionId']
+                    for marker in versions_response.get('DeleteMarkers', [])
+                    if marker['Key'] == key
+                }
+
                 versions = []
                 for version in versions_response.get('Versions', []):
                     if version['Key'] == key:
-                        # Enhanced version information
+                        # Check archive status against pre-built set (O(1) lookup)
                         version_info = {
                             'versionId': version['VersionId'],
                             'lastModified': version['LastModified'].isoformat(),
@@ -926,10 +933,10 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                             'isLatest': version['IsLatest'],
                             'storageClass': version.get('StorageClass', 'STANDARD'),
                             'etag': version.get('ETag', '').strip('"'),
-                            'isArchived': is_file_archived(bucket, key, version['VersionId'])
+                            'isArchived': version['VersionId'] in delete_marker_version_ids
                         }
                         versions.append(version_info)
-                
+
                 # Sort versions by date (newest first)
                 versions.sort(key=lambda x: x['lastModified'], reverse=True)
                 result['versions'] = versions
@@ -1065,6 +1072,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         # Single S3 list call
         page = s3_client.list_objects_v2(**list_params)
         
+        # Items that need head_object enrichment (non-basic mode)
+        items_needing_enrichment = []
+
         # Process objects from this single page
         for obj in page.get('Contents', []):
             # Extract filename from key
@@ -1101,36 +1111,45 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                 item['versionId'] = None
                 item['isArchived'] = False  # Can't determine without head_object
                 item['primaryType'] = None
+                result["items"].append(item)
             else:
-                # Full mode: Get version ID, archive status, and metadata
+                # Full mode: collect items for parallel head_object enrichment
+                # Objects returned by list_objects_v2 are always live (no delete marker),
+                # so isArchived is always False here. Archive detection for delete-marker'd
+                # files is handled separately below via list_object_versions.
+                item['isArchived'] = False
+                items_needing_enrichment.append((item, is_folder))
+        
+        # Parallel head_object enrichment for non-basic mode
+        if items_needing_enrichment:
+            def _enrich_item(item_tuple):
+                """Enrich a single item with head_object metadata."""
+                item, is_folder = item_tuple
                 try:
                     version_info = s3_client.head_object(
                         Bucket=bucket,
-                        Key=obj['Key']
+                        Key=item['key']
                     )
                     item['versionId'] = version_info.get('VersionId', 'null')
-                    
-                    # Check if file is archived
-                    item['isArchived'] = is_file_archived(bucket, obj['Key'])
-                    
-                    # Add primaryType from S3 metadata (only for non-folder objects)
                     if not is_folder:
                         metadata = version_info.get('Metadata', {})
                         primary_type = metadata.get('vams-primarytype', '')
                         item['primaryType'] = primary_type if primary_type else None
                     else:
                         item['primaryType'] = None
-                    
                 except Exception as e:
-                    logger.warning(f"Error getting version info for {obj['Key']}: {e}")
+                    logger.warning(f"Error getting version info for {item['key']}: {e}")
                     item['versionId'] = 'null'
-                    item['isArchived'] = False
                     item['primaryType'] = None
-            
-            # Only add non-archived files unless include_archived is True
-            if not item['isArchived'] or include_archived:
-                result["items"].append(item)
-        
+                return item
+
+            max_workers = min(10, len(items_needing_enrichment))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                enriched_items = list(executor.map(_enrich_item, items_needing_enrichment))
+
+            # All items from list_objects_v2 are live (isArchived=False), so always add them
+            result["items"].extend(enriched_items)
+
         # Return the NextContinuationToken directly from S3
         if 'NextContinuationToken' in page:
             result['NextToken'] = page['NextContinuationToken']
@@ -1425,29 +1444,34 @@ def get_top_preview_file(preview_files: List[str], filter_extensions: bool = Tru
         # Return the first file without filtering
         return preview_files[0]
 
-def get_asset_file_versions(assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
-    """Get file versions for a specific asset version
-    
+def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
+    """Get file versions for a specific asset version using the databaseIdAssetIdVersionIdIndex GSI
+
     Args:
+        databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
-        
+        relativeFileKey: Optional relative file key to filter by
+
     Returns:
         Dictionary with file versions or None if not found
     """
     try:
-        # Create partition key in the format {assetId}:{assetversionId}
-        partition_key = f"{assetId}:{assetVersionId}"
-        
-        # Query all records with the same partition key
+        # Create composite key for the table PK query
+        # databaseId:assetId:assetVersionId is now the table PK (was previously a GSI)
+        version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
+
+        # Build query kwargs using the table PK directly (no IndexName needed)
+        # fileKey is the table sort key, so we can use it directly in the KeyConditionExpression
+        query_kwargs = {
+            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
+        }
+
+        # Add fileKey to key condition if provided (fileKey is the table sort key)
         if relativeFileKey:
-            response = asset_version_files_table.query(
-                KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key) & Key('fileKey').eq(relativeFileKey)
-            )
-        else:
-            response = asset_version_files_table.query(
-                KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key)
-            )
+            query_kwargs['KeyConditionExpression'] = Key('databaseId:assetId:assetVersionId').eq(version_composite_key) & Key('fileKey').eq(relativeFileKey)
+
+        response = asset_version_files_table.query(**query_kwargs)
         
         items = response.get('Items', [])
         
@@ -1483,6 +1507,163 @@ def get_asset_file_versions(assetId: str, assetVersionId: str, relativeFileKey: 
 # API Handler Functions
 #######################
 
+def _query_file_metadata(databaseId: str, assetId: str, relative_file_path: str) -> Tuple[List[Dict], List[Dict]]:
+    """Query all metadata and attributes for a file.
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        relative_file_path: The relative file path (with leading slash, e.g. '/folder/file.txt')
+
+    Returns:
+        Tuple of (metadata_items, attribute_items)
+    """
+    # Ensure leading slash — metadata is stored with leading slash in composite key
+    if not relative_file_path.startswith('/'):
+        relative_file_path = '/' + relative_file_path
+    composite_key = f"{databaseId}:{assetId}:{relative_file_path}"
+    metadata_items = []
+    attribute_items = []
+
+    if asset_file_metadata_table:
+        try:
+            response = asset_file_metadata_table.query(
+                IndexName='DatabaseIdAssetIdFilePathIndex',
+                KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+            )
+            metadata_items = response.get('Items', [])
+        except Exception as e:
+            logger.warning(f"Error querying file metadata: {e}")
+
+    if file_attribute_table:
+        try:
+            response = file_attribute_table.query(
+                IndexName='DatabaseIdAssetIdFilePathIndex',
+                KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+            )
+            attribute_items = response.get('Items', [])
+        except Exception as e:
+            logger.warning(f"Error querying file attributes: {e}")
+
+    return metadata_items, attribute_items
+
+
+def _copy_file_metadata_to_destination(
+    source_databaseId: str, source_assetId: str, source_relative_path: str,
+    dest_databaseId: str, dest_assetId: str, dest_relative_path: str
+) -> int:
+    """Copy metadata and attributes from one file path to another, merging with
+    existing metadata at the destination.  If a metadata/attribute key already
+    exists at the destination with a *different* value, the incoming record is
+    written under a new key with a ``_copy_<suffix>`` postfix so that no data is
+    lost.
+
+    Args:
+        source_databaseId: Source database ID
+        source_assetId: Source asset ID
+        source_relative_path: Source relative file path (e.g. '/folder/file.txt' or 'folder/file.txt')
+        dest_databaseId: Destination database ID
+        dest_assetId: Destination asset ID
+        dest_relative_path: Destination relative file path (e.g. '/folder/file.txt' or 'folder/file.txt')
+
+    Returns:
+        Number of metadata/attribute records written to the destination.
+    """
+    if source_relative_path.endswith('/') or dest_relative_path.endswith('/'):
+        return 0
+
+    # Ensure leading slashes — metadata composite keys are stored with leading slash
+    if not source_relative_path.startswith('/'):
+        source_relative_path = '/' + source_relative_path
+    if not dest_relative_path.startswith('/'):
+        dest_relative_path = '/' + dest_relative_path
+
+    source_metadata, source_attributes = _query_file_metadata(
+        source_databaseId, source_assetId, source_relative_path
+    )
+
+    if not source_metadata and not source_attributes:
+        return 0
+
+    # Query existing destination metadata/attributes for merge logic
+    dest_metadata, dest_attributes = _query_file_metadata(
+        dest_databaseId, dest_assetId, dest_relative_path
+    )
+
+    # Build lookup of existing destination keys -> values
+    dest_meta_lookup = {
+        item['metadataKey']: item.get('metadataValue') for item in dest_metadata
+    }
+    dest_attr_lookup = {
+        item['attributeKey']: item.get('attributeValue') for item in dest_attributes
+    }
+
+    dest_composite = f"{dest_databaseId}:{dest_assetId}:{dest_relative_path}"
+    dest_asset_composite = f"{dest_databaseId}:{dest_assetId}"
+
+    written = 0
+    import uuid as _uuid
+
+    # Copy metadata records
+    if asset_file_metadata_table and source_metadata:
+        try:
+            for item in source_metadata:
+                key_name = item['metadataKey']
+                value = item.get('metadataValue', '')
+                value_type = item.get('metadataValueType', 'string')
+
+                # Merge logic: if key exists with same value, skip; different value, rename
+                if key_name in dest_meta_lookup:
+                    if dest_meta_lookup[key_name] == value:
+                        continue  # identical – skip
+                    # Different value – create unique key
+                    suffix = _uuid.uuid4().hex[:8]
+                    key_name = f"{key_name}_copy_{suffix}"
+
+                asset_file_metadata_table.put_item(Item={
+                    'metadataKey': key_name,
+                    'databaseId:assetId:filePath': dest_composite,
+                    'databaseId:assetId': dest_asset_composite,
+                    'metadataValue': value,
+                    'metadataValueType': value_type,
+                })
+                written += 1
+        except Exception as e:
+            logger.warning(f"Error copying file metadata to destination: {e}")
+
+    # Copy attribute records
+    if file_attribute_table and source_attributes:
+        try:
+            for item in source_attributes:
+                key_name = item['attributeKey']
+                value = item.get('attributeValue', '')
+                value_type = item.get('attributeValueType', 'string')
+
+                if key_name in dest_attr_lookup:
+                    if dest_attr_lookup[key_name] == value:
+                        continue
+                    suffix = _uuid.uuid4().hex[:8]
+                    key_name = f"{key_name}_copy_{suffix}"
+
+                file_attribute_table.put_item(Item={
+                    'attributeKey': key_name,
+                    'databaseId:assetId:filePath': dest_composite,
+                    'databaseId:assetId': dest_asset_composite,
+                    'attributeValue': value,
+                    'attributeValueType': value_type,
+                })
+                written += 1
+        except Exception as e:
+            logger.warning(f"Error copying file attributes to destination: {e}")
+
+    if written > 0:
+        logger.info(f"Copied {written} metadata/attribute records from "
+                     f"{source_databaseId}:{source_assetId}:{source_relative_path} to "
+                     f"{dest_databaseId}:{dest_assetId}:{dest_relative_path}")
+
+    return written
+
+
 def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str) -> bool:
     """Delete metadata and attributes for a file from new metadata tables
     
@@ -1500,6 +1681,10 @@ def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str)
             logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
             return True
         
+        # Ensure leading slash — metadata is stored with leading slash in composite key
+        if not relative_file_path.startswith('/'):
+            relative_file_path = '/' + relative_file_path
+
         # Construct the composite key for new metadata tables
         # Format: {databaseId}:{assetId}:{relative_file_path}
         composite_key = f"{databaseId}:{assetId}:{relative_file_path}"
@@ -1988,38 +2173,42 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         logger.exception(f"Error unarchiving file: {e}")
         raise VAMSGeneralErrorResponse(f"Error unarchiving file.")
 
-def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, dest_asset_id: Optional[str], claims_and_roles: Dict) -> FileOperationResponseModel:
-    """Copy a file within an asset or between assets in the same database
-    
+def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, dest_asset_id: Optional[str], dest_database_id: Optional[str] = None, claims_and_roles: Dict = {}) -> FileOperationResponseModel:
+    """Copy a file within an asset or between assets (same or cross-database)
+
     Args:
         databaseId: The database ID
         assetId: The source asset ID
         source_path: The source file path
         dest_path: The destination file path
         dest_asset_id: Optional destination asset ID (if different from source)
+        dest_database_id: Optional destination database ID (if different from source)
         claims_and_roles: The claims and roles from the request
-        
+
     Returns:
         FileOperationResponseModel with the result of the operation
     """
+    # Determine effective destination database
+    effective_dest_db = dest_database_id if (dest_database_id and dest_database_id != databaseId) else databaseId
+
     # Validate that source and destination paths are different
-    if source_path == dest_path and (dest_asset_id is None or dest_asset_id == assetId):
+    if source_path == dest_path and (dest_asset_id is None or dest_asset_id == assetId) and effective_dest_db == databaseId:
         raise VAMSGeneralErrorResponse("Source and destination paths must be different for copy operation")
-    
+
     # Get source asset and verify permissions
     source_asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
-    
+
     # Check if this is a preview file - don't allow direct operations on preview files
     if is_preview_file(source_path):
         raise VAMSGeneralErrorResponse(f"Cannot directly copy preview files. Copy the base file instead.")
-    
-    # Determine if this is a cross-asset operation
-    is_cross_asset = dest_asset_id is not None and dest_asset_id != assetId
-    
+
+    # Determine if this is a cross-asset or cross-database operation
+    is_cross_asset = (dest_asset_id is not None and dest_asset_id != assetId) or (dest_database_id is not None and dest_database_id != databaseId)
+
     # Get destination asset if cross-asset operation
     if is_cross_asset:
-        dest_asset = get_asset_with_permissions(databaseId, dest_asset_id, "POST", claims_and_roles)
-        
+        dest_asset = get_asset_with_permissions(effective_dest_db, dest_asset_id or assetId, "POST", claims_and_roles)
+
         # Validate cross-asset permissions
         validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles)
     else:
@@ -2055,12 +2244,12 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         source_asset_id=assetId,
         source_database_id=databaseId,
         dest_asset_id=dest_asset_id if is_cross_asset else assetId,
-        dest_database_id=databaseId
+        dest_database_id=effective_dest_db
     )
-    
+
     if not success:
         raise VAMSGeneralErrorResponse(f"Failed to copy file.")
-    
+
     # Process preview files using centralized helper
     copied_preview_files = process_preview_files(
         operation='copy',
@@ -2071,22 +2260,33 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         source_asset_id=assetId,
         source_database_id=databaseId,
         dest_asset_id=dest_asset_id if is_cross_asset else assetId,
-        dest_database_id=databaseId
+        dest_database_id=effective_dest_db,
+        dest_bucket=dest_bucket
     )
-    
+
     # Copy auxiliary files if they exist
     copy_auxiliary_files(source_key, dest_key)
 
+    # Copy metadata and attributes to the destination (merge with existing)
+    source_rel = source_path.lstrip('/')
+    dest_rel = dest_path.lstrip('/')
+    actual_dest_asset = dest_asset_id if is_cross_asset else assetId
+    metadata_copied = _copy_file_metadata_to_destination(
+        databaseId, assetId, source_rel,
+        effective_dest_db, actual_dest_asset, dest_rel
+    )
+
     # Send email for asset file change
-    send_subscription_email(databaseId, dest_asset_id if is_cross_asset else assetId)
-    
+    send_subscription_email(effective_dest_db, actual_dest_asset)
+
     # Return response
     affected_files = [dest_path] + copied_preview_files
     return FileOperationResponseModel(
         success=True,
-        message=f"Successfully copied file from {source_path} to {dest_path}" + 
+        message=f"Successfully copied file from {source_path} to {dest_path}" +
                 (f" in asset {dest_asset_id}" if is_cross_asset else "") +
-                (f" and {len(copied_preview_files)} associated preview files" if copied_preview_files else ""),
+                (f" and {len(copied_preview_files)} associated preview files" if copied_preview_files else "") +
+                (f" and {metadata_copied} metadata/attribute records" if metadata_copied else ""),
         affectedFiles=affected_files
     )
 
@@ -2194,15 +2394,26 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # Move auxiliary files if they exist
     move_auxiliary_files(source_key, dest_key)
 
+    # Move metadata and attributes: copy to new path (merge), then delete from old path
+    source_rel = source_path.lstrip('/')
+    dest_rel = dest_path.lstrip('/')
+    metadata_moved = _copy_file_metadata_to_destination(
+        databaseId, assetId, source_rel,
+        databaseId, assetId, dest_rel
+    )
+    if metadata_moved > 0:
+        delete_file_metadata(databaseId, assetId, source_rel)
+
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)
-    
+
     # Return response
     affected_files = [source_path, dest_path] + moved_preview_files
     return FileOperationResponseModel(
         success=True,
-        message=f"Successfully moved file from {source_path} to {dest_path}" + 
-                (f" and {len(moved_preview_files) // 2} associated preview files" if moved_preview_files else ""),
+        message=f"Successfully moved file from {source_path} to {dest_path}" +
+                (f" and {len(moved_preview_files) // 2} associated preview files" if moved_preview_files else "") +
+                (f" and {metadata_moved} metadata/attribute records" if metadata_moved else ""),
         affectedFiles=affected_files
     )
 
@@ -2333,7 +2544,7 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             relative_path = file_path.lstrip('/')
             
             # Get file version for the current asset version
-            asset_file_versions = get_asset_file_versions(assetId, current_version_id, relative_path)
+            asset_file_versions = get_asset_file_versions(databaseId, assetId, current_version_id, relative_path)
             
             # Find the matching version record
             matching_version = None
@@ -2353,7 +2564,114 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
                         version['currentAssetVersionFileVersionMismatch'] = False
                     else:
                         version['currentAssetVersionFileVersionMismatch'] = True
-    
+
+    # Enrich versions with assetVersionIds — which asset versions reference each file version
+    if include_versions and 'versions' in metadata and not metadata.get("isFolder", False):
+        try:
+            # Build composite key for the databaseIdAssetIdIndex GSI
+            db_asset_composite_key = f"{databaseId}:{assetId}"
+
+            # Get the relative path for comparison with fileKey in version records.
+            # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
+            # or "subfolder/model.glb"), while file_path may include the assetId prefix.
+            # Strip the base_key prefix to get the same relative path format.
+            relative_path_for_lookup = full_key
+            if base_key and relative_path_for_lookup.startswith(base_key):
+                relative_path_for_lookup = relative_path_for_lookup[len(base_key):]
+            relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
+            #logger.info(f"Enriching file versions: file_path='{file_path}', full_key='{full_key}', base_key='{base_key}', relative_path_for_lookup='{relative_path_for_lookup}'")
+
+            # Query the GSI to get all version file records for this database+asset
+            all_version_file_records = []
+            query_kwargs = {
+                'IndexName': 'databaseIdAssetIdIndex',
+                'KeyConditionExpression': Key('databaseId:assetId').eq(db_asset_composite_key)
+            }
+
+            while True:
+                response = asset_version_files_table.query(**query_kwargs)
+                all_version_file_records.extend(response.get('Items', []))
+
+                # Check for pagination
+                if 'LastEvaluatedKey' in response:
+                    query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                else:
+                    break
+
+            # Get asset version metadata for archive filtering and alias labels
+            archived_version_ids = set()
+            version_alias_map = {}  # assetVersionId -> versionAlias
+            try:
+                all_asset_versions = get_all_asset_versions(databaseId, assetId)
+                for v in all_asset_versions:
+                    vid = v.get('assetVersionId', '')
+                    if v.get('isArchived', False):
+                        archived_version_ids.add(vid)
+                    alias = v.get('versionAlias', '')
+                    if alias:
+                        version_alias_map[vid] = alias
+            except Exception as e:
+                logger.warning(f"Could not fetch asset version metadata: {e}")
+
+            # Build a lookup map: S3 versionId -> list of assetVersionIds
+            # Only include records where fileKey matches our file's relative path
+            # Exclude archived asset versions
+            version_id_to_asset_versions = {}
+            pk_prefix = f"{databaseId}:{assetId}:"
+
+            for record in all_version_file_records:
+                record_file_key = record.get('fileKey', '')
+
+                # Only include records that match this file's relative path
+                if record_file_key != relative_path_for_lookup:
+                    continue
+
+                s3_version_id = record.get('versionId')
+                if not s3_version_id:
+                    continue
+
+                # Extract assetVersionId from the PK field: "databaseId:assetId:assetVersionId"
+                pk_value = record.get('databaseId:assetId:assetVersionId', '')
+                if pk_value.startswith(pk_prefix):
+                    asset_version_id = pk_value[len(pk_prefix):]
+                else:
+                    continue
+
+                # Skip archived asset versions
+                if asset_version_id in archived_version_ids:
+                    continue
+
+                if s3_version_id not in version_id_to_asset_versions:
+                    version_id_to_asset_versions[s3_version_id] = []
+                version_id_to_asset_versions[s3_version_id].append(asset_version_id)
+
+            # Build display objects with id and label (e.g., {"id": "3", "label": "v3 (RC1)"})
+            def build_version_entries(version_ids):
+                # Sort numerically when possible
+                try:
+                    sorted_ids = sorted(version_ids, key=lambda x: int(x))
+                except (ValueError, TypeError):
+                    sorted_ids = sorted(version_ids)
+
+                entries = []
+                for vid in sorted_ids:
+                    alias = version_alias_map.get(vid, '')
+                    label = f"v{vid} ({alias})" if alias else f"v{vid}"
+                    entries.append({'id': vid, 'label': label})
+                return entries
+
+            # Populate assetVersionIds on each version entry
+            for version in metadata['versions']:
+                s3_vid = version.get('versionId')
+                if s3_vid and s3_vid in version_id_to_asset_versions:
+                    version['assetVersionIds'] = build_version_entries(version_id_to_asset_versions[s3_vid])
+                else:
+                    version['assetVersionIds'] = []
+
+        except Exception as e:
+            logger.warning(f"Failed to enrich file versions with assetVersionIds: {e}")
+            # Non-fatal: continue without assetVersionIds enrichment
+
     # Add preview file information if this is not a preview file itself
     if not is_preview_file(file_path) and not metadata.get('isFolder', False):
         # Find preview files for this base file
@@ -2506,28 +2824,18 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
         raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata.")
 
 def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict) -> ListAssetFilesResponseModel:
-    """List files for an asset
-    
-    Args:
-        databaseId: The database ID
-        assetId: The asset ID
-        query_params: Dictionary containing query parameters
-        claims_and_roles: The claims and roles from the request
-        
-    Returns:
-        ListAssetFilesResponseModel with the list of files
-    """
+    """List files for an asset, optionally filtered by asset version"""
     # Get asset and verify permissions
     asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
-    
+
     # Get asset location
     bucket, key = get_asset_s3_location(asset)
-    
+
     # Parse basic flag first to determine defaults
     basic_mode = query_params.get('basic', 'false').lower() == 'true'
-    
-    # Parse query parameters with conditional defaults based on basic mode
-    # Convert string values to appropriate types
+    asset_version_id = query_params.get('assetVersionId')
+
+    # Parse query parameters
     max_items = query_params.get('maxItems')
     page_size = query_params.get('pageSize')
 
@@ -2537,9 +2845,24 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         startingToken=query_params.get('startingToken'),
         prefix=query_params.get('prefix'),
         includeArchived=query_params.get('includeArchived', 'false').lower() == 'true',
-        basic=basic_mode
+        basic=basic_mode,
+        assetVersionId=asset_version_id
     )
-    
+
+    # Branch: version listing vs current listing
+    if request_model.assetVersionId:
+        return list_asset_files_from_version(
+            databaseId, assetId, asset, bucket, key, request_model
+        )
+    else:
+        return list_asset_files_current(
+            databaseId, assetId, asset, bucket, key, request_model
+        )
+
+def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
+                             bucket: str, key: str,
+                             request_model: ListAssetFilesRequestModel) -> ListAssetFilesResponseModel:
+    """List current files for an asset (existing S3-based logic)"""
     # Create resolved query params for S3 listing
     resolved_query_params = {
         'maxItems': request_model.maxItems,
@@ -2547,19 +2870,19 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         'startingToken': request_model.startingToken,
         'prefix': request_model.prefix
     }
-    
+
     # List files with archive status, passing basic_mode flag
     result = list_s3_objects_with_archive_status(
-        bucket, 
-        key, 
+        bucket,
+        key,
         resolved_query_params,
         request_model.includeArchived,
         basic_mode=request_model.basic
     )
-    
+
     # Convert to response model
     file_items = []
-    
+
     if request_model.basic:
         # Basic mode: Skip preview file processing and version checks
         # Just convert items directly to response models
@@ -2573,7 +2896,7 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         # Full mode: Process preview files and version checks
         preview_files = []
         base_files = {}
-        
+
         # First pass: separate preview files and base files
         for item in result.get('items', []):
             if is_preview_file(item['key']):
@@ -2584,20 +2907,20 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
                 file_items.append(AssetFileItemModel(**item))
                 # Store in lookup dictionary for preview file matching
                 base_files[item['key']] = len(file_items) - 1
-        
+
         # Process preview files
         orphaned_preview_files = []
-        
+
         for preview_item in preview_files:
             # Get the base file key for this preview file
             base_key = get_base_file_for_preview(preview_item['key'])
-            
+
             # Check if the base file exists
             if base_key in base_files:
                 # Base file exists, add this preview file to it if it has an allowed extension
                 if is_allowed_preview_extension(preview_item['key']):
                     base_file_index = base_files[base_key]
-                    
+
                     # Only add if the base file doesn't already have a preview file
                     if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
                         # Add relative path to the preview file
@@ -2605,33 +2928,33 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
                             relative_preview_path = '/' + preview_item['key'][len(key):]
                         else:
                             relative_preview_path = '/' + preview_item['key']
-                        
+
                         # Add preview file to base file
                         file_items[base_file_index].previewFile = relative_preview_path
             else:
                 # Base file doesn't exist, this is an orphaned preview file
                 orphaned_preview_files.append(preview_item['key'])
-        
+
         # Log orphaned preview files
         if orphaned_preview_files:
             logger.warning(f"Found {len(orphaned_preview_files)} orphaned preview files: {orphaned_preview_files}")
-        
+
         # Initialize previewFile field for files that don't have one
         for file_item in file_items:
             if not hasattr(file_item, 'previewFile'):
                 file_item.previewFile = ""
-        
+
         # Check for Asset Version Mismatch
         # Get current asset version ID if available
         current_version_id = None
         if asset.get('currentVersionId'):
             current_version_id = asset.get('currentVersionId', '0')
-        
+
         # If we have a current version, check file versions against asset version files
         if current_version_id:
             # Get all file versions for the current asset version
-            asset_file_versions = get_asset_file_versions(assetId, current_version_id, None)
-            
+            asset_file_versions = get_asset_file_versions(databaseId, assetId, current_version_id, None)
+
             # Create a lookup dictionary for faster matching
             file_version_lookup = {}
             if asset_file_versions and asset_file_versions.get('files'):
@@ -2639,34 +2962,237 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
                     relative_key = file_version.get('relativeKey')
                     if relative_key:
                         file_version_lookup[relative_key] = file_version
-            
+
             # Check each file against the asset version files
             for file_item in file_items:
                 # Separate Folder assets are not included ever in asset versions
                 if file_item.isFolder:
                     continue
-                    
+
                 # If file is archived, it's automatically a mismatch
                 if file_item.isArchived:
                     file_item.currentAssetVersionFileVersionMismatch = True
                     continue
-                
+
                 # Get the relative path without leading slash for comparison
                 relative_path = file_item.relativePath.lstrip('/')
-                
+
                 # Find matching record in asset file versions
                 matching_version = file_version_lookup.get(relative_path)
-                
+
                 # Set mismatch flag
                 if matching_version and matching_version.get('versionId') == file_item.versionId:
                     file_item.currentAssetVersionFileVersionMismatch = False
                 else:
                     file_item.currentAssetVersionFileVersionMismatch = True
-    
+
     return ListAssetFilesResponseModel(
         items=file_items,
         NextToken=result.get('NextToken')
     )
+
+def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
+                                  bucket: str, key: str,
+                                  request_model: ListAssetFilesRequestModel) -> ListAssetFilesResponseModel:
+    """List files for a specific asset version
+
+    For basic mode: constructs file list directly from DynamoDB version snapshot (no S3 calls).
+    For detailed mode: lists S3 objects, filters to versioned files, overlays saved versionId.
+    """
+    asset_version_id = request_model.assetVersionId
+    logger.info(f"Listing files from asset version {asset_version_id} (basic_mode={request_model.basic})")
+
+    # Validate version exists
+    validate_asset_version_exists(databaseId, assetId, asset_version_id)
+
+    # Get versioned file list from DynamoDB
+    asset_file_versions = get_asset_file_versions(databaseId, assetId, asset_version_id, None)
+
+    if not asset_file_versions or not asset_file_versions.get('files'):
+        logger.info(f"No files found in version {asset_version_id}")
+        return ListAssetFilesResponseModel(items=[], NextToken=None)
+
+    versioned_files = asset_file_versions.get('files', [])
+    logger.info(f"Found {len(versioned_files)} files in version snapshot")
+
+    if request_model.basic:
+        # BASIC MODE: Construct file list directly from DynamoDB snapshot - NO S3 calls
+        # First pass: separate base files from preview files
+        base_file_items = []
+        preview_file_map = {}  # base_relative_key -> preview relative path
+
+        for file_info in versioned_files:
+            relative_key = file_info.get('relativeKey', '')
+            full_file_key = key + relative_key.lstrip('/')
+
+            # Skip preview files — group them under their base file
+            if is_preview_file(full_file_key):
+                base_file_key = get_base_file_for_preview(full_file_key)
+                if base_file_key.startswith(key):
+                    base_relative = base_file_key[len(key):].lstrip('/')
+                else:
+                    base_relative = base_file_key
+                if is_allowed_preview_extension(full_file_key):
+                    preview_file_map[base_relative] = '/' + relative_key.lstrip('/')
+                continue
+
+            file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
+            relative_path = '/' + relative_key.lstrip('/')
+
+            item = {
+                'fileName': file_name,
+                'key': full_file_key,
+                'relativePath': relative_path,
+                'isFolder': False,
+                'size': file_info.get('size', 0),
+                'dateCreatedCurrentVersion': file_info.get('lastModified', ''),
+                'storageClass': 'STANDARD',
+                'versionId': file_info.get('versionId'),
+                'isArchived': False,
+                'primaryType': None,
+                'previewFile': "",
+                'currentAssetVersionFileVersionMismatch': None
+            }
+            base_file_items.append(AssetFileItemModel(**item))
+
+        # Second pass: attach preview files to their base files
+        for file_item in base_file_items:
+            item_relative_key = file_item.key[len(key):].lstrip('/') if file_item.key.startswith(key) else file_item.key
+            if item_relative_key in preview_file_map:
+                file_item.previewFile = preview_file_map[item_relative_key]
+
+        return ListAssetFilesResponseModel(items=base_file_items, NextToken=None)
+
+    else:
+        # DETAILED MODE: List S3, filter to versioned files, overlay saved versionId
+
+        # Build lookup of versioned files by relative key
+        versioned_file_lookup = {}
+        for file_info in versioned_files:
+            relative_key = file_info.get('relativeKey', '')
+            versioned_file_lookup[relative_key] = file_info
+
+        # List all S3 objects including archived (delete-marker'd) files.
+        # include_archived=True ensures soft-deleted files appear in the listing,
+        # reducing the number of per-file list_object_versions checks needed.
+        resolved_query_params = {
+            'maxItems': 10000,
+            'pageSize': 1500,
+            'startingToken': None,
+            'prefix': None
+        }
+
+        s3_result = list_s3_objects_with_archive_status(
+            bucket, key, resolved_query_params,
+            include_archived=True,
+            basic_mode=False
+        )
+
+        # Filter and process — only include files from the version snapshot
+        # Preview files from S3 are ignored; preview grouping is derived from the snapshot itself
+        file_items = []
+        base_files = {}
+        found_relative_keys = set()
+
+        for s3_item in s3_result.get('items', []):
+            # Extract relative key from full S3 key
+            if s3_item['key'].startswith(key):
+                relative_key = s3_item['key'][len(key):].lstrip('/')
+            else:
+                relative_key = s3_item['key']
+
+            # Skip all preview files — they'll be grouped from the version snapshot below
+            if is_preview_file(s3_item['key']):
+                continue
+
+            # Check if this file is in the version snapshot
+            if relative_key in versioned_file_lookup:
+                version_info = versioned_file_lookup[relative_key]
+                # Overlay saved versionId from the version snapshot
+                s3_item['versionId'] = version_info.get('versionId')
+                s3_item['currentAssetVersionFileVersionMismatch'] = None
+                file_items.append(AssetFileItemModel(**s3_item))
+                base_files[s3_item['key']] = len(file_items) - 1
+                found_relative_keys.add(relative_key)
+
+        # Check for permanently deleted files: versioned files not found in S3.
+        # Since we used include_archived=True above, only truly missing files
+        # (permanently deleted from S3) remain in this set.
+        missing_relative_keys = set(versioned_file_lookup.keys()) - found_relative_keys
+        if missing_relative_keys:
+            logger.info(f"Checking {len(missing_relative_keys)} version snapshot files not found in S3 listing")
+
+            def _check_permanently_deleted(relative_key_to_check: str) -> Tuple[str, bool]:
+                """Check if a single file has been permanently deleted from S3."""
+                full_key = key + relative_key_to_check.lstrip('/')
+                try:
+                    versions_response = s3_client.list_object_versions(
+                        Bucket=bucket,
+                        Prefix=full_key,
+                        MaxKeys=1
+                    )
+                    has_versions = any(
+                        v['Key'] == full_key for v in versions_response.get('Versions', [])
+                    )
+                    has_delete_markers = any(
+                        m['Key'] == full_key for m in versions_response.get('DeleteMarkers', [])
+                    )
+                    return relative_key_to_check, not has_versions and not has_delete_markers
+                except Exception as e:
+                    logger.warning(f"Error checking S3 versions for {full_key}: {e}")
+                    return relative_key_to_check, True
+
+            # Parallelize S3 version checks for better performance with many missing files
+            max_workers = min(10, len(missing_relative_keys))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(_check_permanently_deleted, rk): rk
+                    for rk in missing_relative_keys
+                }
+                for future in as_completed(futures):
+                    relative_key, is_permanently_deleted = future.result()
+                    if is_permanently_deleted:
+                        version_info = versioned_file_lookup[relative_key]
+                        file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
+                        relative_path = '/' + relative_key.lstrip('/')
+                        full_s3_key = key + relative_key.lstrip('/')
+
+                        item = {
+                            'fileName': file_name,
+                            'key': full_s3_key,
+                            'relativePath': relative_path,
+                            'isFolder': False,
+                            'size': version_info.get('size', 0),
+                            'dateCreatedCurrentVersion': version_info.get('lastModified', ''),
+                            'storageClass': 'STANDARD',
+                            'versionId': version_info.get('versionId'),
+                            'isArchived': False,
+                            'isPermanentlyDeleted': True,
+                            'primaryType': None,
+                            'previewFile': "",
+                            'currentAssetVersionFileVersionMismatch': None
+                        }
+                        file_items.append(AssetFileItemModel(**item))
+                        logger.info(f"File permanently deleted from S3: {relative_key}")
+
+        # Group preview files from the version snapshot under their base files
+        # Only preview files that are part of this version snapshot are considered
+        for relative_key in versioned_file_lookup:
+            full_file_key = key + relative_key.lstrip('/')
+            if is_preview_file(full_file_key) and is_allowed_preview_extension(full_file_key):
+                base_key_for_preview = get_base_file_for_preview(full_file_key)
+                if base_key_for_preview in base_files:
+                    base_file_index = base_files[base_key_for_preview]
+                    if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
+                        file_items[base_file_index].previewFile = '/' + relative_key.lstrip('/')
+
+        # Initialize previewFile field for files that don't have one
+        for file_item in file_items:
+            if not hasattr(file_item, 'previewFile'):
+                file_item.previewFile = ""
+
+        logger.info(f"Returning {len(file_items)} files in detailed mode from version {asset_version_id}")
+        return ListAssetFilesResponseModel(items=file_items, NextToken=None)
 
 def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle DELETE /deleteFile requests
@@ -2985,9 +3511,9 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
             logger.error("Request body is not a string")
             return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
-        # Parse request model
+        # Parse request model (validates destinationAssetId and destinationDatabaseId via @root_validator)
         request_model = parse(body, model=CopyFileRequestModel)
-        
+
         # Process request
         response = copy_file(
             path_params['databaseId'],
@@ -2995,6 +3521,7 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
             request_model.sourcePath,
             request_model.destinationPath,
             request_model.destinationAssetId,
+            request_model.destinationDatabaseId,
             claims_and_roles
         )
         

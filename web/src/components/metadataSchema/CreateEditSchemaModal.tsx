@@ -23,6 +23,7 @@ import {
     ENTITY_TYPE_LABELS,
 } from "./types";
 import { SchemaFieldEditor } from "./SchemaFieldEditor";
+import Synonyms from "../../synonyms";
 
 interface CreateEditSchemaModalProps {
     visible: boolean;
@@ -30,6 +31,7 @@ interface CreateEditSchemaModalProps {
     onSubmit: (schemaData: any) => Promise<void>;
     editingSchema?: MetadataSchema | null;
     databaseId: string;
+    defaultEntityType?: MetadataSchemaEntityType;
 }
 
 export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
@@ -38,6 +40,7 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
     onSubmit,
     editingSchema,
     databaseId,
+    defaultEntityType,
 }) => {
     const isEditMode = !!editingSchema;
 
@@ -60,7 +63,7 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
         } else {
             // Reset form for create mode
             setSchemaName("");
-            setEntityType("assetMetadata");
+            setEntityType(defaultEntityType || "assetMetadata");
             setEnabled(true);
             setFileKeyTypeRestriction("");
             setFields([]);
@@ -206,7 +209,7 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
                     <Input
                         value={schemaName}
                         onChange={({ detail }) => setSchemaName(detail.value)}
-                        placeholder="e.g., Asset Properties, File Attributes"
+                        placeholder={`e.g., ${Synonyms.Asset} Properties, File Attributes`}
                     />
                 </FormField>
 

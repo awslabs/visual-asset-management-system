@@ -3,14 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useRef } from "react";
-import { Button, Container, Header } from "@cloudscape-design/components";
+import React, { useEffect, useState, useRef, useMemo } from "react";
+import Button from "@cloudscape-design/components/button";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
+import Pagination from "@cloudscape-design/components/pagination";
+import Table from "@cloudscape-design/components/table";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import { WorkflowExecutionListDefinition } from "../../list/list-definitions/WorkflowExecutionListDefinition";
 import { fetchDatabaseWorkflows, fetchWorkflowExecutions } from "../../../services/APIService";
-import { useNavigate } from "react-router";
 import { useStatusMessage } from "../../common/StatusMessage";
-import RelatedTableList from "../../list/RelatedTableList";
 
 interface WorkflowTabProps {
     databaseId: string;
@@ -27,7 +29,6 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     onExecuteWorkflow,
     refreshTrigger,
 }) => {
-    const navigate = useNavigate();
     const { showMessage } = useStatusMessage();
     const [refreshing, setRefreshing] = useState(false);
     const [allItems, setAllItems] = useState<any[]>([]);
@@ -36,32 +37,146 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [hasIncompleteJobs, setHasIncompleteJobs] = useState(false);
     const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+    const [expandedItems, setExpandedItems] = useState<any[]>([]);
     const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
     const initialLoadDoneRef = useRef<boolean>(false);
 
-    const WorkflowHeaderControls = () => {
-        return (
-            <div
-                style={{
-                    position: "absolute",
-                    right: "20px",
-                    top: "10px",
-                    zIndex: 1,
-                }}
-            >
-                <Button
-                    variant="primary"
-                    onClick={() => {
-                        // Call the parent's onExecuteWorkflow function to open the modal
-                        // The refresh will be triggered by the refreshTrigger prop when the workflow completes
-                        onExecuteWorkflow();
-                    }}
-                >
-                    Execute Workflow
-                </Button>
-            </div>
-        );
+    // Sorting state
+    const [sortingColumn, setSortingColumn] = useState<{ sortingField: string }>({
+        sortingField: "startDate",
+    });
+    const [isDescending, setIsDescending] = useState(true);
+
+    // Resolve the sortable value for an item given a sorting field.
+    // Some columns display different data for parent vs child rows.
+    const getSortValue = (item: any, field: string): any => {
+        if (field === "description") {
+            // Parents show description, children show inputAssetFileKey
+            return item.parentId ? item.inputAssetFileKey ?? "" : item.description ?? "";
+        }
+        return item[field] ?? "";
     };
+
+    // Generic comparator that works for any field
+    const compareItems = (a: any, b: any, field: string, descending: boolean): number => {
+        const valA = getSortValue(a, field);
+        const valB = getSortValue(b, field);
+        let result: number;
+        if (typeof valA === "string" && typeof valB === "string") {
+            result = valA.localeCompare(valB);
+        } else {
+            result = valA < valB ? -1 : valA > valB ? 1 : 0;
+        }
+        return descending ? -result : result;
+    };
+
+    // Build parent items and children map from the flat allItems list,
+    // with sorting applied to both children within groups and groups themselves
+    const { parentItems, childrenMap } = useMemo(() => {
+        const parents: any[] = [];
+        const children = new Map<string, any[]>();
+
+        for (const item of allItems) {
+            if (item.parentId) {
+                const existing = children.get(item.parentId) || [];
+                existing.push(item);
+                children.set(item.parentId, existing);
+            } else {
+                parents.push(item);
+            }
+        }
+
+        const field = sortingColumn.sortingField;
+
+        // Sort children within each group
+        Array.from(children.keys()).forEach((key) => {
+            const childList = children.get(key)!;
+            childList.sort((a: any, b: any) => compareItems(a, b, field, isDescending));
+            children.set(key, childList);
+        });
+
+        // Sort parent groups by their most recent child's sort value
+        // (first child after sorting, since children are already sorted)
+        parents.sort((a, b) => {
+            const aChildren = children.get(a.name) || [];
+            const bChildren = children.get(b.name) || [];
+            // Use the first child's value (most recent after sort) to represent the group
+            const aVal =
+                aChildren.length > 0 ? getSortValue(aChildren[0], field) : getSortValue(a, field);
+            const bVal =
+                bChildren.length > 0 ? getSortValue(bChildren[0], field) : getSortValue(b, field);
+            let result: number;
+            if (typeof aVal === "string" && typeof bVal === "string") {
+                result = aVal.localeCompare(bVal);
+            } else {
+                result = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+            }
+            return isDescending ? -result : result;
+        });
+
+        return { parentItems: parents, childrenMap: children };
+    }, [allItems, sortingColumn, isDescending]);
+
+    // Auto-expand all parents when data changes
+    useEffect(() => {
+        setExpandedItems(parentItems);
+    }, [parentItems]);
+
+    // Convert WorkflowExecutionListDefinition column definitions to Cloudscape format
+    const columnDefinitions = useMemo(() => {
+        const listDef = WorkflowExecutionListDefinition;
+        return listDef.columnDefinitions.map(({ id, header, CellWrapper, sortingField }: any) => ({
+            id,
+            header,
+            cell: (item: any) => <CellWrapper item={item}>{item[id]}</CellWrapper>,
+            sortingField,
+        }));
+    }, []);
+
+    const visibleColumns = WorkflowExecutionListDefinition.visibleColumns;
+
+    // Calculate execution count (exclude parent workflow rows)
+    const executionCount = allItems.filter((item) => item.parentId).length;
+
+    // Pagination based on execution (child) rows, not parent groups.
+    // Builds a flat list of all children in group order, paginates that,
+    // then determines which parents have visible children on this page.
+    const [currentPage, setCurrentPage] = useState(1);
+    const pageSize = 15;
+
+    const { paginatedParents, paginatedChildrenMap } = useMemo(() => {
+        // Build flat ordered list of all children following parent group order
+        const allChildren: any[] = [];
+        for (const parent of parentItems) {
+            const kids = childrenMap.get(parent.name) || [];
+            for (const kid of kids) {
+                allChildren.push({ ...kid, _parentName: parent.name });
+            }
+        }
+
+        // Slice to current page
+        const start = (currentPage - 1) * pageSize;
+        const pageChildren = allChildren.slice(start, start + pageSize);
+
+        // Group page children back by parent and determine which parents to show
+        const pageChildMap = new Map<string, any[]>();
+        const parentOrder: string[] = [];
+        for (const child of pageChildren) {
+            const pName = child._parentName;
+            if (!pageChildMap.has(pName)) {
+                pageChildMap.set(pName, []);
+                parentOrder.push(pName);
+            }
+            pageChildMap.get(pName)!.push(child);
+        }
+
+        // Build the parent list in the same order, only including parents with visible children
+        const visibleParents = parentOrder
+            .map((pName) => parentItems.find((p) => p.name === pName))
+            .filter(Boolean);
+
+        return { paginatedParents: visibleParents, paginatedChildrenMap: pageChildMap };
+    }, [parentItems, childrenMap, currentPage]);
 
     // Trigger a refresh when refreshTrigger changes (after workflow execution)
     useEffect(() => {
@@ -112,7 +227,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                 }
 
                 if (workflows && Array.isArray(workflows)) {
-                    const newRows = [];
+                    const newRows: any[] = [];
 
                     // Create a map to organize executions by workflow
                     const workflowMap = new Map();
@@ -313,24 +428,80 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
         );
     }
 
-    // Calculate execution count (exclude parent workflow rows)
-    const executionCount = allItems.filter((item) => item.parentId).length;
-
     return (
         <ErrorBoundary componentName="Workflows">
-            <RelatedTableList
-                allItems={allItems}
+            <Table
+                items={paginatedParents}
                 loading={refreshing}
-                listDefinition={WorkflowExecutionListDefinition}
-                databaseId={databaseId}
-                setReload={setReload}
-                parentId={"parentId"}
-                defaultSortingColumn="startDate"
-                defaultSortingDescending={true}
-                countOverride={executionCount}
-                hideSearch={true}
-                //@ts-ignore
-                HeaderControls={WorkflowHeaderControls}
+                trackBy="name"
+                columnDefinitions={columnDefinitions}
+                visibleColumns={visibleColumns}
+                sortingColumn={sortingColumn}
+                sortingDescending={isDescending}
+                onSortingChange={({ detail }) => {
+                    setSortingColumn(detail.sortingColumn as { sortingField: string });
+                    setIsDescending(detail.isDescending ?? true);
+                    setCurrentPage(1);
+                }}
+                expandableRows={{
+                    getItemChildren: (item: any) => paginatedChildrenMap.get(item.name) || [],
+                    isItemExpandable: (item: any) =>
+                        (paginatedChildrenMap.get(item.name) || []).length > 0,
+                    expandedItems,
+                    onExpandableItemToggle: ({ detail: { item, expanded } }: any) => {
+                        setExpandedItems((prev) =>
+                            expanded
+                                ? [...prev, item]
+                                : prev.filter((i: any) => i.name !== item.name)
+                        );
+                    },
+                }}
+                header={
+                    <>
+                        <div
+                            style={{
+                                position: "absolute",
+                                right: "20px",
+                                top: "10px",
+                                zIndex: 1,
+                            }}
+                        >
+                            <Button
+                                variant="primary"
+                                onClick={() => {
+                                    onExecuteWorkflow();
+                                }}
+                            >
+                                Execute Workflow
+                            </Button>
+                        </div>
+                        <Header counter={`(${executionCount})`}>Workflow Executions</Header>
+                    </>
+                }
+                pagination={
+                    <Pagination
+                        currentPageIndex={currentPage}
+                        pagesCount={Math.ceil(executionCount / pageSize) || 1}
+                        onChange={({ detail }) => setCurrentPage(detail.currentPageIndex)}
+                    />
+                }
+                filter={
+                    <div style={{ padding: "0 0 16px 0" }}>
+                        <Button
+                            iconName="refresh"
+                            variant="icon"
+                            onClick={() => setReload(true)}
+                            loading={refreshing}
+                            ariaLabel="Refresh data"
+                        />
+                    </div>
+                }
+                empty={
+                    <div style={{ textAlign: "center", padding: "20px" }}>
+                        <b>No workflow executions</b>
+                        <p>No workflow executions to display.</p>
+                    </div>
+                }
             />
         </ErrorBoundary>
     );

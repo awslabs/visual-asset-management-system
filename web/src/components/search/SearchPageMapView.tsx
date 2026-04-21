@@ -23,10 +23,10 @@ import {
     Popover,
     Icon,
 } from "@cloudscape-design/components";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../services/appCache";
 import { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
-import { SearchExplanation } from "./types";
+import { SearchExplanation, getTotalResultCount } from "./types";
 import { extractLocationData } from "./utils/locationUtils";
 
 interface LocationDataWithDetails {
@@ -223,12 +223,12 @@ const extractMetadata = (
 function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const [selectedItem, setSelectedItem] = useState<LocationDataWithDetails | null>(null);
     const mapRef = useRef<MapRef>(null);
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
 
     // Get pagination info from state
     const pageSize = state.tablePreferences?.pageSize || 50;
     const currentPage = 1 + Math.floor((state.pagination?.from || 0) / pageSize);
-    const totalResults = state.result?.hits?.total?.value || 0;
+    const totalResults = getTotalResultCount(state?.result);
     const pageCount = Math.ceil(totalResults / pageSize);
 
     // Extract location data from search results
@@ -467,7 +467,16 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         closeOnClick={false}
                         maxWidth="400px"
                     >
-                        <div style={{ padding: "12px", minWidth: "300px", maxWidth: "400px" }}>
+                        <div
+                            style={{
+                                padding: "12px",
+                                minWidth: "300px",
+                                maxWidth: "400px",
+                                backgroundColor: "var(--vams-bg-primary, #ffffff)",
+                                color: "var(--vams-text-primary, #000716)",
+                                borderRadius: "8px",
+                            }}
+                        >
                             <SpaceBetween direction="vertical" size="s">
                                 {/* Preview thumbnail if enabled */}
                                 {state.showPreviewThumbnails && (

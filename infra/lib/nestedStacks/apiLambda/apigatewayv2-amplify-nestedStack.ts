@@ -93,6 +93,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         // Determine cache TTL based on IP restrictions
         const hasIpRestrictions =
             props.config.app.authProvider.authorizerOptions?.allowedIpRanges?.length > 0;
+        // nosemgrep: useless-ternary
         const cacheTtlSeconds = hasIpRestrictions ? 30 : 30;
 
         // Setup custom Lambda authorizer with payload format version 2.0

@@ -17,6 +17,7 @@ import {
 import { useParams } from "react-router";
 import { revertAssetVersion } from "../../../../services/AssetVersionService";
 import { AssetVersion } from "../AssetVersionManager";
+import Synonyms from "../../../../synonyms";
 
 interface RevertVersionModalProps {
     visible: boolean;
@@ -42,7 +43,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
     // Handle revert
     const handleRevert = async () => {
         if (!databaseId || !assetId) {
-            setError("Database ID and Asset ID are required");
+            setError(`${Synonyms.Database} ID and ${Synonyms.Asset} ID are required`);
             return;
         }
 
@@ -124,7 +125,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                         <div style={{ marginTop: "8px" }}>
                             <strong>Note:</strong> Metadata and attributes will also be reverted to
                             match version v{version.Version}, replacing all current metadata and
-                            attributes for the asset and its files.
+                            {`attributes for the ${Synonyms.asset} and its files.`}
                         </div>
                     )}
                 </Alert>
@@ -160,7 +161,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                             <strong>Revert Metadata and Attributes</strong>
                             <Box variant="p" color="text-body-secondary" margin={{ top: "xxs" }}>
                                 Also restore the metadata and attributes from this version to the
-                                asset and files (default: off)
+                                {`${Synonyms.asset} and files (default: off)`}
                             </Box>
                         </Box>
                     </Toggle>

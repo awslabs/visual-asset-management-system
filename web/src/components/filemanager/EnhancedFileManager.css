@@ -1,5 +1,5 @@
 .enhanced-file-manager {
     height: 600px;
-    border-top: 1px solid #eaeded;
-    margin-top: 15px;
+    border-top: 1px solid var(--vams-border-default);
+    margin-top: 0;
 }

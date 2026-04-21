@@ -19,6 +19,7 @@ interface FileVersionsModalProps {
     fileName: string;
     currentVersionId?: string; // For ViewFile context
     onVersionRevert?: () => void; // Refresh callback
+    assetVersionId?: string; // Current asset version context for highlighting
 }
 
 interface RevertConfirmationModalProps {
@@ -83,6 +84,7 @@ export const FileVersionsModal: React.FC<FileVersionsModalProps> = ({
     fileName,
     currentVersionId,
     onVersionRevert,
+    assetVersionId,
 }) => {
     const navigate = useNavigate();
 
@@ -109,6 +111,7 @@ export const FileVersionsModal: React.FC<FileVersionsModalProps> = ({
                 onVersionRevert={onVersionRevert}
                 displayMode="modal"
                 visible={visible}
+                assetVersionId={assetVersionId}
             />
         </Modal>
     );

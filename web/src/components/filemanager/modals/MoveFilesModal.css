@@ -3,14 +3,14 @@
 }
 
 .move-files-modal .selected-files-summary {
-    background-color: #f2f3f3;
+    background-color: var(--vams-bg-secondary);
     padding: 12px;
     border-radius: 4px;
     margin-bottom: 16px;
 }
 
 .move-files-modal .selected-files-summary strong {
-    color: #0972d3;
+    color: var(--vams-color-info);
 }
 
 .move-files-modal .operation-mode-toggle {
@@ -28,15 +28,15 @@
 .move-files-modal .asset-selector-section {
     margin-bottom: 16px;
     padding: 16px;
-    border: 1px solid #d5dbdb;
+    border: 1px solid var(--vams-border-default);
     border-radius: 4px;
-    background-color: #fafbfc;
+    background-color: var(--vams-bg-secondary);
 }
 
 .move-files-modal .processing-section {
     margin: 16px 0;
     padding: 16px;
-    background-color: #f2f3f3;
+    background-color: var(--vams-bg-secondary);
     border-radius: 4px;
 }
 
@@ -59,12 +59,12 @@
 }
 
 .move-files-modal .success-message {
-    color: #037f0c;
+    color: var(--vams-color-success);
     font-weight: 500;
 }
 
 .move-files-modal .error-message {
-    color: #d91515;
+    color: var(--vams-color-error);
     font-weight: 500;
 }
 
@@ -81,14 +81,14 @@
 
 .move-files-modal .selected-asset-info {
     padding: 12px;
-    background-color: #e8f4fd;
-    border: 1px solid #0972d3;
+    background-color: var(--vams-bg-hover);
+    border: 1px solid var(--vams-color-info);
     border-radius: 4px;
     margin-bottom: 16px;
 }
 
 .move-files-modal .selected-asset-info strong {
-    color: #0972d3;
+    color: var(--vams-color-info);
 }
 
 /* Progress bar styling */

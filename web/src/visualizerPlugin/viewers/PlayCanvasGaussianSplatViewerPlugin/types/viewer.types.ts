@@ -14,7 +14,7 @@ import { ViewerPluginProps } from "../../../core/types";
 // ========================================
 
 // Re-export the base props
-export interface PlayCanvasGaussianSplatViewerProps extends ViewerPluginProps {}
+export type PlayCanvasGaussianSplatViewerProps = ViewerPluginProps;
 
 // PlayCanvas-specific types for Gaussian Splat viewing
 export interface GaussianSplatOptions {

@@ -7,16 +7,16 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    background-color: var(--color-background-container-content);
-    border: 1px solid #eaeded;
+    background-color: var(--vams-bg-secondary);
+    border: 1px solid var(--vams-border-default);
     border-radius: 4px;
 }
 
 /* Search box styling */
 .asset-links-search-box {
     padding: 10px 5px;
-    border-bottom: 1px solid #eaeded;
-    background-color: var(--color-background-container-header);
+    border-bottom: 1px solid var(--vams-border-default);
+    background-color: var(--vams-bg-secondary);
 }
 
 .asset-links-search-container {
@@ -38,8 +38,8 @@
 
 .asset-links-tree-footer {
     padding: 8px 10px;
-    border-top: 1px solid #eaeded;
-    background-color: #f8f9fa;
+    border-top: 1px solid var(--vams-border-default);
+    background-color: var(--vams-bg-secondary);
     margin-top: auto;
     display: flex;
     flex-direction: column;
@@ -60,9 +60,10 @@
 }
 
 .selection-note {
-    font-size: 11px;
-    color: #6c757d;
+    font-size: 13px;
+    color: var(--vams-text-secondary);
     text-align: center;
+    padding: 4px 0;
 }
 
 .asset-links-tree-item {
@@ -80,13 +81,13 @@
 }
 
 .asset-links-tree-item-content:hover {
-    background-color: var(--color-background-item-selected);
+    background-color: var(--vams-bg-hover);
 }
 
 .asset-links-tree-item-content.selected {
-    background-color: var(--color-background-item-selected, #e3f2fd);
-    border: 1px solid var(--color-border-item-selected, #1976d2);
-    color: var(--color-text-accent, #1976d2);
+    background-color: var(--vams-bg-hover);
+    border: 1px solid var(--vams-color-info);
+    color: var(--vams-color-info);
     font-weight: 500;
 }
 
@@ -98,11 +99,11 @@
     height: 16px;
     margin-right: 4px;
     cursor: pointer;
-    color: var(--color-text-interactive-default);
+    color: var(--vams-color-info);
 }
 
 .asset-links-tree-item-caret:hover {
-    color: var(--color-text-interactive-hover);
+    color: var(--vams-color-info);
 }
 
 .asset-links-tree-item-icon {
@@ -112,13 +113,13 @@
     width: 16px;
     height: 16px;
     margin-right: 8px;
-    color: var(--color-text-body-secondary);
+    color: var(--vams-text-secondary);
 }
 
 .asset-links-tree-item-name {
     flex: 1;
     font-size: 14px;
-    color: var(--color-text-body-default);
+    color: var(--vams-text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -127,14 +128,14 @@
 .asset-links-count {
     margin-left: 8px;
     font-size: 12px;
-    color: var(--color-text-body-secondary);
+    color: var(--vams-text-secondary);
     font-weight: normal;
 }
 
 .asset-links-tags {
     margin-left: 8px;
     font-size: 12px;
-    color: var(--color-text-body-secondary);
+    color: var(--vams-text-secondary);
     font-weight: normal;
     font-style: italic;
     max-width: 300px;
@@ -145,7 +146,7 @@
 }
 
 .asset-links-alias-id {
-    color: var(--color-text-body-secondary);
+    color: var(--vams-text-secondary);
     font-style: italic;
     font-size: 0.9em;
 }
@@ -192,13 +193,13 @@
 }
 
 .asset-links-search-result-item:hover {
-    background-color: var(--color-background-item-hover);
+    background-color: var(--vams-bg-hover);
 }
 
 .asset-links-search-result-item.selected {
-    background-color: var(--color-background-item-selected, #e3f2fd);
-    border: 1px solid var(--color-border-item-selected, #1976d2);
-    color: var(--color-text-accent, #1976d2);
+    background-color: var(--vams-bg-hover);
+    border: 1px solid var(--vams-color-info);
+    color: var(--vams-color-info);
     font-weight: 500;
 }
 
@@ -209,13 +210,13 @@
     width: 16px;
     height: 16px;
     margin-right: 8px;
-    color: var(--color-text-body-secondary);
+    color: var(--vams-text-secondary);
 }
 
 .asset-links-search-result-name {
     flex: 1;
     font-size: 14px;
-    color: var(--color-text-body-default);
+    color: var(--vams-text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -224,8 +225,8 @@
 .asset-links-search-result-type {
     margin-left: 8px;
     font-size: 12px;
-    color: var(--color-text-body-secondary);
-    background-color: var(--color-background-status-info);
+    color: var(--vams-text-secondary);
+    background-color: var(--vams-bg-hover);
     padding: 2px 6px;
     border-radius: 10px;
 }

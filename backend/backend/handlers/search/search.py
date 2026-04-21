@@ -842,8 +842,8 @@ class SimpleSearchQueryBuilder:
                 must_clauses.extend(specific_queries)
             
             if general_query:
-                # General query is optional - add to should_clauses
-                should_clauses.append(general_query)
+                # General query is required (AND) with other filters
+                must_clauses.append(general_query)
         
         # Build final bool query
         bool_query = {}
@@ -968,10 +968,12 @@ class DualIndexQueryBuilder:
         """Build query for specific index type"""
         try:
             # Calculate buffer size for authorization filtering
+            # Must fetch enough records to cover the requested offset + page size,
+            # with a buffer multiplier to account for records removed by auth filtering.
             requested_from = request.from_ or 0
             requested_size = request.size or 100
             buffer_multiplier = 2.0
-            opensearch_size = min(int(requested_size * buffer_multiplier), 2000)
+            opensearch_size = min(int((requested_from + requested_size) * buffer_multiplier), 10000)
             
             # Build base query structure
             query = {
@@ -1024,20 +1026,17 @@ class DualIndexQueryBuilder:
                         # Only add non-rectype filters
                         filter_clauses.append(filter_dict)
         
-        # Add general text search
+        # Add general text search (AND with other filters)
         if request.query:
             general_search_query = self._build_general_search_query(request.query, request.includeMetadataInSearch, index_type)
             if general_search_query:
-                should_clauses.append(general_search_query)
+                must_clauses.append(general_search_query)
         
-        # Add dedicated metadata search
+        # Add dedicated metadata search (AND with other filters)
         if request.metadataQuery:
             metadata_search_query = self._build_metadata_search_query(request.metadataQuery, request.metadataSearchMode, index_type)
             if metadata_search_query:
-                if request.query:
-                    must_clauses.append(metadata_search_query)
-                else:
-                    should_clauses.append(metadata_search_query)
+                must_clauses.append(metadata_search_query)
         
         # Add database access restrictions
         if accessible_databases:
@@ -1553,7 +1552,13 @@ class DualIndexResponseProcessor:
             # Fix aggregation structure
             if "aggregations" in response_data:
                 response_data["aggregations"] = self._fix_aggregation_structure(response_data["aggregations"])
-            
+
+            # Compute true total from aggregation bucket counts
+            aggregation_total = None
+            if "aggregations" in response_data:
+                aggregation_total = self._compute_aggregation_total(response_data["aggregations"])
+            response_data["aggregationTotal"] = aggregation_total
+
             # Parse into response model
             return parse(response_data, model=SearchResponseModel)
             
@@ -1741,7 +1746,21 @@ class DualIndexResponseProcessor:
         
         end_index = min(from_index + size, len(hits))
         return hits[from_index:end_index]
-    
+
+    def _compute_aggregation_total(self, aggregations: Dict[str, Any]) -> Optional[int]:
+        """Compute total accessible record count from aggregation bucket sums.
+
+        Uses str_databaseid aggregation as the authoritative total since it
+        groups all records by database (which aligns with access control).
+        Falls back to str_assetid if str_databaseid is not present.
+        """
+        for agg_key in ["str_databaseid", "str_assetid"]:
+            agg_data = aggregations.get(agg_key, {})
+            buckets = agg_data.get("buckets", [])
+            if buckets:
+                return sum(bucket.get("doc_count", 0) for bucket in buckets)
+        return None
+
     def _fix_aggregation_structure(self, aggregations: Dict[str, Any]) -> Dict[str, Any]:
         """Fix nested aggregation structure to match expected format"""
         fixed_aggregations = {}

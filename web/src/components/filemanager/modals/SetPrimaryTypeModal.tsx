@@ -99,7 +99,7 @@ export function SetPrimaryTypeModal({
 
         try {
             let successCount = 0;
-            let errorMessages: string[] = [];
+            const errorMessages: string[] = [];
 
             // Process each selected file
             for (const file of selectedFiles) {

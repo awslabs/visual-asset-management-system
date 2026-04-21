@@ -167,4 +167,4 @@ if __name__ == '__main__':
   app = Flask(__name__, template_folder='localDev_oauth2_templates')
   app.secret_key = 'development'
   app.register_blueprint(oauth2_routes)
-  app.run(debug=True, port=9031, ssl_context='adhoc', host='0.0.0.0')
+  app.run(debug=True, port=9031, ssl_context='adhoc', host='0.0.0.0') # nosec B201

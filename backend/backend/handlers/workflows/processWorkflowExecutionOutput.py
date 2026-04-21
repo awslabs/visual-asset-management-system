@@ -8,11 +8,11 @@ import json
 import uuid
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
-from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from models.common import success, validation_error, authorization_error, internal_error
 from common.s3 import validateS3AssetExtensionsAndContentType
 from models.assetsV3 import AssetUploadTableModel
 
@@ -418,7 +418,6 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
 
 
 def lambda_handler(event, context):
-    response = STANDARD_JSON_RESPONSE
     logger.info(event)
 
     try:
@@ -428,15 +427,11 @@ def lambda_handler(event, context):
                     event['body'] = json.loads(event['body'])
                 except json.JSONDecodeError as e:
                     logger.exception(f"Invalid JSON in request body: {e}")
-                    response['statusCode'] = 400
-                    response['body'] = json.dumps({"message": "Invalid JSON in request body"})
-                    return response
+                    return validation_error(body={"message": "Invalid JSON in request body"})
         else:
             message = "No Body in API Call"
             logger.error(message)
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": message})
-            return response
+            return validation_error(body={"message": message})
         
         #sub in body for event
         event = event["body"]
@@ -445,30 +440,22 @@ def lambda_handler(event, context):
         if 'databaseId' not in event:
             message = "No databaseId in API Call"
             logger.error(message)
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": message})
-            return response
+            return validation_error(body={"message": message})
 
         if 'assetId' not in event:
             message = "No assetId in API Call"
             logger.error(message)
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": message})
-            return response
+            return validation_error(body={"message": message})
 
         if 'executingRequestContext' not in event:
             message = "No executingRequestContext in API Call"
             logger.error(message)
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": message})
-            return response
+            return validation_error(body={"message": message})
 
         if 'executingUserName' not in event:
             message = "No executingUserName in API Call"
             logger.error(message)
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": message})
-            return response
+            return validation_error(body={"message": message})
 
 
         logger.info("Validating parameters")
@@ -504,11 +491,8 @@ def lambda_handler(event, context):
         })
         if not valid:
             logger.error(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
+            return validation_error(body={"message": message})
 
-        global claims_and_roles
         requestContext = event['executingRequestContext']
         event["requestContext"] = requestContext
         claims_and_roles = request_to_claims(event)
@@ -517,9 +501,7 @@ def lambda_handler(event, context):
         asset = lookup_existing_asset(event['databaseId'], event['assetId'])
         if not asset:
             logger.error(f"Asset {event['assetId']} not found in database {event['databaseId']}")
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "Asset not found in database"})
-            return response
+            return validation_error(body={"message": "Asset not found in database"})
 
         #ABAC Checks for Asset
         #ABAC Implementation Deviation - Not called through API. Username passed through Pipeline Execution Call.
@@ -784,16 +766,10 @@ def lambda_handler(event, context):
                             logger.exception(f"Error processing file attribute {file_obj['Key']}: {e}")
 
 
-            response['statusCode'] = 200
-            response['body'] = json.dumps({"message": "Workflow Execution Output Processing Complete"})
-            return response
+            return success(body={"message": "Workflow Execution Output Processing Complete"})
 
         else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
+            return authorization_error()
     except Exception as e:
-        response['statusCode'] = 500
         logger.exception(e)
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
+        return internal_error()

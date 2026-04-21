@@ -4,18 +4,25 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { PotreeDependencyManager } from "./dependencies";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 
-const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({ assetId, databaseId, assetKey }) => {
+const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
+    assetId,
+    databaseId,
+    assetKey,
+    versionId,
+    assetVersionId,
+}) => {
     const engineElement = useRef<HTMLDivElement>(null);
     const [loaded, setLoaded] = useState(false);
     const [showNoAssetMessage, setShowNoAssetMessage] = useState(false);
-    const [config] = useState(Cache.getItem("config"));
+    const [config] = useState(appCache.getItem("config"));
     const [potreeInstance, setPotreeInstance] = useState<any>(null);
     const [error, setError] = useState<string | null>(null);
+    const [dismissedVersionWarning, setDismissedVersionWarning] = useState(false);
 
     useEffect(() => {
         const initializePotree = async () => {
@@ -39,8 +46,8 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({ assetId, databaseI
             if (!potreeInstance || !assetKey || loaded || !config) return;
 
             try {
-                let fileKey = assetKey + "/preview/PotreeViewer/metadata.json";
-                let url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
+                const fileKey = assetKey + "/preview/PotreeViewer/metadata.json";
+                const url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
 
                 // Get a valid, fresh authorization header (automatically refreshes token if expired)
                 const authorizationHeader = await getDualAuthorizationHeader();
@@ -53,11 +60,11 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({ assetId, databaseI
                     engineElement.current.setAttribute("pc", url);
 
                     setTimeout(() => {
-                        let parentDiv = engineElement.current;
+                        const parentDiv = engineElement.current;
                         if (!parentDiv || !potreeInstance) return;
 
                         try {
-                            let viewer = new potreeInstance.Viewer(parentDiv);
+                            const viewer = new potreeInstance.Viewer(parentDiv);
                             viewer.setEDLEnabled(true);
                             viewer.setFOV(60);
                             viewer.setPointBudget(1000000);
@@ -76,8 +83,8 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({ assetId, databaseI
                                 .loadPointCloud(url, "Point Cloud", authHeader)
                                 .then(
                                     (e: any) => {
-                                        let pointcloud = e.pointcloud;
-                                        let material = pointcloud.material;
+                                        const pointcloud = e.pointcloud;
+                                        const material = pointcloud.material;
 
                                         material.activeAttributeName = "rgba";
                                         material.minSize = 2;
@@ -187,6 +194,49 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({ assetId, databaseI
 
     return (
         <div style={{ position: "relative", height: "100%" }} id="potree-root">
+            {(assetVersionId || versionId) && !dismissedVersionWarning && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: "0",
+                        left: "0",
+                        right: "0",
+                        backgroundColor: "#e8f4fd",
+                        border: "1px solid #0972d3",
+                        borderRadius: "4px",
+                        padding: "8px 12px",
+                        margin: "8px",
+                        zIndex: 1001,
+                        fontSize: "0.85em",
+                        color: "#0972d3",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                    }}
+                >
+                    <span style={{ textAlign: "center", flex: 1 }}>
+                        This viewer does not support loading files from specific asset versions.
+                        What is displayed may be the latest file and not the asset version selected.
+                    </span>
+                    <button
+                        onClick={() => setDismissedVersionWarning(true)}
+                        style={{
+                            background: "none",
+                            border: "none",
+                            color: "#0972d3",
+                            cursor: "pointer",
+                            fontSize: "1.1em",
+                            fontWeight: "bold",
+                            padding: "0 0 0 12px",
+                            lineHeight: "1",
+                            flexShrink: 0,
+                        }}
+                        title="Dismiss"
+                    >
+                        &times;
+                    </button>
+                </div>
+            )}
             <div id="potree_container">
                 <div id="potree_render_area" ref={engineElement}></div>
                 <div id="potree_sidebar_container"></div>

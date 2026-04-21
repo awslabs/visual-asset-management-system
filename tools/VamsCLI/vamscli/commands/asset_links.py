@@ -496,11 +496,11 @@ def delete(ctx: click.Context, asset_link_id: str, json_output: bool):
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        # Confirmation prompt for safety (suppress in JSON mode)
+        # Confirmation prompt for safety (skip in JSON mode)
         if not json_output:
             output_warning(
                 f"⚠️  You are about to delete asset link '{asset_link_id}'",
-                json_output
+                False
             )
             click.echo("This will remove the relationship and all associated metadata.")
             

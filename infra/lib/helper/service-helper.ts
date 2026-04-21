@@ -136,6 +136,14 @@ export function IAMArn(name: string) {
         geoapi: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:geo:${
             config.env.region
         }:${config.env.account}:api-key/${name}`,
+
+        sqs: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:sqs:${
+            config.env.region
+        }:${config.env.account}:${name}`,
+
+        eventBus: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:events:${
+            config.env.region
+        }:${config.env.account}:event-bus/${name}`,
     };
 }
 

@@ -143,6 +143,8 @@ export function buildAssetService(
             COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName,
             SUBSCRIPTIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.subscriptionsStorageTable.tableName,
+            ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileMetadataVersionsStorageTable.tableName,
             SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
         },
     });
@@ -158,6 +160,7 @@ export function buildAssetService(
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileMetadataVersionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.commentStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
     sendEmailFunction.grantInvoke(fun);
@@ -210,6 +213,8 @@ export function buildAssetFiles(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
             ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileMetadataStorageTable.tableName,
             FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
@@ -223,6 +228,7 @@ export function buildAssetFiles(
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     sendEmailFunction.grantInvoke(fun);
@@ -365,11 +371,17 @@ export function buildDownloadAssetFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionsStorageTable.tableName,
         },
     });
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
 
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -476,11 +488,17 @@ export function buildStreamAssetFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionsStorageTable.tableName,
         },
     });
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
 
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

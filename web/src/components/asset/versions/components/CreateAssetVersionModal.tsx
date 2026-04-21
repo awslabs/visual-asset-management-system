@@ -11,6 +11,7 @@ import {
     SpaceBetween,
     Alert,
     FormField,
+    Input,
     Textarea,
     SegmentedControl,
     Container,
@@ -33,6 +34,7 @@ import { FileVersionsContainer } from "./FileVersionsContainer";
 import { BaseVersionSelectionContainer } from "./BaseVersionSelectionContainer";
 import { AssetVersion, S3File, SelectedFile, S3FileVersion, CreationMode } from "./types";
 import { normalizePath, formatFileSize, formatDate } from "./utils";
+import Synonyms from "../../../../synonyms";
 
 interface CreateAssetVersionModalProps {
     visible: boolean;
@@ -51,6 +53,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [comment, setComment] = useState<string>("");
+    const [versionAlias, setVersionAlias] = useState<string>("");
     const [creationMode, setCreationMode] = useState<CreationMode>("current");
 
     // Files state
@@ -93,6 +96,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
             setLoading(false);
             setError(null);
             setComment("");
+            setVersionAlias("");
             setCreationMode("current");
             setSelectedFiles([]);
             setShowArchived(false);
@@ -140,7 +144,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
         if (!databaseId || !assetId) {
             console.error("Missing required parameters:", { databaseId, assetId });
             if (!isRetry && !initialLoading) {
-                setError("Database ID and Asset ID are required");
+                setError(`${Synonyms.Database} ID and ${Synonyms.Asset} ID are required`);
             }
             setInitialLoading(false);
             return;
@@ -177,7 +181,9 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                 // Only show error if not in initial loading state or if this is a retry
                 if (!initialLoading || isRetry) {
                     const errorMessage =
-                        typeof response === "string" ? response : "Failed to load asset files";
+                        typeof response === "string"
+                            ? response
+                            : `Failed to load ${Synonyms.asset} files`;
                     setError(errorMessage);
                 }
                 console.error("Failed to fetch asset files:", response);
@@ -283,7 +289,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
     // Handle create version
     const handleCreateVersion = async () => {
         if (!databaseId || !assetId) {
-            setError("Database ID and Asset ID are required");
+            setError(`${Synonyms.Database} ID and ${Synonyms.Asset} ID are required`);
             return;
         }
 
@@ -307,6 +313,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                     useLatestFiles: true,
                     files: [], // Provide empty array to satisfy TypeScript
                     comment,
+                    versionAlias,
                 });
             } else if (creationMode === "select" || creationMode === "modify") {
                 // Use selected files
@@ -322,6 +329,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                     useLatestFiles: false,
                     files: selectedFiles,
                     comment,
+                    versionAlias,
                 });
             }
 
@@ -385,7 +393,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                 setVersions(response.versions);
             } else {
                 setVersions([]);
-                setError("Failed to load asset versions");
+                setError(`Failed to load ${Synonyms.asset} versions`);
             }
         } catch (err) {
             console.error("Error loading versions:", err);
@@ -438,7 +446,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
         // Load files from this version
         try {
             if (!databaseId || !assetId) {
-                setError("Database ID and Asset ID are required");
+                setError(`${Synonyms.Database} ID and ${Synonyms.Asset} ID are required`);
                 return;
             }
 
@@ -664,7 +672,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
         <Modal
             visible={visible}
             onDismiss={onDismiss}
-            header="Create New Asset Version"
+            header={`Create New ${Synonyms.Asset} Version`}
             size="max"
             footer={
                 <Box float="right">
@@ -704,7 +712,9 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                     <Alert type="info">
                         <Box textAlign="center">
                             <Spinner size="normal" />
-                            <div style={{ marginTop: "8px" }}>Loading asset files...</div>
+                            <div
+                                style={{ marginTop: "8px" }}
+                            >{`Loading ${Synonyms.asset} files...`}</div>
                         </Box>
                     </Alert>
                 )}
@@ -721,18 +731,34 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                         options={[
                             { text: "Use all current files and versions", id: "current" },
                             { text: "Select specific files and versions", id: "select" },
-                            { text: "Modify from current asset version", id: "modify" },
+                            { text: `Modify from current ${Synonyms.asset} version`, id: "modify" },
                         ]}
                     />
                 </FormField>
 
                 <Alert type="info">
                     <strong>Metadata Versioning:</strong> Creating this version will automatically
-                    snapshot the current metadata and attributes of the asset and all selected
-                    files.
+                    {`snapshot the current metadata and attributes of the ${Synonyms.asset} and all selected files.`}
                 </Alert>
 
                 {renderCreationModeContent()}
+
+                <FormField
+                    label="Version Alias"
+                    description="An optional short name for this version (e.g., RC1, GA, Beta). Max 64 characters."
+                    constraintText={`${versionAlias.length}/64 characters`}
+                >
+                    <Input
+                        value={versionAlias}
+                        onChange={({ detail }) => {
+                            if (detail.value.length <= 64) {
+                                setVersionAlias(detail.value);
+                            }
+                        }}
+                        placeholder="e.g., RC1, GA, Beta"
+                        disabled={loading}
+                    />
+                </FormField>
 
                 <FormField
                     label="Version Comment *"

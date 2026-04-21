@@ -71,7 +71,7 @@ The dynamic loading is handled automatically by the viewer component. No changes
 To update the Online3DViewer library:
 
 1. Update the version in `customInstalls/online3dviewer/package.json`
-2. Run `npm install` or `yarn install` in the main web directory
+2. Run `npm install` in the main web directory
 3. The postinstall script will automatically:
     - Install the new version in the local customInstalls directory
     - Copy the new files to the public directory

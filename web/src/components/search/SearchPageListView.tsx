@@ -13,10 +13,10 @@ import {
     Select,
     FormField,
     Modal,
-    Popover,
     Icon,
 } from "@cloudscape-design/components";
-import { SearchExplanation } from "./types";
+import Popover from "@cloudscape-design/components/popover";
+import { SearchExplanation, getTotalResultCount, FIELD_MAPPINGS } from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
@@ -33,14 +33,14 @@ import { INITIAL_STATE, SearchPageViewProps } from "./SearchPageTypes";
 import Synonyms from "../../synonyms";
 import { EmptyState } from "../../common/common-components";
 import { useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { fetchtagTypes } from "../../services/APIService";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
-import { Cache } from "aws-amplify";
+import { appCache } from "../../services/appCache";
 
-var tagTypes: any;
+let tagTypes: any;
 
 // Helper component to render explanation popover
 const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ explanation }) => (
@@ -215,6 +215,155 @@ const extractMetadata = (
     return { metadata, attributes };
 };
 
+/**
+ * Wraps a Cloudscape Table with a synced horizontal scrollbar above the column headers.
+ * Uses a MutationObserver to detect when Cloudscape finishes rendering, then finds
+ * its internal scroll container and syncs a visible top scrollbar with it.
+ */
+const DualScrollWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const topScrollRef = useRef<HTMLDivElement>(null);
+    const wrapperRef = useRef<HTMLDivElement>(null);
+    const tableScrollElRef = useRef<Element | null>(null);
+    const syncing = useRef(false);
+    const [scrollInfo, setScrollInfo] = useState({ width: 0, visible: false });
+
+    useEffect(() => {
+        const wrapper = wrapperRef.current;
+        if (!wrapper) return;
+
+        let cleanupScrollListener: (() => void) | null = null;
+
+        const findAndBind = () => {
+            // Find the scrollable container: look for any div with overflow-x auto/scroll
+            const allDivs = wrapper.querySelectorAll("div");
+            let scrollContainer: Element | null = null;
+
+            for (const div of allDivs) {
+                const style = getComputedStyle(div);
+                if (style.overflowX === "auto" || style.overflowX === "scroll") {
+                    // This is a candidate — check if it has a table inside
+                    if (div.querySelector("table")) {
+                        scrollContainer = div;
+                        break;
+                    }
+                }
+            }
+
+            if (!scrollContainer) return;
+
+            // Detach previous listener if any
+            if (cleanupScrollListener) cleanupScrollListener();
+
+            tableScrollElRef.current = scrollContainer;
+
+            // Get the full scrollable width from the table element
+            const table = scrollContainer.querySelector("table");
+            const fullWidth = table ? table.scrollWidth : scrollContainer.scrollWidth;
+
+            setScrollInfo({ width: fullWidth, visible: true });
+
+            // Sync: table scroll → top scrollbar
+            const onTableScroll = () => {
+                if (syncing.current || !topScrollRef.current || !tableScrollElRef.current) return;
+                syncing.current = true;
+                topScrollRef.current.scrollLeft = tableScrollElRef.current.scrollLeft;
+                requestAnimationFrame(() => {
+                    syncing.current = false;
+                });
+            };
+
+            scrollContainer.addEventListener("scroll", onTableScroll, { passive: true });
+            cleanupScrollListener = () => {
+                scrollContainer!.removeEventListener("scroll", onTableScroll);
+            };
+        };
+
+        // Cloudscape renders async — use MutationObserver to detect when the table appears
+        const mutationObserver = new MutationObserver(() => {
+            findAndBind();
+        });
+        mutationObserver.observe(wrapper, { childList: true, subtree: true });
+
+        // Also try immediately and after delays
+        findAndBind();
+        const t1 = setTimeout(findAndBind, 300);
+        const t2 = setTimeout(findAndBind, 1000);
+        const t3 = setTimeout(findAndBind, 3000);
+
+        // Recalculate on resize
+        const resizeObserver = new ResizeObserver(findAndBind);
+        resizeObserver.observe(wrapper);
+
+        return () => {
+            mutationObserver.disconnect();
+            resizeObserver.disconnect();
+            clearTimeout(t1);
+            clearTimeout(t2);
+            clearTimeout(t3);
+            if (cleanupScrollListener) cleanupScrollListener();
+        };
+    }, []);
+
+    // Sync: top scrollbar → table scroll
+    const handleTopScroll = useCallback(() => {
+        if (syncing.current || !tableScrollElRef.current || !topScrollRef.current) return;
+        syncing.current = true;
+        tableScrollElRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+        requestAnimationFrame(() => {
+            syncing.current = false;
+        });
+    }, []);
+
+    return (
+        <div ref={wrapperRef}>
+            {/* Top scrollbar — always rendered, shown when table is wider than viewport */}
+            <div
+                ref={topScrollRef}
+                onScroll={handleTopScroll}
+                style={{
+                    overflowX: "auto",
+                    overflowY: "hidden",
+                    height: scrollInfo.visible ? "14px" : "0px",
+                    borderBottom: scrollInfo.visible
+                        ? "1px solid var(--vams-border-default)"
+                        : "none",
+                }}
+            >
+                <div style={{ width: scrollInfo.width || 1, height: "1px" }} />
+            </div>
+            {children}
+        </div>
+    );
+};
+
+/**
+ * Renders text truncated to maxLength with a native title tooltip showing full text on hover.
+ * Used for long values like file paths, descriptions, and tags.
+ */
+const TruncatedCell: React.FC<{
+    text: string;
+    maxLength?: number;
+    isLink?: boolean;
+    href?: string;
+    onFollow?: (event: any) => void;
+}> = ({ text, maxLength = 60, isLink, href, onFollow }) => {
+    if (!text) return <span>-</span>;
+    const isTruncated = text.length > maxLength;
+    const displayText = isTruncated ? text.substring(0, maxLength) + "\u2026" : text;
+
+    if (isLink && href) {
+        return (
+            <span title={isTruncated ? text : undefined}>
+                <Link href={href} onFollow={onFollow}>
+                    {displayText}
+                </Link>
+            </span>
+        );
+    }
+
+    return <span title={isTruncated ? text : undefined}>{displayText}</span>;
+};
+
 function columnRender(e: any, name: string, value: any, navigate?: any, isFileMode?: boolean) {
     // Check if item is archived
     const isArchived = e.bool_archived === true || e.status === "archived";
@@ -259,37 +408,42 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             );
         }
     } else if (name === "str_key") {
-        // File path - remove hyperlink for archived files
+        // File path — always show full path, allow wrapping
+        const pathStyle: React.CSSProperties = {
+            wordBreak: "break-all",
+            whiteSpace: "normal",
+            lineHeight: "1.4",
+            fontSize: "13px",
+        };
         if (isFileMode && navigate && !isArchived) {
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Link
-                            href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}
-                            onFollow={(event) => {
-                                event.preventDefault();
-                                navigate(
-                                    `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`,
-                                    {
-                                        state: { filePathToNavigate: value },
-                                    }
-                                );
-                            }}
-                        >
-                            {value}
-                        </Link>
-                        {/* Show explanation icon on file path in file mode */}
+                        <span style={pathStyle}>
+                            <Link
+                                href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}
+                                onFollow={(event) => {
+                                    event.preventDefault();
+                                    navigate(
+                                        `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`,
+                                        {
+                                            state: { filePathToNavigate: value },
+                                        }
+                                    );
+                                }}
+                            >
+                                {value}
+                            </Link>
+                        </span>
                         {e.explanation && <ExplanationPopover explanation={e.explanation} />}
                     </SpaceBetween>
                 </Box>
             );
         } else {
-            // Non-file mode or archived - just show as text
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
-                        <span>{value}</span>
-                        {/* Show explanation for archived files in file mode */}
+                        <span style={pathStyle}>{value}</span>
                         {e.explanation && isFileMode && (
                             <ExplanationPopover explanation={e.explanation} />
                         )}
@@ -301,7 +455,7 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
         const tagsWithType = value.map((tag) => {
             if (tagTypes)
                 for (const tagType of tagTypes) {
-                    var tagTypeName = tagType.tagTypeName;
+                    let tagTypeName = tagType.tagTypeName;
 
                     //If tagType has required field add [R] to tag type name
                     if (tagType && tagType.required === "True") {
@@ -315,7 +469,14 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             return tag;
         });
 
-        return <Box>{tagsWithType.join(", ")}</Box>;
+        const tagsText = tagsWithType.join(", ");
+        return (
+            <Box>
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    <TruncatedCell text={tagsText} maxLength={60} />
+                </span>
+            </Box>
+        );
     } else if (name.startsWith("bool_")) {
         // Display all boolean fields as checkboxes
         return (
@@ -334,6 +495,12 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
         } catch {
             return <Box>{value}</Box>;
         }
+    } else if (name === "str_description") {
+        return (
+            <Box>
+                <TruncatedCell text={String(value ?? "")} maxLength={80} />
+            </Box>
+        );
     } else if (name.indexOf("str") === 0 || name.indexOf("num_") === 0) {
         return <Box>{value}</Box>;
     }
@@ -433,6 +600,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
+                    width: 150,
+                    minWidth: 120,
                 };
             }
             if (name === "str_databaseid") {
@@ -442,24 +611,30 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
+                    width: 150,
+                    minWidth: 100,
                 };
             }
             if (name === "str_assettype") {
                 return {
                     id: name,
-                    header: isFileMode ? "Asset Type" : "Type",
+                    header: isFileMode ? `${Synonyms.Asset} Type` : "Type",
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
+                    width: 120,
+                    minWidth: 80,
                 };
             }
             if (name === "list_tags") {
                 return {
                     id: name,
-                    header: isFileMode ? "Asset Tags" : "Tags",
+                    header: isFileMode ? `${Synonyms.Asset} Tags` : "Tags",
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
+                    width: 150,
+                    minWidth: 100,
                 };
             }
             if (name === "str_key" && isFileMode) {
@@ -469,29 +644,65 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
+                    width: 350,
+                    minWidth: 200,
                 };
             }
             if (name === "str_description" && isFileMode) {
                 return {
                     id: name,
-                    header: "Asset Description",
+                    header: `${Synonyms.Asset} Description`,
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
+                    width: 150,
+                    minWidth: 100,
                 };
             }
+            // Determine width for common column types
+            const isDateColumn = name.startsWith("date_");
+            const isSizeColumn = name === "num_filesize" || name === "num_size";
+            const isDescriptionColumn = name === "str_description";
+            const isVersionColumn =
+                name === "str_asset_version_id" || name === "str_assetversionid";
+            const defaultWidth = isDateColumn
+                ? 160
+                : isSizeColumn
+                ? 100
+                : isDescriptionColumn
+                ? 200
+                : isVersionColumn
+                ? 180
+                : 150;
+            const defaultMinWidth = isDateColumn
+                ? 120
+                : isSizeColumn
+                ? 70
+                : isDescriptionColumn
+                ? 120
+                : isVersionColumn
+                ? 130
+                : 100;
+
+            // Use FIELD_MAPPINGS label if available, with overrides for brevity
+            const shortLabels: Record<string, string> = {
+                str_assetname: Synonyms.Asset,
+                str_asset_version_id: "Version",
+                metadata: "Metadata",
+            };
+
+            const fieldLabel =
+                shortLabels[name] ||
+                (FIELD_MAPPINGS as any)[name]?.label ||
+                name
+                    .split("_")
+                    .slice(1)
+                    .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
+                    .join(" ");
+
             return {
                 id: name,
-                header:
-                    name === "str_assetname"
-                        ? Synonyms.Asset
-                        : name === "metadata"
-                        ? "Metadata"
-                        : name
-                              .split("_")
-                              .slice(1)
-                              .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
-                              .join(" "),
+                header: fieldLabel,
                 cell: (e: any) => {
                     if (name === "metadata") {
                         const { metadata, attributes } = extractMetadata(e);
@@ -510,6 +721,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                 },
                 sortingField: name === "metadata" ? undefined : name,
                 isRowHeader: false,
+                width: defaultWidth,
+                minWidth: defaultMinWidth,
             };
         });
 
@@ -537,10 +750,17 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                 handleOpenPreview(url, assetName, previewKey, item)
                             }
                             assetName={item.str_assetname}
+                            previewFileKey={
+                                item.str_previewfilekey !== undefined
+                                    ? item.str_previewfilekey
+                                    : undefined
+                            }
                         />
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
+                    width: 150,
+                    minWidth: 100,
                 },
                 ...enhancedColumnDefinitions,
             ];
@@ -560,10 +780,17 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                             onOpenFullPreview={(url, fileName, previewKey, downloadType) =>
                                 handleOpenPreview(url, fileName, previewKey, downloadType, item)
                             }
+                            previewFileKey={
+                                item.str_previewfilekey !== undefined
+                                    ? item.str_previewfilekey
+                                    : undefined
+                            }
                         />
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
+                    width: 150,
+                    minWidth: 100,
                 },
                 ...enhancedColumnDefinitions,
             ];
@@ -596,7 +823,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
     // Add or remove map thumbnail column based on showMapThumbnails toggle
     // Only for assets when maps are enabled
     if (state.showMapThumbnails && state.useMapView && state.filters._rectype.value === "asset") {
-        const config = Cache.getItem("config");
+        const config = appCache.getItem("config");
         const mapStyleUrl = config?.locationServiceApiUrl;
 
         // Remove any existing map thumbnail columns first to avoid duplicates
@@ -620,6 +847,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                 ),
                 sortingField: undefined, // Not sortable - client-side column
                 isRowHeader: false,
+                width: 230,
+                minWidth: 220,
             });
 
             // Add mapThumbnail to visible columns if not already there
@@ -645,17 +874,18 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
         }
     }
 
+    const totalResults = getTotalResultCount(state?.result);
     const currentPage = 1 + Math.floor(state?.pagination?.from / state?.tablePreferences?.pageSize);
-    const pageCount = Math.ceil(
-        state?.result?.hits?.total?.value / state?.tablePreferences?.pageSize
-    );
+    const pageCount = Math.ceil(totalResults / state?.tablePreferences?.pageSize);
 
     console.log("[SearchPageListView] Pagination calculation:", {
         from: state?.pagination?.from,
         pageSize: state?.tablePreferences?.pageSize,
         currentPage,
         pageCount,
-        totalResults: state?.result?.hits?.total?.value,
+        totalResults,
+        hitsTotal: state?.result?.hits?.total?.value,
+        aggregationTotal: state?.result?.aggregationTotal,
     });
 
     if (!enhancedColumnDefinitions) {
@@ -677,6 +907,9 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
         <>
             <SpaceBetween direction="vertical" size="l">
                 <Table
+                    resizableColumns={true}
+                    stickyHeader={true}
+                    wrapLines={false}
                     empty={
                         <EmptyState
                             title="No matches"
@@ -785,10 +1018,35 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                 state.filters._rectype.value === "file" ? "Files" : Synonyms.Assets
                             }
                             counter={
-                                state?.result?.hits?.total?.value
-                                    ? state?.result?.hits?.total?.value +
-                                      (state?.result?.hits?.total?.relation === "gte" ? "+" : "")
+                                totalResults
+                                    ? `${totalResults.toLocaleString()}${
+                                          state?.result?.hits?.total?.relation === "gte" ? "+" : ""
+                                      }`
                                     : ""
+                            }
+                            info={
+                                totalResults ? (
+                                    <Popover
+                                        header="About this count"
+                                        content="This total is based on records accessible with your current permissions. The actual number of records in the system may be higher."
+                                        triggerType="custom"
+                                    >
+                                        <Box
+                                            color="text-status-info"
+                                            fontSize="body-s"
+                                            display="inline"
+                                        >
+                                            <span
+                                                style={{
+                                                    cursor: "help",
+                                                    textDecoration: "underline dotted",
+                                                }}
+                                            >
+                                                &#9432;
+                                            </span>
+                                        </Box>
+                                    </Popover>
+                                ) : undefined
                             }
                             actions={
                                 state.filters._rectype.value === "asset" ? (
@@ -848,7 +1106,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                         const operationName =
                             operation === "archive" ? "archived" : "permanently deleted";
                         onShowToast(
-                            `Asset ${operationName} successfully`,
+                            `${Synonyms.Asset} ${operationName} successfully`,
                             "Changes may take a few minutes to propagate throughout the system, including search results."
                         );
                     }
@@ -874,7 +1132,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     // Show toast notification
                     if (onShowToast) {
                         onShowToast(
-                            "Asset unarchived successfully",
+                            `${Synonyms.Asset} unarchived successfully`,
                             "Changes may take a few minutes to propagate throughout the system, including search results."
                         );
                     }

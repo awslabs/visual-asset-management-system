@@ -148,7 +148,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
         const commonProps = {
             value: row.editValue,
             onChange: onValueChange,
-            disabled: isDisabledDueToDeps,
+            disabled: readOnly || isDisabledDueToDeps,
             ariaLabel: `${row.editKey} value`,
             error: row.validationError,
         };
@@ -297,22 +297,39 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
         <>
             <tr>
                 {/* Metadata Key Column */}
-                <td style={{ padding: "12px", verticalAlign: "middle" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        {canEditKey ? (
-                            <Input
-                                value={row.editKey}
-                                onChange={({ detail }) => onKeyChange(detail.value)}
-                                placeholder="Enter key name"
-                                ariaLabel="Metadata key"
-                                disabled={readOnly}
-                                invalid={row.isNew && (!row.editKey || row.editKey.trim() === "")}
-                            />
-                        ) : (
-                            <span style={{ fontWeight: isSchema ? "bold" : "normal" }}>
-                                {row.metadataKey || row.editKey}
-                            </span>
-                        )}
+                <td style={{ padding: "6px 12px", verticalAlign: "middle" }}>
+                    <div
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "4px",
+                            flexWrap: "nowrap",
+                        }}
+                    >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            {canEditKey ? (
+                                <Input
+                                    value={row.editKey}
+                                    onChange={({ detail }) => onKeyChange(detail.value)}
+                                    placeholder="Enter key name"
+                                    ariaLabel="Metadata key"
+                                    disabled={readOnly}
+                                    invalid={
+                                        row.isNew && (!row.editKey || row.editKey.trim() === "")
+                                    }
+                                />
+                            ) : (
+                                <span
+                                    style={{
+                                        fontWeight: isSchema ? "bold" : "normal",
+                                        wordBreak: "break-word",
+                                        overflowWrap: "break-word",
+                                    }}
+                                >
+                                    {row.metadataKey || row.editKey}
+                                </span>
+                            )}
+                        </div>
 
                         {/* Schema conflict warning - show before other icons */}
                         {row.metadataSchemaMultiFieldConflict && (
@@ -340,7 +357,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                 </td>
 
                 {/* Metadata Type Column */}
-                <td style={{ padding: "12px", verticalAlign: "middle" }}>
+                <td style={{ padding: "6px 12px", verticalAlign: "middle" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         {canEditType ? (
                             <Select
@@ -375,7 +392,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                 </td>
 
                 {/* Metadata Value Column */}
-                <td style={{ padding: "12px", verticalAlign: "middle" }}>
+                <td style={{ padding: "6px 12px", verticalAlign: "middle" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <div style={{ flex: 1 }}>
                             {isComplexType ? (
@@ -439,7 +456,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                 </td>
 
                 {/* Actions Column */}
-                <td style={{ padding: "12px", verticalAlign: "middle" }}>
+                <td style={{ padding: "6px 12px", verticalAlign: "middle", textAlign: "center" }}>
                     <SpaceBetween direction="horizontal" size="xs">
                         {/* Revert changes button - only show if there are changes */}
                         {row.hasChanges && !row.isNew && (

@@ -16,7 +16,12 @@ import {
     Spinner,
     Toggle,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import {
+    archiveAssetDelete,
+    deleteAssetPermanentDelete,
+    archiveFile,
+    deleteFilePermanent,
+} from "../../services/APIService";
 import Synonyms from "../../synonyms";
 
 interface AssetDeleteModalProps {
@@ -71,6 +76,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
         currentItemIndex: 0,
         processedCount: 0,
     });
+    const [reasonError, setReasonError] = useState("");
 
     // Reset state when modal opens/closes
     useEffect(() => {
@@ -84,6 +90,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                 currentItemIndex: 0,
                 processedCount: 0,
             });
+            setReasonError("");
         }
     }, [visible, forceDeleteMode]);
 
@@ -145,80 +152,82 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
     };
 
     const processAsset = async (asset: any) => {
-        try {
-            // Get the database ID either from props or from the asset itself
-            const dbId = databaseId || asset.databaseId || asset.str_databaseid;
-            const assetId = asset.assetId || asset.str_assetid;
+        // Get the database ID either from props or from the asset itself
+        const dbId = databaseId || asset.databaseId || asset.str_databaseid;
+        const aId = asset.assetId || asset.str_assetid;
 
-            if (!dbId || !assetId) {
-                throw new Error("Missing database ID or asset ID");
-            }
+        if (!dbId || !aId) {
+            throw new Error("Missing database ID or asset ID");
+        }
 
-            let endpoint = "";
-            let body = {};
+        let response;
 
-            if (state.operation === "archive") {
-                endpoint = `database/${dbId}/assets/${assetId}/archiveAsset`;
-                body = {
+        if (state.operation === "archive") {
+            response = await archiveAssetDelete({
+                databaseId: dbId,
+                assetId: aId,
+                body: {
                     confirmArchive: true,
                     reason: state.reason,
-                };
-            } else {
-                endpoint = `database/${dbId}/assets/${assetId}/deleteAsset`;
-                body = {
-                    confirmPermanentDelete: true,
-                };
-            }
-
-            const response = await API.del("api", endpoint, {
-                body: body,
+                },
             });
-
-            return response;
-        } catch (error) {
-            console.error("Error processing asset:", error);
-            throw error;
+        } else {
+            response = await deleteAssetPermanentDelete({
+                databaseId: dbId,
+                assetId: aId,
+                body: {
+                    confirmPermanentDelete: true,
+                },
+            });
         }
+
+        // Check for API error tuple [false, errorMessage]
+        if (Array.isArray(response) && response[0] === false) {
+            throw new Error(response[1] || `Failed to ${state.operation} ${Synonyms.asset}.`);
+        }
+
+        return response;
     };
 
     const processFile = async (file: any) => {
-        try {
-            // For files, we need both databaseId and assetId
-            if (!databaseId || !assetId) {
-                throw new Error("Missing database ID or asset ID for file operation");
-            }
+        // For files, we need both databaseId and assetId
+        if (!databaseId || !assetId) {
+            throw new Error("Missing database ID or asset ID for file operation");
+        }
 
-            // Get the file path
-            const filePath = file.relativePath;
-            const isFolder = file.isFolder || file.keyPrefix?.endsWith("/") || false;
+        // Get the file path
+        const filePath = file.relativePath;
+        const isFolder = file.isFolder || file.keyPrefix?.endsWith("/") || false;
 
-            let endpoint = "";
-            let body = {};
+        let response;
 
-            if (state.operation === "archive") {
-                endpoint = `database/${databaseId}/assets/${assetId}/archiveFile`;
-                body = {
+        if (state.operation === "archive") {
+            response = await archiveFile({
+                databaseId,
+                assetId,
+                body: {
                     filePath: filePath,
                     isPrefix: isFolder,
-                };
-            } else {
-                endpoint = `database/${databaseId}/assets/${assetId}/deleteFile`;
-                body = {
+                },
+            });
+        } else {
+            response = await deleteFilePermanent({
+                databaseId,
+                assetId,
+                body: {
                     filePath: filePath,
                     isPrefix: isFolder,
                     confirmPermanentDelete: true,
-                };
-            }
-
-            const response = await API.del("api", endpoint, {
-                body: body,
+                },
             });
-
-            return response;
-        } catch (error) {
-            console.error("Error processing file:", error);
-            throw error;
         }
+
+        // Check for API error tuple [false, errorMessage]
+        if (Array.isArray(response) && response[0] === false) {
+            throw new Error(response[1] || `Failed to ${state.operation} file.`);
+        }
+
+        return response;
     };
 
     const handleSubmit = async () => {
@@ -261,7 +270,9 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                 loading: false,
                 error:
                     error.message ||
-                    `An error occurred while processing the ${isAssetMode ? "assets" : "files"}.`,
+                    `An error occurred while processing the ${
+                        isAssetMode ? Synonyms.assets : "files"
+                    }.`,
             }));
         }
     };
@@ -331,7 +342,7 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                             Are you sure you want to archive <b>{itemName}</b>?
                             <br />
                             {isAssetMode
-                                ? "Archived assets will not appear in normal results but can be restored later."
+                                ? `Archived ${Synonyms.assets} will not appear in normal results but can be restored later.`
                                 : "Archived files will not appear in normal results but can be restored later."}
                         </>
                     ) : (
@@ -351,23 +362,25 @@ const AssetDeleteModal: React.FC<AssetDeleteModalProps> = ({
                         }
                         checked={state.operation === "delete"}
                     >
-                        Permanently delete {isAssetMode ? "asset" : "file"} instead of archiving.
-                        This will remove all versions and sub-versions associated with the entity.
+                        Permanently delete {isAssetMode ? Synonyms.asset : "file"} instead of
+                        archiving. This will remove all versions and sub-versions associated with
+                        the entity.
                     </Toggle>
                 )}
 
                 {/* Only show reason field for asset archiving */}
                 {isAssetMode && state.operation === "archive" && (
                     <FormField
-                        label="Reason for archiving"
-                        description="Please provide a reason for archiving this asset."
-                        errorText={
-                            state.error && !state.reason.trim() ? "Reason is required" : undefined
-                        }
+                        label="Reason for archiving *"
+                        description={`Please provide a reason for archiving this ${Synonyms.asset}.`}
+                        errorText={reasonError}
                     >
                         <Input
                             value={state.reason}
-                            onChange={({ detail }) => handleReasonChange(detail.value)}
+                            onChange={({ detail }) => {
+                                handleReasonChange(detail.value);
+                                setReasonError(!detail.value.trim() ? "Reason is required" : "");
+                            }}
                             placeholder="Enter reason for archiving"
                             disabled={state.loading}
                         />

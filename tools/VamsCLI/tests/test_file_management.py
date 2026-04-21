@@ -341,6 +341,7 @@ class TestFileListCommand:
         assert '--basic' in result.output
         assert '--max-items' in result.output
         assert '--auto-paginate' in result.output
+        assert '--asset-version-id' in result.output
     
     def test_list_success(self, cli_runner, file_command_mocks):
         """Test successful file listing."""
@@ -671,6 +672,123 @@ class TestFileListCommand:
             output_json = json.loads(result.output.strip())
             assert output_json == api_response
 
+    def test_list_with_asset_version_id(self, cli_runner, file_command_mocks):
+        """Test file listing filtered by asset version ID."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {
+                        'fileName': 'model.gltf',
+                        'relativePath': '/model.gltf',
+                        'isFolder': False,
+                        'size': 1024,
+                        'isArchived': False
+                    }
+                ]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--asset-version-id', 'ver-123'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Found 1 file(s):' in result.output
+
+            # Verify API call includes assetVersionId
+            expected_params = {'assetVersionId': 'ver-123'}
+            mocks['api_client'].list_asset_files.assert_called_once_with(
+                'test-db', 'test-asset', expected_params
+            )
+
+    def test_list_with_asset_version_id_and_basic(self, cli_runner, file_command_mocks):
+        """Test file listing with asset version ID and basic mode."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {
+                        'fileName': 'model.gltf',
+                        'relativePath': '/model.gltf',
+                        'isFolder': False,
+                        'size': 512,
+                        'isArchived': False
+                    }
+                ]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--asset-version-id', 'ver-123',
+                '--basic'
+            ])
+
+            assert result.exit_code == 0
+
+            # Verify API call includes both assetVersionId and basic
+            expected_params = {'basic': 'true', 'assetVersionId': 'ver-123'}
+            mocks['api_client'].list_asset_files.assert_called_once_with(
+                'test-db', 'test-asset', expected_params
+            )
+
+    def test_list_with_asset_version_id_auto_paginate(self, cli_runner, file_command_mocks):
+        """Test file listing with asset version ID and auto-pagination."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {'fileName': f'file{i}.gltf', 'relativePath': f'/file{i}.gltf', 'isFolder': False, 'size': 100}
+                    for i in range(50)
+                ],
+                'NextToken': None
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--asset-version-id', 'ver-123',
+                '--auto-paginate'
+            ])
+
+            assert result.exit_code == 0
+
+            # Verify API call includes assetVersionId
+            call_args = mocks['api_client'].list_asset_files.call_args
+            assert call_args[0][2]['assetVersionId'] == 'ver-123'
+
+    def test_list_with_asset_version_id_json_input(self, cli_runner, file_command_mocks):
+        """Test file listing with asset version ID from JSON input."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {
+                        'fileName': 'model.gltf',
+                        'relativePath': '/model.gltf',
+                        'isFolder': False,
+                        'size': 1024
+                    }
+                ]
+            }
+
+            json_input = json.dumps({'asset_version_id': 'ver-from-json'})
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--json-input', json_input
+            ])
+
+            assert result.exit_code == 0
+
+            # Verify API call includes assetVersionId from JSON input
+            expected_params = {'assetVersionId': 'ver-from-json'}
+            mocks['api_client'].list_asset_files.assert_called_once_with(
+                'test-db', 'test-asset', expected_params
+            )
+
 
 class TestFileInfoCommand:
     """Test file info command."""
@@ -813,9 +931,10 @@ class TestFileOperationCommands:
         """Test copy command help."""
         result = cli_runner.invoke(cli, ['file', 'copy', '--help'])
         assert result.exit_code == 0
-        assert 'Copy a file within an asset or to another asset' in result.output
+        assert 'Copy a file within an asset' in result.output
         assert '--dest-asset' in result.output
-    
+        assert '--dest-database' in result.output
+
     def test_copy_cross_asset(self, cli_runner, file_command_mocks):
         """Test successful cross-asset file copy."""
         with file_command_mocks as mocks:
@@ -824,7 +943,7 @@ class TestFileOperationCommands:
                 'message': 'File copied successfully',
                 'affectedFiles': ['/file.gltf', '/file.previewFile.png']
             }
-            
+
             result = cli_runner.invoke(cli, [
                 'file', 'copy',
                 '-d', 'test-db',
@@ -833,11 +952,100 @@ class TestFileOperationCommands:
                 '--dest', '/file.gltf',
                 '--dest-asset', 'dest-asset'
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ File copied successfully!' in result.output
             assert 'Destination Asset: dest-asset' in result.output
             assert 'Additional files copied: 1' in result.output
+
+            # Verify destinationDatabaseId is NOT in the request body
+            call_args = mocks['api_client'].copy_file.call_args
+            copy_data = call_args[0][2]
+            assert 'destinationDatabaseId' not in copy_data
+
+    def test_copy_cross_database(self, cli_runner, file_command_mocks):
+        """Test successful cross-database file copy."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].copy_file.return_value = {
+                'success': True,
+                'message': 'File copied successfully',
+                'affectedFiles': ['/file.gltf']
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'copy',
+                '-d', 'source-db',
+                '-a', 'source-asset',
+                '--source', '/file.gltf',
+                '--dest', '/file.gltf',
+                '--dest-asset', 'dest-asset',
+                '--dest-database', 'dest-db'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ File copied successfully!' in result.output
+            assert 'Destination Asset: dest-asset' in result.output
+            assert 'Destination Database: dest-db' in result.output
+
+            # Verify the API was called with destinationDatabaseId in request body
+            call_args = mocks['api_client'].copy_file.call_args
+            copy_data = call_args[0][2]
+            assert copy_data['destinationDatabaseId'] == 'dest-db'
+            assert copy_data['destinationAssetId'] == 'dest-asset'
+            assert copy_data['sourcePath'] == '/file.gltf'
+            assert copy_data['destinationPath'] == '/file.gltf'
+
+    def test_copy_without_dest_database_backward_compat(self, cli_runner, file_command_mocks):
+        """Test that copy without --dest-database does not include destinationDatabaseId (backward compatibility)."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].copy_file.return_value = {
+                'success': True,
+                'message': 'File copied successfully',
+                'affectedFiles': ['/file.gltf']
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'copy',
+                '-d', 'my-db',
+                '-a', 'my-asset',
+                '--source', '/file.gltf',
+                '--dest', '/copy.gltf'
+            ])
+
+            assert result.exit_code == 0
+
+            # Verify destinationDatabaseId is NOT in the request body
+            call_args = mocks['api_client'].copy_file.call_args
+            copy_data = call_args[0][2]
+            assert 'destinationDatabaseId' not in copy_data
+            assert 'destinationAssetId' not in copy_data
+            assert copy_data['sourcePath'] == '/file.gltf'
+            assert copy_data['destinationPath'] == '/copy.gltf'
+
+    def test_copy_cross_database_json_output(self, cli_runner, file_command_mocks):
+        """Test cross-database copy with JSON output."""
+        with file_command_mocks as mocks:
+            api_response = {
+                'success': True,
+                'message': 'File copied successfully',
+                'affectedFiles': ['/file.gltf']
+            }
+            mocks['api_client'].copy_file.return_value = api_response
+
+            result = cli_runner.invoke(cli, [
+                'file', 'copy',
+                '-d', 'source-db',
+                '-a', 'source-asset',
+                '--source', '/file.gltf',
+                '--dest', '/file.gltf',
+                '--dest-asset', 'dest-asset',
+                '--dest-database', 'dest-db',
+                '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            output_json = json.loads(result.output.strip())
+            assert output_json['success'] is True
     
     def test_archive_help(self, cli_runner):
         """Test archive command help."""

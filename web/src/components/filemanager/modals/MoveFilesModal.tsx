@@ -5,6 +5,7 @@ import {
     SpaceBetween,
     Button,
     FormField,
+    Input,
     SegmentedControl,
     Alert,
     ProgressBar,
@@ -56,6 +57,9 @@ export function MoveFilesModal({
     const [operationResults, setOperationResults] = useState<FileOperationResult[]>([]);
     const [showResults, setShowResults] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Destination filename (editable for single file operations only)
+    const [destFileName, setDestFileName] = useState("");
+    const [fileNameError, setFileNameError] = useState("");
 
     // Reset state when modal opens/closes
     useEffect(() => {
@@ -72,8 +76,17 @@ export function MoveFilesModal({
             setOperationResults([]);
             setShowResults(false);
             setError(null);
+            // Initialize filename for single file
+            if (selectedFiles.length === 1) {
+                const fileName =
+                    selectedFiles[0].relativePath.split("/").pop() || selectedFiles[0].displayName;
+                setDestFileName(fileName);
+            } else {
+                setDestFileName("");
+            }
+            setFileNameError("");
         }
-    }, [visible]);
+    }, [visible, selectedFiles]);
 
     // Handle folder selection
     const handleFolderSelect = (folderPath: string) => {
@@ -134,6 +147,9 @@ export function MoveFilesModal({
     const isValidSelection = (): boolean => {
         if (!selectedFolder) return false;
 
+        // For single file, filename is required
+        if (selectedFiles.length === 1 && !destFileName.trim()) return false;
+
         if (operationMode === "copy" && copyTarget === "different") {
             return selectedAsset !== null && selectedFolder !== null;
         }
@@ -168,13 +184,28 @@ export function MoveFilesModal({
                     ? selectedAsset?.assetId
                     : undefined;
 
+            // Extract destinationDatabaseId when copying to a different asset in a different database
+            const destinationDatabaseId =
+                operationMode === "copy" &&
+                copyTarget === "different" &&
+                selectedAsset &&
+                selectedAsset.databaseId !== databaseId
+                    ? selectedAsset.databaseId
+                    : undefined;
+
+            // For single file, pass the custom destination filename
+            const destFileNames =
+                selectedFiles.length === 1 ? { [filePaths[0]]: destFileName.trim() } : undefined;
+
             const results = await processMultipleFileOperations(
                 databaseId,
                 currentAssetId,
                 filePaths,
                 selectedFolder!,
                 operationMode,
-                destinationAssetId
+                destinationAssetId,
+                destFileNames,
+                destinationDatabaseId
             );
 
             // Check if all operations were successful
@@ -247,7 +278,15 @@ export function MoveFilesModal({
                             Files have been {operationMode}d to: {selectedFolder}
                             {operationMode === "copy" &&
                                 copyTarget === "different" &&
-                                selectedAsset && <> in asset: {selectedAsset.assetName}</>}
+                                selectedAsset && (
+                                    <>
+                                        {" "}
+                                        in asset: {selectedAsset.assetName}
+                                        {selectedAsset.databaseId !== databaseId && (
+                                            <> (database: {selectedAsset.databaseId})</>
+                                        )}
+                                    </>
+                                )}
                         </Alert>
                     )}
                 </SpaceBetween>
@@ -295,6 +334,32 @@ export function MoveFilesModal({
                     </Box>
                 </Container>
 
+                {/* File Name (single file only) */}
+                {selectedFiles.length === 1 ? (
+                    <FormField
+                        label="File Name"
+                        constraintText="Required. The destination file name."
+                        errorText={fileNameError}
+                    >
+                        <Input
+                            value={destFileName}
+                            onChange={({ detail }) => {
+                                setDestFileName(detail.value);
+                                if (!detail.value.trim()) {
+                                    setFileNameError("File name is required");
+                                } else {
+                                    setFileNameError("");
+                                }
+                            }}
+                            placeholder="Enter destination file name"
+                        />
+                    </FormField>
+                ) : (
+                    <Alert type="info" statusIconAriaLabel="Info">
+                        Original file names will be used for all {selectedFiles.length} files.
+                    </Alert>
+                )}
+
                 {/* Operation Mode Toggle */}
                 <FormField label="Operation">
                     <SegmentedControl
@@ -341,6 +406,7 @@ export function MoveFilesModal({
                         selectedAsset={selectedAsset}
                         onAssetSelect={handleAssetSelect}
                         onAssetFilesLoad={handleAssetFilesLoad}
+                        restrictToCurrentDatabase={false}
                     />
                 )}
 

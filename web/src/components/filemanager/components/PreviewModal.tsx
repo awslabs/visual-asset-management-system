@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Button, Modal, Spinner } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
+import Synonyms from "../../../synonyms";
 
 interface PreviewModalProps {
     visible: boolean;
@@ -94,7 +95,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
             visible={visible}
             onDismiss={onDismiss}
             size="large"
-            header={isFilePreview ? "File Preview" : "Asset Preview"}
+            header={isFilePreview ? "File Preview" : `${Synonyms.Asset} Preview`}
             footer={
                 <Box float="right">
                     <Button onClick={onDismiss}>Close</Button>
@@ -118,7 +119,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
                 {!loading && !error && previewUrl && (
                     <img
                         src={previewUrl}
-                        alt="Asset preview"
+                        alt={`${Synonyms.Asset} preview`}
                         style={{ maxWidth: "100%", maxHeight: "80vh" }}
                         onError={(e) => {
                             console.error("Error loading preview image");

@@ -1,0 +1,5 @@
+# VAMS CLI is the only external dependency.
+# Install from the VAMS repository:
+#   pip install -e <path-to-VAMS>/tools/VamsCLI
+# Or if published:
+#   pip install vamscli

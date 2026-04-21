@@ -12,6 +12,7 @@ const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
 }) => {
     const [audioUrl, setAudioUrl] = useState<string>("");
     const [loading, setLoading] = useState(true);
@@ -29,7 +30,7 @@ const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId,
                     databaseId,
                     key: assetKey,
-                    versionId: versionId || "",
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 
@@ -37,7 +38,8 @@ const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey,
-                    versionId: versionId || "",
+                    versionId: versionId,
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 

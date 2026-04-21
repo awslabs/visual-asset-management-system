@@ -19,14 +19,14 @@ def after_request(response):
 def amplifyConfig():
   return {
     'api': 'http://localhost:8002/',
-    'region': '',
+    'region': 'us-east-1',
     #'cognitoUserPoolId': 'XX-XXXX-X_abcd1234',
     #'cognitoAppClientId': '1',
-    'cognitoIdentityPoolId': 'XXXXX',
+    #'cognitoIdentityPoolId': 'XXXXX',
     'externalOAuthIdpURL': 'https://localhost:9031',
     'externalOAuthIdpClientId': 'clientId',
     'externalOAuthIdpScope': 'openid',
-    'externalOAuthIdpScopeMfa': 'test_mfa_scope',
+    'externalOAuthIdpScopeMfa': 'test_mfa_scope', #Remove this to remove MFA capability
     'externalOAuthIdpTokenEndpoint': '/as/token.oauth2',
     'externalOAuthIdpAuthorizationEndpoint': '/as/authorization.oauth2',
     'externalOAuthIdpDiscoveryEndpoint': '/.well-known/openid-configuration',
@@ -58,8 +58,8 @@ def routes():
 
   # FIXME Issue with accessing header outside of route.
   access_token = request.headers['Authorization'].split()[1]
-  header = pyjwt.get_unverified_header(access_token)
-  claims = pyjwt.decode(access_token, options={ 'verify_signature': False })
+  header = pyjwt.get_unverified_header(access_token) # nosemgrep: unverified-jwt-decode
+  claims = pyjwt.decode(access_token, options={ 'verify_signature': False }) # nosemgrep: unverified-jwt-decode
   print('header', header)
   print('claims', claims)
 
@@ -90,8 +90,8 @@ def routes():
 def decode_access_token(access_token):
   print('access_token', access_token)
 
-  header = pyjwt.get_unverified_header(access_token)
-  claims = pyjwt.decode(access_token, options={ 'verify_signature': False })
+  header = pyjwt.get_unverified_header(access_token)  # nosemgrep: unverified-jwt-decode
+  claims = pyjwt.decode(access_token, options={ 'verify_signature': False })  # nosemgrep: unverified-jwt-decode
   print('header', header)
   print('claims', claims)
 
@@ -133,4 +133,4 @@ if __name__ == '__main__':
   app = Flask(__name__)
   app.secret_key = 'development'
   app.register_blueprint(vams)
-  app.run(debug=True, port=8002, host='0.0.0.0')
+  app.run(debug=True, port=8002, host='0.0.0.0') # nosec B201

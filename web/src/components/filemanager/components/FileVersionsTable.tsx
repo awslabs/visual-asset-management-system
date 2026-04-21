@@ -18,6 +18,7 @@ import {
 import { downloadAsset, revertFileVersion } from "../../../services/APIService";
 import { fetchFileVersions } from "../../../services/AssetVersionService";
 import { useNavigate } from "react-router";
+import Synonyms from "../../../synonyms";
 
 // TypeScript interfaces
 interface FileVersion {
@@ -29,6 +30,7 @@ interface FileVersion {
     etag?: string;
     isArchived: boolean;
     currentAssetVersionFileVersionMismatch?: boolean;
+    assetVersionIds?: { id: string; label: string }[];
 }
 
 interface FileVersionsTableProps {
@@ -40,6 +42,7 @@ interface FileVersionsTableProps {
     onVersionRevert?: () => void; // Refresh callback
     displayMode?: "modal" | "container"; // Display context
     visible?: boolean; // For modal context
+    assetVersionId?: string; // Current asset version context for highlighting
 }
 
 interface RevertConfirmationModalProps {
@@ -125,6 +128,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     onVersionRevert,
     displayMode = "container",
     visible = true,
+    assetVersionId,
 }) => {
     const navigate = useNavigate();
 
@@ -204,8 +208,25 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         // Find the version to get its isArchived status
         const version = versions.find((v) => v.versionId === versionId);
 
-        // For EnhancedFileManager context without callback - navigate directly
-        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
+        // Get the relative path from the file path
+        // The filePath format is typically: assetId/relativePath
+        // We need to extract just the relativePath part
+        const pathParts = filePath.split("/");
+        let relativePath = filePath;
+        if (pathParts.length > 1 && pathParts[0] === assetId) {
+            relativePath = pathParts.slice(1).join("/");
+        }
+
+        // Encode the path for URL
+        const encodedPath = encodeURIComponent(relativePath);
+
+        // Build URL with version query parameter
+        const url = `/databases/${databaseId}/assets/${assetId}/file/${encodedPath}?version=${encodeURIComponent(
+            versionId
+        )}`;
+
+        // Navigate with state for fast loading, URL for bookmarking/sharing
+        navigate(url, {
             state: {
                 filename: fileName,
                 key: filePath,
@@ -285,13 +306,45 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                     {item.currentAssetVersionFileVersionMismatch && (
                         <span style={{ marginLeft: "12px" }}>
                             <StatusIndicator type="warning">
-                                Not Included in Asset Version
+                                {`Not Included in Current ${Synonyms.Asset} Version`}
                             </StatusIndicator>
                         </span>
                     )}
                 </div>
             ),
             sortingField: "versionId",
+        },
+        {
+            id: "assetVersions",
+            header: `${Synonyms.Asset} Versions`,
+            cell: (item: FileVersion) => {
+                if (!item.assetVersionIds || item.assetVersionIds.length === 0) {
+                    return <Box color="text-status-inactive">--</Box>;
+                }
+                return (
+                    <SpaceBetween direction="horizontal" size="xxs">
+                        {item.assetVersionIds.map((av) => (
+                            <span
+                                key={av.id}
+                                title={av.label}
+                                style={{
+                                    display: "inline-block",
+                                    padding: "1px 6px",
+                                    fontSize: "12px",
+                                    borderRadius: "3px",
+                                    backgroundColor:
+                                        av.id === assetVersionId ? "#0972d3" : "#e9ebed",
+                                    color: av.id === assetVersionId ? "#fff" : "#414d5c",
+                                    cursor: "default",
+                                }}
+                            >
+                                {av.label}
+                            </span>
+                        ))}
+                    </SpaceBetween>
+                );
+            },
+            width: 150,
         },
         {
             id: "date",

@@ -6,10 +6,14 @@ import json
 import os
 import time
 import re
+import hashlib
 import requests
 import urllib.request
 from typing import Dict, Any, Optional, List, Tuple
 from aws_lambda_powertools import Logger
+import boto3
+from boto3.dynamodb.conditions import Key as DDBKey
+from botocore.config import Config as BotoConfig
 
 # Import libraries for different JWT verification methods
 from joserfc import jwt as joserfc_jwt
@@ -55,6 +59,79 @@ except json.JSONDecodeError:
     logger.error("Failed to parse IGNORED_PATHS environment variable")
     IGNORED_PATHS = []
 
+# API Key Configuration
+API_KEY_STORAGE_TABLE_NAME = os.environ.get('API_KEY_STORAGE_TABLE_NAME')
+API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'
+USER_ROLES_STORAGE_TABLE_NAME = os.environ.get('USER_ROLES_STORAGE_TABLE_NAME')
+API_KEY_CACHE_TTL = 15  # seconds before a cached entry expires
+
+# DynamoDB client for API key lookups (only initialized if table configured)
+_dynamodb_resource = None
+_api_key_table = None
+_user_roles_table = None
+
+# Per-key cache: maps apiKeyHash -> { "record": DynamoDB item or None, "expiry": timestamp }
+# - On cache hit (fresh): return cached record immediately (no DynamoDB call)
+# - On cache miss (no entry): query GSI once, cache the result (record or None for not-found)
+# - On cache miss (expired entry): query GSI once, update cache
+# - None record means "we looked and it doesn't exist" — prevents repeated lookups for bad keys
+_api_key_cache = {}
+
+def _get_api_key_table():
+    global _dynamodb_resource, _api_key_table
+    if _api_key_table is None and API_KEY_STORAGE_TABLE_NAME:
+        _dynamodb_resource = boto3.resource('dynamodb', config=BotoConfig(retries={'max_attempts': 3, 'mode': 'adaptive'}))
+        _api_key_table = _dynamodb_resource.Table(API_KEY_STORAGE_TABLE_NAME)
+    return _api_key_table
+
+def _get_user_roles_table():
+    global _dynamodb_resource, _user_roles_table
+    if _user_roles_table is None and USER_ROLES_STORAGE_TABLE_NAME:
+        if _dynamodb_resource is None:
+            _dynamodb_resource = boto3.resource('dynamodb', config=BotoConfig(retries={'max_attempts': 3, 'mode': 'adaptive'}))
+        _user_roles_table = _dynamodb_resource.Table(USER_ROLES_STORAGE_TABLE_NAME)
+    return _user_roles_table
+
+def _lookup_api_key_by_hash(key_hash: str):
+    """
+    Look up an API key record by hash using a per-key cache.
+
+    Cache behavior:
+    - Fresh cache hit: return immediately (no DynamoDB call)
+    - Expired or missing: query DynamoDB GSI once, cache result for API_KEY_CACHE_TTL seconds
+    - Not-found keys are cached as None to prevent DDOS of DynamoDB with invalid keys
+    """
+    current_time = time.time()
+    cached = _api_key_cache.get(key_hash)
+
+    if cached and current_time < cached['expiry']:
+        # Cache hit — return record (may be None for known-missing keys)
+        return cached['record']
+
+    # Cache miss or expired — query DynamoDB GSI
+    api_key_table = _get_api_key_table()
+    if not api_key_table:
+        return None
+
+    try:
+        response = api_key_table.query(
+            IndexName=API_KEY_HASH_INDEX_NAME,
+            KeyConditionExpression=DDBKey('apiKeyHash').eq(key_hash)
+        )
+        items = response.get('Items', [])
+        record = items[0] if items else None
+
+        # Cache the result (including None for not-found)
+        _api_key_cache[key_hash] = {
+            'record': record,
+            'expiry': current_time + API_KEY_CACHE_TTL
+        }
+        return record
+    except Exception as e:
+        logger.error(f"Failed to query API key by hash: {str(e)}")
+        # On error, return cached record if available (even if expired), else None
+        return cached['record'] if cached else None
+
 # Cache for public keys to avoid fetching them on every request
 # Download them only on cold start as per AWS best practices
 # https://aws.amazon.com/blogs/compute/container-reuse-in-lambda/
@@ -93,43 +170,67 @@ def lambda_handler(event, context):
             logger.info(f"Path {request_path} is in ignored paths, allowing access")
             return {"isAuthorized": True}
         
-        # Extract the JWT token from Authorization header
+        # Extract the Authorization header value
+        headers = event.get('headers', {})
+        authorization_header = headers.get('Authorization') or headers.get('authorization')
+
+        if not authorization_header:
+            logger.info("Authorization header not found")
+            log_authorization_gateway(event, False, "Token missing or invalid format")
+            return {"isAuthorized": False}
+
+        # Check if this is an API key (starts with "vams_" or "Bearer vams_")
+        api_key_value = None
+        if authorization_header.startswith('vams_'):
+            api_key_value = authorization_header
+        elif re.match(r'^Bearer\s+vams_', authorization_header, re.IGNORECASE):
+            api_key_value = re.sub(r'^Bearer\s+', '', authorization_header, flags=re.IGNORECASE)
+
+        if api_key_value:
+            api_key_result = verify_api_key(api_key_value)
+            if api_key_result is not None:
+                if api_key_result.get('denied'):
+                    logger.info(f"API key denied: {api_key_result.get('reason')}")
+                    log_authorization_gateway(event, False, api_key_result.get('reason', 'API key denied'))
+                    return {"isAuthorized": False}
+                # Valid API key — build response
+                context = {}
+                for key, value in api_key_result.items():
+                    if value is not None:
+                        context[key] = str(value)
+                # AUDIT LOG: API key authorization successful
+                log_authorization_gateway(event, True, None)
+                return {"isAuthorized": True, "context": context}
+            # api_key_result is None means no match found — fall through to JWT
+
+        # Extract JWT token from Bearer header
         token = extract_token_from_header(event)
         if not token:
             logger.info("Token not found in Authorization header")
-            # AUDIT LOG: Token missing or invalid format
             log_authorization_gateway(event, False, "Token missing or invalid format")
             return {"isAuthorized": False}
-        
+
         if AUTH_MODE == 'cognito':
             claims = verify_cognito_jwt(token)
         elif AUTH_MODE == 'external':
             claims = verify_external_jwt(token)
         else:
             logger.error(f"Invalid AUTH_MODE: {AUTH_MODE}")
-            # AUDIT LOG: Invalid auth mode configuration
             log_authorization_gateway(event, False, "Token verification failed")
             return {"isAuthorized": False}
-        
+
         if not claims:
             logger.error("Token verification failed")
-            # AUDIT LOG: Token verification failed (generic reason for security)
             log_authorization_gateway(event, False, "Token verification failed")
             return {"isAuthorized": False}
-        
+
         logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
-        
-        # Return simple authorization response with comprehensive JWT claims context
-        # Format expected by VAMS auth system: ['requestContext']['authorizer']['jwt']['claims']
+
         context = {}
-        
-        # Add all JWT claims to context for downstream processing
         for key, value in claims.items():
-            # API Gateway context values must be strings
             if value is not None:
                 context[key] = str(value)
-        
-        # Build response with context for audit logging
+
         response = {
             "isAuthorized": True,
             "context": context
@@ -191,6 +292,78 @@ def extract_token_from_header(event: Dict[str, Any]) -> Optional[str]:
         return None
     
     return match.group(1)
+
+def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
+    """
+    Verify an API key by hashing it and looking up the hash via per-key cache.
+    Each key is cached individually for API_KEY_CACHE_TTL seconds after first lookup.
+    Invalid keys are cached as None to prevent DynamoDB DDOS.
+    Returns a synthetic claims dict if valid, None otherwise.
+    """
+    try:
+        if not API_KEY_STORAGE_TABLE_NAME or not USER_ROLES_STORAGE_TABLE_NAME:
+            logger.warning("API key tables not configured, skipping API key auth")
+            return None
+
+        user_roles_table = _get_user_roles_table()
+        if not user_roles_table:
+            return None
+
+        # Hash the incoming key
+        key_hash = hashlib.sha256(raw_key.encode('utf-8')).hexdigest()
+
+        # Look up from cache (cache misses do NOT trigger refresh)
+        api_key_record = _lookup_api_key_by_hash(key_hash)
+        if not api_key_record:
+            return None  # No match — fall through to JWT
+
+        # Check isActive
+        if api_key_record.get('isActive') != 'true':
+            logger.info(f"API key is disabled: {api_key_record.get('apiKeyId')}")
+            return {'denied': True, 'reason': 'API key is disabled'}
+
+        # Check expiration
+        expires_at = api_key_record.get('expiresAt', '')
+        if expires_at:
+            from datetime import datetime, timezone
+            try:
+                expiry = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                if datetime.now(timezone.utc) > expiry:
+                    logger.info(f"API key has expired: {api_key_record.get('apiKeyId')}")
+                    return {'denied': True, 'reason': 'API key has expired'}
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Could not parse expiresAt '{expires_at}': {e}")
+
+        # Look up userId roles
+        user_id = api_key_record.get('userId', '')
+        if not user_id:
+            logger.error(f"API key has no userId: {api_key_record.get('apiKeyId')}")
+            return {'denied': True, 'reason': 'API key has no userId configured'}
+
+        roles_response = user_roles_table.query(
+            KeyConditionExpression=DDBKey('userId').eq(user_id)
+        )
+        user_roles = roles_response.get('Items', [])
+        if not user_roles:
+            logger.info(f"No roles found for API key userId: {user_id}")
+            return {'denied': True, 'reason': f'No roles for API key user {user_id}'}
+
+        # Build synthetic claims context
+        role_names = [r.get('roleName', '') for r in user_roles if r.get('roleName')]
+        claims = {
+            'sub': user_id,
+            'cognito:username': user_id,
+            'vams:tokens': json.dumps([user_id]),
+            'vams:roles': json.dumps(role_names),
+            'vams:apiKeyId': api_key_record.get('apiKeyId', ''),
+            'vams:authMethod': 'apiKey',
+        }
+        logger.info(f"API key authenticated successfully for user: {user_id}")
+        return claims
+
+    except Exception as e:
+        logger.error(f"API key verification error: {str(e)}")
+        return None  # Fall through to JWT on error
 
 def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
     """

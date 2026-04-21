@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef } from "react";
-import { API } from "aws-amplify";
+import { deleteComment, updateComment } from "../../../../services/APIService";
 import {
     ExpandableSection,
     Button,
@@ -14,6 +14,7 @@ import {
     TextContent,
 } from "@cloudscape-design/components";
 import JoditEditor from "jodit-react";
+import Synonyms from "../../../../synonyms";
 
 // Define the type for showMessage prop
 type ShowMessageFunction = (props: {
@@ -71,10 +72,14 @@ export default function VersionComments(props: VersionCommentsProps) {
     const [editedContent, setEditedContent] = useState<string>("");
     const editor = useRef(null);
 
+    // Detect dark mode from the body class (set by useThemeSettings)
+    const isDarkMode = document.body.classList.contains("awsui-dark-mode");
+
     // Config for the Jodit editor
     const config = {
         readonly: false,
         minHeight: 100,
+        theme: isDarkMode ? "dark" : "default",
         showCharsCounter: false,
         showWordsCounter: false,
         showXPathInStatusbar: false,
@@ -128,19 +133,15 @@ export default function VersionComments(props: VersionCommentsProps) {
         console.log("Deleting Comment-- " + commentToDelete);
         const [assetId, assetVersionId, CommentId] = commentToDelete.split(":");
 
-        let assetVersionIdAndCommentId = assetVersionId + ":" + CommentId;
+        const assetVersionIdAndCommentId = assetVersionId + ":" + CommentId;
 
         showLoading(true);
 
         try {
-            await API.del(
-                "api",
-                `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-                {}
-            );
+            await deleteComment({ assetId, assetVersionIdAndCommentId });
             showMessage({
                 type: "success",
-                message: "Comment deleted successfully",
+                message: `${Synonyms.Comment} deleted successfully`,
                 dismissible: true,
                 autoDismiss: true,
             });
@@ -150,8 +151,8 @@ export default function VersionComments(props: VersionCommentsProps) {
             console.log("delete comment error", e);
             const errorMessage =
                 e.response?.status === 403
-                    ? "Unable to delete comment. You don't have permission to perform this action."
-                    : `Unable to delete comment: ${e.message || "Unknown error"}`;
+                    ? `Unable to delete ${Synonyms.comment}. You don't have permission to perform this action.`
+                    : `Unable to delete ${Synonyms.comment}: ${e.message || "Unknown error"}`;
 
             showMessage({
                 type: "error",
@@ -166,23 +167,20 @@ export default function VersionComments(props: VersionCommentsProps) {
     const handleEditComment = async () => {
         if (!commentToEdit) return;
 
-        const [assetId, assetVersionIdAndCommentId] =
-            commentToEdit["assetVersionId:commentId"].split(":");
+        const [assetId] = commentToEdit["assetVersionId:commentId"].split(":");
         showLoading(true);
 
         try {
-            await API.put(
-                "api",
-                `comments/assets/${assetId}/assetVersionId:commentId/${commentToEdit["assetVersionId:commentId"]}`,
-                {
-                    body: {
-                        commentBody: editedContent,
-                    },
-                }
-            );
+            await updateComment({
+                assetId,
+                assetVersionIdAndCommentId: commentToEdit["assetVersionId:commentId"],
+                body: {
+                    commentBody: editedContent,
+                },
+            });
             showMessage({
                 type: "success",
-                message: "Comment updated successfully",
+                message: `${Synonyms.Comment} updated successfully`,
                 dismissible: true,
                 autoDismiss: true,
             });
@@ -192,8 +190,8 @@ export default function VersionComments(props: VersionCommentsProps) {
             console.log("edit comment error", e);
             const errorMessage =
                 e.response?.status === 403
-                    ? "Unable to edit comment. You don't have permission to perform this action."
-                    : `Unable to edit comment: ${e.message || "Unknown error"}`;
+                    ? `Unable to edit ${Synonyms.comment}. You don't have permission to perform this action.`
+                    : `Unable to edit ${Synonyms.comment}: ${e.message || "Unknown error"}`;
 
             showMessage({
                 type: "error",
@@ -220,7 +218,7 @@ export default function VersionComments(props: VersionCommentsProps) {
             >
                 <div>
                     {comments.length === 0 ? (
-                        <div className="noCommentsDiv">No comments for this version</div>
+                        <div className="noCommentsDiv">{`No ${Synonyms.comments} for this version`}</div>
                     ) : (
                         comments.map((comment) => (
                             <div
@@ -279,7 +277,7 @@ export default function VersionComments(props: VersionCommentsProps) {
             <Modal
                 visible={visible}
                 onDismiss={() => setVisible(false)}
-                header="Delete comment"
+                header={`Delete ${Synonyms.comment}`}
                 footer={
                     <Box float="right">
                         <SpaceBetween direction="horizontal" size="xs">
@@ -294,7 +292,7 @@ export default function VersionComments(props: VersionCommentsProps) {
                 }
             >
                 <TextContent>
-                    <p>Are you sure you want to delete this comment?</p>
+                    <p>{`Are you sure you want to delete this ${Synonyms.comment}?`}</p>
                 </TextContent>
             </Modal>
 
@@ -302,7 +300,7 @@ export default function VersionComments(props: VersionCommentsProps) {
             <Modal
                 visible={editVisible}
                 onDismiss={() => setEditVisible(false)}
-                header="Edit comment"
+                header={`Edit ${Synonyms.comment}`}
                 footer={
                     <Box float="right">
                         <SpaceBetween direction="horizontal" size="xs">

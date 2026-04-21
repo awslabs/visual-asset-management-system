@@ -233,16 +233,15 @@ def delete(profile_name: str, force: bool, json_output: bool):
             return result
         
         # Confirm deletion unless force is used
-        if not force:
+        if not force and not json_output:
             profile_info = profile_manager.get_profile_info()
             
             # Show profile info (only in CLI mode)
-            if not json_output:
-                click.echo(f"Profile '{profile_name}' information:")
-                if profile_info['has_config']:
-                    click.echo(f"  API Gateway: {profile_info.get('api_gateway_url', 'Unknown')}")
-                if profile_info['has_auth']:
-                    click.echo(f"  User: {profile_info.get('user_id', 'Unknown')}")
+            click.echo(f"Profile '{profile_name}' information:")
+            if profile_info['has_config']:
+                click.echo(f"  API Gateway: {profile_info.get('api_gateway_url', 'Unknown')}")
+            if profile_info['has_auth']:
+                click.echo(f"  User: {profile_info.get('user_id', 'Unknown')}")
             
             if not click.confirm(f"Are you sure you want to delete profile '{profile_name}'?"):
                 result = {
@@ -251,10 +250,7 @@ def delete(profile_name: str, force: bool, json_output: bool):
                     "message": "Deletion cancelled by user"
                 }
                 
-                output_info("Deletion cancelled.", json_output)
-                
-                if json_output:
-                    click.echo(json.dumps(result, indent=2))
+                output_info("Deletion cancelled.", False)
                 
                 return result
         

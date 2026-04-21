@@ -6,9 +6,8 @@ import Synonyms from "../../synonyms";
 import Input from "@cloudscape-design/components/input";
 import { useEffect, useState } from "react";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { API } from "aws-amplify";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
-import { fetchTags, fetchtagTypes } from "../../services/APIService";
+import { fetchTags, fetchtagTypes, updateAsset } from "../../services/APIService";
 import { TagType } from "../../pages/Tag/TagType.interface";
 import {
     validateRequiredTagTypeSelected,
@@ -27,9 +26,9 @@ const isDistributableOptions: OptionDefinition[] = [
     { label: "No", value: "false" },
 ];
 
-var tags: any[] = [];
-var assetTags: any[] = [];
-var tagTypes: TagType[] = [];
+const tags: any[] = [];
+let assetTags: any[] = [];
+let tagTypes: TagType[] = [];
 
 const update = async (
     updatedAsset: any,
@@ -52,9 +51,10 @@ const update = async (
         };
 
         // Update asset metadata using the new API endpoint
-        await API.put("api", `database/${updatedAsset.databaseId}/assets/${updatedAsset.assetId}`, {
-            "Content-type": "application/json",
-            body: updateAssetData,
+        await updateAsset({
+            databaseId: updatedAsset.databaseId,
+            assetId: updatedAsset.assetId,
+            updateData: updateAssetData,
         });
 
         // Mark as complete
@@ -94,13 +94,42 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     useEffect(() => {
         setAssetDetail(asset);
         fetchTags().then((res) => {
-            tags = [];
+            tags.length = 0; // Clear without losing reference
             if (res && Array.isArray(res)) {
-                Object.values(res).map((x: any) => {
-                    tags.push({ label: `${x.tagName} (${x.tagTypeName})`, value: x.tagName });
-                });
+                const grouped: Record<
+                    string,
+                    { tagTypeName: string; required: string; tagItems: any[] }
+                > = {};
+                const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
+                for (const x of res) {
+                    const typeName = x.tagTypeName || "Uncategorized";
+                    if (!grouped[typeName]) {
+                        const typeInfo = storedTypes.find((t: any) => t.tagTypeName === typeName);
+                        grouped[typeName] = {
+                            tagTypeName: typeName,
+                            required: typeInfo?.required || "False",
+                            tagItems: [],
+                        };
+                    }
+                    grouped[typeName].tagItems.push(x);
+                }
+                Object.values(grouped)
+                    .filter((group) => group.tagItems.length > 0)
+                    .sort((a, b) => a.tagTypeName.localeCompare(b.tagTypeName))
+                    .forEach((group) => {
+                        tags.push({
+                            label:
+                                group.required === "True"
+                                    ? `${group.tagTypeName} [required]`
+                                    : group.tagTypeName,
+                            options: group.tagItems
+                                .sort((a: any, b: any) =>
+                                    (a.tagName || "").localeCompare(b.tagName || "")
+                                )
+                                .map((t: any) => ({ label: t.tagName, value: t.tagName })),
+                        });
+                    });
             }
-            return tags;
         });
 
         const tagTypesString = localStorage.getItem("tagTypes");
@@ -199,12 +228,12 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                             }}
                             disabled={(inProgress && !error.isError) || !isValid}
                         >
-                            Update Asset
+                            {`Update ${Synonyms.Asset}`}
                         </Button>
                     </SpaceBetween>
                 </Box>
             }
-            header="Update Asset"
+            header={`Update ${Synonyms.Asset}`}
         >
             <SpaceBetween direction="vertical" size="l">
                 <FormField

@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from "react-router";
-import { downloadAsset } from "../services/APIService";
+import { downloadAsset, fetchAsset } from "../services/APIService";
 import { FileTree } from "../components/filemanager/types/FileManagerTypes";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import { useReducer, useState, useEffect } from "react";
@@ -7,6 +7,7 @@ import { useParams } from "react-router";
 import axios from "axios";
 import {
     Box,
+    BreadcrumbGroup,
     Button,
     Container,
     Header,
@@ -15,6 +16,8 @@ import {
     Toggle,
     Alert,
 } from "@cloudscape-design/components";
+import { usePageTitle } from "../hooks/usePageTitle";
+import Synonyms from "../synonyms";
 
 // Utility class for managing concurrent downloads
 class DownloadQueue {
@@ -99,7 +102,8 @@ const downloadSingleFile = async (
     file: FileTree,
     directoryHandle: any,
     dispatch: any,
-    flattenHierarchy: boolean = false,
+    flattenHierarchy = false,
+    assetVersionId?: string,
     maxRetries = 3
 ): Promise<boolean> => {
     let retries = 0;
@@ -136,12 +140,13 @@ const downloadSingleFile = async (
             const fileHandle = await fileDirectoryHandle.getFileHandle(fileName, { create: true });
             const writable = await fileHandle.createWritable();
 
-            // Get download URL with new downloadType parameter and pass the versionId if available
+            // Get download URL — use assetVersionId if provided, otherwise fall back to versionId
             const response = await downloadAsset({
                 databaseId,
                 assetId,
                 key: file.keyPrefix,
                 versionId: file.versionId || "",
+                assetVersionId: assetVersionId,
                 downloadType: "assetFile",
             });
 
@@ -227,7 +232,8 @@ const downloadFilesInParallel = async (
     files: Array<FileTree>,
     directoryHandle: any,
     dispatch: any,
-    flattenHierarchy: boolean = false,
+    flattenHierarchy = false,
+    assetVersionId?: string,
     concurrencyLimit = 5
 ): Promise<void> => {
     const downloadQueue = new DownloadQueue(concurrencyLimit);
@@ -241,7 +247,8 @@ const downloadFilesInParallel = async (
                 file,
                 directoryHandle,
                 dispatch,
-                flattenHierarchy
+                flattenHierarchy,
+                assetVersionId
             )
         )
     );
@@ -284,7 +291,8 @@ async function downloadFolder(
     databaseId: string,
     tree: FileTree,
     dispatch: any,
-    flattenHierarchy: boolean = false,
+    flattenHierarchy = false,
+    assetVersionId?: string,
     setSelectedFolderName?: (name: string) => void
 ): Promise<void> {
     try {
@@ -320,7 +328,8 @@ async function downloadFolder(
             files,
             directoryHandle,
             dispatch,
-            flattenHierarchy
+            flattenHierarchy,
+            assetVersionId
         );
 
         console.log("All downloads have been processed");
@@ -559,8 +568,21 @@ export default function AssetDownloadsPage() {
     const { databaseId, assetId } = useParams();
     const navigate = useNavigate();
     const fileTree = state["fileTree"] as FileTree;
+    const [assetName, setAssetName] = useState<string>((state?.assetName as string) || "");
+    usePageTitle(databaseId, assetName || assetId, "Download");
     const [resume, setResume] = useState(true);
     const [isDownloading, setIsDownloading] = useState(false);
+
+    // Fetch asset name if not provided in navigation state
+    useEffect(() => {
+        if (!assetName && databaseId && assetId) {
+            fetchAsset({ databaseId, assetId }).then((item: any) => {
+                if (item && typeof item !== "string" && item !== false) {
+                    setAssetName(item.assetName || "");
+                }
+            });
+        }
+    }, [databaseId, assetId, assetName]);
 
     // Toggle state for flatten hierarchy mode (default to true as requested)
     const [flattenHierarchy, setFlattenHierarchy] = useState(true);
@@ -606,6 +628,7 @@ export default function AssetDownloadsPage() {
                 fileTree,
                 dispatch,
                 flattenHierarchy,
+                state?.assetVersionId,
                 setSelectedFolderName
             );
 
@@ -660,69 +683,102 @@ export default function AssetDownloadsPage() {
     const allComplete = isAllComplete();
 
     return (
-        <Container header={<Header variant="h2">Downloading Folder ({fileTree.name})</Header>}>
-            <SpaceBetween size="l" direction="vertical">
-                {/* Download Mode Toggle */}
-                <Box>
-                    <SpaceBetween size="m" direction="vertical">
-                        <Toggle
-                            onChange={({ detail }) => setFlattenHierarchy(detail.checked)}
-                            checked={flattenHierarchy}
-                        >
-                            {flattenHierarchy
-                                ? "Flatten Asset Paths on Download"
-                                : "Keep Asset Paths on Download"}
-                        </Toggle>
+        <Box padding={{ top: "xs", horizontal: "l" }}>
+            <SpaceBetween direction="vertical" size="xs">
+                <BreadcrumbGroup
+                    items={[
+                        { text: Synonyms.Databases, href: "#/databases/" },
+                        {
+                            text: "Search",
+                            href: "#/assets/",
+                        },
+                        {
+                            text: databaseId || "",
+                            href: "#/databases/" + databaseId + "/assets/",
+                        },
+                        {
+                            text: assetName || assetId || "",
+                            href: "#/databases/" + databaseId + "/assets/" + assetId,
+                        },
+                        { text: "Download", href: "" },
+                    ]}
+                    ariaLabel="Breadcrumbs"
+                />
+                <Container
+                    header={<Header variant="h2">Downloading Folder ({fileTree.name})</Header>}
+                >
+                    <SpaceBetween size="l" direction="vertical">
+                        {/* Download Mode Toggle */}
+                        <Box>
+                            <SpaceBetween size="m" direction="vertical">
+                                <Toggle
+                                    onChange={({ detail }) => setFlattenHierarchy(detail.checked)}
+                                    checked={flattenHierarchy}
+                                >
+                                    {flattenHierarchy
+                                        ? `Flatten ${Synonyms.Asset} Paths on Download`
+                                        : `Keep ${Synonyms.Asset} Paths on Download`}
+                                </Toggle>
 
-                        {/* Error Alert for Duplicate Files */}
-                        {flattenHierarchy && hasDuplicates && (
-                            <Alert type="error" header="Duplicate File Names Detected">
-                                The following files have duplicate names and cannot be downloaded in
-                                flatten mode: {duplicateFileNames.join(", ")}. Please switch to
-                                "Keep Asset Paths on Download" mode or rename the conflicting files.
-                            </Alert>
-                        )}
-                    </SpaceBetween>
-                </Box>
-
-                <Box>
-                    <SpaceBetween size="m" direction="vertical">
-                        <SpaceBetween size="xs" direction="horizontal">
-                            <Button
-                                variant="primary"
-                                onClick={handleDownload}
-                                loading={isDownloading}
-                                disabled={isDownloading || (flattenHierarchy && hasDuplicates)}
-                            >
-                                {resume ? "Start Download" : "Restart Download"}
-                            </Button>
-
-                            {!isDownloading && stats.inProgress > 0 && (
-                                <Button onClick={handleForceComplete}>Mark All as Complete</Button>
-                            )}
-
-                            {allComplete && (
-                                <Button onClick={handleReturnToAsset}>Return to View Asset</Button>
-                            )}
-                        </SpaceBetween>
+                                {/* Error Alert for Duplicate Files */}
+                                {flattenHierarchy && hasDuplicates && (
+                                    <Alert type="error" header="Duplicate File Names Detected">
+                                        The following files have duplicate names and cannot be
+                                        downloaded in flatten mode: {duplicateFileNames.join(", ")}.
+                                        {`Please switch to "Keep ${Synonyms.Asset} Paths on Download" mode or rename the conflicting files.`}
+                                    </Alert>
+                                )}
+                            </SpaceBetween>
+                        </Box>
 
                         <Box>
-                            <StatusIndicator type={allComplete ? "success" : "in-progress"}>
-                                {stats.completed} of {stats.total} files completed
-                                {stats.failed > 0 && `, ${stats.failed} failed`}
-                                {stats.inProgress > 0 && `, ${stats.inProgress} in progress`}
-                            </StatusIndicator>
-                        </Box>
-                    </SpaceBetween>
-                </Box>
+                            <SpaceBetween size="m" direction="vertical">
+                                <SpaceBetween size="xs" direction="horizontal">
+                                    <Button
+                                        variant="primary"
+                                        onClick={handleDownload}
+                                        loading={isDownloading}
+                                        disabled={
+                                            isDownloading || (flattenHierarchy && hasDuplicates)
+                                        }
+                                    >
+                                        {resume ? "Start Download" : "Restart Download"}
+                                    </Button>
 
-                <FileUploadTable
-                    allItems={updatedTableItems}
-                    resume={resume}
-                    onRetry={handleDownload}
-                    mode={"Download"}
-                />
+                                    {!isDownloading && stats.inProgress > 0 && (
+                                        <Button onClick={handleForceComplete}>
+                                            Mark All as Complete
+                                        </Button>
+                                    )}
+
+                                    {allComplete && (
+                                        <Button onClick={handleReturnToAsset}>
+                                            {`Return to View ${Synonyms.Asset}`}
+                                        </Button>
+                                    )}
+                                </SpaceBetween>
+
+                                <Box>
+                                    <StatusIndicator type={allComplete ? "success" : "in-progress"}>
+                                        {stats.completed} of {stats.total} files completed
+                                        {stats.failed > 0 && `, ${stats.failed} failed`}
+                                        {stats.inProgress > 0 &&
+                                            `, ${stats.inProgress} in progress`}
+                                    </StatusIndicator>
+                                </Box>
+                            </SpaceBetween>
+                        </Box>
+
+                        <FileUploadTable
+                            allItems={updatedTableItems}
+                            resume={resume}
+                            onRetry={handleDownload}
+                            mode={"Download"}
+                        />
+                    </SpaceBetween>
+                </Container>
+                <div style={{ paddingBottom: "20px" }} />
             </SpaceBetween>
-        </Container>
+        </Box>
     );
 }

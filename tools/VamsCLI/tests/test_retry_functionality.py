@@ -346,24 +346,26 @@ class TestAPIClientRetryLogic:
         mock_get_retry_config.return_value = mock_retry_config
         
         # Mock profile manager and auth methods
-        with patch.object(self.api_client, '_validate_token_before_request'):
+        # Ensure is_override_token returns False so auth retry path is taken (not override token path)
+        with patch.object(self.api_client.profile_manager, 'is_override_token', return_value=False), \
+             patch.object(self.api_client, '_validate_token_before_request'):
             with patch.object(self.api_client, '_get_headers') as mock_get_headers:
                 mock_get_headers.return_value = {'Authorization': 'Bearer token'}
-                
+
                 # Setup response mocks - 401 then 429 then success
                 mock_401_response = Mock()
                 mock_401_response.status_code = 401
-                
+
                 mock_429_response = Mock()
                 mock_429_response.status_code = 429
                 mock_429_response.headers = {}
-                
+
                 mock_success_response = Mock()
                 mock_success_response.status_code = 200
                 mock_success_response.json.return_value = {'success': True}
-                
+
                 mock_request.side_effect = [mock_401_response, mock_429_response, mock_success_response]
-                
+
                 # Mock token refresh to succeed
                 with patch.object(self.api_client, '_try_refresh_token', return_value=True):
                     # Make request

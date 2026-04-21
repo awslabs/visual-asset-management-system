@@ -147,20 +147,20 @@ class RetryConfig:
             show_progress: Whether to show progress indication
         """
         if not show_progress or delay < 1.0:
-            time.sleep(delay)
+            time.sleep(delay)  # nosemgrep: arbitrary-sleep
             return
             
         # Show progress for longer delays
         import sys
         
-        print(f"Rate limited. Retrying in {delay:.1f}s (attempt {attempt}/{total_attempts})...", 
+        print(f"Rate limited. Retrying in {delay:.1f}s (attempt {attempt}/{total_attempts})...",
               end='', flush=True)
-        
+
         # Sleep in small increments to allow for interruption
         remaining = delay
         while remaining > 0:
             sleep_time = min(0.1, remaining)
-            time.sleep(sleep_time)
+            time.sleep(sleep_time) # nosemgrep: arbitrary-sleep
             remaining -= sleep_time
             
         print(" retrying now.", flush=True)

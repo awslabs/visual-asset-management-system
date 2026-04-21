@@ -1,0 +1,20 @@
+{
+    "name": "threejs-viewer-bundle",
+    "version": "1.0.0",
+    "description": "Three.js viewer bundle for VAMS dynamic viewer system",
+    "private": true,
+    "license": "Apache-2.0",
+    "dependencies": {
+        "three": "0.182.0"
+    },
+    "optionalDependencies": {},
+    "devDependencies": {
+        "webpack": "^5.89.0",
+        "webpack-cli": "^5.1.4",
+        "copy-webpack-plugin": "^11.0.0"
+    },
+    "scripts": {
+        "build": "webpack --mode production"
+    },
+    "comment": "To enable OCCT support for STEP/IGES/BREP files, add 'occt-import-js': '^0.0.12' to optionalDependencies above, then run 'npm install' followed by 'npm run build'. WARNING: occt-import-js uses LGPL license which is more restrictive than Apache-2.0."
+}

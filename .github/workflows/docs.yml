@@ -1,0 +1,59 @@
+name: Deploy Documentation
+
+on:
+    push:
+        branches:
+            - main
+            - "release/*"
+        paths:
+            - "documentation/docusaurus-site/**"
+    workflow_dispatch:
+
+permissions:
+    contents: write
+
+concurrency:
+    group: "docs-${{ github.ref_name }}"
+    cancel-in-progress: true
+
+jobs:
+    build-and-deploy:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+                  cache: "npm"
+                  cache-dependency-path: documentation/docusaurus-site/package-lock.json
+
+            - name: Determine deploy path
+              id: paths
+              run: |
+                  BRANCH="${{ github.ref_name }}"
+                  if [ "$BRANCH" = "main" ]; then
+                    echo "deploy_subdir=." >> $GITHUB_OUTPUT
+                    echo "base_url=/visual-asset-management-system/" >> $GITHUB_OUTPUT
+                  else
+                    # release/2.5.0 -> release-2.5.0
+                    SLUG=$(echo "$BRANCH" | sed 's|/|-|g')
+                    echo "deploy_subdir=$SLUG" >> $GITHUB_OUTPUT
+                    echo "base_url=/visual-asset-management-system/$SLUG/" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Install dependencies
+              run: cd documentation/docusaurus-site && npm ci
+
+            - name: Build documentation
+              run: cd documentation/docusaurus-site && DOCS_BASE_URL="${{ steps.paths.outputs.base_url }}" npm run build
+
+            - name: Deploy to gh-pages branch
+              uses: peaceiris/actions-gh-pages@v4
+              with:
+                  github_token: ${{ secrets.GITHUB_TOKEN }}
+                  publish_dir: documentation/docusaurus-site/build
+                  destination_dir: ${{ steps.paths.outputs.deploy_subdir }}
+                  keep_files: true

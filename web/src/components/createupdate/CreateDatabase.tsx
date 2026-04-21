@@ -19,6 +19,7 @@ import {
 } from "@cloudscape-design/components";
 import { useState, useEffect } from "react";
 import { createDatabase, updateDatabase, fetchBuckets } from "../../services/APIService";
+import Synonyms from "../../synonyms";
 
 interface CreateDatabaseProps {
     open: boolean;
@@ -55,7 +56,9 @@ function validateDatabaseNameLength(name: string) {
 
 // databaseId cannot be named "GLOBAL" (case insenstive)
 function validateDatabaseNameGlobal(name: string) {
-    return name.toLowerCase() !== "global" ? null : "DatabaseId cannot be named GLOBAL";
+    return name.toLowerCase() !== "global"
+        ? null
+        : `${Synonyms.Database} Id cannot be named GLOBAL`;
 }
 
 // chain together the above three functions, when they return null, then return null
@@ -235,15 +238,17 @@ export default function CreateDatabase({
                                             setReload(true);
                                         } else {
                                             // Display the actual error message from the API
-                                            let msg =
-                                                res[1] || `Unable to ${createOrUpdate} database`;
+                                            const msg =
+                                                res[1] ||
+                                                `Unable to ${createOrUpdate} ${Synonyms.database}`;
                                             setFormError(msg);
                                         }
                                     })
                                     .catch((err) => {
                                         console.log(`${createOrUpdate} database error`, err);
-                                        let msg =
-                                            err.message || `Unable to ${createOrUpdate} database`;
+                                        const msg =
+                                            err.message ||
+                                            `Unable to ${createOrUpdate} ${Synonyms.database}`;
                                         setFormError(msg);
                                     })
                                     .finally(() => {
@@ -264,18 +269,18 @@ export default function CreateDatabase({
                             }
                             data-testid={`${createOrUpdate}-database-button`}
                         >
-                            {createOrUpdate} Database
+                            {`${createOrUpdate} ${Synonyms.Database}`}
                         </Button>
                     </SpaceBetween>
                 </Box>
             }
-            header={`${createOrUpdate} Database`}
+            header={`${createOrUpdate} ${Synonyms.Database}`}
         >
             <form onSubmit={(e) => e.preventDefault()}>
                 <Form errorText={formError}>
                     <SpaceBetween direction="vertical" size="s">
                         <FormField
-                            label="Database Name"
+                            label={`${Synonyms.Database} Name`}
                             errorText={validateDatabaseName(formState.databaseId)}
                             constraintText="Required. No special chars or spaces except - and 4 and max 64"
                         >
@@ -289,12 +294,12 @@ export default function CreateDatabase({
                                 onChange={({ detail }) =>
                                     setFormState({ ...formState, databaseId: detail.value })
                                 }
-                                placeholder="Database Name"
+                                placeholder={`${Synonyms.Database} Name`}
                                 data-testid="database-name"
                             />
                         </FormField>
                         <FormField
-                            label="Database Description"
+                            label={`${Synonyms.Database} Description`}
                             constraintText="Required. Max 256 characters."
                             errorText={validateDatabaseDescriptionLength(formState.description)}
                         >
@@ -305,13 +310,13 @@ export default function CreateDatabase({
                                     setFormState({ ...formState, description: detail.value })
                                 }
                                 rows={4}
-                                placeholder="Database Description"
+                                placeholder={`${Synonyms.Database} Description`}
                                 data-testid="database-desc"
                             />
                         </FormField>
                         <FormField
                             label="Default Bucket and Prefix"
-                            constraintText="Required. Select a bucket and prefix for this database."
+                            constraintText={`Required. Select a bucket and prefix for this ${Synonyms.database}.`}
                             errorText={
                                 !formState.defaultBucketId ? "A default bucket is required" : null
                             }
@@ -342,7 +347,7 @@ export default function CreateDatabase({
                         </FormField>
                         <FormField
                             label="Restrict Metadata Outside Schemas"
-                            description="Restricts all metadata for components below this database to only allow fields based on applied metadata schema. If no schema is applied, this option is disregarded."
+                            description={`Restricts all metadata for components below this ${Synonyms.database} to only allow fields based on applied metadata schema. If no schema is applied, this option is disregarded.`}
                         >
                             <Checkbox
                                 checked={formState.restrictMetadataOutsideSchemas || false}

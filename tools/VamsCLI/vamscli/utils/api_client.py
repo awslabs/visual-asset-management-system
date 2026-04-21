@@ -14,11 +14,13 @@ from ..constants import (
     API_ARCHIVE_ASSET, API_DELETE_ASSET, API_DOWNLOAD_ASSET, API_ASSET_EXPORT, API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS,
     API_TAGS, API_TAG_DELETE, API_TAG_TYPES, API_TAG_TYPE_DELETE,
     API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION, API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION,
+    API_ASSET_VERSION_BY_ID, API_ASSET_VERSION_ARCHIVE, API_ASSET_VERSION_UNARCHIVE,
     API_ASSET_LINKS, API_ASSET_LINKS_SINGLE, API_ASSET_LINKS_UPDATE, API_ASSET_LINKS_DELETE, API_ASSET_LINKS_FOR_ASSET,
     API_ASSET_LINKS_METADATA, API_ASSET_LINKS_METADATA_KEY, API_METADATA, API_METADATA_SCHEMA,
     API_METADATA_SCHEMA_LIST, API_METADATA_SCHEMA_BY_ID,
     API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING,
-    API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW
+    API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW,
+    API_AUTH_API_KEYS, API_AUTH_API_KEY
 )
 from ..version import get_version
 from .exceptions import (
@@ -30,7 +32,7 @@ from .exceptions import (
     AssetAlreadyArchivedError, AssetDeletionError, TagNotFoundError, TagAlreadyExistsError,
     TagTypeNotFoundError, TagTypeAlreadyExistsError, TagTypeInUseError, 
     InvalidTagDataError, InvalidTagTypeDataError, AssetVersionError, AssetVersionNotFoundError,
-    AssetVersionOperationError, InvalidAssetVersionDataError, AssetVersionRevertError,
+    AssetVersionOperationError, InvalidAssetVersionDataError, AssetVersionRevertError, AssetVersionArchiveError,
     AssetLinkError, AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError,
     CycleDetectionError, AssetLinkAlreadyExistsError, InvalidRelationshipTypeError, AssetLinkOperationError,
     RateLimitExceededError, RetryExhaustedError
@@ -2003,6 +2005,167 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to get asset version: {e}")
 
+    def update_asset_version(self, database_id: str, asset_id: str, asset_version_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an asset version using the PUT /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId} endpoint.
+
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            asset_version_id: Asset version ID to update
+            data: Update data (comment, versionAlias)
+
+        Returns:
+            API response data with update result
+
+        Raises:
+            AssetNotFoundError: When asset is not found
+            AssetVersionNotFoundError: When version is not found
+            DatabaseNotFoundError: When database doesn't exist
+            InvalidAssetVersionDataError: When update data is invalid
+            AssetVersionOperationError: When update operation fails
+            APIError: When API call fails
+        """
+        try:
+            endpoint = API_ASSET_VERSION_BY_ID.format(
+                databaseId=database_id,
+                assetId=asset_id,
+                assetVersionId=asset_version_id
+            )
+            response = self.put(endpoint, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise InvalidAssetVersionDataError(f"Invalid update data: {error_message}")
+
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'version' in error_message.lower():
+                    raise AssetVersionNotFoundError(f"Asset version '{asset_version_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise AssetVersionOperationError(f"Asset version update failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to update asset version: {e}")
+
+    def archive_asset_version(self, database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
+        """
+        Archive an asset version using the POST /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive endpoint.
+
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            asset_version_id: Asset version ID to archive
+
+        Returns:
+            API response data with archive result
+
+        Raises:
+            AssetNotFoundError: When asset is not found
+            AssetVersionNotFoundError: When version is not found
+            DatabaseNotFoundError: When database doesn't exist
+            AssetVersionArchiveError: When archive operation fails
+            APIError: When API call fails
+        """
+        try:
+            endpoint = API_ASSET_VERSION_ARCHIVE.format(
+                databaseId=database_id,
+                assetId=asset_id,
+                assetVersionId=asset_version_id
+            )
+            response = self.post(endpoint, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise AssetVersionArchiveError(f"Archive failed: {error_message}")
+
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'version' in error_message.lower():
+                    raise AssetVersionNotFoundError(f"Asset version '{asset_version_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise AssetVersionArchiveError(f"Asset version archive failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to archive asset version: {e}")
+
+    def unarchive_asset_version(self, database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
+        """
+        Unarchive an asset version using the POST /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive endpoint.
+
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            asset_version_id: Asset version ID to unarchive
+
+        Returns:
+            API response data with unarchive result
+
+        Raises:
+            AssetNotFoundError: When asset is not found
+            AssetVersionNotFoundError: When version is not found
+            DatabaseNotFoundError: When database doesn't exist
+            AssetVersionArchiveError: When unarchive operation fails
+            APIError: When API call fails
+        """
+        try:
+            endpoint = API_ASSET_VERSION_UNARCHIVE.format(
+                databaseId=database_id,
+                assetId=asset_id,
+                assetVersionId=asset_version_id
+            )
+            response = self.post(endpoint, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise AssetVersionArchiveError(f"Unarchive failed: {error_message}")
+
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                elif 'version' in error_message.lower():
+                    raise AssetVersionNotFoundError(f"Asset version '{asset_version_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise AssetVersionArchiveError(f"Asset version unarchive failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to unarchive asset version: {e}")
+
     # Asset Links API Methods
 
     def create_asset_link(self, link_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2211,19 +2374,20 @@ class APIClient:
 
     # Unified Metadata API Methods (v2.2+)
 
-    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
+    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 3000, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
         """
         Get metadata for an asset using the new unified API.
-        
+
         Args:
             database_id: Database ID
             asset_id: Asset ID
             page_size: Page size for pagination (default: 3000)
             starting_token: Token for pagination
-        
+            asset_version_id: Optional asset version ID to retrieve metadata snapshot
+
         Returns:
             API response with metadata list and optional NextToken
-        
+
         Raises:
             AssetNotFoundError: When asset is not found
             DatabaseNotFoundError: When database doesn't exist
@@ -2235,6 +2399,8 @@ class APIClient:
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
+            if asset_version_id:
+                params['assetVersionId'] = asset_version_id
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2353,11 +2519,11 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to delete asset metadata: {e}")
 
-    def get_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str = 'metadata', 
-                            page_size: int = 3000, starting_token: str = None) -> Dict[str, Any]:
+    def get_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str = 'metadata',
+                            page_size: int = 3000, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
         """
         Get metadata or attributes for a file using the new unified API.
-        
+
         Args:
             database_id: Database ID
             asset_id: Asset ID
@@ -2365,10 +2531,11 @@ class APIClient:
             metadata_type: 'metadata' or 'attribute'
             page_size: Page size for pagination (default: 3000)
             starting_token: Token for pagination
-        
+            asset_version_id: Optional asset version ID to retrieve metadata snapshot
+
         Returns:
             API response with metadata list and optional NextToken
-        
+
         Raises:
             AssetNotFoundError: When asset is not found
             DatabaseNotFoundError: When database doesn't exist
@@ -2384,6 +2551,8 @@ class APIClient:
             }
             if starting_token:
                 params['startingToken'] = starting_token
+            if asset_version_id:
+                params['assetVersionId'] = asset_version_id
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2922,19 +3091,22 @@ class APIClient:
 
     # Asset Download API Methods
 
-    def download_asset_file(self, database_id: str, asset_id: str, file_key: Optional[str] = None, version_id: Optional[str] = None) -> Dict[str, Any]:
+    def download_asset_file(self, database_id: str, asset_id: str, file_key: Optional[str] = None, version_id: Optional[str] = None,
+                            asset_version_id: Optional[str] = None, asset_version_alias: Optional[str] = None) -> Dict[str, Any]:
         """
         Generate presigned URL for downloading asset files using the /database/{databaseId}/assets/{assetId}/download POST endpoint.
-        
+
         Args:
             database_id: Database ID
             asset_id: Asset ID
             file_key: Optional specific file key to download
             version_id: Optional version ID for specific version
-        
+            asset_version_id: Optional asset version ID to download files from a specific asset version
+            asset_version_alias: Optional asset version alias to download files from a specific asset version by alias
+
         Returns:
             API response data with download URL and metadata
-        
+
         Raises:
             AssetNotFoundError: When asset is not found
             DatabaseNotFoundError: When database doesn't exist
@@ -2949,6 +3121,10 @@ class APIClient:
                 data["key"] = file_key
             if version_id:
                 data["versionId"] = version_id
+            if asset_version_id:
+                data["assetVersionId"] = asset_version_id
+            if asset_version_alias:
+                data["assetVersionIdAlias"] = asset_version_alias
                 
             response = self.post(endpoint, data=data, include_auth=True)
             return response.json()
@@ -3443,3 +3619,995 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to get search mapping: {e}")
+
+    # Role Management API Methods
+
+    def list_roles(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        List all roles using the /roles GET endpoint.
+        
+        Args:
+            params: Optional pagination parameters (maxItems, pageSize, startingToken)
+        
+        Returns:
+            API response data with roles list wrapped in message field
+        
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_ROLES
+        from .exceptions import RoleError
+        
+        try:
+            query_params = params or {}
+            response = self.get(API_ROLES, include_auth=True, params=query_params)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list roles: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to list roles: {e}")
+
+    def create_role(self, role_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new role using the /roles POST endpoint.
+        
+        Args:
+            role_data: Role creation data matching CreateRoleRequestModel:
+                - roleName: Role name (required)
+                - description: Role description (required)
+                - source: Optional source
+                - sourceIdentifier: Optional source identifier
+                - mfaRequired: Optional MFA requirement (default: false)
+        
+        Returns:
+            API response data with operation result
+        
+        Raises:
+            RoleAlreadyExistsError: When role already exists
+            InvalidRoleDataError: When role data is invalid
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_ROLES
+        from .exceptions import RoleAlreadyExistsError, InvalidRoleDataError
+        
+        try:
+            response = self.post(API_ROLES, data=role_data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'already exists' in error_message.lower():
+                    raise RoleAlreadyExistsError(f"Role already exists: {error_message}")
+                else:
+                    raise InvalidRoleDataError(f"Invalid role data: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Role creation failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to create role: {e}")
+
+    def update_role(self, role_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing role using the /roles PUT endpoint.
+        
+        Args:
+            role_data: Role update data matching UpdateRoleRequestModel:
+                - roleName: Role name (required)
+                - description: Role description (required)
+                - source: Optional source
+                - sourceIdentifier: Optional source identifier
+                - mfaRequired: Optional MFA requirement
+        
+        Returns:
+            API response data with operation result
+        
+        Raises:
+            RoleNotFoundError: When role is not found
+            InvalidRoleDataError: When role data is invalid
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_ROLES
+        from .exceptions import RoleNotFoundError, InvalidRoleDataError
+        
+        try:
+            response = self.put(API_ROLES, data=role_data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'does not exist' in error_message.lower() or 'not found' in error_message.lower():
+                    raise RoleNotFoundError(f"Role not found: {error_message}")
+                else:
+                    raise InvalidRoleDataError(f"Invalid role data: {error_message}")
+                    
+            elif e.response.status_code == 404:
+                raise RoleNotFoundError("Role not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Role update failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to update role: {e}")
+
+    def delete_role(self, role_name: str) -> Dict[str, Any]:
+        """
+        Delete a role using the /roles/{roleId} DELETE endpoint.
+        
+        Args:
+            role_name: Role name to delete
+        
+        Returns:
+            API response data with deletion result
+        
+        Raises:
+            RoleNotFoundError: When role is not found
+            RoleDeletionError: When role deletion fails due to dependencies
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_ROLE_BY_ID
+        from .exceptions import RoleNotFoundError, RoleDeletionError
+        
+        try:
+            endpoint = API_ROLE_BY_ID.format(roleId=role_name)
+            response = self.delete(endpoint, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise RoleDeletionError(f"Role deletion failed: {error_message}")
+                
+            elif e.response.status_code == 404:
+                raise RoleNotFoundError(f"Role '{role_name}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Role deletion failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to delete role: {e}")
+
+    # Cognito User Management API Methods
+
+    def list_cognito_users(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        List Cognito users using the /user/cognito GET endpoint.
+        
+        Args:
+            params: Optional pagination parameters (maxItems, pageSize, startingToken)
+        
+        Returns:
+            API response data with users list and NextToken
+        
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails or Cognito is not enabled
+        """
+        from ..constants import API_COGNITO_USERS
+        from .exceptions import CognitoUserOperationError
+        
+        try:
+            query_params = params or {}
+            response = self.get(API_COGNITO_USERS, include_auth=True, params=query_params)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise CognitoUserOperationError(f"Invalid list parameters: {error_message}")
+                
+            elif e.response.status_code == 503:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list Cognito users: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to list Cognito users: {e}")
+
+    def create_cognito_user(self, user_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new Cognito user using the /user/cognito POST endpoint.
+        
+        Args:
+            user_data: User creation data matching CreateCognitoUserRequestModel:
+                - userId: User ID (email format)
+                - email: Email address
+                - phone: Optional phone number in E.164 format
+        
+        Returns:
+            API response data with operation result and temporary password
+        
+        Raises:
+            CognitoUserAlreadyExistsError: When user already exists
+            InvalidCognitoUserDataError: When user data is invalid
+            CognitoUserOperationError: When Cognito is not enabled
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_COGNITO_USERS
+        from .exceptions import (
+            CognitoUserAlreadyExistsError, InvalidCognitoUserDataError, CognitoUserOperationError
+        )
+        
+        try:
+            response = self.post(API_COGNITO_USERS, data=user_data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'already exists' in error_message.lower() or 'user exists' in error_message.lower():
+                    raise CognitoUserAlreadyExistsError(f"User already exists: {error_message}")
+                else:
+                    raise InvalidCognitoUserDataError(f"Invalid user data: {error_message}")
+                    
+            elif e.response.status_code == 503:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"User creation failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to create Cognito user: {e}")
+
+    def update_cognito_user(self, user_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update a Cognito user using the /user/cognito/{userId} PUT endpoint.
+        
+        Args:
+            user_id: User ID to update
+            update_data: User update data matching UpdateCognitoUserRequestModel:
+                - email: Optional new email address
+                - phone: Optional new phone number in E.164 format
+        
+        Returns:
+            API response data with operation result
+        
+        Raises:
+            CognitoUserNotFoundError: When user is not found
+            InvalidCognitoUserDataError: When update data is invalid
+            CognitoUserOperationError: When Cognito is not enabled
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_COGNITO_USER_BY_ID
+        from .exceptions import (
+            CognitoUserNotFoundError, InvalidCognitoUserDataError, CognitoUserOperationError
+        )
+        
+        try:
+            endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
+            response = self.put(endpoint, data=update_data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise InvalidCognitoUserDataError(f"Invalid update data: {error_message}")
+                
+            elif e.response.status_code == 404:
+                raise CognitoUserNotFoundError(f"User '{user_id}' not found")
+                
+            elif e.response.status_code == 503:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"User update failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to update Cognito user: {e}")
+
+    def delete_cognito_user(self, user_id: str) -> Dict[str, Any]:
+        """
+        Delete a Cognito user using the /user/cognito/{userId} DELETE endpoint.
+        
+        Args:
+            user_id: User ID to delete
+        
+        Returns:
+            API response data with operation result
+        
+        Raises:
+            CognitoUserNotFoundError: When user is not found
+            CognitoUserOperationError: When Cognito is not enabled
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_COGNITO_USER_BY_ID
+        from .exceptions import CognitoUserNotFoundError, CognitoUserOperationError
+        
+        try:
+            endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
+            response = self.delete(endpoint, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise CognitoUserNotFoundError(f"User '{user_id}' not found")
+                
+            elif e.response.status_code == 503:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"User deletion failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to delete Cognito user: {e}")
+
+    def reset_cognito_user_password(self, user_id: str, confirm_reset: bool = False) -> Dict[str, Any]:
+        """
+        Reset a Cognito user's password using the /user/cognito/{userId}/resetPassword POST endpoint.
+        
+        Args:
+            user_id: User ID to reset password for
+            confirm_reset: Confirmation flag for password reset
+        
+        Returns:
+            API response data with operation result and temporary password
+        
+        Raises:
+            CognitoUserNotFoundError: When user is not found
+            InvalidCognitoUserDataError: When confirmation is not provided
+            CognitoUserOperationError: When Cognito is not enabled
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_COGNITO_USER_RESET_PASSWORD
+        from .exceptions import (
+            CognitoUserNotFoundError, InvalidCognitoUserDataError, CognitoUserOperationError
+        )
+        
+        try:
+            endpoint = API_COGNITO_USER_RESET_PASSWORD.format(userId=user_id)
+            data = {'confirmReset': confirm_reset}
+            response = self.post(endpoint, data=data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise InvalidCognitoUserDataError(f"Invalid reset request: {error_message}")
+                
+            elif e.response.status_code == 404:
+                raise CognitoUserNotFoundError(f"User '{user_id}' not found")
+                
+            elif e.response.status_code == 503:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Password reset failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to reset Cognito user password: {e}")
+
+    # Constraint Management API Methods
+
+    def list_constraints(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        List all constraints using the /auth/constraints GET endpoint.
+        
+        Args:
+            params: Optional pagination parameters (maxItems, pageSize, startingToken)
+        
+        Returns:
+            API response data with constraints list wrapped in message field
+        
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_CONSTRAINTS
+        
+        try:
+            query_params = params or {}
+            response = self.get(API_CONSTRAINTS, include_auth=True, params=query_params)
+            result = response.json()
+            
+            # Backend wraps response in "message" field for backward compatibility
+            # Unwrap it for consistent API client behavior
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list constraints: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to list constraints: {e}")
+
+    def get_constraint(self, constraint_id: str) -> Dict[str, Any]:
+        """
+        Get a specific constraint using the /auth/constraints/{constraintId} GET endpoint.
+        
+        Args:
+            constraint_id: Constraint ID
+        
+        Returns:
+            API response data with constraint details
+        
+        Raises:
+            ConstraintNotFoundError: When constraint is not found
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_CONSTRAINT_BY_ID
+        from .exceptions import ConstraintNotFoundError
+        
+        try:
+            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            response = self.get(endpoint, include_auth=True)
+            result = response.json()
+            
+            # Extract constraint from response
+            if 'constraint' in result:
+                return result['constraint']
+            return result
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ConstraintNotFoundError(f"Constraint '{constraint_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get constraint: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to get constraint: {e}")
+
+    def create_constraint(self, constraint_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new constraint using the /auth/constraints/{constraintId} POST endpoint.
+        
+        Args:
+            constraint_data: Constraint creation data matching CreateConstraintRequestModel:
+                - identifier: Constraint ID (required)
+                - name: Constraint name (required)
+                - description: Constraint description (required)
+                - objectType: Object type (required)
+                - criteriaAnd: AND criteria array (optional)
+                - criteriaOr: OR criteria array (optional)
+                - groupPermissions: Group permissions array (optional)
+                - userPermissions: User permissions array (optional)
+        
+        Returns:
+            API response data with operation result
+        
+        Raises:
+            ConstraintAlreadyExistsError: When constraint already exists
+            InvalidConstraintDataError: When constraint data is invalid
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_CONSTRAINT_BY_ID
+        from .exceptions import ConstraintAlreadyExistsError, InvalidConstraintDataError
+        
+        try:
+            constraint_id = constraint_data.get('identifier')
+            if not constraint_id:
+                raise InvalidConstraintDataError("Constraint identifier is required")
+            
+            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            response = self.post(endpoint, data=constraint_data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'already exists' in error_message.lower():
+                    raise ConstraintAlreadyExistsError(f"Constraint already exists: {error_message}")
+                else:
+                    raise InvalidConstraintDataError(f"Invalid constraint data: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Constraint creation failed: {e}")
+                
+        except InvalidConstraintDataError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to create constraint: {e}")
+
+    def update_constraint(self, constraint_id: str, constraint_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing constraint using the /auth/constraints/{constraintId} POST endpoint.
+        
+        Args:
+            constraint_id: Constraint ID
+            constraint_data: Constraint update data matching CreateConstraintRequestModel
+        
+        Returns:
+            API response data with operation result
+        
+        Raises:
+            ConstraintNotFoundError: When constraint is not found
+            InvalidConstraintDataError: When constraint data is invalid
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_CONSTRAINT_BY_ID
+        from .exceptions import ConstraintNotFoundError, InvalidConstraintDataError
+        
+        try:
+            # Ensure identifier matches the path parameter
+            constraint_data['identifier'] = constraint_id
+            
+            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            response = self.post(endpoint, data=constraint_data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'does not exist' in error_message.lower() or 'not found' in error_message.lower():
+                    raise ConstraintNotFoundError(f"Constraint not found: {error_message}")
+                else:
+                    raise InvalidConstraintDataError(f"Invalid constraint data: {error_message}")
+                    
+            elif e.response.status_code == 404:
+                raise ConstraintNotFoundError(f"Constraint '{constraint_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Constraint update failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to update constraint: {e}")
+
+    def delete_constraint(self, constraint_id: str) -> Dict[str, Any]:
+        """
+        Delete a constraint using the /auth/constraints/{constraintId} DELETE endpoint.
+        
+        Args:
+            constraint_id: Constraint ID to delete
+        
+        Returns:
+            API response data with deletion result
+        
+        Raises:
+            ConstraintNotFoundError: When constraint is not found
+            ConstraintDeletionError: When constraint deletion fails due to dependencies
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_CONSTRAINT_BY_ID
+        from .exceptions import ConstraintNotFoundError, ConstraintDeletionError
+        
+        try:
+            endpoint = API_CONSTRAINT_BY_ID.format(constraintId=constraint_id)
+            response = self.delete(endpoint, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ConstraintDeletionError(f"Constraint deletion failed: {error_message}")
+                
+            elif e.response.status_code == 404:
+                raise ConstraintNotFoundError(f"Constraint '{constraint_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Constraint deletion failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to delete constraint: {e}")
+
+    def import_constraints_template(self, template_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Import constraints from a permission template using the /auth/constraintsTemplateImport POST endpoint.
+
+        Args:
+            template_data: Template import data matching ImportConstraintsTemplateRequestModel:
+                - template: Optional template metadata (name, description, version)
+                - variables: Optional list of variable definitions
+                - variableValues: Dictionary of variable name -> value mappings (ROLE_NAME required)
+                - constraints: List of constraint definitions
+
+        Returns:
+            API response data with import results (constraintsCreated, constraintIds, etc.)
+
+        Raises:
+            InvalidConstraintDataError: When template data is invalid
+            TemplateImportError: When template import fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_CONSTRAINTS_TEMPLATE_IMPORT
+        from .exceptions import InvalidConstraintDataError, TemplateImportError
+
+        try:
+            response = self.post(API_CONSTRAINTS_TEMPLATE_IMPORT, data=template_data, include_auth=True)
+            result = response.json()
+
+            # Backend wraps response in "message" field for backward compatibility
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise InvalidConstraintDataError(f"Invalid template data: {error_message}")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise TemplateImportError(f"Template import failed: {e}")
+
+        except (InvalidConstraintDataError, AuthenticationError, TemplateImportError):
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to import constraints template: {e}")
+
+    # User Role Management API Methods
+
+    def list_user_roles(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        List all user roles using the /user-roles GET endpoint.
+        
+        Args:
+            params: Optional pagination parameters (maxItems, pageSize, startingToken)
+        
+        Returns:
+            API response data with user roles list wrapped in message field
+        
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_USER_ROLES
+        
+        try:
+            query_params = params or {}
+            response = self.get(API_USER_ROLES, include_auth=True, params=query_params)
+            result = response.json()
+            
+            # Backend wraps response in "message" field for backward compatibility
+            # Unwrap it for consistent API client behavior
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list user roles: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to list user roles: {e}")
+
+    def create_user_roles(self, user_role_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create new user roles using the /user-roles POST endpoint.
+        
+        Args:
+            user_role_data: User role creation data matching CreateUserRolesRequestModel:
+                - userId: User ID (required)
+                - roleName: Array of role names (required)
+        
+        Returns:
+            API response data with operation result
+        
+        Raises:
+            UserRoleAlreadyExistsError: When user role already exists
+            InvalidUserRoleDataError: When user role data is invalid
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_USER_ROLES
+        from .exceptions import UserRoleAlreadyExistsError, InvalidUserRoleDataError
+        
+        try:
+            response = self.post(API_USER_ROLES, data=user_role_data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'already exist' in error_message.lower():
+                    raise UserRoleAlreadyExistsError(f"User role already exists: {error_message}")
+                else:
+                    raise InvalidUserRoleDataError(f"Invalid user role data: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"User role creation failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to create user roles: {e}")
+
+    def update_user_roles(self, user_role_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update user roles using the /user-roles PUT endpoint.
+        
+        Args:
+            user_role_data: User role update data matching UpdateUserRolesRequestModel:
+                - userId: User ID (required)
+                - roleName: Array of role names (required)
+        
+        Returns:
+            API response data with operation result
+        
+        Raises:
+            UserRoleNotFoundError: When user role is not found
+            InvalidUserRoleDataError: When user role data is invalid
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_USER_ROLES
+        from .exceptions import UserRoleNotFoundError, InvalidUserRoleDataError
+        
+        try:
+            response = self.put(API_USER_ROLES, data=user_role_data, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                
+                if 'does not exist' in error_message.lower() or 'not found' in error_message.lower():
+                    raise UserRoleNotFoundError(f"User role not found: {error_message}")
+                else:
+                    raise InvalidUserRoleDataError(f"Invalid user role data: {error_message}")
+                    
+            elif e.response.status_code == 404:
+                raise UserRoleNotFoundError("User role not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"User role update failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to update user roles: {e}")
+
+    def delete_user_roles(self, user_id: str) -> Dict[str, Any]:
+        """
+        Delete all roles for a user using the /user-roles DELETE endpoint.
+        
+        Args:
+            user_id: User ID whose roles should be deleted
+        
+        Returns:
+            API response data with deletion result
+        
+        Raises:
+            UserRoleNotFoundError: When user role is not found
+            UserRoleDeletionError: When user role deletion fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_USER_ROLES
+        from .exceptions import UserRoleNotFoundError, UserRoleDeletionError
+        
+        try:
+            data = {'userId': user_id}
+            response = self.delete(API_USER_ROLES, include_auth=True, json=data)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise UserRoleDeletionError(f"User role deletion failed: {error_message}")
+                
+            elif e.response.status_code == 404:
+                raise UserRoleNotFoundError(f"User roles for '{user_id}' not found")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"User role deletion failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to delete user roles: {e}")
+
+    # API Key Management API Methods
+
+    def list_api_keys(self) -> Dict[str, Any]:
+        """
+        List all API keys using the /auth/api-keys GET endpoint.
+
+        Returns:
+            API response data with API keys list
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import ApiKeyError
+
+        try:
+            response = self.get(API_AUTH_API_KEYS, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list API keys: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list API keys: {e}")
+
+    def create_api_key(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new API key using the /auth/api-keys POST endpoint.
+
+        Args:
+            data: API key creation data:
+                - apiKeyName: Name for the key (required)
+                - userId: VAMS user ID this key acts as (required)
+                - description: Optional description
+                - expiresAt: Optional expiration date in ISO 8601 format
+
+        Returns:
+            API response data including the generated API key (shown only once)
+
+        Raises:
+            ApiKeyCreationError: When API key creation fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import ApiKeyCreationError
+
+        try:
+            response = self.post(API_AUTH_API_KEYS, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyCreationError(f"API key creation failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key creation failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to create API key: {e}")
+
+    def update_api_key(self, api_key_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an API key using the /auth/api-keys/{apiKeyId} PUT endpoint.
+
+        Args:
+            api_key_id: ID of the API key to update
+            data: Update data:
+                - description: Optional new description
+                - expiresAt: Optional new expiration date
+
+        Returns:
+            API response data with updated API key details
+
+        Raises:
+            ApiKeyNotFoundError: When API key is not found
+            ApiKeyUpdateError: When API key update fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import ApiKeyNotFoundError, ApiKeyUpdateError
+
+        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.put(endpoint, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyUpdateError(f"API key update failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key update failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to update API key: {e}")
+
+    def delete_api_key(self, api_key_id: str) -> Dict[str, Any]:
+        """
+        Delete an API key using the /auth/api-keys/{apiKeyId} DELETE endpoint.
+
+        Args:
+            api_key_id: ID of the API key to delete
+
+        Returns:
+            API response data with deletion result
+
+        Raises:
+            ApiKeyNotFoundError: When API key is not found
+            ApiKeyDeletionError: When API key deletion fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from .exceptions import ApiKeyNotFoundError, ApiKeyDeletionError
+
+        endpoint = API_AUTH_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.delete(endpoint, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyDeletionError(f"API key deletion failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key deletion failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to delete API key: {e}")

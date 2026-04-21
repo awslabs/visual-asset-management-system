@@ -582,35 +582,39 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
+@click.option('--asset-version-id', help='Filter files by a specific asset version')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
 def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str, include_archived: bool,
                basic: bool, page_size: int, max_items: int, starting_token: str, auto_paginate: bool,
-               json_input: str, json_output: bool):
+               asset_version_id: str, json_input: str, json_output: bool):
     """List files in an asset.
-    
+
     Examples:
         # Basic listing (uses API defaults)
         vamscli file list -d my-db -a my-asset
-        
+
         # Fast listing with basic mode
         vamscli file list -d my-db -a my-asset --basic
-        
+
+        # List files from a specific asset version
+        vamscli file list -d my-db -a my-asset --asset-version-id ver123
+
         # Auto-pagination to fetch all items (default: up to 10,000)
         vamscli file list -d my-db -a my-asset --auto-paginate
-        
+
         # Auto-pagination with custom limit
         vamscli file list -d my-db -a my-asset --auto-paginate --max-items 5000
-        
+
         # Auto-pagination with custom page size
         vamscli file list -d my-db -a my-asset --auto-paginate --page-size 500
-        
+
         # Manual pagination with page size
         vamscli file list -d my-db -a my-asset --page-size 200
         vamscli file list -d my-db -a my-asset --starting-token "token123" --page-size 200
-        
+
         # With filters
         vamscli file list -d my-db -a my-asset --prefix "models/" --include-archived
     """
@@ -628,7 +632,8 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
         max_items = json_data.get('max_items', max_items)
         starting_token = json_data.get('starting_token', starting_token)
         auto_paginate = json_data.get('auto_paginate', auto_paginate)
-        
+        asset_version_id = json_data.get('asset_version_id', asset_version_id)
+
         # Validate required arguments
         if not database_id:
             raise click.ClickException("Database ID is required (-d/--database)")
@@ -677,9 +682,11 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                     params['pageSize'] = page_size  # Pass pageSize to API
                 if next_token:
                     params['startingToken'] = next_token
-                
+                if asset_version_id:
+                    params['assetVersionId'] = asset_version_id
+
                 # Note: maxItems is NOT passed to API - it's CLI-side limit only
-                
+
                 # Make API call
                 result = api_client.list_asset_files(database_id, asset_id, params)
                 
@@ -724,9 +731,11 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 params['pageSize'] = page_size  # Pass pageSize to API
             if starting_token:
                 params['startingToken'] = starting_token
-            
+            if asset_version_id:
+                params['assetVersionId'] = asset_version_id
+
             # Note: maxItems is NOT passed to API in manual mode
-            
+
             # Call API
             final_result = api_client.list_asset_files(database_id, asset_id, params)
         
@@ -1169,7 +1178,10 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
                     lines.append(f"    Modified: {version.get('lastModified', 'N/A')}")
                     if not data.get('isFolder'):
                         lines.append(f"    Size: {version.get('size', 0)} bytes")
-            
+                    if version.get('assetVersionIds'):
+                        labels = [av.get('label', av.get('id', '')) if isinstance(av, dict) else f"v{av}" for av in version['assetVersionIds']]
+                        lines.append(f"    Asset Versions: {', '.join(labels)}")
+
             return '\n'.join(lines)
         
         output_result(
@@ -1273,20 +1285,24 @@ def move_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
 @click.option('--source', required=True, help='Source file path')
 @click.option('--dest', required=True, help='Destination file path')
 @click.option('--dest-asset', help='Destination asset ID (for cross-asset copy)')
+@click.option('--dest-database', help='Destination database ID (for cross-database copy). Defaults to source database.')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
-def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, dest: str, dest_asset: str, json_input: str, json_output: bool):
-    """Copy a file within an asset or to another asset.
-    
+def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, dest: str, dest_asset: str, dest_database: str, json_input: str, json_output: bool):
+    """Copy a file within an asset, to another asset, or across databases.
+
     Examples:
         # Copy within same asset
         vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/copy.gltf"
-        
-        # Copy to another asset
+
+        # Copy to another asset in the same database
         vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf" --dest-asset other-asset
-        
+
+        # Copy to another asset in a different database
+        vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf" --dest-asset other-asset --dest-database other-db
+
         # Copy with JSON input
         vamscli file copy --json-input '{"database_id": "my-db", "asset_id": "my-asset", "source": "/file.gltf", "dest": "/copy.gltf"}'
     """
@@ -1300,7 +1316,8 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
         source = json_data.get('source', source)
         dest = json_data.get('dest', dest)
         dest_asset = json_data.get('dest_asset', dest_asset)
-        
+        dest_database = json_data.get('dest_database', dest_database)
+
         # Validate required arguments
         if not database_id:
             raise click.ClickException("Database ID is required (-d/--database)")
@@ -1323,7 +1340,9 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
         }
         if dest_asset:
             copy_data["destinationAssetId"] = dest_asset
-        
+        if dest_database:
+            copy_data["destinationDatabaseId"] = dest_database
+
         output_status(f"Copying file from '{source}' to '{dest}'...", json_output)
         
         # Call API
@@ -1336,7 +1355,9 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
             lines.append(f"  To: {dest}")
             if dest_asset:
                 lines.append(f"  Destination Asset: {dest_asset}")
-            
+            if dest_database:
+                lines.append(f"  Destination Database: {dest_database}")
+
             if data.get('affectedFiles'):
                 affected_count = len(data['affectedFiles'])
                 if affected_count > 1:  # More than just the main file
@@ -1555,8 +1576,24 @@ def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
             raise click.ClickException("Asset ID is required (-a/--asset)")
         if not file_path:
             raise click.ClickException("File path is required (-p/--path)")
+        
+        # Require confirmation for deletion
         if not confirm:
-            raise click.ClickException("Permanent deletion requires confirmation (--confirm)")
+            if json_output:
+                # For JSON output, return error in JSON format
+                import sys
+                error_result = {
+                    "error": "Confirmation required",
+                    "message": "Permanent deletion requires the --confirm flag",
+                    "databaseId": database_id,
+                    "assetId": asset_id,
+                    "filePath": file_path
+                }
+                output_result(error_result, json_output=True)
+                sys.exit(1)
+            else:
+                # For CLI output, show helpful message
+                raise click.ClickException("Permanent deletion requires confirmation (--confirm)")
         
         # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)

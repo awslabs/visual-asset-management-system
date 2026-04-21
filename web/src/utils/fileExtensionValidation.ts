@@ -4,6 +4,7 @@
  */
 
 import { FileUploadTableItem } from "../pages/AssetUpload/FileUploadTable";
+import Synonyms from "../synonyms";
 
 /**
  * Parse the restrictFileUploadsToExtensions string into an array of allowed extensions
@@ -147,7 +148,7 @@ export function formatValidationErrors(validationResult: ValidationResult): stri
 
     const { invalidFiles, allowedExtensions } = validationResult;
 
-    let message = "The following files have extensions that are not allowed for this database:\n\n";
+    let message = `The following files have extensions that are not allowed for this ${Synonyms.database}:\n\n`;
 
     invalidFiles.forEach((file) => {
         message += `• ${file.fileName} - Extension ${file.extension} not allowed\n`;

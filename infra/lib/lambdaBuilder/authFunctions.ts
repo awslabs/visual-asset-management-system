@@ -26,8 +26,11 @@ import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
 
 interface AuthFunctions {
     authConstraintsService: lambda.Function;
+    authConstraintsTemplateService: lambda.Function;
     authLoginProfile: lambda.Function;
     routes: lambda.Function;
+    cognitoUserService: lambda.Function;
+    apiKeyService: lambda.Function;
 }
 
 export function buildAuthFunctions(
@@ -49,6 +52,15 @@ export function buildAuthFunctions(
             vpc,
             subnets
         ),
+        authConstraintsTemplateService: buildAuthConstraintsTemplateFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            authResources,
+            config,
+            vpc,
+            subnets
+        ),
         authLoginProfile: buildAuthLoginProfile(
             scope,
             lambdaCommonBaseLayer,
@@ -58,6 +70,23 @@ export function buildAuthFunctions(
             subnets
         ),
         routes: buildRoutesService(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        ),
+        cognitoUserService: buildCognitoUserService(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            authResources,
+            config,
+            vpc,
+            subnets
+        ),
+        apiKeyService: buildApiKeyServiceFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
@@ -84,6 +113,41 @@ export function buildAuthConstraintsFunction(
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(1),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {},
+    });
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.constraintsStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
+}
+
+export function buildAuthConstraintsTemplateFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    authResources: authResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "authConstraintsTemplateService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(2),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
@@ -183,6 +247,108 @@ export function buildRoutesService(
     return fun;
 }
 
+export function buildCognitoUserService(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    authResources: authResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "cognitoUserService";
+
+    // Build environment variables
+    const environment: { [key: string]: string } = {
+        COGNITO_ENABLED: config.app.authProvider.useCognito.enabled ? "true" : "false",
+    };
+
+    // Add Cognito-specific variables if enabled and authResources available
+    if (config.app.authProvider.useCognito.enabled && authResources?.cognito?.userPoolId) {
+        environment.USER_POOL_ID = authResources.cognito.userPoolId;
+    }
+
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(2),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: environment,
+    });
+
+    // Grant Cognito permissions only if Cognito is enabled and user pool exists
+    if (config.app.authProvider.useCognito.enabled && authResources?.cognito?.userPool) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: [
+                    "cognito-idp:ListUsers",
+                    "cognito-idp:AdminCreateUser",
+                    "cognito-idp:AdminUpdateUserAttributes",
+                    "cognito-idp:AdminDeleteUser",
+                    "cognito-idp:AdminResetUserPassword",
+                    "cognito-idp:AdminSetUserPassword",
+                    "cognito-idp:AdminGetUser",
+                ],
+                resources: [authResources.cognito.userPool.userPoolArn],
+            })
+        );
+    }
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    return fun;
+}
+
+export function buildApiKeyServiceFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "apiKeyService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(1),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            API_KEY_STORAGE_TABLE_NAME: storageResources.dynamo.apiKeyStorageTable.tableName,
+            USER_ROLES_STORAGE_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+        },
+    });
+    storageResources.dynamo.apiKeyStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    return fun;
+}
+
 export function buildApiGatewayAuthorizerHttpFunction(
     scope: Construct,
     lambdaAuthorizerLayer: LayerVersion,
@@ -224,6 +390,11 @@ export function buildApiGatewayAuthorizerHttpFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
     }
 
+    // Add API Key authentication environment variables
+    environment.API_KEY_STORAGE_TABLE_NAME = storageResources.dynamo.apiKeyStorageTable.tableName;
+    environment.USER_ROLES_STORAGE_TABLE_NAME =
+        storageResources.dynamo.userRolesStorageTable.tableName;
+
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
@@ -244,6 +415,13 @@ export function buildApiGatewayAuthorizerHttpFunction(
 
     // Grant API Gateway invoke permissions
     fun.grantInvoke(Service("APIGATEWAY").Principal);
+
+    // Grant API key table read access for authorizer lookups
+    storageResources.dynamo.apiKeyStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+
+    // Add KMS permissions for encrypted DynamoDB table access
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
     // Add global permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);

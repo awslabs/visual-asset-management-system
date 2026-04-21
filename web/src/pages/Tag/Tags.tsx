@@ -6,13 +6,13 @@
 import CreateTag from "./CreateTag";
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
-import { API } from "aws-amplify";
 import ListPageNoDatabase from "../ListPageNoDatabase";
 import CreateTagType from "./CreateTagType";
-import { fetchTags, fetchtagTypes } from "../../services/APIService";
+import { fetchTags, fetchtagTypes, deleteTag, deleteTagType } from "../../services/APIService";
 import { useEffect, useState } from "react";
 import { Box } from "@cloudscape-design/components";
-var rel;
+import { usePageTitle } from "../../hooks/usePageTitle";
+let rel;
 
 export const TagsListDefinition = new ListDefinition({
     pluralName: "tags",
@@ -20,14 +20,14 @@ export const TagsListDefinition = new ListDefinition({
     singularNameTitleCase: "Tag",
     visibleColumns: ["tagName", "description", "tagTypeName"],
     filterColumns: [{ name: "tagName", placeholder: "Name" }],
-    elementId: "name",
+    elementId: "tagName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `tags/${item.tagName}`, {});
-            return [true, response.message, ""];
+            const result: any = await deleteTag({ tagName: item.tagName });
+            return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response.data.message];
+            return [false, error?.message, error?.response?.data?.message];
         }
     },
     columnDefinitions: [
@@ -42,7 +42,11 @@ export const TagsListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: (props: any) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "description",
         }),
         new ColumnDefinition({
@@ -60,14 +64,14 @@ export const TagTypesListDefinition = new ListDefinition({
     singularNameTitleCase: "Tag Type",
     visibleColumns: ["tagTypeName", "description", "required", "tags"],
     filterColumns: [{ name: "name", placeholder: "Name" }],
-    elementId: "name",
+    elementId: "tagTypeName",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
-            const response: any = await API.del("api", `tag-types/${item.tagTypeName}`, {});
-            return [true, response.message, ""];
+            const result: any = await deleteTagType({ tagTypeName: item.tagTypeName });
+            return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response.data.message];
+            return [false, error?.message, error?.response?.data?.message];
         }
     },
     columnDefinitions: [
@@ -82,7 +86,11 @@ export const TagTypesListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: (props: any) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "description",
         }),
         new ColumnDefinition({
@@ -94,13 +102,18 @@ export const TagTypesListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "tags",
             header: "Tags",
-            cellWrapper: (props: any) => <>{props.children}</>,
+            cellWrapper: (props: any) => (
+                <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {props.children}
+                </span>
+            ),
             sortingField: "tags",
         }),
     ],
 });
 
 export default function Tags() {
+    usePageTitle("Tag Management");
     const [reloadKey1, setReloadKey1] = useState(0);
     const [reloadKey2, setReloadKey2] = useState(100);
     const reloadChild1 = () => {

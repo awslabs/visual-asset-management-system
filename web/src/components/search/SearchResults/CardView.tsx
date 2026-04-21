@@ -328,6 +328,11 @@ const CardView: React.FC<CardViewProps> = ({
                                 databaseId={source.str_databaseid || ""}
                                 onOpenFullPreview={onOpenPreview || (() => {})}
                                 assetName={source.str_assetname || ""}
+                                previewFileKey={
+                                    source.str_previewfilekey !== undefined
+                                        ? source.str_previewfilekey
+                                        : undefined
+                                }
                             />
                         ) : (
                             <FilePreviewThumbnailCell
@@ -337,6 +342,11 @@ const CardView: React.FC<CardViewProps> = ({
                                 fileName={source.str_key?.split("/").pop() || source.str_key || ""}
                                 fileSize={source.num_filesize || source.num_size}
                                 onOpenFullPreview={onOpenPreview || (() => {})}
+                                previewFileKey={
+                                    source.str_previewfilekey !== undefined
+                                        ? source.str_previewfilekey
+                                        : undefined
+                                }
                             />
                         )}
                     </Box>

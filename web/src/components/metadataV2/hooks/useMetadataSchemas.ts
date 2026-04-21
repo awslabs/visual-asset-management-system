@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback, useEffect } from "react";
-import { fetchMetadataSchemas } from "../../../services/metadataSchemaAPI";
+import { fetchMetadataSchemas } from "../../../services/MetadataSchemaService";
 import { MetadataValueType } from "../types/metadata.types";
 
 export interface MetadataSchemaField {
@@ -38,7 +38,7 @@ interface UseMetadataSchemasResult {
 export const useMetadataSchemas = (
     databaseId?: string,
     entityType?: "asset" | "assetLink",
-    enabled: boolean = true
+    enabled = true
 ): UseMetadataSchemasResult => {
     const [schemas, setSchemas] = useState<AggregatedSchema | null>(null);
     const [loading, setLoading] = useState(false);

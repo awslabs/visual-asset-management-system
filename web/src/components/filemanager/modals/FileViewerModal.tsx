@@ -14,6 +14,7 @@ interface FileViewerModalProps {
     files: FileInfo[];
     databaseId: string;
     assetId: string;
+    assetVersionId?: string;
 }
 
 export const FileViewerModal: React.FC<FileViewerModalProps> = ({
@@ -22,6 +23,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     files,
     databaseId,
     assetId,
+    assetVersionId,
 }) => {
     const [viewerMode, setViewerMode] = useState("collapse");
 
@@ -88,6 +90,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
                         files={files}
                         assetId={assetId}
                         databaseId={databaseId}
+                        assetVersionId={assetVersionId}
                         viewerMode={viewerMode}
                         onViewerModeChange={handleViewerModeChange}
                         showViewerSelector={true}

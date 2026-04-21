@@ -1,0 +1,359 @@
+<!--
+
+Copyright 2025 Esri
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied. See the License for the specific language governing
+permissions and limitations under the License.
+
+-->
+
+<Window x:Class="VamsConnector.ImagePreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Image Preview" 
+        Height="600" Width="800"
+        WindowStartupLocation="CenterOwner"
+        Background="#F0F0F0">
+    <Window.Resources>
+        <Style x:Key="HeaderTextStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#333333"/>
+        </Style>
+        <Style x:Key="RegularTextStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#333333"/>
+        </Style>
+        <Style x:Key="ErrorTextStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="Red"/>
+        </Style>
+        <Style x:Key="ButtonStyle" TargetType="Button">
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Margin" Value="4"/>
+            <Setter Property="MinWidth" Value="80"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Background" Value="#E1E1E1"/>
+            <Setter Property="BorderBrush" Value="#ADADAD"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" 
+                                BorderBrush="{TemplateBinding BorderBrush}" 
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="2">
+                            <ContentPresenter HorizontalAlignment="Center" 
+                                            VerticalAlignment="Center"
+                                            Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#D4D4D4"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Background" Value="#C0C0C0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Image Content -->
+        <Grid Grid.Row="1">
+            <!-- Loading indicator -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel.Style>
+                    <Style TargetType="StackPanel">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsLoading}" Value="True">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Style>
+                <ProgressBar IsIndeterminate="True" Width="200" Height="4" Margin="0,0,0,10"/>
+                <TextBlock Text="Loading image..." 
+                           Style="{StaticResource RegularTextStyle}"
+                           HorizontalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- Download progress overlay -->
+            <Grid Background="#80000000" Panel.ZIndex="10">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsDownloading}" Value="True">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+                <Border HorizontalAlignment="Center" 
+                        VerticalAlignment="Center"
+                        Background="#F0F0F0"
+                        BorderBrush="#CCCCCC"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="30,20">
+                    <StackPanel>
+                        <TextBlock Text="Downloading File..." 
+                                   Style="{StaticResource HeaderTextStyle}"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,15"/>
+                        <ProgressBar IsIndeterminate="True" 
+                                     Width="250" 
+                                     Height="8" 
+                                     Margin="0,0,0,15"
+                                     Background="#E0E0E0"
+                                     Foreground="#007ACC"/>
+                        <TextBlock Text="Please wait while the file is being downloaded..." 
+                                   Style="{StaticResource RegularTextStyle}"
+                                   HorizontalAlignment="Center"
+                                   Foreground="#666666"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- Image display with zoom controls -->
+            <Grid>
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility" Value="Visible"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding PreviewImage}" Value="{x:Null}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsLoading}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+                
+                <!-- Zoom controls -->
+                <Border HorizontalAlignment="Left" 
+                        VerticalAlignment="Top" 
+                        Margin="15"
+                        Background="#E0FFFFFF"
+                        BorderBrush="#CCCCCC"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Panel.ZIndex="1">
+                    <StackPanel Orientation="Vertical" Margin="8">
+                        <!-- Zoom level indicator -->
+                        <TextBlock x:Name="ZoomLevelText" 
+                                   Text="100%" 
+                                   FontSize="10" 
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" 
+                                   Margin="0,0,0,6"
+                                   Foreground="#333333"/>
+                        
+                        <Button Click="ZoomIn_Click"
+                                Width="40" Height="40"
+                                Margin="0,0,0,4"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ToolTip="Zoom In (Ctrl + Mouse Wheel)"
+                                Cursor="Hand">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border Background="{TemplateBinding Background}" 
+                                                        CornerRadius="4"
+                                                        Padding="8">
+                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Background" Value="#20000000"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsPressed" Value="True">
+                                                        <Setter Property="Background" Value="#40000000"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </Button.Style>
+                            <Path Data="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" 
+                                  Fill="#333333" 
+                                  Stretch="Uniform" 
+                                  Width="20" Height="20"/>
+                        </Button>
+                        
+                        <Button Click="ZoomOut_Click"
+                                Width="40" Height="40"
+                                Margin="0,0,0,4"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ToolTip="Zoom Out (Ctrl + Mouse Wheel)"
+                                Cursor="Hand">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border Background="{TemplateBinding Background}" 
+                                                        CornerRadius="4"
+                                                        Padding="8">
+                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Background" Value="#20000000"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsPressed" Value="True">
+                                                        <Setter Property="Background" Value="#40000000"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </Button.Style>
+                            <Path Data="M19,13H5V11H19V13Z" 
+                                  Fill="#333333" 
+                                  Stretch="Uniform" 
+                                  Width="20" Height="20"/>
+                        </Button>
+                        
+                        <Button Click="ZoomReset_Click"
+                                Width="40" Height="40"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ToolTip="Fit to Window"
+                                Cursor="Hand">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border Background="{TemplateBinding Background}" 
+                                                        CornerRadius="4"
+                                                        Padding="8">
+                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Background" Value="#20000000"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsPressed" Value="True">
+                                                        <Setter Property="Background" Value="#40000000"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </Button.Style>
+                            <Path Data="M9,3V4H4V9H3V4A1,1 0 0,1 4,3H9M21,4V9H20V4H15V3H20A1,1 0 0,1 21,4M4,15V20H9V21H4A1,1 0 0,1 3,20V15H4M20,15V20A1,1 0 0,1 20,21H15V20H20V15H21Z" 
+                                  Fill="#333333" 
+                                  Stretch="Uniform" 
+                                  Width="18" Height="18"/>
+                        </Button>
+                    </StackPanel>
+                </Border>
+                
+                <ScrollViewer x:Name="ImageScrollViewer"
+                              HorizontalScrollBarVisibility="Auto" 
+                              VerticalScrollBarVisibility="Auto"
+                              PreviewMouseWheel="ImageScrollViewer_PreviewMouseWheel"
+                              PreviewMouseLeftButtonDown="ImageScrollViewer_PreviewMouseLeftButtonDown"
+                              PreviewMouseMove="ImageScrollViewer_PreviewMouseMove"
+                              PreviewMouseLeftButtonUp="ImageScrollViewer_PreviewMouseLeftButtonUp"
+                              Cursor="{Binding RelativeSource={RelativeSource Self}, Path=Tag}">
+                    <Canvas x:Name="ImageCanvas" 
+                            Background="Transparent"
+                            ClipToBounds="True">
+                        <Image x:Name="PreviewImage"
+                               Source="{Binding PreviewImage}" 
+                               Stretch="Uniform"
+                               RenderTransformOrigin="0.5,0.5">
+                            <Image.RenderTransform>
+                                <TransformGroup>
+                                    <ScaleTransform x:Name="ImageScaleTransform" ScaleX="1" ScaleY="1"/>
+                                    <TranslateTransform x:Name="ImageTranslateTransform" X="0" Y="0"/>
+                                </TransformGroup>
+                            </Image.RenderTransform>
+                        </Image>
+                    </Canvas>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- Error message -->
+            <TextBlock Text="{Binding ErrorMessage}" 
+                       HorizontalAlignment="Center" 
+                       VerticalAlignment="Center"
+                       TextWrapping="Wrap"
+                       Name="ErrorTextBlock">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource ErrorTextStyle}">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ErrorMessageVisible}" Value="True">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </Grid>
+
+        <!-- Footer -->
+        <Border Grid.Row="2" Background="#E8E8E8" 
+                BorderBrush="#CCCCCC" BorderThickness="0,1,0,0"
+                Padding="10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <!-- Instructions -->
+                <TextBlock Grid.Column="0" 
+                           VerticalAlignment="Center"
+                           FontSize="11"
+                           Foreground="#666666"
+                           Text="💡 Ctrl + Mouse Wheel to zoom • Click and drag to pan at any scale"/>
+                
+                <!-- Buttons -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Download" 
+                            Command="{Binding DownloadCommand}"
+                            Style="{StaticResource ButtonStyle}"/>
+                    <Button Content="Close" 
+                            Click="CloseButton_Click"
+                            Style="{StaticResource ButtonStyle}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

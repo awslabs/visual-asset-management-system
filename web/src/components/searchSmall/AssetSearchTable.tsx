@@ -15,10 +15,11 @@ import {
     Pagination,
     Spinner,
 } from "@cloudscape-design/components";
-import { API, Cache } from "aws-amplify";
-import { fetchAllAssets } from "../../services/APIService";
+import { appCache } from "../../services/appCache";
+import { fetchAllAssets, searchAssets } from "../../services/APIService";
 import CustomTable from "../table/CustomTable";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import Synonyms from "../../synonyms";
 
 export interface AssetSearchItem {
     assetId: string;
@@ -54,6 +55,9 @@ export interface AssetSearchTableProps {
 
     // Optional no-OpenSearch mode
     noOpenSearch?: boolean;
+
+    // When true (default), restrict search to currentDatabaseId. When false, search across all databases.
+    restrictToCurrentDatabase?: boolean;
 }
 
 export function AssetSearchTable({
@@ -68,6 +72,7 @@ export function AssetSearchTable({
     tagTypes = [],
     onAssetFilesLoad,
     noOpenSearch = false,
+    restrictToCurrentDatabase = true,
 }: AssetSearchTableProps) {
     const [searchTerm, setSearchTerm] = useState("");
     const [searchResults, setSearchResults] = useState<AssetSearchItem[]>([]);
@@ -86,7 +91,7 @@ export function AssetSearchTable({
     const [selectedAssets, setSelectedAssets] = useState<AssetSearchItem[]>([]);
 
     // Check if OpenSearch is disabled
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
     const useNoOpenSearch =
         noOpenSearch || config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH);
 
@@ -129,7 +134,7 @@ export function AssetSearchTable({
     };
 
     // Handle search
-    const handleSearch = async (page: number = 1) => {
+    const handleSearch = async (page = 1) => {
         if (!searchTerm.trim()) {
             setSearchResults([]);
             setShowResults(false);
@@ -149,8 +154,8 @@ export function AssetSearchTable({
                 // Build filters array
                 const filters: object[] = [];
 
-                // Add database filter if specified (for both single and multi select modes)
-                if (currentDatabaseId) {
+                // Add database filter if specified and restricted to current database
+                if (currentDatabaseId && restrictToCurrentDatabase) {
                     filters.push({
                         query_string: {
                             query: `(str_databaseid:("${currentDatabaseId}"))`,
@@ -172,10 +177,11 @@ export function AssetSearchTable({
                     includeArchived: false,
                 };
 
-                const response = await API.post("api", "search", {
-                    "Content-type": "application/json",
-                    body: body,
-                });
+                const [success, searchResult] = (await searchAssets(body)) as [boolean, any];
+                if (!success) {
+                    throw new Error(searchResult || "Search failed");
+                }
+                const response = searchResult;
 
                 if (response?.hits?.hits) {
                     results = response.hits.hits.map((result: any) => {
@@ -211,11 +217,18 @@ export function AssetSearchTable({
                 // Use assets API with client-side pagination
                 const allAssets = await fetchAllAssets();
                 if (Array.isArray(allAssets)) {
-                    const filtered = allAssets
+                    let filtered = allAssets
                         .filter((asset: any) => asset.databaseId.indexOf("#deleted") === -1)
                         .filter((asset: any) =>
                             asset.assetName.toLowerCase().includes(searchTerm.toLowerCase())
                         );
+
+                    // Filter to current database if restricted
+                    if (currentDatabaseId && restrictToCurrentDatabase) {
+                        filtered = filtered.filter(
+                            (asset: any) => asset.databaseId === currentDatabaseId
+                        );
+                    }
 
                     total = filtered.length;
                     const startIndex = (page - 1) * pageSize;
@@ -245,7 +258,7 @@ export function AssetSearchTable({
             setShowResults(true);
         } catch (error) {
             console.error("Error searching assets:", error);
-            setSearchError("Failed to search assets. Please try again.");
+            setSearchError(`Failed to search ${Synonyms.assets}. Please try again.`);
             setSearchResults([]);
             setShowResults(false);
         } finally {
@@ -323,7 +336,7 @@ export function AssetSearchTable({
         const columns: any[] = [
             {
                 id: "assetName",
-                header: "Asset Name",
+                header: `${Synonyms.Asset} Name`,
                 cell: (item: AssetSearchItem) => (
                     <Link
                         href={`#/databases/${item.databaseName || item.databaseId}/assets/${
@@ -343,7 +356,7 @@ export function AssetSearchTable({
         if (showDatabaseColumn) {
             columns.push({
                 id: "databaseId",
-                header: "Database Name",
+                header: `${Synonyms.Database} Name`,
                 cell: (item: AssetSearchItem) => item.databaseName || item.databaseId,
                 sortingField: "databaseName",
             });
@@ -398,7 +411,7 @@ export function AssetSearchTable({
                                 color: "var(--color-text-label)",
                             }}
                         >
-                            Selected Assets ({selectedAssets.length})
+                            {`Selected ${Synonyms.Assets} (${selectedAssets.length})`}
                         </label>
                     </div>
                     <CustomTable
@@ -425,7 +438,7 @@ export function AssetSearchTable({
                             color: "var(--color-text-label)",
                         }}
                     >
-                        Search Assets
+                        {`Search ${Synonyms.Assets}`}
                     </label>
                     <div
                         style={{
@@ -434,7 +447,7 @@ export function AssetSearchTable({
                             marginBottom: "8px",
                         }}
                     >
-                        Input asset search keywords. Press Enter to search.
+                        {`Input ${Synonyms.asset} search keywords. Press Enter to search.`}
                     </div>
                 </div>
                 <SpaceBetween direction="vertical" size="xs">
@@ -453,7 +466,7 @@ export function AssetSearchTable({
                         Search in metadata
                     </Toggle>
                     <Input
-                        placeholder="Search for assets"
+                        placeholder={`Search for ${Synonyms.assets}`}
                         type="search"
                         value={searchTerm}
                         onChange={({ detail }) => {
@@ -484,7 +497,7 @@ export function AssetSearchTable({
             {isSearching && (
                 <Box textAlign="center" padding="m">
                     <Spinner size="normal" />
-                    <div>Searching assets...</div>
+                    <div>{`Searching ${Synonyms.assets}...`}</div>
                 </Box>
             )}
 
@@ -517,7 +530,9 @@ export function AssetSearchTable({
                                     {totalResults} results
                                 </Badge>
                             )}
-                            {currentDatabaseId && <Badge>Database: {currentDatabaseId}</Badge>}
+                            {currentDatabaseId && restrictToCurrentDatabase && (
+                                <Badge>{`${Synonyms.Database}: ${currentDatabaseId}`}</Badge>
+                            )}
                         </SpaceBetween>
                         {selectionMode === "multi" && (
                             <Button
@@ -558,7 +573,7 @@ export function AssetSearchTable({
                             </>
                         ) : (
                             <Box textAlign="center" padding="m" color="text-status-inactive">
-                                No assets found matching your search
+                                {`No ${Synonyms.assets} found matching your search`}
                             </Box>
                         )}
                     </SpaceBetween>

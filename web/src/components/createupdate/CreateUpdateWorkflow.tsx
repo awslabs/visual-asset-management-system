@@ -1,0 +1,560 @@
+/*
+ * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import {
+    Box,
+    Button,
+    Input,
+    Grid,
+    Spinner,
+    SpaceBetween,
+    Tabs,
+    Textarea,
+    Form,
+    FormField,
+    Container,
+    Header,
+    BreadcrumbGroup,
+    Toggle,
+} from "@cloudscape-design/components";
+import React, { useEffect, useState, Suspense } from "react";
+import { useNavigate } from "react-router";
+import { useParams } from "react-router";
+import CreatePipeline from "./CreatePipeline";
+import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
+//import AssetSelector from "../selectors/AssetSelector";
+import { appCache } from "../../services/appCache";
+import { fetchDatabaseWorkflows, saveWorkflow, runWorkflow } from "../../services/APIService";
+import { WorkflowContext } from "../../context/WorkflowContext";
+import { validateEntityId, verifyStringMaxLength } from "./entity-types/EntityPropTypes";
+import Synonyms from "../../synonyms";
+import { usePageTitle } from "../../hooks/usePageTitle";
+
+const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
+
+export default function CreateUpdateWorkflow(props) {
+    // Get parameters from URL
+    const { databaseId: urlDatabaseId, workflowId } = useParams();
+
+    // If this is a global workflow, use "GLOBAL" as databaseId
+    const databaseId = urlDatabaseId;
+
+    const isGlobalWorkflow = databaseId === "GLOBAL";
+    const navigate = useNavigate();
+    usePageTitle(databaseId, workflowId ? "Edit Workflow" : "Create Workflow");
+    const [reload, setReload] = useState(true);
+    const [loaded, setLoaded] = useState(!workflowId);
+    const [saving, setSaving] = useState(false);
+    const [reloadPipelines, setReloadPipelines] = useState(true);
+    const [openCreatePipeline, setOpenCreatePipeline] = useState(false);
+    const [asset, setAsset] = useState(null);
+    const [assetDatabaseId, setAssetDatabaseId] = useState(null);
+    const [pipelines, setPipelines] = useState([]);
+    const [workflowPipelines, setWorkflowPipelines] = useState([null]);
+    const [loadedWorkflowPipelines, setLoadedWorkflowPipelines] = useState([]);
+    const [activeTab, setActiveTab] = useState("asset");
+    const [workflowIdNew, setWorkflowIDNew] = useState(workflowId);
+    const [workflowDescription, setWorkflowDescription] = useState("");
+    const [workflowIdError, setWorkflowIDError] = useState("");
+    const [workflowDescriptionError, setWorkflowDescriptionError] = useState("");
+    const [autoTriggerEnabled, setAutoTriggerEnabled] = useState(false);
+    const [autoTriggerExtensions, setAutoTriggerExtensions] = useState("");
+    const [autoTriggerExtensionsError, setAutoTriggerExtensionsError] = useState("");
+    const [pipelinesError, setPipelinesError] = useState("");
+    // state
+    const [createUpdateWorkflowError, setCreateUpdateWorkflowError] = useState("");
+    const [runWorkflowError, setRunWorkflowError] = useState("");
+    // clear all workflow related error messages
+    const clearWorkflowErrors = () => {
+        setWorkflowIDError("");
+        setWorkflowDescriptionError("");
+        setAutoTriggerExtensionsError("");
+        setPipelinesError("");
+        setCreateUpdateWorkflowError("");
+        setRunWorkflowError("");
+    };
+
+    useEffect(() => {
+        const getData = async () => {
+            const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
+            if (items !== false && Array.isArray(items)) {
+                setReload(false);
+                const currentItem = items.find(({ workflowId }) => workflowId === workflowIdNew);
+                setWorkflowIDNew(currentItem.workflowId);
+                setWorkflowDescription(currentItem.description);
+
+                // Load auto-trigger settings
+                const autoTriggerValue = currentItem.autoTriggerOnFileExtensionsUpload || "";
+                if (autoTriggerValue && autoTriggerValue.trim() !== "") {
+                    setAutoTriggerEnabled(true);
+                    setAutoTriggerExtensions(autoTriggerValue);
+                } else {
+                    setAutoTriggerEnabled(false);
+                    setAutoTriggerExtensions("");
+                }
+
+                const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
+                    return {
+                        value: item.name,
+                        databaseId: item.databaseId,
+                        pipelineType: item.pipelineType,
+                        pipelineExecutionType: item.pipelineExecutionType,
+                        outputType: item.outputType,
+                        waitForCallback: item.waitForCallback,
+                        taskTimeout: item.taskTimeout,
+                        taskHeartbeatTimeout: item.taskHeartbeatTimeout,
+                        userProvidedResource: item.userProvidedResource,
+                        inputParameters: item.inputParameters,
+                    };
+                });
+                setLoadedWorkflowPipelines(loadedPipelines);
+                setWorkflowPipelines(loadedPipelines);
+                setLoaded(true);
+            }
+        };
+        if (reload && workflowId) {
+            getData();
+        }
+    }, [databaseId, reload, workflowId, workflowIdNew]);
+
+    useEffect(() => {
+        const cachedActiveTab = appCache.getItem("workflowActiveTab");
+        if (
+            cachedActiveTab === "details" ||
+            cachedActiveTab === "pipelines" ||
+            cachedActiveTab === "asset"
+        ) {
+            setActiveTab(cachedActiveTab);
+        }
+    }, []);
+
+    useEffect(() => {
+        const cachedActiveTab = appCache.getItem("workflowActiveTab");
+        if (activeTab !== cachedActiveTab) {
+            appCache.setItem("workflowActiveTab", activeTab);
+        }
+    }, [activeTab]);
+
+    const validateAutoTriggerExtensions = (extensions) => {
+        if (!extensions || extensions.trim() === "") {
+            return false;
+        }
+
+        const trimmedValue = extensions.trim().toLowerCase();
+
+        // Check for special "all" case
+        if (trimmedValue === ".all" || trimmedValue === "all") {
+            return true;
+        }
+
+        // Split by comma and validate each extension
+        const extArray = extensions.split(",");
+        for (let ext of extArray) {
+            ext = ext.trim();
+
+            // Skip empty strings
+            if (ext === "") {
+                continue;
+            }
+
+            // Remove leading dot if present
+            ext = ext.replace(/^\.+/, "");
+
+            // Check if extension contains only alphanumeric, dash, and underscore
+            if (!/^[a-zA-Z0-9_-]+$/.test(ext)) {
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+    const handleOpenCreatePipeline = () => {
+        setOpenCreatePipeline(true);
+    };
+
+    const handleSaveWorkflow = async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        // reset all workflow-related error messages when either save or run workflow is executed
+        clearWorkflowErrors();
+        if (!workflowIdNew || workflowIdNew === "") {
+            setWorkflowIDError("Invalid value for workflowId. Value cannot be empty.");
+            setActiveTab("details");
+        } else if (!validateEntityId(workflowIdNew)) {
+            setWorkflowIDError("Invalid value for workflowId. Expected a valid entity id.");
+            setActiveTab("details");
+        } else if (!workflowDescription || workflowDescription === "") {
+            setWorkflowIDError("");
+            setWorkflowDescriptionError("Invalid prop description. Value cannot be empty.");
+            setActiveTab("details");
+        } else if (!verifyStringMaxLength(workflowDescription, 256)) {
+            setWorkflowIDError("");
+            setWorkflowDescriptionError(
+                "Invalid prop description. Value exceeds maximum length of 256."
+            );
+            setActiveTab("details");
+        } else if (autoTriggerEnabled && !validateAutoTriggerExtensions(autoTriggerExtensions)) {
+            setWorkflowDescriptionError("");
+            setAutoTriggerExtensionsError(
+                "Invalid extensions format. Use comma-delimited extensions (e.g., 'jpg,png,pdf') or '.all' for all files."
+            );
+            setActiveTab("details");
+        } else if (workflowPipelines.length === 0 || workflowPipelines[0] === null) {
+            setWorkflowDescriptionError("");
+            setPipelinesError("Must select pipelines.");
+            setActiveTab("pipelines");
+        } else {
+            const functions = workflowPipelines.map((item) => {
+                return {
+                    name: item.value,
+                    databaseId: item.databaseId,
+                    pipelineType: item.pipelineType,
+                    pipelineExecutionType: item.pipelineExecutionType,
+                    outputType: item.outputType,
+                    waitForCallback: item.waitForCallback,
+                    taskTimeout: item.taskTimeout,
+                    taskHeartbeatTimeout: item.taskHeartbeatTimeout,
+                    userProvidedResource: item.userProvidedResource,
+                    inputParameters: item.inputParameters,
+                };
+            });
+            const config = {
+                body: {
+                    workflowId: workflowIdNew,
+                    databaseId: databaseId,
+                    description: workflowDescription,
+                    specifiedPipelines: { functions: functions },
+                    autoTriggerOnFileExtensionsUpload: autoTriggerEnabled
+                        ? autoTriggerExtensions.trim()
+                        : "",
+                },
+            };
+            const result = await saveWorkflow({ config: config });
+            if (result !== false && Array.isArray(result)) {
+                if (result[0] === false) {
+                    setCreateUpdateWorkflowError(`Unable to save workflow. Error: ${result[1]}`);
+                } else {
+                    setCreateUpdateWorkflowError("");
+                    setReload(true);
+                }
+            }
+        }
+        setSaving(false);
+    };
+
+    // const handleExecuteWorkflow = async (event) => {
+    //     event.preventDefault();
+    //     setSaving(true);
+    //     // reset all workflow-related error messages when either save or run workflow is executed
+    //     clearWorkflowErrors();
+    //     setActiveTab("asset");
+    //     const result = await runWorkflow({
+    //         databaseId: databaseId,
+    //         assetId: asset?.value,
+    //         workflowId: workflowId,
+    //         isGlobalWorkflow: isGlobalWorkflow
+    //     });
+    //     if (result !== false && Array.isArray(result)) {
+    //         if (result[0] === false) {
+    //             setRunWorkflowError(`Unable to run workflow. Error: ${result[1]}`);
+    //         } else {
+    //             navigate(result[1]);
+    //             setSaving(false);
+    //         }
+    //     }
+    //     setSaving(false);
+    // };
+
+    return (
+        <WorkflowContext.Provider
+            value={{
+                asset,
+                setAsset,
+                setAssetDatabaseId,
+                pipelines,
+                setPipelines,
+                workflowPipelines,
+                setWorkflowPipelines,
+                reloadPipelines,
+                setReloadPipelines,
+                setActiveTab,
+            }}
+        >
+            {saving && (
+                <div
+                    style={{
+                        position: "absolute",
+                        zIndex: 4000,
+                        top: 0,
+                        left: 0,
+                        textAlign: "center",
+                        paddingTop: "300px",
+                        height: "100vh",
+                        width: "100%",
+                        pointerEvents: "none",
+                        background: "color-mix(in srgb, var(--vams-bg-primary) 50%, transparent)",
+                    }}
+                >
+                    <Spinner size="large" />
+                </div>
+            )}
+            <Box padding={{ top: "s", horizontal: "l" }}>
+                <SpaceBetween direction="vertical" size="xs">
+                    <BreadcrumbGroup
+                        items={[
+                            { text: Synonyms.Databases, href: "#/databases/" },
+                            {
+                                text: databaseId,
+                                href: "#/databases/" + databaseId + "/workflows/",
+                            },
+                            { text: "Create Workflow" },
+                        ]}
+                        ariaLabel="Breadcrumbs"
+                    />
+                    <Container
+                        header={
+                            <Header
+                                variant="h2"
+                                actions={
+                                    <SpaceBetween direction="horizontal" size="xs">
+                                        <Button onClick={handleSaveWorkflow}>Save</Button>
+                                        {/* <Button onClick={handleExecuteWorkflow} variant="primary">
+                                            Run Workflow
+                                        </Button> */}
+                                    </SpaceBetween>
+                                }
+                            >
+                                {isGlobalWorkflow ? "Global Workflow" : "Container Workflow"}
+                            </Header>
+                        }
+                    >
+                        <Grid disableGutters gridDefinition={[{ colspan: 12 }]}>
+                            <div
+                                style={{
+                                    borderRight: "solid 1px var(--vams-border-default)",
+                                    minHeight: "800px",
+                                }}
+                            >
+                                <Suspense
+                                    fallback={
+                                        <div className="workflow-editor-spinner">
+                                            <Spinner />
+                                        </div>
+                                    }
+                                >
+                                    <WorkflowEditor
+                                        loaded={loaded}
+                                        loadedWorkflowPipelines={loadedWorkflowPipelines}
+                                        setLoadedWorkflowPipelines={setLoadedWorkflowPipelines}
+                                    />
+                                </Suspense>
+                                <div
+                                    style={{
+                                        maxWidth: "400px",
+                                        position: "absolute",
+                                        top: 0,
+                                        right: 0,
+                                        zIndex: 100,
+                                    }}
+                                >
+                                    <Tabs
+                                        activeTabId={activeTab}
+                                        onChange={({ detail }) => {
+                                            setActiveTab(detail.activeTabId);
+                                        }}
+                                        variant={"container"}
+                                        tabs={[
+                                            {
+                                                label: "Workflow Details",
+                                                id: "details",
+                                                content: (
+                                                    <Form
+                                                        errorText={createUpdateWorkflowError}
+                                                        style={{ padding: "5px 20px" }}
+                                                    >
+                                                        <SpaceBetween
+                                                            direction="vertical"
+                                                            size="xs"
+                                                        >
+                                                            <FormField
+                                                                label={"Workflow Name"}
+                                                                constraintText={
+                                                                    "Required. No special chars or spaces except - and _ only letters for first character min 4 and max 64."
+                                                                }
+                                                                errorText={workflowIdError}
+                                                            >
+                                                                <Input
+                                                                    placeholder="Workflow Name"
+                                                                    name="workflowId"
+                                                                    value={workflowIdNew}
+                                                                    onChange={(event) =>
+                                                                        setWorkflowIDNew(
+                                                                            event.detail.value
+                                                                        )
+                                                                    }
+                                                                />
+                                                            </FormField>
+                                                            <FormField
+                                                                label={"Description"}
+                                                                constraintText={
+                                                                    "Required. Max 256 characters."
+                                                                }
+                                                                errorText={workflowDescriptionError}
+                                                            >
+                                                                <Textarea
+                                                                    placeholder="Description"
+                                                                    name="workflowDescription"
+                                                                    rows={4}
+                                                                    value={workflowDescription}
+                                                                    onChange={(event) =>
+                                                                        setWorkflowDescription(
+                                                                            event.detail.value
+                                                                        )
+                                                                    }
+                                                                />
+                                                            </FormField>
+                                                            <FormField
+                                                                label={"Auto-Trigger - File Upload"}
+                                                            >
+                                                                <Toggle
+                                                                    checked={autoTriggerEnabled}
+                                                                    onChange={({ detail }) =>
+                                                                        setAutoTriggerEnabled(
+                                                                            detail.checked
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    Enable auto-trigger on file
+                                                                    upload
+                                                                </Toggle>
+                                                            </FormField>
+                                                            {autoTriggerEnabled && (
+                                                                <FormField
+                                                                    label={"File Extensions"}
+                                                                    constraintText={
+                                                                        "Comma-delimited extensions to trigger on. Use '.all' for all files."
+                                                                    }
+                                                                    errorText={
+                                                                        autoTriggerExtensionsError
+                                                                    }
+                                                                >
+                                                                    <Input
+                                                                        placeholder="e.g., jpg,png,pdf or .all"
+                                                                        name="autoTriggerExtensions"
+                                                                        value={
+                                                                            autoTriggerExtensions
+                                                                        }
+                                                                        onChange={(event) =>
+                                                                            setAutoTriggerExtensions(
+                                                                                event.detail.value
+                                                                            )
+                                                                        }
+                                                                    />
+                                                                </FormField>
+                                                            )}
+                                                        </SpaceBetween>
+                                                    </Form>
+                                                ),
+                                            },
+                                            {
+                                                label: "Pipelines",
+                                                id: "pipelines",
+                                                content: (
+                                                    <Form errorText={createUpdateWorkflowError}>
+                                                        <FormField errorText={pipelinesError}>
+                                                            <table style={{ width: "100%" }}>
+                                                                <tbody>
+                                                                    {workflowPipelines.length ===
+                                                                        0 && (
+                                                                        <tr>
+                                                                            <td colSpan={2}>
+                                                                                Click{" "}
+                                                                                <strong>
+                                                                                    [+ Pipeline]
+                                                                                </strong>{" "}
+                                                                                on the left to
+                                                                                begin.
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                    {workflowPipelines.map(
+                                                                        (pipeline, i) => {
+                                                                            return (
+                                                                                <tr key={i}>
+                                                                                    <td>
+                                                                                        {i + 1}:
+                                                                                    </td>
+                                                                                    <td>
+                                                                                        <WorkflowPipelineSelector
+                                                                                            database={
+                                                                                                databaseId
+                                                                                            }
+                                                                                            index={
+                                                                                                i
+                                                                                            }
+                                                                                        />
+                                                                                    </td>
+                                                                                </tr>
+                                                                            );
+                                                                        }
+                                                                    )}
+                                                                </tbody>
+                                                                <tfoot>
+                                                                    <tr>
+                                                                        <td colSpan={2}>
+                                                                            <div
+                                                                                style={{
+                                                                                    marginTop:
+                                                                                        "10px",
+                                                                                }}
+                                                                            >
+                                                                                <Button
+                                                                                    onClick={
+                                                                                        handleOpenCreatePipeline
+                                                                                    }
+                                                                                    variant="primary"
+                                                                                >
+                                                                                    Create Pipeline
+                                                                                </Button>
+                                                                            </div>
+                                                                        </td>
+                                                                    </tr>
+                                                                </tfoot>
+                                                            </table>
+                                                        </FormField>
+                                                    </Form>
+                                                ),
+                                            },
+                                            // {
+                                            //     label: `Source ${Synonyms.Asset}`,
+                                            //     id: "asset",
+                                            //     content: (
+                                            //         <Form
+                                            //             errorText={runWorkflowError}
+                                            //             style={{ padding: "5px 20px" }}
+                                            //         >
+                                            //             <AssetSelector database={databaseId} />
+                                            //         </Form>
+                                            //     ),
+                                            // },
+                                        ]}
+                                    />
+                                </div>
+                            </div>
+                        </Grid>
+                    </Container>
+                </SpaceBetween>
+                <div style={{ paddingBottom: "20px" }} />
+            </Box>
+            <CreatePipeline
+                open={openCreatePipeline}
+                setOpen={setOpenCreatePipeline}
+                setReload={setReloadPipelines}
+                database={databaseId}
+            />
+        </WorkflowContext.Provider>
+    );
+}

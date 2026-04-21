@@ -13,11 +13,11 @@ import {
     SpaceBetween,
     Alert,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
-import { fetchtagTypes } from "../../../../../services/APIService";
+import { fetchtagTypes, createAssetLink } from "../../../../../services/APIService";
 import { useStatusMessage } from "../../../../common/StatusMessage";
 import { CreateAssetLinkModalProps } from "../../types/AssetLinksTypes";
 import { AssetSearchTable, AssetSearchItem } from "../../../../searchSmall/AssetSearchTable";
+import Synonyms from "../../../../../synonyms";
 
 export function CreateAssetLinkModal({
     visible,
@@ -92,7 +92,7 @@ export function CreateAssetLinkModal({
     // Add link
     const addLink = async () => {
         if (selectedAssets.length === 0) {
-            setFormError("Please select at least one asset to link.");
+            setFormError(`Please select at least one ${Synonyms.asset} to link.`);
             return;
         }
 
@@ -141,7 +141,7 @@ export function CreateAssetLinkModal({
                 handleClose();
             } catch (err: any) {
                 console.error("Error adding asset links:", err);
-                setFormError("Unable to add asset links. Please try again.");
+                setFormError(`Unable to add ${Synonyms.asset} links. Please try again.`);
             } finally {
                 setAddDisabled(false);
             }
@@ -214,9 +214,7 @@ export function CreateAssetLinkModal({
                 }
 
                 try {
-                    await API.post("api", "asset-links", {
-                        body: assetLinkBody,
-                    });
+                    await createAssetLink(assetLinkBody);
                     successCount++;
                 } catch (err: any) {
                     console.error("Error creating asset link:", err);
@@ -282,7 +280,7 @@ export function CreateAssetLinkModal({
                     `Failed to add any ${relationshipType} links.\n\nErrors:\n${errorMessages}`
                 );
             } else {
-                setFormError(`No asset links were processed. Please try again.`);
+                setFormError(`No ${Synonyms.asset} links were processed. Please try again.`);
             }
         } catch (err: any) {
             console.error("Error in batch processing:", err);
@@ -315,7 +313,7 @@ export function CreateAssetLinkModal({
                     </Alert>
                 </div>
             )}
-            <h2>{`Create ${relationshipDisplayName} Asset Link`}</h2>
+            <h2>{`Create ${relationshipDisplayName} ${Synonyms.Asset} Link`}</h2>
         </div>
     );
 
@@ -348,14 +346,16 @@ export function CreateAssetLinkModal({
                     <div style={{ marginBottom: "20px" }}>
                         <Alert type="warning" dismissible={false}>
                             <div>
-                                <strong>Sub-Child Asset Link:</strong> You are adding a child asset
-                                to "{parentAssetData.assetName}" (not the top-level asset being
-                                viewed).
+                                <strong>Sub-Child {Synonyms.Asset} Link:</strong> You are adding a
+                                child {Synonyms.asset}
+                                to "{parentAssetData.assetName}" (not the top-level {Synonyms.asset}{" "}
+                                being viewed).
                             </div>
                             <div style={{ marginTop: "8px" }}>
-                                This will create a relationship between the selected asset below and
-                                "{parentAssetData.assetName}", which is itself a child of the main
-                                asset being viewed.
+                                This will create a relationship between the selected{" "}
+                                {Synonyms.asset} below and "{parentAssetData.assetName}", which is
+                                itself a child of the main
+                                {Synonyms.asset} being viewed.
                             </div>
                         </Alert>
                     </div>
@@ -394,7 +394,19 @@ export function CreateAssetLinkModal({
                         showSelectedAssets={true}
                         tagTypes={tagTypes}
                         noOpenSearch={noOpenSearch}
+                        restrictToCurrentDatabase={false}
                     />
+
+                    {/* Cross-database warning */}
+                    {selectedAssets.some(
+                        (a) => (a.databaseName || a.databaseId) !== currentDatabaseId
+                    ) && (
+                        <Alert type="warning">
+                            {`Cross-${Synonyms.database} link: One or more selected ${Synonyms.assets} are in a different ${Synonyms.database} than `}
+                            <strong>{currentDatabaseId}</strong>
+                            {`. Ensure you have the required permissions on all involved ${Synonyms.databases}.`}
+                        </Alert>
+                    )}
                 </SpaceBetween>
             </div>
         </Modal>

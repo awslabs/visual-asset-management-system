@@ -173,8 +173,9 @@ class TestSpatialGLBAssetCombineCommand:
                 assert result.exit_code == 0
                 
                 # Verify output is valid JSON
+                # Use raw_decode to handle potential trailing RuntimeWarning from GC'd coroutines
                 try:
-                    output_data = json.loads(result.output)
+                    output_data, _ = json.JSONDecoder().raw_decode(result.output.strip())
                     assert output_data['status'] == 'success'
                     assert 'combined_glb_path' in output_data
                     assert output_data['total_assets_processed'] == 2

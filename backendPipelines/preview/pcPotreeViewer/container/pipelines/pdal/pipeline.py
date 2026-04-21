@@ -137,7 +137,7 @@ def allconvert_pdalconversion_pipeline(input_file_path: str, output_dir: str) ->
     logger.info("Executing PDAL Conversion to Laz")
 
     # Run PDAL local subprocess
-    subprocess.Popen(PDAL_CONVERTER_CMD).wait()
+    subprocess.Popen(PDAL_CONVERTER_CMD).wait() # nosemgrep: dangerous-subprocess-use-audit
 
     return {
         "output_dir": output_dir,

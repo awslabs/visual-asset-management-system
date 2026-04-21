@@ -10,15 +10,21 @@ import ErrorBoundary from "../../common/ErrorBoundary";
 interface FileManagerTabProps {
     assetName: string;
     filePathToNavigate?: string; // Optional file path to navigate to
+    assetVersionId?: string; // Optional version ID to filter files
 }
 
 export const FileManagerTab: React.FC<FileManagerTabProps> = ({
     assetName,
     filePathToNavigate,
+    assetVersionId,
 }) => {
     return (
         <ErrorBoundary componentName="File Manager">
-            <EnhancedFileManager assetName={assetName} filePathToNavigate={filePathToNavigate} />
+            <EnhancedFileManager
+                assetName={assetName}
+                filePathToNavigate={filePathToNavigate}
+                assetVersionId={assetVersionId}
+            />
         </ErrorBoundary>
     );
 };

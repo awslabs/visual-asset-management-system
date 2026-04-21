@@ -441,7 +441,7 @@ class CasbinEnforcerService:
                 policy_text = None
             if not policy_text:
                 logger.info(f"Failed to retrieve policy_text. Retry count {str(i)}.")
-                time.sleep(CASBIN_GET_POLICY_RETRY_DELAY_SECONDS)
+                time.sleep(CASBIN_GET_POLICY_RETRY_DELAY_SECONDS) # nosemgrep: arbitrary-sleep
             else:
                 # Successfully retrieved policy_text
                 #

@@ -42,6 +42,7 @@ class TestAssetMetadataListCommand:
         assert '--database-id' in result.output
         assert '--asset-id' in result.output
         assert '--json-output' in result.output
+        assert '--asset-version-id' in result.output
     
     def test_list_success(self, cli_runner, metadata_command_mocks):
         """Test successful asset metadata listing."""
@@ -74,7 +75,7 @@ class TestAssetMetadataListCommand:
             assert 'Test Asset' in result.output
             
             # Verify API call
-            mocks['api_client'].get_asset_metadata_v2.assert_called_once_with('test-db', 'test-asset', 3000, None)
+            mocks['api_client'].get_asset_metadata_v2.assert_called_once_with('test-db', 'test-asset', 3000, None, None)
     
     def test_list_json_output(self, cli_runner, metadata_command_mocks):
         """Test asset metadata listing with JSON output."""
@@ -101,10 +102,66 @@ class TestAssetMetadataListCommand:
         """Test list command without setup."""
         with metadata_no_setup_mocks as mocks:
             result = cli_runner.invoke(cli, ['metadata', 'asset', 'list', '-d', 'test-db', '-a', 'test-asset'])
-            
+
             assert result.exit_code == 1
             assert result.exception
             assert isinstance(result.exception, SetupRequiredError)
+
+    def test_list_with_asset_version_id(self, cli_runner, metadata_command_mocks):
+        """Test asset metadata listing filtered by asset version ID."""
+        with metadata_command_mocks as mocks:
+            mocks['api_client'].get_asset_metadata_v2.return_value = {
+                'metadata': [
+                    {
+                        'metadataKey': 'title',
+                        'metadataValue': 'Versioned Asset',
+                        'metadataValueType': 'string'
+                    }
+                ],
+                'message': 'Success'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'metadata', 'asset', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--asset-version-id', 'ver-123'
+            ])
+
+            assert result.exit_code == 0
+            assert 'title' in result.output
+
+            # Verify API call includes asset_version_id
+            mocks['api_client'].get_asset_metadata_v2.assert_called_once_with(
+                'test-db', 'test-asset', 3000, None, 'ver-123'
+            )
+
+    def test_list_with_asset_version_id_json_output(self, cli_runner, metadata_command_mocks):
+        """Test asset metadata listing with asset version ID and JSON output."""
+        with metadata_command_mocks as mocks:
+            api_response = {
+                'metadata': [
+                    {
+                        'metadataKey': 'title',
+                        'metadataValue': 'Versioned Asset',
+                        'metadataValueType': 'string'
+                    }
+                ],
+                'message': 'Success'
+            }
+            mocks['api_client'].get_asset_metadata_v2.return_value = api_response
+
+            result = cli_runner.invoke(cli, [
+                'metadata', 'asset', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--asset-version-id', 'ver-123',
+                '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            output_json = json.loads(result.output)
+            assert output_json == api_response
 
 
 class TestAssetMetadataUpdateCommand:
@@ -261,6 +318,7 @@ class TestFileMetadataListCommand:
         assert 'List all metadata or attributes for a file' in result.output
         assert '--file-path' in result.output
         assert '--type' in result.output
+        assert '--asset-version-id' in result.output
     
     def test_list_metadata_success(self, cli_runner, metadata_command_mocks):
         """Test successful file metadata listing."""
@@ -290,7 +348,7 @@ class TestFileMetadataListCommand:
             
             # Verify API call
             mocks['api_client'].get_file_metadata_v2.assert_called_once_with(
-                'test-db', 'test-asset', 'models/file.gltf', 'metadata', 3000, None
+                'test-db', 'test-asset', 'models/file.gltf', 'metadata', 3000, None, None
             )
     
     def test_list_attribute_success(self, cli_runner, metadata_command_mocks):
@@ -318,10 +376,72 @@ class TestFileMetadataListCommand:
             assert result.exit_code == 0
             assert 'Metadata (1 items)' in result.output
 
+    def test_list_with_asset_version_id(self, cli_runner, metadata_command_mocks):
+        """Test file metadata listing filtered by asset version ID."""
+        with metadata_command_mocks as mocks:
+            mocks['api_client'].get_file_metadata_v2.return_value = {
+                'metadata': [
+                    {
+                        'metadataKey': 'format',
+                        'metadataValue': 'gltf',
+                        'metadataValueType': 'string'
+                    }
+                ],
+                'message': 'Success'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'metadata', 'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--file-path', 'models/file.gltf',
+                '--type', 'metadata',
+                '--asset-version-id', 'ver-456'
+            ])
+
+            assert result.exit_code == 0
+            assert 'format' in result.output
+
+            # Verify API call includes asset_version_id
+            mocks['api_client'].get_file_metadata_v2.assert_called_once_with(
+                'test-db', 'test-asset', 'models/file.gltf', 'metadata', 3000, None, 'ver-456'
+            )
+
+    def test_list_attribute_with_asset_version_id(self, cli_runner, metadata_command_mocks):
+        """Test file attribute listing filtered by asset version ID."""
+        with metadata_command_mocks as mocks:
+            mocks['api_client'].get_file_metadata_v2.return_value = {
+                'metadata': [
+                    {
+                        'metadataKey': 'extracted_property',
+                        'metadataValue': 'versioned_value',
+                        'metadataValueType': 'string'
+                    }
+                ],
+                'message': 'Success'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'metadata', 'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--file-path', 'models/file.gltf',
+                '--type', 'attribute',
+                '--asset-version-id', 'ver-456'
+            ])
+
+            assert result.exit_code == 0
+            assert 'extracted_property' in result.output
+
+            # Verify API call includes asset_version_id
+            mocks['api_client'].get_file_metadata_v2.assert_called_once_with(
+                'test-db', 'test-asset', 'models/file.gltf', 'attribute', 3000, None, 'ver-456'
+            )
+
 
 class TestFileMetadataUpdateCommand:
     """Test metadata file update command."""
-    
+
     def test_update_help(self, cli_runner):
         """Test update command help."""
         result = cli_runner.invoke(cli, ['metadata', 'file', 'update', '--help'])
@@ -971,7 +1091,7 @@ class TestMetadataEdgeCases:
             
             # Verify API call with pagination params
             mocks['api_client'].get_asset_metadata_v2.assert_called_once_with(
-                'test-db', 'test-asset', 100, 'previous-token'
+                'test-db', 'test-asset', 100, 'previous-token', None
             )
     
     def test_schema_enrichment_display(self, cli_runner, metadata_command_mocks):

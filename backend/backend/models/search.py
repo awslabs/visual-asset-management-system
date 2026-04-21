@@ -275,6 +275,7 @@ class SearchResponseModel(BaseModel, extra='ignore'):
     _shards: Dict[str, int]
     hits: SearchHitsModel
     aggregations: Optional[Dict[str, AggregationModel]] = None
+    aggregationTotal: Optional[int] = None  # True total from aggregation bucket sums
 
 ######################## Index Mapping Models ##########################
 

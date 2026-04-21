@@ -14,10 +14,11 @@ import {
     AlertProps,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
-import { Cache, API } from "aws-amplify";
+import { appCache } from "../../services/appCache";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
 import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";
+import { fetchAllAssetVersions } from "../../services/AssetVersionService";
 import { StatusMessageProvider } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import AssetDetailsPane from "./AssetDetailsPane";
@@ -29,6 +30,7 @@ import { MetadataContainer } from "../metadataV2";
 import localforage from "localforage";
 import Synonyms from "../../synonyms";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import { usePageTitle } from "../../hooks/usePageTitle";
 
 // Fetch tag types and store in localStorage
 fetchtagTypes().then((res) => {
@@ -59,8 +61,18 @@ export default function ViewAsset() {
     const [showApiError, setShowApiError] = useState(false);
     const [apiErrorType, setApiErrorType] = useState<AlertProps.Type>("error");
 
+    // Version selection state - initialize from URL query parameter for deep linking
+    const [selectedVersionId, setSelectedVersionId] = useState<string | null>(() => {
+        const params = new URLSearchParams(location.search);
+        return params.get("assetVersionId") || null;
+    });
+    const [versions, setVersions] = useState<any[]>([]);
+    const [versionsLoading, setVersionsLoading] = useState(false);
+
+    usePageTitle(databaseId, asset?.assetName);
+
     // Config
-    const config = Cache.getItem("config");
+    const config = appCache.getItem("config");
     const [useNoOpenSearch] = useState(
         config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
     );
@@ -81,14 +93,14 @@ export default function ViewAsset() {
                     setAsset(item);
                 } else if (typeof item === "string" && item.includes("not found")) {
                     setApiError(
-                        "Asset not found. The requested asset may have been deleted or you may not have permission to access it."
+                        `${Synonyms.Asset} not found. The requested ${Synonyms.asset} may have been deleted or you may not have permission to access it.`
                     );
                     setShowApiError(true);
                     setApiErrorType("error");
                 } else {
                     // Handle other API failure cases
                     setApiError(
-                        "Failed to load asset data. The server returned an invalid response."
+                        `Failed to load ${Synonyms.asset} data. The server returned an invalid response.`
                     );
                     setShowApiError(true);
                     setApiErrorType("error");
@@ -96,7 +108,7 @@ export default function ViewAsset() {
                 }
             } catch (error) {
                 console.error("Error fetching asset:", error);
-                setApiError("Failed to load asset data. Please try again later.");
+                setApiError(`Failed to load ${Synonyms.asset} data. Please try again later.`);
                 setShowApiError(true);
                 setApiErrorType("error");
             }
@@ -156,6 +168,54 @@ export default function ViewAsset() {
         fetchAssetData();
     }, [databaseId, assetId, asset?.assetId]);
 
+    // Fetch asset versions for the version dropdown
+    useEffect(() => {
+        const loadVersions = async () => {
+            if (!databaseId || !assetId) return;
+            setVersionsLoading(true);
+            try {
+                const [success, result] = await fetchAllAssetVersions({
+                    databaseId,
+                    assetId,
+                });
+                if (success && result?.versions) {
+                    // Sort versions by DateModified (newest first)
+                    const sorted = [...result.versions].sort((a: any, b: any) => {
+                        const dateA = new Date(a.DateModified || a.dateModified || 0).getTime();
+                        const dateB = new Date(b.DateModified || b.dateModified || 0).getTime();
+                        return dateB - dateA;
+                    });
+                    setVersions(sorted);
+                }
+            } catch (error) {
+                console.log("Failed to load asset versions:", error);
+            } finally {
+                setVersionsLoading(false);
+            }
+        };
+        loadVersions();
+    }, [databaseId, assetId]);
+
+    // Handle version selection change and sync to URL query parameter
+    const handleVersionChange = useCallback(
+        (newVersionId: string | null) => {
+            setSelectedVersionId(newVersionId);
+            // Update URL query parameter for deep linking support
+            const params = new URLSearchParams(location.search);
+            if (newVersionId) {
+                params.set("assetVersionId", newVersionId);
+            } else {
+                params.delete("assetVersionId");
+            }
+            const search = params.toString();
+            navigate(
+                { search: search ? `?${search}` : "" },
+                { replace: true, state: location.state }
+            );
+        },
+        [location.search, location.state, navigate]
+    );
+
     // Handle opening the update asset modal
     const handleOpenUpdateAsset = () => {
         setOpenUpdateAsset(true);
@@ -184,12 +244,16 @@ export default function ViewAsset() {
     return (
         <AssetDetailContext.Provider value={{ state, dispatch }}>
             <StatusMessageProvider>
-                <Box padding={{ top: "s", horizontal: "l" }}>
-                    <SpaceBetween direction="vertical" size="l">
+                <Box padding={{ top: "xs", horizontal: "l" }}>
+                    <SpaceBetween direction="vertical" size="xs">
                         {/* Breadcrumbs */}
                         <BreadcrumbGroup
                             items={[
                                 { text: Synonyms.Databases, href: "#/databases/" },
+                                {
+                                    text: "Search",
+                                    href: "#/assets/",
+                                },
                                 {
                                     text: databaseId,
                                     href: "#/databases/" + databaseId + "/assets/",
@@ -212,15 +276,15 @@ export default function ViewAsset() {
                             </Alert>
                         )}
 
-                        {/* Asset Header */}
-                        <Header variant="h1">
-                            {showApiError
-                                ? "Asset Information Unavailable"
-                                : `${asset?.assetName || ""}${
-                                      asset?.status === "archived" ? " (Archived)" : ""
-                                  }`}
-                        </Header>
+                        {/* Asset Header - only shown on error, otherwise asset name is in the details container */}
+                        {showApiError && (
+                            <Header variant="h1">{`${Synonyms.Asset} Information Unavailable`}</Header>
+                        )}
+                    </SpaceBetween>
 
+                    {/* Content with more spacing between containers */}
+                    <div style={{ marginTop: "12px" }} />
+                    <SpaceBetween direction="vertical" size="xs">
                         {/* Only render asset details and related components if there's no API error */}
                         {!showApiError && (
                             <>
@@ -230,6 +294,10 @@ export default function ViewAsset() {
                                     databaseId={databaseId || ""}
                                     onOpenUpdateAsset={handleOpenUpdateAsset}
                                     onOpenDeleteModal={handleOpenDeleteModal}
+                                    versions={versions}
+                                    versionsLoading={versionsLoading}
+                                    selectedVersionId={selectedVersionId}
+                                    onVersionChange={handleVersionChange}
                                 />
 
                                 {/* Tabbed Container */}
@@ -241,6 +309,7 @@ export default function ViewAsset() {
                                     onWorkflowExecuted={refreshWorkflowTab}
                                     workflowExecutedTrigger={workflowRefreshTrigger}
                                     filePathToNavigate={filePathToNavigate}
+                                    assetVersionId={selectedVersionId || undefined}
                                 />
 
                                 {/* Metadata - New MetadataV2 Component */}
@@ -251,12 +320,15 @@ export default function ViewAsset() {
                                             entityId={assetId}
                                             databaseId={databaseId}
                                             mode="online"
+                                            assetVersionId={selectedVersionId || undefined}
+                                            readOnly={!!selectedVersionId}
                                         />
                                     )}
                                 </ErrorBoundary>
                             </>
                         )}
                     </SpaceBetween>
+                    <div style={{ paddingBottom: "20px" }} />
                 </Box>
 
                 {/* Modals */}
@@ -289,7 +361,7 @@ export default function ViewAsset() {
                     onSuccess={(operation) => {
                         setShowDeleteModal(false);
                         // Navigate back to search page after successful deletion / archival
-                        navigate(databaseId ? `/search/${databaseId}/assets` : "/search");
+                        navigate(databaseId ? `/databases/${databaseId}/assets` : "/assets");
                     }}
                 />
             </StatusMessageProvider>

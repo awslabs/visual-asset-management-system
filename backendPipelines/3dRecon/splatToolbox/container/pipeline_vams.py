@@ -102,7 +102,7 @@ def splat_pipeline(input_file_path: str, output_dir: str) -> dict:
     logger.info("Executing Splat Toolbox Pipeline...")
 
     # Run Potree Converter local subprocess
-    subprocess.Popen(SPLAT_TOOLBOX_CMD).wait()
+    subprocess.Popen(SPLAT_TOOLBOX_CMD).wait() # nosemgrep: dangerous-subprocess-use-audit
 
     # Get an array of all file names in output directory
     output_files = os.listdir(output_dir)

@@ -12,6 +12,7 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
 }) => {
     const [videoUrl, setVideoUrl] = useState<string>("");
     const [loading, setLoading] = useState(true);
@@ -29,7 +30,7 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId,
                     databaseId,
                     key: assetKey,
-                    versionId: versionId || "",
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 
@@ -37,7 +38,8 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey,
-                    versionId: versionId || "",
+                    versionId: versionId,
+                    assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
 
@@ -72,7 +74,7 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
                     alignItems: "center",
                     height: "100%",
                     fontSize: "16px",
-                    color: "#666",
+                    color: "var(--vams-text-secondary)",
                 }}
             >
                 Loading video...
@@ -89,7 +91,7 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
                     alignItems: "center",
                     height: "100%",
                     fontSize: "16px",
-                    color: "#d13212",
+                    color: "var(--vams-color-error)",
                 }}
             >
                 Error: {error}

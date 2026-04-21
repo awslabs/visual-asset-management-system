@@ -19,6 +19,9 @@ import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dB
 import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
 import { IsaacLabTrainingBuilderNestedStack } from "./simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack";
+import { Preview3dThumbnailBuilderNestedStack } from "./preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack";
+import { CosmosBuilderNestedStack } from "./genAi/nvidia/cosmos/cosmosBuilder-nestedStack";
+import { Gr00tBuilderNestedStack } from "./genAi/nvidia/gr00t/gr00tBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -106,6 +109,111 @@ export class PipelineBuilderNestedStack extends NestedStack {
             );
         }
 
+        if (props.config.app.pipelines.useNvidiaCosmos.enabled) {
+            const cosmosBuilderNestedStack = new CosmosBuilderNestedStack(
+                this,
+                "CosmosBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowFunctionName:
+                        props.importGlobalPipelineWorkflowFunctionName,
+                }
+            );
+
+            if (
+                props.config.app.pipelines.useNvidiaCosmos.modelsPredict.text2world2B_v2?.enabled &&
+                cosmosBuilderNestedStack.pipelineText2World2Bv2VamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineText2World2Bv2VamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos.modelsPredict.video2world2B_v2
+                    ?.enabled &&
+                cosmosBuilderNestedStack.pipelineVideo2World2Bv2VamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineVideo2World2Bv2VamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos.modelsPredict.text2world14B_v2
+                    ?.enabled &&
+                cosmosBuilderNestedStack.pipelineText2World14Bv2VamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineText2World14Bv2VamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos.modelsPredict.video2world14B_v2
+                    ?.enabled &&
+                cosmosBuilderNestedStack.pipelineVideo2World14Bv2VamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineVideo2World14Bv2VamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos.modelsTransfer?.transfer2B?.enabled &&
+                cosmosBuilderNestedStack.pipelineTransfer2BVamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineTransfer2BVamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos.modelsReason?.reason2B?.enabled &&
+                cosmosBuilderNestedStack.pipelineReason2BVamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineReason2BVamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos.modelsReason?.reason8B?.enabled &&
+                cosmosBuilderNestedStack.pipelineReason8BVamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineReason8BVamsLambdaFunctionName
+                );
+            }
+        }
+
+        if (props.config.app.pipelines.useNvidiaGr00t.enabled) {
+            const gr00tBuilderNestedStack = new Gr00tBuilderNestedStack(
+                this,
+                "Gr00tBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowFunctionName:
+                        props.importGlobalPipelineWorkflowFunctionName,
+                }
+            );
+
+            if (
+                props.config.app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.enabled &&
+                gr00tBuilderNestedStack.pipelineGr00tFinetuneVamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    gr00tBuilderNestedStack.pipelineGr00tFinetuneVamsLambdaFunctionName
+                );
+            }
+        }
+
         if (props.config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled) {
             const conversionMeshCadMetadataExtractionPipelineNestedStack =
                 new ConversionMeshCadMetadataExtractionNestedStack(
@@ -133,6 +241,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
         ////VPC-Required Pipelines
         if (
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
+            props.config.app.pipelines.usePreview3dThumbnail.enabled ||
             props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
@@ -157,6 +266,30 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
                     previewPcPotreeViewerPipelineNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            if (props.config.app.pipelines.usePreview3dThumbnail.enabled) {
+                const preview3dThumbnailPipelineNestedStack =
+                    new Preview3dThumbnailBuilderNestedStack(
+                        this,
+                        "Preview3dThumbnailBuilderNestedStack",
+                        {
+                            ...props,
+                            config: props.config,
+                            storageResources: props.storageResources,
+                            lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                            vpc: props.vpc,
+                            pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                            pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                            importGlobalPipelineWorkflowFunctionName:
+                                props.importGlobalPipelineWorkflowFunctionName,
+                        }
+                    );
+
+                //Add function name to array for stack output
+                this.pipelineVamsLambdaFunctionNames.push(
+                    preview3dThumbnailPipelineNestedStack.pipelineVamsLambdaFunctionName
                 );
             }
 

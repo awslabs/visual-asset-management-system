@@ -1,0 +1,132 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--
+
+Copyright 2025 Esri
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied. See the License for the specific language governing
+permissions and limitations under the License.
+
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <NoWarn>1591;CA1416</NoWarn>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Remove="Images\FileImage16.png" />
+    <None Remove="Images\STACAssetSelection16.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="ArcGIS.Desktop.Framework">
+      <HintPath>C:\Program Files\ArcGIS\Pro\bin\ArcGIS.Desktop.Framework.dll</HintPath>
+      <CopyLocal>False</CopyLocal>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Core">
+      <HintPath>C:\Program Files\ArcGIS\Pro\bin\ArcGIS.Core.dll</HintPath>
+      <CopyLocal>False</CopyLocal>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Core">
+      <HintPath>C:\Program Files\ArcGIS\Pro\bin\Extensions\Core\ArcGIS.Desktop.Core.dll</HintPath>
+      <CopyLocal>False</CopyLocal>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Mapping">
+      <HintPath>C:\Program Files\ArcGIS\Pro\bin\Extensions\Mapping\ArcGIS.Desktop.Mapping.dll</HintPath>
+      <CopyLocal>False</CopyLocal>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Catalog">
+      <HintPath>C:\Program Files\ArcGIS\Pro\bin\Extensions\Catalog\ArcGIS.Desktop.Catalog.dll</HintPath>
+      <CopyLocal>False</CopyLocal>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Editing">
+      <HintPath>C:\Program Files\ArcGIS\Pro\bin\Extensions\Editing\ArcGIS.Desktop.Editing.dll</HintPath>
+      <CopyLocal>False</CopyLocal>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Extensions">
+      <HintPath>C:\Program Files\ArcGIS\Pro\bin\Extensions\DesktopExtensions\ArcGIS.Desktop.Extensions.dll</HintPath>
+      <CopyLocal>False</CopyLocal>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Layouts.dll">
+      <HintPath>C:\Program Files\ArcGIS\Pro\bin\Extensions\Layout\ArcGIS.Desktop.Layouts.dll</HintPath>
+      <CopyLocal>False</CopyLocal>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Shared.Wpf.dll">
+      <HintPath>C:\Program Files\ArcGIS\Pro\bin\ArcGIS.Desktop.Shared.Wpf.dll</HintPath>
+      <CopyLocal>False</CopyLocal>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Config.daml" />
+    <Content Include="DarkImages\VamsIconAlt.png" />
+    <Content Include="Images\AddInDesktop16.png" />
+    <Content Include="Images\AddInDesktop32.png" />
+    <Content Include="DarkImages\AddInDesktop16.png" />
+    <Content Include="DarkImages\AddInDesktop32.png" />
+    <Resource Include="Images\FileImage16.png" />
+    <Content Include="Images\GenericButtonPurple16.png" />
+    <Content Include="Images\GenericButtonPurple32.png" />
+    <Content Include="DarkImages\GenericButtonPurple16.png" />
+    <Content Include="DarkImages\GenericButtonPurple32.png" />
+    <Content Include="Images\LayerAdd16.png" />
+    <Content Include="Images\LayerAdd32.png" />
+    <Content Include="DarkImages\LayerAdd16.png" />
+    <Content Include="DarkImages\LayerAdd32.png" />
+    <Content Include="Images\VamsIconAlt.png" />
+    <Resource Include="Images\STACAssetSelection16.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="Images\Folder16.png" />
+    <Resource Include="Images\FolderOpenState16.bmp" />
+    <Resource Include="Images\FolderOpenState16.png" />
+    <Resource Include="Images\ArcGISProject16.png" />
+    <Resource Include="Images\ArcGISProjectOpenState16.png" />
+    <Resource Include="DarkImages\Folder16.png" />
+    <Resource Include="DarkImages\FolderOpenState16.bmp" />
+    <Resource Include="DarkImages\DataAdd16.png" />
+    <Resource Include="Images\DataAdd16.png" />
+    <Resource Include="DarkImages\Geodatabase16.png" />
+    <Resource Include="Images\Geodatabase16.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DarkImages\DataAdd16.png" />
+    <None Include="DarkImages\Folder16.png" />
+    <None Include="DarkImages\FolderOpenState16.bmp" />
+    <None Include="DarkImages\Geodatabase16.png" />
+    <None Include="Images\DataAdd16.png" />
+    <None Include="Images\Folder16.png" />
+    <None Include="Images\FolderOpenState16.bmp" />
+    <None Include="Images\Geodatabase16.png" />
+  </ItemGroup>
+  <!-- System.Text.Json is included in .NET 8.0 by default -->
+
+
+
+  <Import Project="C:\Program Files\ArcGIS\Pro\bin\Esri.ProApp.SDK.Desktop.targets" Condition="Exists('C:\Program Files\ArcGIS\Pro\bin\Esri.ProApp.SDK.Desktop.targets') AND !Exists('Esri.ArcGISPro.Extensions.targets')" />
+</Project>

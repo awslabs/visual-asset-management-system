@@ -34,7 +34,8 @@ import {
     createMetadataSchema,
     updateMetadataSchema,
     deleteMetadataSchema,
-} from "../services/metadataSchemaAPI";
+} from "../services/MetadataSchemaService";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 // Export for backward compatibility with old metadata components
 export interface SchemaContextData {
@@ -45,6 +46,7 @@ export interface SchemaContextData {
 export default function MetadataSchemaPage() {
     const params = useParams();
     const navigate = useNavigate();
+    usePageTitle("Metadata Schemas");
 
     // Get databaseId from params, but treat "create" as no database selected
     const databaseId =
@@ -327,10 +329,18 @@ export default function MetadataSchemaPage() {
                                     {
                                         id: "fileTypeRestriction",
                                         header: "File Type Restriction",
-                                        cell: (item) =>
-                                            item.fileKeyTypeRestriction || (
-                                                <Box color="text-body-secondary">None</Box>
-                                            ),
+                                        cell: (item) => (
+                                            <span
+                                                style={{
+                                                    whiteSpace: "normal",
+                                                    wordBreak: "break-word",
+                                                }}
+                                            >
+                                                {item.fileKeyTypeRestriction || (
+                                                    <Box color="text-body-secondary">None</Box>
+                                                )}
+                                            </span>
+                                        ),
                                     },
                                     {
                                         id: "enabled",
@@ -408,6 +418,7 @@ export default function MetadataSchemaPage() {
                         </SpaceBetween>
                     </Container>
                 </SpaceBetween>
+                <div style={{ paddingBottom: "20px" }} />
             </Box>
 
             {/* Modals */}
@@ -433,6 +444,7 @@ export default function MetadataSchemaPage() {
                 onSubmit={editingSchema ? handleUpdateSchema : handleCreateSchema}
                 editingSchema={editingSchema}
                 databaseId={databaseId}
+                defaultEntityType={selectedEntityType !== "all" ? selectedEntityType : undefined}
             />
 
             <DeleteSchemaModal

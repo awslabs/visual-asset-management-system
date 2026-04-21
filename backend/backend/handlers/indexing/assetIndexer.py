@@ -376,29 +376,30 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
         logger.exception(f"Error getting asset metadata for {database_id}/{asset_id}: {e}")
         return {}
 
-def get_asset_version_info(asset_id: str) -> Dict[str, Any]:
-    """Get current asset version information"""
+def get_asset_version_info(database_id: str, asset_id: str) -> Dict[str, Any]:
+    """Get current asset version information using the table PK (databaseId:assetId is now the table PK)"""
     try:
-        # Get current version info - remove Limit to ensure we scan all records
-        # The FilterExpression will still only return matching items
+        composite_key = f"{database_id}:{asset_id}"
         response = asset_versions_table.query(
-            KeyConditionExpression=Key('assetId').eq(asset_id),
+            KeyConditionExpression=Key('databaseId:assetId').eq(composite_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('isCurrentVersion').eq(True)
         )
-        
+
         items = response.get('Items', [])
         if items:
             # Should only be one current version, but take the first if multiple exist
             version_info = items[0]
+            version_alias = version_info.get('versionAlias', '') or ''
             return {
                 'versionId': version_info.get('assetVersionId'),
                 'createdAt': version_info.get('dateCreated'),
-                'comment': version_info.get('comment', '')
+                'comment': version_info.get('comment', ''),
+                'versionAlias': version_alias
             }
-        
+
         return {}
     except Exception as e:
-        logger.exception(f"Error getting asset version info for {asset_id}: {e}")
+        logger.exception(f"Error getting asset version info for {database_id}:{asset_id}: {e}")
         return {}
 
 def get_asset_relationship_flags(database_id: str, asset_id: str) -> Dict[str, bool]:
@@ -491,10 +492,30 @@ def build_asset_document(request: AssetIndexRequest, asset_details: Dict[str, An
     
     # Add version information
     if version_info:
-        doc.str_asset_version_id = version_info.get('versionId')
+        version_id = version_info.get('versionId')
+        version_alias = version_info.get('versionAlias', '') or ''
+
+        # Format version ID with alias if present (e.g., "3 (Release Candidate 1)")
+        if version_alias:
+            doc.str_asset_version_id = f"v{version_id} ({version_alias})"
+        else:
+            doc.str_asset_version_id = version_id
+
         doc.date_asset_version_createdate = version_info.get('createdAt')
         doc.str_asset_version_comment = version_info.get('comment')
     
+    # Add asset location key
+    asset_location = asset_details.get('assetLocation', {})
+    doc.str_assetlocationkey = asset_location.get('Key') or asset_location.get('key') or ''
+
+    # Add preview file key from asset's previewLocation
+    preview_location = asset_details.get('previewLocation', {})
+    if preview_location:
+        preview_key = preview_location.get('Key') or preview_location.get('key') or ''
+        doc.str_previewfilekey = preview_key
+    else:
+        doc.str_previewfilekey = ''
+
     # Add relationship flags
     doc.bool_has_asset_children = relationship_flags.get('has_children', False)
     doc.bool_has_asset_parents = relationship_flags.get('has_parents', False)
@@ -676,7 +697,7 @@ def process_asset_index_request(request: AssetIndexRequest) -> IndexOperationRes
             asset_metadata = get_asset_metadata(request.databaseId, request.assetId)
             
             # Get version information
-            version_info = get_asset_version_info(request.assetId)
+            version_info = get_asset_version_info(request.databaseId, request.assetId)
             
             # Get relationship flags
             relationship_flags = get_asset_relationship_flags(request.databaseId, request.assetId)
