@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
+-   Updated documentation to add Finch and Podman alternatives to Docker for the CDK build process
+
 ### Known Outstanding Issues
 
 -   With multiple S3 bucket support, identical assetIds across different buckets/prefixes in different databases can cause lookup conflicts in comments and subscriptions. This only occurs with manual S3 changes, as VAMS-generated assetIds use unique GUIDs.
