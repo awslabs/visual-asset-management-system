@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.5.1] (2026-04-29)
+
+### Bug Fixes
+
+-
+
+### Chores
+
+-   AI Steering Documents: Removed direct version references that were previosly hard-set to a particular version (like v2.5.0)
+-   Updated documentation to add Finch and Podman alternatives to Docker for the CDK build process
+
 ## [2.5.0] (2026-04-21)
 
 ### Major Change Summary:

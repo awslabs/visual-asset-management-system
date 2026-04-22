@@ -8,7 +8,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 | Version       | Date       | Key Changes                                                                                                                                                                                                                                                                                      |
 | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [2.5.0](#250) | 2026-04-30 | Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates |
+| [2.5.1](#251) | 2026-04-29 |                                                                                                                                                                                                                                                                                                  |
+| [2.5.0](#250) | 2026-04-21 | Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates |
 | [2.4.1](#241) | 2026-01-30 | GovCloud deployment fixes, CloudFront KMS fix, metadata schema navigation fix, file manager UX improvements                                                                                                                                                                                      |
 | [2.4.0](#240) | 2026-01-16 | Veerum viewer, NVIDIA Isaac Lab pipeline, Garnet Framework addon, metadata schema overhaul, metadata system overhaul, asset unarchiving, CloudFront custom domains, audit logging, EKS pipeline option                                                                                           |
 | [2.3.2](#232) | 2026-01-12 | CLI documentation fixes, NPM dependency updates                                                                                                                                                                                                                                                  |
@@ -20,9 +21,17 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 ## Version Details
 
+### 2.5.1
+
+**Release date:** 2026-04-29
+
+**Key fixes:**
+
+-
+
 ### 2.5.0
 
-**Release date:** 2026-04-30
+**Release date:** 2026-04-21
 
 **Major changes:**
 

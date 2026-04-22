@@ -7,7 +7,7 @@
 
 ## Project Overview
 
-VamsCLI is a Python command-line interface built with the **Click** framework (v2.5.0) for interacting with the Visual Asset Management System (VAMS) deployed on AWS. It provides authentication, configuration management, multi-profile support, and full CRUD operations against the VAMS API Gateway.
+VamsCLI is a Python command-line interface built with the **Click** framework for interacting with the Visual Asset Management System (VAMS) deployed on AWS. It provides authentication, configuration management, multi-profile support, and full CRUD operations against the VAMS API Gateway.
 
 -   **Entry point**: `vamscli/main.py`
 -   **Version**: Defined in `vamscli/version.py` (`__version__` and `CLI_VERSION`)

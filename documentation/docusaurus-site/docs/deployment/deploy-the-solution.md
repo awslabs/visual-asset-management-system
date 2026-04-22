@@ -141,8 +141,10 @@ Skipping this step when importing an external VPC will cause the deployment to f
 
 ## Step 8: Deploy
 
-:::danger[Docker must be running]
-Ensure the Docker daemon is running before deploying. CDK builds container images for AWS Lambda layers and pipeline containers during synthesis. The deployment will fail if Docker is not available.
+:::danger[Container engine must be running]
+Ensure Docker (or your configured container engine) is running before deploying. CDK builds container images for AWS Lambda layers and pipeline containers during synthesis. The deployment will fail if a container engine is not available.
+
+If you are using an alternative container engine such as [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/), set the `CDK_DOCKER` environment variable before deploying (for example, `export CDK_DOCKER=finch`). See the [Prerequisites](prerequisites.md#docker-alternatives) page for setup details.
 :::
 
 Run the CDK deploy command from the `infra/` directory:
@@ -236,7 +238,7 @@ For major version changes, significant configuration changes (such as switching 
 
 | Error                                                                                          | Cause                                                          | Resolution                                                                                                                                                                                                                                           |
 | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Docker daemon not running`                                                                    | Docker is not started.                                         | Start Docker Desktop or the Docker daemon and retry.                                                                                                                                                                                                 |
+| `Docker daemon not running`                                                                    | Docker (or your configured container engine) is not started.   | Start Docker Desktop (or your alternative container engine such as Finch or Podman) and retry. If using an alternative, ensure `CDK_DOCKER` is set correctly.                                                                                        |
 | `Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId`                                | Missing required configuration field.                          | Set `app.assetBuckets.defaultNewBucketSyncDatabaseId` in `config.json` (default: `"default"`).                                                                                                                                                       |
 | `Cannot use ALB deployment without specifying a valid domain hostname and ACM Certificate ARN` | ALB enabled without domain or certificate.                     | Provide `app.useAlb.domainHost` and `app.useAlb.certificateArn`.                                                                                                                                                                                     |
 | `Must specify an initial admin email address`                                                  | Admin email not configured.                                    | Set `app.adminEmailAddress` to a valid email.                                                                                                                                                                                                        |
