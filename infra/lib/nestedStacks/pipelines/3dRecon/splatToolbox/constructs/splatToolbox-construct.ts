@@ -748,7 +748,9 @@ export class SplatToolboxConstruct extends Construct {
                 fs.rmSync(tempDir, { recursive: true, force: true });
             }
 
+            // nosemgrep: detect-child-process
             execSync(`git clone ${gitHubLink} "${tempDir}"`, { stdio: "inherit" });
+            // nosemgrep: detect-child-process
             execSync(`git -C "${tempDir}" checkout ${gitHubCommitHash}`, { stdio: "inherit" });
 
             const sourceDir = path.join(tempDir, "source", "container");

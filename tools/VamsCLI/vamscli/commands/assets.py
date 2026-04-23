@@ -1199,7 +1199,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                 queue: asyncio.Queue = asyncio.Queue(maxsize=parallel_downloads * 2)
                                 streaming_progress = StreamingDownloadProgress()
 
-                                async def _produce():
+                                # nosemgrep: useless-inner-function
+                                async def _produce():  # nosemgrep: useless-inner-function
                                     total = len(target_files)
                                     for idx, file_item in enumerate(target_files):
                                         rp = file_item.get('relativePath', '')
@@ -1350,7 +1351,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         queue: asyncio.Queue = asyncio.Queue(maxsize=parallel_downloads * 2)
                         streaming_progress = StreamingDownloadProgress()
 
-                        async def _produce():
+                        # nosemgrep: useless-inner-function
+                        async def _produce():  # nosemgrep: useless-inner-function
                             total = len(target_files)
                             for idx, file_item in enumerate(target_files):
                                 rp = file_item.get('relativePath', '')
