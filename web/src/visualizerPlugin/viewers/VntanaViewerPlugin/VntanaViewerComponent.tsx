@@ -44,6 +44,7 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
                     assetId,
                     databaseId,
                     key: assetKey,
+                    versionId: versionId,
                     assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
@@ -227,7 +228,7 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
                 }
             }
         };
-    }, [assetKey, assetId, databaseId, versionId]);
+    }, [assetKey, assetId, databaseId, versionId, assetVersionId]);
 
     return (
         <div

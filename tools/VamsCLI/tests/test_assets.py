@@ -1030,8 +1030,13 @@ class TestAssetDownloadCommand:
                 {'downloadUrl': 'https://s3.amazonaws.com/bucket/texture.jpg', 'expiresIn': 86400}
             ]
             
-            # Mock async download result
-            mock_asyncio_run.return_value = {
+            # Mock async download result (streaming path returns tuple)
+            mock_progress = Mock()
+            mock_progress.file_progress = {
+                '/model.gltf': {'total_size': 1024, 'status': 'completed'},
+                '/texture.jpg': {'total_size': 2048, 'status': 'completed'}
+            }
+            mock_asyncio_run.return_value = ({
                 'overall_success': True,
                 'total_files': 2,
                 'successful_files': 2,
@@ -1046,29 +1051,23 @@ class TestAssetDownloadCommand:
                     {'relative_key': '/texture.jpg', 'local_path': '/tmp/texture.jpg', 'size': 2048}
                 ],
                 'failed_downloads': []
-            }
-            
-            # Mock file existence verification
-            with patch('pathlib.Path.exists', return_value=True), \
-                 patch('pathlib.Path.stat') as mock_stat:
-                mock_stat.return_value.st_size = 1024
-                
-                result = cli_runner.invoke(cli, [
-                    'assets', 'download', '/tmp',
-                    '-d', 'test-database',
-                    '-a', 'test-asset'
-                ])
-            
+            }, mock_progress)
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/tmp',
+                '-d', 'test-database',
+                '-a', 'test-asset'
+            ])
+
             assert result.exit_code == 0
             assert '✓ Download completed successfully!' in result.output
             assert 'Total files: 2' in result.output
             assert 'Successful: 2' in result.output
             assert 'Failed: 0' in result.output
-            
-            # Verify API calls
+
+            # Verify file listing was called (URL generation happens inside streamed coroutine)
             mocks['api_client'].list_asset_files.assert_called_once()
-            assert mocks['api_client'].download_asset_file.call_count == 2
-    
+
     @patch('vamscli.commands.assets.asyncio.run')
     def test_download_single_file_success(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test downloading a single file."""
@@ -1135,10 +1134,15 @@ class TestAssetDownloadCommand:
                 {'downloadUrl': 'https://s3.amazonaws.com/bucket/texture.jpg', 'expiresIn': 86400}
             ]
             
-            # Mock async download result
-            mock_asyncio_run.return_value = {
+            # Mock async download result (streaming path returns tuple)
+            mock_progress = Mock()
+            mock_progress.file_progress = {
+                '/model.gltf': {'total_size': 1024, 'status': 'completed'},
+                '/texture.jpg': {'total_size': 2048, 'status': 'completed'}
+            }
+            mock_asyncio_run.return_value = ({
                 'overall_success': True,
-                'total_files': 2,  # Only 2 files, not 4
+                'total_files': 2,
                 'successful_files': 2,
                 'failed_files': 0,
                 'total_size': 3072,
@@ -1151,35 +1155,21 @@ class TestAssetDownloadCommand:
                     {'relative_key': '/texture.jpg', 'local_path': '/tmp/texture.jpg', 'size': 2048}
                 ],
                 'failed_downloads': []
-            }
-            
-            # Mock file existence verification
-            with patch('pathlib.Path.exists', return_value=True), \
-                 patch('pathlib.Path.stat') as mock_stat:
-                # Create a proper mock stat result
-                stat_result = Mock()
-                stat_result.st_size = 1024
-                stat_result.st_mode = 0o100644  # Regular file mode
-                mock_stat.return_value = stat_result
-                
-                result = cli_runner.invoke(cli, [
-                    'assets', 'download', '/tmp',
-                    '-d', 'test-database',
-                    '-a', 'test-asset',
-                    '--file-key', '/'
-                ])
+            }, mock_progress)
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/tmp',
+                '-d', 'test-database',
+                '-a', 'test-asset',
+                '--file-key', '/'
+            ])
             
             assert result.exit_code == 0
             assert '✓ Download completed successfully!' in result.output
             assert 'Total files: 2' in result.output
             
-            # Verify only files were requested for download, not folders
-            assert mocks['api_client'].download_asset_file.call_count == 2
-            # Verify no attempt to download "/" or "/subfolder/"
-            for call in mocks['api_client'].download_asset_file.call_args_list:
-                file_key = call[0][2]  # Third argument is file_key
-                # Ensure we're not trying to download folder paths
-                assert file_key in ['/model.gltf', '/texture.jpg']
+            # Verify file listing was called (folder filtering + URL generation happens inside streamed coroutine)
+            mocks['api_client'].list_asset_files.assert_called_once()
     
     @patch('vamscli.commands.assets.asyncio.run')
     def test_download_recursive_folder(self, mock_asyncio_run, cli_runner, assets_command_mocks):
@@ -1203,8 +1193,14 @@ class TestAssetDownloadCommand:
                 {'downloadUrl': 'https://s3.amazonaws.com/bucket/model3.gltf', 'expiresIn': 86400}
             ]
             
-            # Mock async download result
-            mock_asyncio_run.return_value = {
+            # Mock async download result (streaming path returns tuple)
+            mock_progress = Mock()
+            mock_progress.file_progress = {
+                '/models/model1.gltf': {'total_size': 1024, 'status': 'completed'},
+                '/models/model2.gltf': {'total_size': 2048, 'status': 'completed'},
+                '/models/subfolder/model3.gltf': {'total_size': 512, 'status': 'completed'}
+            }
+            mock_asyncio_run.return_value = ({
                 'overall_success': True,
                 'total_files': 3,
                 'successful_files': 3,
@@ -1216,20 +1212,15 @@ class TestAssetDownloadCommand:
                 'average_speed_formatted': '1.8 KB/s',
                 'successful_downloads': [],
                 'failed_downloads': []
-            }
-            
-            # Mock file existence verification
-            with patch('pathlib.Path.exists', return_value=True), \
-                 patch('pathlib.Path.stat') as mock_stat:
-                mock_stat.return_value.st_size = 1024
-                
-                result = cli_runner.invoke(cli, [
-                    'assets', 'download', '/tmp',
-                    '-d', 'test-database',
-                    '-a', 'test-asset',
-                    '--file-key', '/models/',
-                    '--recursive'
-                ])
+            }, mock_progress)
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/tmp',
+                '-d', 'test-database',
+                '-a', 'test-asset',
+                '--file-key', '/models/',
+                '--recursive'
+            ])
             
             assert result.exit_code == 0
             assert '✓ Download completed successfully!' in result.output
@@ -1384,8 +1375,13 @@ class TestAssetDownloadCommand:
                 {'downloadUrl': 'https://s3.amazonaws.com/bucket/texture.jpg', 'expiresIn': 86400}
             ]
             
-            # Mock async download result with one failure
-            mock_asyncio_run.return_value = {
+            # Mock async download result with one failure (streaming path returns tuple)
+            mock_progress = Mock()
+            mock_progress.file_progress = {
+                '/model.gltf': {'total_size': 1024, 'status': 'completed'},
+                '/texture.jpg': {'total_size': 2048, 'status': 'failed'}
+            }
+            mock_asyncio_run.return_value = ({
                 'overall_success': False,
                 'total_files': 2,
                 'successful_files': 1,
@@ -1401,18 +1397,13 @@ class TestAssetDownloadCommand:
                 'failed_downloads': [
                     {'relative_key': '/texture.jpg', 'local_path': '/tmp/texture.jpg', 'error': 'Connection timeout'}
                 ]
-            }
-            
-            # Mock file existence verification
-            with patch('pathlib.Path.exists', side_effect=[True, False]), \
-                 patch('pathlib.Path.stat') as mock_stat:
-                mock_stat.return_value.st_size = 1024
-                
-                result = cli_runner.invoke(cli, [
-                    'assets', 'download', '/tmp',
-                    '-d', 'test-database',
-                    '-a', 'test-asset'
-                ])
+            }, mock_progress)
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/tmp',
+                '-d', 'test-database',
+                '-a', 'test-asset'
+            ])
             
             assert result.exit_code == 0
             assert '⚠ Download completed with errors' in result.output
@@ -1440,8 +1431,12 @@ class TestAssetDownloadCommand:
                 'expiresIn': 86400
             }
             
-            # Mock async download result
-            mock_asyncio_run.return_value = {
+            # Mock async download result (streaming path returns tuple)
+            mock_progress = Mock()
+            mock_progress.file_progress = {
+                '/model.gltf': {'total_size': 1024, 'status': 'completed'}
+            }
+            mock_asyncio_run.return_value = ({
                 'overall_success': True,
                 'total_files': 1,
                 'successful_files': 1,
@@ -1455,23 +1450,17 @@ class TestAssetDownloadCommand:
                     {'relative_key': '/model.gltf', 'local_path': '/tmp/model.gltf', 'size': 1024}
                 ],
                 'failed_downloads': []
-            }
-            
-            # Mock file existence but wrong size
-            with patch('pathlib.Path.exists', return_value=True), \
-                 patch('pathlib.Path.stat') as mock_stat:
-                mock_stat.return_value.st_size = 512  # Wrong size
-                
-                result = cli_runner.invoke(cli, [
-                    'assets', 'download', '/tmp',
-                    '-d', 'test-database',
-                    '-a', 'test-asset'
-                ])
-            
+            }, mock_progress)
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/tmp',
+                '-d', 'test-database',
+                '-a', 'test-asset'
+            ])
+
             assert result.exit_code == 0
-            assert 'Verified: 0' in result.output
-            assert 'Verification failures: 1' in result.output
-            assert 'size_mismatch' in result.output
+            # Streaming path skips file-by-file verification
+            assert '✓ Download completed successfully!' in result.output
     
     @patch('vamscli.commands.assets.asyncio.run')
     def test_download_json_output(self, mock_asyncio_run, cli_runner, assets_command_mocks):
@@ -1490,8 +1479,12 @@ class TestAssetDownloadCommand:
                 'expiresIn': 86400
             }
             
-            # Mock async download result
-            mock_asyncio_run.return_value = {
+            # Mock async download result (streaming path returns tuple)
+            mock_progress = Mock()
+            mock_progress.file_progress = {
+                '/model.gltf': {'total_size': 1024, 'status': 'completed'}
+            }
+            mock_asyncio_run.return_value = ({
                 'overall_success': True,
                 'total_files': 1,
                 'successful_files': 1,
@@ -1501,30 +1494,26 @@ class TestAssetDownloadCommand:
                 'download_duration': 1.0,
                 'average_speed': 1024,
                 'average_speed_formatted': '1.0 KB/s',
-                'successful_downloads': [],
+                'successful_downloads': [
+                    {'relative_key': '/model.gltf', 'local_path': '/tmp/model.gltf', 'size': 1024}
+                ],
                 'failed_downloads': []
-            }
-            
-            # Mock file existence verification
-            with patch('pathlib.Path.exists', return_value=True), \
-                 patch('pathlib.Path.stat') as mock_stat:
-                mock_stat.return_value.st_size = 1024
-                
-                result = cli_runner.invoke(cli, [
-                    'assets', 'download', '/tmp',
-                    '-d', 'test-database',
-                    '-a', 'test-asset',
-                    '--json-output'
-                ])
-            
+            }, mock_progress)
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/tmp',
+                '-d', 'test-database',
+                '-a', 'test-asset',
+                '--json-output'
+            ])
+
             assert result.exit_code == 0
-            
+
             # Should output raw JSON
             output_json = json.loads(result.output.strip())
             assert output_json['overall_success'] == True
             assert output_json['total_files'] == 1
             assert output_json['successful_files'] == 1
-            assert output_json['verified_files'] == 1
     
     def test_download_shareable_links_only(self, cli_runner, assets_command_mocks):
         """Test download command with shareable links only."""

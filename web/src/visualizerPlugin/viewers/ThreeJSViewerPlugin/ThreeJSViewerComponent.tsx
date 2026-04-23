@@ -635,7 +635,16 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             ThreeJSDependencyManager.cleanup();
             console.log("ThreeJS Viewer: Cleanup complete");
         };
-    }, [threeReady, assetKey, multiFileKeys, assetId, databaseId, versionId, config]);
+    }, [
+        threeReady,
+        assetKey,
+        multiFileKeys,
+        assetId,
+        databaseId,
+        versionId,
+        assetVersionId,
+        config,
+    ]);
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {

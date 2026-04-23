@@ -187,6 +187,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     assetId,
                     databaseId,
                     key: assetKey,
+                    versionId: versionId,
                     assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
@@ -309,7 +310,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
             // Final cleanup of any remaining unwanted elements
             removeUnwantedElements();
         };
-    }, [assetKey, assetId, databaseId, versionId]);
+    }, [assetKey, assetId, databaseId, versionId, assetVersionId]);
 
     return (
         <div

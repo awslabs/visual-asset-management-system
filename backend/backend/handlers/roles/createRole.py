@@ -74,7 +74,7 @@ def create_role(role_data, claims_and_roles):
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(role_object, "POST"):
-                raise authorization_error()
+                return authorization_error()
         
         # Create the role item
         logger.info(f"Creating role {role_data['roleName']}")
@@ -139,7 +139,7 @@ def update_role(role_data, claims_and_roles):
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(role_object, "PUT"):
-                raise authorization_error()
+                return authorization_error()
         
         # Update the role
         logger.info(f"Updating role {role_data['roleName']}")

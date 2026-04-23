@@ -71,7 +71,7 @@ def create_tag(tag_data, claims_and_roles):
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(tag_obj, "POST"):
-                raise authorization_error()
+                return authorization_error()
         
         # Check if tag already exists
         try:
@@ -146,7 +146,7 @@ def update_tag(tag_data, claims_and_roles):
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(tag_obj, "PUT"):
-                raise authorization_error()
+                return authorization_error()
         
         # Check if tag exists
         try:

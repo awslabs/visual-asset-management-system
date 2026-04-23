@@ -99,9 +99,71 @@ class DownloadProgress:
         return 0.0
 
 
+class StreamingDownloadProgress:
+    """Track download progress when files are added incrementally via a queue."""
+
+    def __init__(self):
+        self.total_files = 0
+        self.total_size = 0
+        self.completed_files = 0
+        self.completed_size = 0
+        self.failed_files = 0
+        self.active_downloads = 0
+        self.start_time = time.time()
+        self.file_progress: Dict[str, Dict] = {}
+        self._finished_producing = False
+
+    def add_file(self, file_info: DownloadFileInfo):
+        self.total_files += 1
+        self.total_size += file_info.file_size or 0
+        self.file_progress[file_info.relative_key] = {
+            "completed_size": 0,
+            "total_size": file_info.file_size or 0,
+            "status": "pending",
+        }
+
+    def mark_producing_done(self):
+        self._finished_producing = True
+
+    def update_file_progress(self, relative_key: str, completed_size: int, status: str):
+        if relative_key in self.file_progress:
+            old_completed = self.file_progress[relative_key]["completed_size"]
+            self.file_progress[relative_key]["completed_size"] = completed_size
+            self.file_progress[relative_key]["status"] = status
+            self.completed_size += completed_size - old_completed
+            if status == "completed":
+                self.completed_files += 1
+            elif status == "failed":
+                self.failed_files += 1
+
+    @property
+    def overall_progress(self) -> float:
+        if self.total_size == 0:
+            return 100.0 if self.completed_files == self.total_files else 0.0
+        return (self.completed_size / self.total_size) * 100
+
+    @property
+    def elapsed_time(self) -> float:
+        return time.time() - self.start_time
+
+    @property
+    def estimated_time_remaining(self) -> Optional[float]:
+        if self.completed_size == 0:
+            return None
+        rate = self.completed_size / self.elapsed_time
+        if rate > 0:
+            return (self.total_size - self.completed_size) / rate
+        return None
+
+    @property
+    def download_speed(self) -> float:
+        elapsed = self.elapsed_time
+        return self.completed_size / elapsed if elapsed > 0 else 0.0
+
+
 class DownloadManager:
     """Manages file downloads with progress monitoring and retry logic."""
-    
+
     def __init__(self, api_client: APIClient, max_parallel: int = DEFAULT_PARALLEL_DOWNLOADS,
                  max_retries: int = DEFAULT_DOWNLOAD_RETRY_ATTEMPTS, 
                  timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
@@ -254,6 +316,105 @@ class DownloadManager:
                         self.progress_callback(progress)
         
         return {"size": downloaded_size}
+
+
+    async def download_files_streamed(self, queue: 'asyncio.Queue[Optional[DownloadFileInfo]]',
+                                      progress: StreamingDownloadProgress) -> Dict[str, Any]:
+        """Download files as they are added to the queue by a producer.
+
+        The producer puts DownloadFileInfo items into the queue, then puts None
+        to signal completion.  Consumer workers pull items and download them
+        concurrently, bounded by max_parallel.
+        """
+        semaphore = asyncio.Semaphore(self.max_parallel)
+        all_files: List[DownloadFileInfo] = []
+        successful_files: List[Dict] = []
+        failed_files: List[Dict] = []
+        pending_tasks: List[asyncio.Task] = []
+
+        async def _consume():
+            while True:
+                file_info = await queue.get()
+                if file_info is None:
+                    queue.task_done()
+                    break
+                progress.add_file(file_info)
+                all_files.append(file_info)
+                task = asyncio.create_task(
+                    self._download_file_with_retry_streaming(file_info, semaphore, progress)
+                )
+                pending_tasks.append(task)
+                queue.task_done()
+
+        await _consume()
+        progress.mark_producing_done()
+
+        if pending_tasks:
+            results = await asyncio.gather(*pending_tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                fi = all_files[i]
+                if isinstance(result, Exception):
+                    failed_files.append({"relative_key": fi.relative_key, "local_path": str(fi.local_path), "error": str(result)})
+                elif result.get("success"):
+                    successful_files.append({"relative_key": fi.relative_key, "local_path": str(fi.local_path), "size": result.get("size", 0)})
+                else:
+                    failed_files.append({"relative_key": fi.relative_key, "local_path": str(fi.local_path), "error": result.get("error", "Unknown error")})
+
+        return {
+            "overall_success": len(failed_files) == 0,
+            "total_files": len(all_files),
+            "successful_files": len(successful_files),
+            "failed_files": len(failed_files),
+            "total_size": progress.total_size,
+            "total_size_formatted": format_file_size(progress.total_size),
+            "download_duration": progress.elapsed_time,
+            "average_speed": progress.download_speed,
+            "average_speed_formatted": format_file_size(int(progress.download_speed)) + "/s",
+            "successful_downloads": successful_files,
+            "failed_downloads": failed_files,
+        }
+
+    async def _download_file_with_retry_streaming(self, file_info: DownloadFileInfo,
+                                                   semaphore: asyncio.Semaphore,
+                                                   progress: StreamingDownloadProgress) -> Dict[str, Any]:
+        """Download a single file with retry logic (streaming progress variant)."""
+        async with semaphore:
+            progress.active_downloads += 1
+            try:
+                for attempt in range(self.max_retries + 1):
+                    try:
+                        progress.update_file_progress(file_info.relative_key, 0, "downloading")
+                        if self.progress_callback:
+                            self.progress_callback(progress)
+
+                        file_info.local_path.parent.mkdir(parents=True, exist_ok=True)
+                        async with self.session.get(file_info.download_url) as response:
+                            if response.status != 200:
+                                raise DownloadError(f"Download failed with status {response.status}")
+                            downloaded_size = 0
+                            async with aiofiles.open(file_info.local_path, 'wb') as f:
+                                async for chunk in response.content.iter_chunked(8192):
+                                    await f.write(chunk)
+                                    downloaded_size += len(chunk)
+                                    progress.update_file_progress(file_info.relative_key, downloaded_size, "downloading")
+                                    if self.progress_callback:
+                                        self.progress_callback(progress)
+
+                        progress.update_file_progress(file_info.relative_key, downloaded_size, "completed")
+                        if self.progress_callback:
+                            self.progress_callback(progress)
+                        return {"success": True, "size": downloaded_size}
+
+                    except Exception as e:
+                        if attempt < self.max_retries:
+                            await asyncio.sleep(min(2 ** attempt, 30))
+                        else:
+                            progress.update_file_progress(file_info.relative_key, 0, "failed")
+                            if self.progress_callback:
+                                self.progress_callback(progress)
+                            return {"success": False, "error": str(e)}
+            finally:
+                progress.active_downloads -= 1
 
 
 def format_file_size(size_bytes: int) -> str:

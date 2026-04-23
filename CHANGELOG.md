@@ -14,8 +14,6 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
--   Updated documentation to add Finch and Podman alternatives to Docker for the CDK build process
-
 ### Known Outstanding Issues
 
 -   With multiple S3 bucket support, identical assetIds across different buckets/prefixes in different databases can cause lookup conflicts in comments and subscriptions. This only occurs with manual S3 changes, as VAMS-generated assetIds use unique GUIDs.
@@ -24,6 +22,31 @@ All notable changes to this project will be documented in this file. See [standa
 -   For assets with hundreds to thousands of files or very large files (TB-size), some API operations may time out after 29 seconds while the Lambda continues processing (up to 15 minutes). OpenSearch re-indexing with hundreds of thousands to millions of files may not complete within the 15-minute Lambda timeout and may require local or containerized re-indexing. Asynchronous methods and optional containerized processing are being evaluated.
 
 ### Troubleshooting
+
+## [2.5.1] (2026-04-23)
+
+### Bug Fixes
+
+-   **Web** Fixed file upload path construction in ModifyAssetsUploads — files uploaded to a subfolder now correctly include the full folder path (e.g., `/textures/USD/texture.png` instead of `/texture.png`)
+-   Fixed permanent file deletion not cleaning up DynamoDB version snapshot records — re-uploading a file at the same path no longer shows stale version history from previously deleted files
+-   Fixed S3 version deletion not paginating — permanent delete now removes all S3 object versions even when a file has more than 1000 versions
+-   Fixed permanent asset deletion not paginating DynamoDB queries for version files and metadata version cleanup — assets with large numbers of versions or files now fully delete all related records
+-   Fixed `raise authorization_error()` across multiple backend handlers (assetService, metadataSchemaService, userRolesService, createRole, tagService, createTag) — was raising a dict instead of returning an API response, causing "exceptions must derive from BaseException" errors
+-   **Web** Fixed version switching across many viewer plugins — when switching to a different file version — the viewer now correctly fetches and displays the selected version instead of showing the latest only
+-   **CLI** Fixed CLI asset download command capping at ~100 files — now paginates through all API results when downloading whole assets or folders
+    -   Improved CLI asset download performance — presigned URL generation and file downloads now run concurrently via streaming pipeline instead of sequentially
+    -   `--recursive` flag on `assets download` now defaults `--file-key` to `/` when not specified, enabling `vamscli assets download /path -d db -a asset --recursive` to download all files
+-   **CLI** Fixed CLI file upload progress display erasing terminal scrollback history — progress now tracks and clears only the lines it printed
+-   **CLI** Fixed CLI API retry messages polluting outputs when using --json-output parameters
+-   Fixed NVIDIA pipeline CodeBuild ECR repositories failing to delete when disabling pipelines — added `emptyOnDelete: true` to Cosmos and Gr00t CodeBuild ECR repos so images are automatically cleared before CloudFormation deletion
+
+### Chores
+
+-   AI Steering Documents: Fixed incorrect `raise authorization_error()` pattern in (Cline workflows, Kiro steering) to use `return authorization_error()` consistent with backend conventions
+-   AI Steering Documents: Removed direct version references that were previosly hard-set to a particular version (like v2.5.0)
+-   Updated README and documentation to add Finch and Podman alternatives to Docker for the CDK build process
+-   Updated .gitleaksignore with false positive findings
+-   Update several package dependency versions to fix new npm audit findings
 
 ## [2.5.0] (2026-04-21)
 

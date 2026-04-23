@@ -498,42 +498,37 @@ def delete_s3_object(bucket: str, key: str) -> bool:
 
 def delete_s3_object_all_versions(bucket: str, key: str) -> bool:
     """Permanently delete an S3 object and all its versions
-    
+
     Args:
         bucket: The S3 bucket
         key: The S3 object key
-        
+
     Returns:
         True if successful, False otherwise
     """
     try:
-        # List all versions of the object
-        versions_response = s3_client.list_object_versions(
-            Bucket=bucket,
-            Prefix=key,
-            MaxKeys=1000  # Limit to 1000 versions
-        )
-        
-        # Delete all versions
-        for version in versions_response.get('Versions', []):
-            if version['Key'] == key:
-                s3_client.delete_object(
-                    Bucket=bucket,
-                    Key=key,
-                    VersionId=version['VersionId']
-                )
-                logger.info(f"Deleted version {version['VersionId']} of {key}")
-        
-        # Delete all delete markers
-        for marker in versions_response.get('DeleteMarkers', []):
-            if marker['Key'] == key:
-                s3_client.delete_object(
-                    Bucket=bucket,
-                    Key=key,
-                    VersionId=marker['VersionId']
-                )
-                logger.info(f"Deleted delete marker {marker['VersionId']} of {key}")
-        
+        paginator = s3_client.get_paginator('list_object_versions')
+        for page in paginator.paginate(Bucket=bucket, Prefix=key):
+            # Delete all versions
+            for version in page.get('Versions', []):
+                if version['Key'] == key:
+                    s3_client.delete_object(
+                        Bucket=bucket,
+                        Key=key,
+                        VersionId=version['VersionId']
+                    )
+                    logger.info(f"Deleted version {version['VersionId']} of {key}")
+
+            # Delete all delete markers
+            for marker in page.get('DeleteMarkers', []):
+                if marker['Key'] == key:
+                    s3_client.delete_object(
+                        Bucket=bucket,
+                        Key=key,
+                        VersionId=marker['VersionId']
+                    )
+                    logger.info(f"Deleted delete marker {marker['VersionId']} of {key}")
+
         return True
     except Exception as e:
         logger.exception(f"Error deleting all versions of S3 object {key}: {e}")
@@ -1752,6 +1747,75 @@ def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str)
         logger.exception(f"Error deleting metadata for file: {e}")
         return False
 
+def delete_file_version_records(databaseId: str, assetId: str, file_paths: list) -> int:
+    """Delete version snapshot records from asset_version_files_table for given file paths.
+
+    When a file is permanently deleted, orphaned version records must be cleaned up
+    so that re-uploading the same path doesn't show stale version history.
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        file_paths: List of relative file paths (with or without leading slash)
+
+    Returns:
+        Number of records deleted
+    """
+    if not file_paths:
+        return 0
+
+    deleted_count = 0
+    db_asset_key = f"{databaseId}:{assetId}"
+
+    # Normalize file paths: the table stores fileKey with leading slash
+    normalized_paths = set()
+    for fp in file_paths:
+        fp_clean = fp.strip()
+        if fp_clean.endswith('/'):
+            continue
+        if not fp_clean.startswith('/'):
+            fp_clean = '/' + fp_clean
+        normalized_paths.add(fp_clean)
+
+    if not normalized_paths:
+        return 0
+
+    try:
+        query_kwargs = {
+            'IndexName': 'databaseIdAssetIdIndex',
+            'KeyConditionExpression': Key('databaseId:assetId').eq(db_asset_key)
+        }
+
+        records_to_delete = []
+        while True:
+            response = asset_version_files_table.query(**query_kwargs)
+            for item in response.get('Items', []):
+                if item.get('fileKey', '') in normalized_paths:
+                    records_to_delete.append(item)
+
+            if 'LastEvaluatedKey' in response:
+                query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+            else:
+                break
+
+        # Batch delete the matching records
+        with asset_version_files_table.batch_writer() as batch:
+            for item in records_to_delete:
+                batch.delete_item(Key={
+                    'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
+                    'fileKey': item['fileKey']
+                })
+                deleted_count += 1
+
+        if deleted_count > 0:
+            logger.info(f"Deleted {deleted_count} version snapshot records for {len(normalized_paths)} file(s) in {db_asset_key}")
+
+    except Exception as e:
+        logger.warning(f"Error cleaning up version records for {db_asset_key}: {e}")
+
+    return deleted_count
+
+
 def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, confirm_permanent_delete: bool, claims_and_roles: Dict) -> FileOperationResponseModel:
     """Permanently delete a file or files under a prefix
     
@@ -1877,13 +1941,16 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         relative_path = file_path.lstrip('/')
         delete_file_metadata(databaseId, assetId, relative_path)
 
+    # Clean up version snapshot records in DynamoDB for deleted files
+    delete_file_version_records(databaseId, assetId, affected_files)
+
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)
-    
+
     # Return response
     return FileOperationResponseModel(
         success=True,
-        message=f"Successfully deleted {len(affected_files)} file(s) and all versions" + 
+        message=f"Successfully deleted {len(affected_files)} file(s) and all versions" +
                 (f" under prefix {file_path}" if is_prefix else f": {file_path}"),
         affectedFiles=affected_files
     )

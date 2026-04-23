@@ -194,7 +194,7 @@ def delete_tag(tag_name, claims_and_roles):
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(tag, "DELETE"):
-                raise authorization_error()
+                return authorization_error()
         
         # Delete the tag
         logger.info(f"Deleting tag: {tag_name}")

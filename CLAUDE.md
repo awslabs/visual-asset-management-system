@@ -464,7 +464,7 @@ When implementing new features, follow the patterns in these files:
 ## 🔀 **Git Workflow**
 
 -   **Branch naming**: `release/X.Y.Z` for releases, `feature/description` for features
--   **Current branch**: `release/2.6.0`
+-   **Current branch**: `release/2.X.0` based on version in (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)
 -   **Main branch**: `main`
 -   **Changelog format**: `standard-version` format in `CHANGELOG.md`
 -   **Commit style**: Descriptive imperative mood ("Fix bugs", "Add cognito user management")
