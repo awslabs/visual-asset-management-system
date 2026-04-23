@@ -148,25 +148,25 @@ Download files from an asset with advanced options for version selection, tree t
 vamscli assets download [LOCAL_PATH] [OPTIONS]
 ```
 
-| Option                             | Type    | Required    | Description                                                            |
-| ---------------------------------- | ------- | ----------- | ---------------------------------------------------------------------- |
-| `LOCAL_PATH`                       | PATH    | Conditional | Local directory for downloads (optional with `--shareable-links-only`) |
-| `-d`, `--database`                 | TEXT    | Yes         | Database ID                                                            |
-| `-a`, `--asset`                    | TEXT    | Yes         | Asset ID                                                               |
-| `--file-key`                       | TEXT    | No          | Specific file key to download                                          |
-| `--recursive`                      | Flag    | No          | Download all files from folder tree                                    |
-| `--flatten-download-tree`          | Flag    | No          | Ignore folder structure, download flat                                 |
-| `--asset-preview`                  | Flag    | No          | Download only the asset preview file                                   |
-| `--file-previews`                  | Flag    | No          | Additionally download file preview files                               |
-| `--asset-version-id`               | TEXT    | No          | Download from a specific version by ID                                 |
-| `--asset-version-alias`            | TEXT    | No          | Download from a specific version by alias                              |
-| `--asset-link-children-tree-depth` | INTEGER | No          | Traverse child link tree to specified depth                            |
-| `--shareable-links-only`           | Flag    | No          | Return presigned URLs without downloading                              |
-| `--parallel-downloads`             | INTEGER | No          | Max parallel downloads (default: 5)                                    |
-| `--retry-attempts`                 | INTEGER | No          | Retry attempts per file (default: 3)                                   |
-| `--timeout`                        | INTEGER | No          | Download timeout per file in seconds (default: 300)                    |
-| `--hide-progress`                  | Flag    | No          | Hide download progress display                                         |
-| `--json-output`                    | Flag    | No          | Output raw JSON response                                               |
+| Option                             | Type    | Required    | Description                                                                         |
+| ---------------------------------- | ------- | ----------- | ----------------------------------------------------------------------------------- |
+| `LOCAL_PATH`                       | PATH    | Conditional | Local directory for downloads (optional with `--shareable-links-only`)              |
+| `-d`, `--database`                 | TEXT    | Yes         | Database ID                                                                         |
+| `-a`, `--asset`                    | TEXT    | Yes         | Asset ID                                                                            |
+| `--file-key`                       | TEXT    | No          | Specific file key to download (defaults to `/` when `--recursive` is used)          |
+| `--recursive`                      | Flag    | No          | Download all files from folder tree (defaults `--file-key` to `/` if not specified) |
+| `--flatten-download-tree`          | Flag    | No          | Ignore folder structure, download flat                                              |
+| `--asset-preview`                  | Flag    | No          | Download only the asset preview file                                                |
+| `--file-previews`                  | Flag    | No          | Additionally download file preview files                                            |
+| `--asset-version-id`               | TEXT    | No          | Download from a specific version by ID                                              |
+| `--asset-version-alias`            | TEXT    | No          | Download from a specific version by alias                                           |
+| `--asset-link-children-tree-depth` | INTEGER | No          | Traverse child link tree to specified depth                                         |
+| `--shareable-links-only`           | Flag    | No          | Return presigned URLs without downloading                                           |
+| `--parallel-downloads`             | INTEGER | No          | Max parallel downloads (default: 5)                                                 |
+| `--retry-attempts`                 | INTEGER | No          | Retry attempts per file (default: 3)                                                |
+| `--timeout`                        | INTEGER | No          | Download timeout per file in seconds (default: 300)                                 |
+| `--hide-progress`                  | Flag    | No          | Hide download progress display                                                      |
+| `--json-output`                    | Flag    | No          | Output raw JSON response                                                            |
 
 :::note
 `--asset-version-id` and `--asset-version-alias` are mutually exclusive. When provided, downloads retrieve files as they existed in the specified version rather than the current state.
@@ -174,7 +174,9 @@ vamscli assets download [LOCAL_PATH] [OPTIONS]
 
 ```bash
 vamscli assets download /local/path -d my-db -a my-asset
+vamscli assets download /local/path -d my-db -a my-asset --recursive
 vamscli assets download /local/path -d my-db -a my-asset --file-key "/model.gltf"
+vamscli assets download /local/path -d my-db -a my-asset --file-key "/models/" --recursive
 vamscli assets download /local/path -d my-db -a my-asset --asset-version-id 2
 vamscli assets download /local/path -d my-db -a my-asset --asset-version-alias "stable-release"
 vamscli assets download -d my-db -a my-asset --shareable-links-only

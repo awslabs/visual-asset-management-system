@@ -84,7 +84,7 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
         };
 
         loadPDF();
-    }, [assetId, assetKey, databaseId, versionId, isPreviewFile]);
+    }, [assetId, assetKey, databaseId, versionId, assetVersionId, isPreviewFile]);
 
     const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
         setNumPages(numPages);

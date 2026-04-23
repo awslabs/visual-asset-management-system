@@ -38,6 +38,7 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey,
+                    versionId: versionId,
                     assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
@@ -62,7 +63,7 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
         };
 
         loadHTML();
-    }, [assetId, assetKey, databaseId, versionId]);
+    }, [assetId, assetKey, databaseId, versionId, assetVersionId]);
 
     if (loading) {
         return (

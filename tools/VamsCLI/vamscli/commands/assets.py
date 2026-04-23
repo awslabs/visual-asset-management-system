@@ -23,8 +23,8 @@ from ..utils.exceptions import (
     AssetNotDistributableError, DownloadTreeError, APIError
 )
 from ..utils.download_manager import (
-    DownloadManager, DownloadFileInfo, DownloadProgress, FileTreeBuilder,
-    AssetTreeTraverser, format_file_size, format_duration
+    DownloadManager, DownloadFileInfo, DownloadProgress, StreamingDownloadProgress,
+    FileTreeBuilder, AssetTreeTraverser, format_file_size, format_duration
 )
 
 
@@ -46,6 +46,28 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
             raise click.BadParameter(
                 f"Invalid JSON input: '{json_input}' is neither valid JSON nor a readable file path"
             )
+
+
+def list_all_asset_files(api_client, database_id: str, asset_id: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Fetch all files for an asset, handling pagination automatically."""
+    all_items: List[Dict[str, Any]] = []
+    next_token = None
+    base_params = dict(params) if params else {}
+
+    while True:
+        request_params = dict(base_params)
+        if next_token:
+            request_params['startingToken'] = next_token
+
+        result = api_client.list_asset_files(database_id, asset_id, request_params)
+        items = result.get('items', [])
+        all_items.extend(items)
+
+        next_token = result.get('NextToken')
+        if not next_token:
+            break
+
+    return all_items
 
 
 def format_asset_output(asset_data: Dict[str, Any], json_output: bool = False) -> str:
@@ -115,69 +137,71 @@ def parse_tags_input(tags: List[str]) -> List[str]:
 
 class DownloadProgressDisplay:
     """Display download progress in the terminal."""
-    
+
     def __init__(self, hide_progress: bool = False):
         self.hide_progress = hide_progress
         self.last_update = 0
-        self.update_interval = 0.5  # Update every 500ms
-        
-    def update(self, progress: DownloadProgress):
+        self.update_interval = 0.5
+        self._lines_printed = 0
+
+    def update(self, progress):
         """Update the progress display."""
         if self.hide_progress:
             return
-            
+
         current_time = time.time()
         if current_time - self.last_update < self.update_interval:
             return
-            
+
         self.last_update = current_time
-        
-        # Clear previous lines (using click.echo directly for terminal control sequences)
-        click.echo('\033[2K\033[1A' * 10, nl=False)  # Clear up to 10 lines
-        
-        # Overall progress
+
+        if self._lines_printed > 0:
+            click.echo('\033[2K\033[1A' * self._lines_printed, nl=False)
+            click.echo('\033[2K', nl=False)
+
+        lines_count = 0
+
         overall_pct = progress.overall_progress
         completed_size_str = format_file_size(progress.completed_size)
         total_size_str = format_file_size(progress.total_size)
-        
-        # Progress bar
+
         bar_width = 40
         filled = int(bar_width * overall_pct / 100)
-        bar = '█' * filled + '░' * (bar_width - filled)
-        
-        output_info(f"\nOverall Progress: [{bar}] {overall_pct:.1f}% ({completed_size_str}/{total_size_str})", False)
-        
-        # Speed and ETA
+        bar = '#' * filled + '-' * (bar_width - filled)
+
+        click.echo(f"Progress: [{bar}] {overall_pct:.1f}% ({completed_size_str}/{total_size_str})")
+        lines_count += 1
+
         speed_str = format_file_size(int(progress.download_speed)) + "/s"
         eta = progress.estimated_time_remaining
         eta_str = format_duration(eta) if eta else "calculating..."
-        
-        output_info(f"Speed: {speed_str} | Active: {progress.active_downloads} | ETA: {eta_str}", False)
-        
-        # File progress (show up to 5 files)
+
+        click.echo(f"Speed: {speed_str} | Active: {progress.active_downloads} | ETA: {eta_str}")
+        lines_count += 1
+
+        status_icons = {"pending": "[.]", "downloading": "[v]", "completed": "[+]", "failed": "[x]"}
+
         files_shown = 0
         for file_key, file_progress in progress.file_progress.items():
             if files_shown >= 5:
                 remaining = len(progress.file_progress) - files_shown
                 if remaining > 0:
-                    output_info(f"... and {remaining} more files", False)
+                    click.echo(f"... and {remaining} more files")
+                    lines_count += 1
                 break
-                
+
             file_pct = (file_progress["completed_size"] / file_progress["total_size"]) * 100 if file_progress["total_size"] > 0 else 0
-            status_icon = {
-                "pending": "⏳",
-                "downloading": "⬇️",
-                "completed": "✅",
-                "failed": "❌"
-            }.get(file_progress["status"], "❓")
-            
-            # Truncate long filenames
+            icon = status_icons.get(file_progress["status"], "[?]")
+
             display_name = file_key
             if len(display_name) > 50:
                 display_name = "..." + display_name[-47:]
-                
-            output_info(f"  {status_icon} {display_name}: {file_pct:.1f}%", False)
+
+            click.echo(f"  {icon} {display_name}: {file_pct:.1f}%")
             files_shown += 1
+            lines_count += 1
+
+        self._lines_printed = lines_count
 
 
 @click.group()
@@ -908,10 +932,13 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
         # Download whole asset
         vamscli assets download /local/path -d my-db -a my-asset
 
+        # Download entire asset recursively (--file-key defaults to /)
+        vamscli assets download /local/path -d my-db -a my-asset --recursive
+
         # Download specific file
         vamscli assets download /local/path -d my-db -a my-asset --file-key "/model.gltf"
 
-        # Download folder recursively
+        # Download specific folder recursively
         vamscli assets download /local/path -d my-db -a my-asset --file-key "/models/" --recursive
 
         # Download asset preview only
@@ -983,12 +1010,12 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
             raise click.ClickException("Cannot specify both --asset-preview and --file-key")
         if asset_preview and asset_link_children_tree_depth:
             raise click.ClickException("Cannot specify both --asset-preview and --asset-link-children-tree-depth")
+        if recursive and not file_key:
+            file_key = "/"
         if file_previews and not file_key:
             raise click.ClickException("--file-previews requires --file-key to be specified")
         if flatten_download_tree and not file_key:
             raise click.ClickException("--flatten-download-tree requires --file-key to be specified")
-        if recursive and not file_key:
-            raise click.ClickException("--recursive requires --file-key to be specified")
 
         # Validate asset version options
         if asset_version_id and asset_version_alias:
@@ -1034,13 +1061,10 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                             "message": "Shareable link generated successfully"
                         }
                     else:
-                        # Get all files
-                        files_response = api_client.list_asset_files(database, asset, {
-                            'includeArchived': 'false',
-                            'maxItems': 1000
+                        # Get all files (with pagination)
+                        all_files = list_all_asset_files(api_client, database, asset, {
+                            'includeArchived': 'false'
                         })
-
-                        all_files = files_response.get('items', [])
                         target_files = [f for f in all_files if not f.get('isFolder')]
 
                         if not target_files:
@@ -1078,6 +1102,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
             try:
                 # Determine what to download
                 files_to_download = []
+                streamed_download_done = False
                 
                 if asset_preview:
                     # Download asset preview only
@@ -1117,13 +1142,10 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         # Create subdirectory for this asset
                         asset_dir = Path(local_path) / asset_id
                         
-                        # Get files for this asset
-                        files_response = api_client.list_asset_files(asset_db, asset_id, {
-                            'includeArchived': 'false',
-                            'maxItems': 1000
+                        # Get files for this asset (with pagination)
+                        asset_files = list_all_asset_files(api_client, asset_db, asset_id, {
+                            'includeArchived': 'false'
                         })
-                        
-                        asset_files = files_response.get('items', [])
                         target_files = [f for f in asset_files if not f.get('isFolder')]
                         
                         # Generate download info for each file
@@ -1147,78 +1169,126 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     output_status(f"Fetching file(s) for key: {file_key}...", json_output)
                     
                     if recursive or file_key.endswith('/'):
-                        # Download folder contents
-                        files_response = api_client.list_asset_files(database, asset, {
-                            'includeArchived': 'false',
-                            'maxItems': 1000
+                        # Download folder contents (with pagination)
+                        all_files = list_all_asset_files(api_client, database, asset, {
+                            'includeArchived': 'false'
                         })
-                        
-                        all_files = files_response.get('items', [])
-                        
+
                         # Get files under the specified prefix
                         target_files = FileTreeBuilder.get_files_under_prefix(
                             all_files, file_key, recursive
                         )
-                        
+
                         if not target_files:
                             raise FileDownloadError(f"No files found under '{file_key}'")
-                        
+
                         # Handle flattening
                         if flatten_download_tree:
                             target_files = FileTreeBuilder.flatten_file_list(target_files)
-                        
-                        # Generate download info for each file
-                        for file_item in target_files:
-                            relative_path = file_item.get('relativePath', '')
 
-                            if flatten_download_tree:
-                                # Save to root of local path
-                                file_local_path = Path(local_path) / Path(relative_path).name
-                            else:
-                                # Preserve directory structure
-                                file_local_path = Path(local_path) / relative_path.lstrip('/')
+                        use_streaming = not flatten_download_tree and not file_previews
+                        if use_streaming:
+                            # Stream: generate presigned URLs and download in parallel
+                            output_status(f"Downloading {len(target_files)} file(s) (streaming)...", json_output)
+                            progress_display = DownloadProgressDisplay(hide_progress=hide_progress)
 
-                            try:
-                                download_response = api_client.download_asset_file(
-                                    database, asset, relative_path,
-                                    asset_version_id=asset_version_id,
-                                    asset_version_alias=asset_version_alias
-                                )
-                                files_to_download.append(DownloadFileInfo(
-                                    relative_key=relative_path,
-                                    local_path=file_local_path,
-                                    download_url=download_response.get('downloadUrl'),
-                                    file_size=file_item.get('size')
-                                ))
-                            except Exception as e:
-                                output_warning(f"Skipping file {relative_path}: {e}", json_output)
+                            def progress_callback(progress):  # nosemgrep: useless-inner-function
+                                progress_display.update(progress)
 
-                        # Download file previews if requested
-                        if file_previews:
-                            for file_item in target_files:
+                            async def _streamed_folder_download():
+                                queue: asyncio.Queue = asyncio.Queue(maxsize=parallel_downloads * 2)
+                                streaming_progress = StreamingDownloadProgress()
+
+                                async def _produce():
+                                    total = len(target_files)
+                                    for idx, file_item in enumerate(target_files):
+                                        rp = file_item.get('relativePath', '')
+                                        lp = Path(local_path) / rp.lstrip('/')
+                                        try:
+                                            dr = api_client.download_asset_file(
+                                                database, asset, rp,
+                                                asset_version_id=asset_version_id,
+                                                asset_version_alias=asset_version_alias
+                                            )
+                                            await queue.put(DownloadFileInfo(
+                                                relative_key=rp, local_path=lp,
+                                                download_url=dr.get('downloadUrl'),
+                                                file_size=file_item.get('size')
+                                            ))
+                                        except Exception:
+                                            pass
+                                        if not json_output and total > 10 and (idx + 1) % 25 == 0:
+                                            output_status(f"Preparing downloads... {idx + 1}/{total} files", False)
+                                    await queue.put(None)
+
+                                async with DownloadManager(
+                                    api_client, max_parallel=parallel_downloads,
+                                    max_retries=retry_attempts, timeout=timeout,
+                                    progress_callback=progress_callback
+                                ) as manager:
+                                    producer = asyncio.create_task(_produce())
+                                    result = await manager.download_files_streamed(queue, streaming_progress)
+                                    await producer
+                                    return result, streaming_progress
+
+                            result, streaming_progress = asyncio.run(_streamed_folder_download())
+                            files_to_download = [DownloadFileInfo(
+                                relative_key=k, local_path=Path('.'), download_url='',
+                                file_size=v.get('total_size')
+                            ) for k, v in streaming_progress.file_progress.items()]
+                            streamed_download_done = True
+                        else:
+                            # Sequential: generate all URLs first, then download
+                            total_target = len(target_files)
+                            for idx, file_item in enumerate(target_files):
                                 relative_path = file_item.get('relativePath', '')
-                                # Try to get preview for this file
+
+                                if not json_output and total_target > 10 and (idx + 1) % 25 == 0:
+                                    output_status(f"Preparing downloads... {idx + 1}/{total_target} files", False)
+
+                                if flatten_download_tree:
+                                    file_local_path = Path(local_path) / Path(relative_path).name
+                                else:
+                                    file_local_path = Path(local_path) / relative_path.lstrip('/')
+
                                 try:
-                                    preview_response = api_client.download_asset_file(
-                                        database, asset, f"{relative_path}_preview",
+                                    download_response = api_client.download_asset_file(
+                                        database, asset, relative_path,
                                         asset_version_id=asset_version_id,
                                         asset_version_alias=asset_version_alias
                                     )
-                                    
-                                    if flatten_download_tree:
-                                        preview_local_path = Path(local_path) / Path(relative_path).name
-                                    else:
-                                        preview_local_path = Path(local_path) / relative_path.lstrip('/')
-                                    
                                     files_to_download.append(DownloadFileInfo(
-                                        relative_key=f"{relative_path}_preview",
-                                        local_path=preview_local_path,
-                                        download_url=preview_response.get('downloadUrl'),
-                                        file_size=None
+                                        relative_key=relative_path,
+                                        local_path=file_local_path,
+                                        download_url=download_response.get('downloadUrl'),
+                                        file_size=file_item.get('size')
                                     ))
-                                except Exception:
-                                    # Preview doesn't exist, skip silently
-                                    pass
+                                except Exception as e:
+                                    output_warning(f"Skipping file {relative_path}: {e}", json_output)
+
+                            if file_previews:
+                                for file_item in target_files:
+                                    relative_path = file_item.get('relativePath', '')
+                                    try:
+                                        preview_response = api_client.download_asset_file(
+                                            database, asset, f"{relative_path}_preview",
+                                            asset_version_id=asset_version_id,
+                                            asset_version_alias=asset_version_alias
+                                        )
+
+                                        if flatten_download_tree:
+                                            preview_local_path = Path(local_path) / Path(relative_path).name
+                                        else:
+                                            preview_local_path = Path(local_path) / relative_path.lstrip('/')
+
+                                        files_to_download.append(DownloadFileInfo(
+                                            relative_key=f"{relative_path}_preview",
+                                            local_path=preview_local_path,
+                                            download_url=preview_response.get('downloadUrl'),
+                                            file_size=None
+                                        ))
+                                    except Exception:
+                                        pass
                     else:
                         # Download single file
                         download_response = api_client.download_asset_file(
@@ -1258,45 +1328,72 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                 # Preview doesn't exist, skip silently
                                 pass
                 else:
-                    # Download all files from asset
+                    # Download all files from asset (with pagination)
                     output_status("Fetching all files from asset...", json_output)
-                    
-                    files_response = api_client.list_asset_files(database, asset, {
-                        'includeArchived': 'false',
-                        'maxItems': 1000
+
+                    all_files = list_all_asset_files(api_client, database, asset, {
+                        'includeArchived': 'false'
                     })
-                    
-                    all_files = files_response.get('items', [])
                     target_files = [f for f in all_files if not f.get('isFolder')]
                     
                     if not target_files:
                         raise FileDownloadError(f"Asset '{asset}' currently has no files to download")
-                    
-                    # Generate download info for each file
-                    for file_item in target_files:
-                        relative_path = file_item.get('relativePath', '')
-                        file_local_path = Path(local_path) / relative_path.lstrip('/')
 
-                        try:
-                            download_response = api_client.download_asset_file(
-                                database, asset, relative_path,
-                                asset_version_id=asset_version_id,
-                                asset_version_alias=asset_version_alias
-                            )
-                            files_to_download.append(DownloadFileInfo(
-                                relative_key=relative_path,
-                                local_path=file_local_path,
-                                download_url=download_response.get('downloadUrl'),
-                                file_size=file_item.get('size')
-                            ))
-                        except Exception as e:
-                            output_warning(f"Skipping file {relative_path}: {e}", json_output)
+                    # Stream: generate presigned URLs and download in parallel
+                    output_status(f"Downloading {len(target_files)} file(s) (streaming)...", json_output)
+                    progress_display = DownloadProgressDisplay(hide_progress=hide_progress)
+
+                    def progress_callback_all(progress):  # nosemgrep: useless-inner-function
+                        progress_display.update(progress)
+
+                    async def _streamed_asset_download():
+                        queue: asyncio.Queue = asyncio.Queue(maxsize=parallel_downloads * 2)
+                        streaming_progress = StreamingDownloadProgress()
+
+                        async def _produce():
+                            total = len(target_files)
+                            for idx, file_item in enumerate(target_files):
+                                rp = file_item.get('relativePath', '')
+                                lp = Path(local_path) / rp.lstrip('/')
+                                try:
+                                    dr = api_client.download_asset_file(
+                                        database, asset, rp,
+                                        asset_version_id=asset_version_id,
+                                        asset_version_alias=asset_version_alias
+                                    )
+                                    await queue.put(DownloadFileInfo(
+                                        relative_key=rp, local_path=lp,
+                                        download_url=dr.get('downloadUrl'),
+                                        file_size=file_item.get('size')
+                                    ))
+                                except Exception:
+                                    pass
+                                if not json_output and total > 10 and (idx + 1) % 25 == 0:
+                                    output_status(f"Preparing downloads... {idx + 1}/{total} files", False)
+                            await queue.put(None)
+
+                        async with DownloadManager(
+                            api_client, max_parallel=parallel_downloads,
+                            max_retries=retry_attempts, timeout=timeout,
+                            progress_callback=progress_callback_all
+                        ) as manager:
+                            producer = asyncio.create_task(_produce())
+                            result = await manager.download_files_streamed(queue, streaming_progress)
+                            await producer
+                            return result, streaming_progress
+
+                    result, streaming_progress = asyncio.run(_streamed_asset_download())
+                    files_to_download = [DownloadFileInfo(
+                        relative_key=k, local_path=Path('.'), download_url='',
+                        file_size=v.get('total_size')
+                    ) for k, v in streaming_progress.file_progress.items()]
+                    streamed_download_done = True
                 
-                if not files_to_download:
+                if not files_to_download and not streamed_download_done:
                     raise FileDownloadError("No files to download")
-                
+
                 # Check for conflicts if flattening
-                if flatten_download_tree and len(files_to_download) > 1:
+                if not streamed_download_done and flatten_download_tree and len(files_to_download) > 1:
                     filenames = [f.local_path.name for f in files_to_download]
                     if len(filenames) != len(set(filenames)):
                         # Conflicts detected
@@ -1353,34 +1450,35 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                 "Use CLI mode for interactive conflict resolution."
                             )
                 
-                # Perform downloads
-                output_status(f"Downloading {len(files_to_download)} file(s)...", json_output)
-                
-                # Create progress callback
-                progress_display = DownloadProgressDisplay(hide_progress=hide_progress)
+                # Perform downloads (skip if streaming already completed them)
+                if not streamed_download_done:
+                    output_status(f"Downloading {len(files_to_download)} file(s)...", json_output)
 
-                def progress_callback(progress: DownloadProgress):  # nosemgrep: useless-inner-function
-                    progress_display.update(progress)
+                    progress_display = DownloadProgressDisplay(hide_progress=hide_progress)
+
+                    def progress_callback(progress):  # nosemgrep: useless-inner-function
+                        progress_display.update(progress)
+
+                    async def download_files_async():
+                        async with DownloadManager(
+                            api_client,
+                            max_parallel=parallel_downloads,
+                            max_retries=retry_attempts,
+                            timeout=timeout,
+                            progress_callback=progress_callback
+                        ) as manager:
+                            return await manager.download_files(files_to_download)
+
+                    result = asyncio.run(download_files_async())
                 
-                # Use async download manager
-                async def download_files_async():
-                    async with DownloadManager(
-                        api_client,
-                        max_parallel=parallel_downloads,
-                        max_retries=retry_attempts,
-                        timeout=timeout,
-                        progress_callback=progress_callback
-                    ) as manager:
-                        return await manager.download_files(files_to_download)
-                
-                # Run async download
-                result = asyncio.run(download_files_async())
-                
-                # Verify downloaded files
+                # Verify downloaded files (skip for streamed downloads — already verified by manager)
                 verified_files = []
                 verification_failures = []
-                
-                for file_info in files_to_download:
+
+                if streamed_download_done:
+                    verified_files = [d['local_path'] for d in result.get('successful_downloads', [])]
+
+                for file_info in ([] if streamed_download_done else files_to_download):
                     if file_info.local_path.exists():
                         actual_size = file_info.local_path.stat().st_size
                         expected_size = file_info.file_size

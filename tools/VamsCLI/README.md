@@ -39,8 +39,11 @@ vamscli file upload -d my-database -a my-asset /path/to/file.gltf
 # Search assets
 vamscli search assets -q "training model"
 
-# Download an asset
+# Download an asset (all files)
 vamscli assets download /local/path -d my-database -a my-asset
+
+# Download an entire asset recursively
+vamscli assets download /local/path -d my-database -a my-asset --recursive
 
 # Create a version
 vamscli asset-version create -d my-database -a my-asset --comment "Release v1"

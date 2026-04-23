@@ -40,6 +40,8 @@ class RetryConfig:
             DEFAULT_RETRY_JITTER
         )
         
+        self.suppress_console_output = False
+
         # Validate configuration
         self._validate_config()
     
@@ -146,24 +148,26 @@ class RetryConfig:
             total_attempts: Total number of attempts
             show_progress: Whether to show progress indication
         """
-        if not show_progress or delay < 1.0:
+        from .logging import log_debug
+
+        log_debug(f"Rate limited. Retrying in {delay:.1f}s (attempt {attempt}/{total_attempts})")
+
+        if not show_progress or self.suppress_console_output or delay < 1.0:
             time.sleep(delay)  # nosemgrep: arbitrary-sleep
             return
-            
-        # Show progress for longer delays
-        import sys
-        
-        print(f"Rate limited. Retrying in {delay:.1f}s (attempt {attempt}/{total_attempts})...",
-              end='', flush=True)
 
-        # Sleep in small increments to allow for interruption
+        import sys
+
+        print(f"Rate limited. Retrying in {delay:.1f}s (attempt {attempt}/{total_attempts})...",
+              end='', flush=True, file=sys.stderr)
+
         remaining = delay
         while remaining > 0:
             sleep_time = min(0.1, remaining)
             time.sleep(sleep_time) # nosemgrep: arbitrary-sleep
             remaining -= sleep_time
-            
-        print(" retrying now.", flush=True)
+
+        print(" retrying now.", flush=True, file=sys.stderr)
 
 
 # Global retry configuration instance

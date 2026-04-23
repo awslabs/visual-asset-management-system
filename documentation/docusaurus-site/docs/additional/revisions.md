@@ -8,7 +8,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 | Version       | Date       | Key Changes                                                                                                                                                                                                                                                                                      |
 | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [2.5.1](#251) | 2026-04-29 |                                                                                                                                                                                                                                                                                                  |
+| [2.5.1](#251) | 2026-04-29 | Bug fixes: upload subfolder paths, file version history cleanup on delete, S3 version pagination, authorization error handling, image viewer version switching, CLI download pagination, CLI upload progress display                                                                             |
 | [2.5.0](#250) | 2026-04-21 | Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates |
 | [2.4.1](#241) | 2026-01-30 | GovCloud deployment fixes, CloudFront KMS fix, metadata schema navigation fix, file manager UX improvements                                                                                                                                                                                      |
 | [2.4.0](#240) | 2026-01-16 | Veerum viewer, NVIDIA Isaac Lab pipeline, Garnet Framework addon, metadata schema overhaul, metadata system overhaul, asset unarchiving, CloudFront custom domains, audit logging, EKS pipeline option                                                                                           |
@@ -27,7 +27,17 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
--
+-   Fixed file upload path construction when uploading to a subfolder — files now correctly include the full folder path (e.g., `/textures/USD/texture.png` instead of `/texture.png`).
+-   Fixed permanent file deletion not cleaning up Amazon DynamoDB version snapshot records — re-uploading a file at the same path no longer shows stale version history from previously deleted files.
+-   Fixed Amazon S3 version deletion not paginating — permanent delete now removes all S3 object versions even when a file has more than 1000 versions.
+-   Fixed permanent asset deletion not paginating Amazon DynamoDB queries for version files and metadata version cleanup — assets with large numbers of versions or files now fully delete all related records, using batch writes for efficiency.
+-   Fixed `authorization_error()` being raised as an exception instead of returned as a response across multiple backend handlers (assetService, metadataSchemaService, userRolesService, createRole, tagService, createTag), which caused "exceptions must derive from BaseException" errors.
+-   Fixed version switching across many viewer plugins — when switching to a different file version — the viewer now correctly fetches and displays the selected version instead of showing the latest only
+-   Fixed CLI asset download command capping at approximately 100 files — now paginates through all API results when downloading whole assets or folders.
+    -   Improved CLI asset download performance — presigned URL generation and file downloads now run concurrently via a streaming pipeline instead of sequentially.
+    -   The `--recursive` flag on `assets download` now defaults `--file-key` to `/` when not specified, enabling whole-asset recursive downloads without explicitly providing `--file-key /`.
+-   Fixed CLI file upload progress display erasing terminal scrollback history — progress now tracks and clears only the lines it actually printed.
+-   Fixed NVIDIA pipeline CodeBuild Amazon ECR repositories failing to delete when disabling pipelines — added `emptyOnDelete` to Cosmos and Gr00t CodeBuild ECR repositories so container images are automatically cleared before AWS CloudFormation deletion.
 
 ### 2.5.0
 

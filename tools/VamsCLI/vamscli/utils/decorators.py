@@ -108,6 +108,14 @@ def requires_setup_and_auth(func):
             # This prevents the availability check from blocking legitimate operations
             pass
         
+        # Suppress retry console output in JSON mode
+        if kwargs.get('json_output'):
+            try:
+                from .retry_config import get_retry_config
+                get_retry_config().suppress_console_output = True
+            except Exception:
+                pass
+
         # Execute the wrapped function and log completion
         try:
             result = func(*args, **kwargs)

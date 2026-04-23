@@ -321,6 +321,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                     assetId,
                     databaseId,
                     key: assetKey,
+                    versionId: versionId,
                     assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
@@ -445,7 +446,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                 cameraControlsRef.current.destroy();
             }
         };
-    }, [assetKey, assetId, databaseId, versionId]);
+    }, [assetKey, assetId, databaseId, versionId, assetVersionId]);
 
     return (
         <div
