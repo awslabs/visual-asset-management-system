@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-user-guide/upload-first-asset" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.9.2">
+<title data-rh="true">Upload Your First Asset | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.5.1/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.5.1/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.5.1/user-guide/upload-first-asset"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Upload Your First Asset | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This tutorial walks you through creating a database, uploading your first asset, and viewing it in the VAMS web interface. By the end, you will have a working database with an asset containing files, metadata, and optional relationships."><meta data-rh="true" property="og:description" content="This tutorial walks you through creating a database, uploading your first asset, and viewing it in the VAMS web interface. By the end, you will have a working database with an asset containing files, metadata, and optional relationships."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.5.1/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.5.1/user-guide/upload-first-asset"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.5.1/user-guide/upload-first-asset" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.5.1/user-guide/upload-first-asset" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Upload Your First Asset","item":"https://awslabs.github.io/visual-asset-management-system/release-2.5.1/user-guide/upload-first-asset"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.5.1/assets/css/styles.dd550158.css">
+<script src="/visual-asset-management-system/release-2.5.1/assets/js/runtime~main.07e531fb.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.5.1/assets/js/main.899dc59e.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}(),document.documentElement.setAttribute("data-announcement-bar-initially-dismissed",function(){try{return"true"===localStorage.getItem("docusaurus.announcement.dismiss")}catch(t){}return!1}())</script><div id="__docusaurus"><link rel="preload" as="image" href="/visual-asset-management-system/release-2.5.1/img/logo_dark.png"><link rel="preload" as="image" href="/visual-asset-management-system/release-2.5.1/img/logo.png"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><div class="theme-announcement-bar announcementBar_mb4j" style="background-color:#232f3e;color:#ffffff" role="banner"><div class="announcementBarPlaceholder_vyr4"></div><div class="content_knG7 announcementBarContent_xLdY">⭐ If you like VAMS, give it a star on <a target="_blank" rel="noopener noreferrer" href="https://github.com/awslabs/visual-asset-management-system">GitHub</a>! ⭐</div><button type="button" aria-label="Close" class="clean-btn close closeButton_CVFx announcementBarClose_gvF7"><svg viewBox="0 0 15 15" width="14" height="14"><g stroke="currentColor" stroke-width="3.1"><path d="M.75.75l13.5 13.5M14.25.75L.75 14.25"></path></g></svg></button></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/visual-asset-management-system/release-2.5.1/"><div class="navbar__logo"><img src="/visual-asset-management-system/release-2.5.1/img/logo_dark.png" alt="VAMS" class="themedComponent_mlkZ themedComponent--light_NVdE"><img src="/visual-asset-management-system/release-2.5.1/img/logo.png" alt="VAMS" class="themedComponent_mlkZ themedComponent--dark_xIcU"></div><b class="navbar__title text--truncate"></b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/visual-asset-management-system/release-2.5.1/">Documentation</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">AWS Solutions<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG menuWithAnnouncementBar_GW3s"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/visual-asset-management-system/release-2.5.1/"><span title="Visual Asset Management System (VAMS)" class="linkLabel_WmDU">Visual Asset Management System (VAMS)</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="true" href="/visual-asset-management-system/release-2.5.1/overview/solution-overview"><span title="Overview" class="categoryLinkLabel_W154">Overview</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/overview/solution-overview"><span title="Solution Overview" class="linkLabel_WmDU">Solution Overview</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/overview/benefits"><span title="Benefits" class="linkLabel_WmDU">Benefits</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/overview/use-cases"><span title="Use Cases" class="linkLabel_WmDU">Use Cases</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/overview/features"><span title="Features" class="linkLabel_WmDU">Features</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/overview/costs"><span title="Cost" class="linkLabel_WmDU">Cost</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.1/concepts/overview"><span title="Core Concepts" class="categoryLinkLabel_W154">Core Concepts</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.1/architecture/overview"><span title="Architecture" class="categoryLinkLabel_W154">Architecture</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.1/deployment/prerequisites"><span title="Deployment" class="categoryLinkLabel_W154">Deployment</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/visual-asset-management-system/release-2.5.1/user-guide/getting-started"><span title="User Guide" class="categoryLinkLabel_W154">User Guide</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/getting-started"><span title="Getting Started" class="linkLabel_WmDU">Getting Started</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/web-interface"><span title="Web Interface Overview" class="linkLabel_WmDU">Web Interface Overview</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/upload-first-asset"><span title="Upload Your First Asset" class="linkLabel_WmDU">Upload Your First Asset</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/asset-management"><span title="Asset Management" class="linkLabel_WmDU">Asset Management</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/search-and-discovery"><span title="Search and Discovery" class="linkLabel_WmDU">Search and Discovery</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/metadata-management"><span title="Metadata Management" class="linkLabel_WmDU">Metadata Management</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/pipelines-and-workflows"><span title="Pipelines and Workflows" class="linkLabel_WmDU">Pipelines and Workflows</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/permissions"><span title="Permissions" class="linkLabel_WmDU">Permissions</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/tags"><span title="Tags" class="linkLabel_WmDU">Tags</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/subscriptions"><span title="Subscriptions" class="linkLabel_WmDU">Subscriptions</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/api-keys"><span title="API Keys" class="linkLabel_WmDU">API Keys</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.5.1/user-guide/user-management"><span title="User Management" class="linkLabel_WmDU">User Management</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.1/developer/setup"><span title="Developer Guide" class="categoryLinkLabel_W154">Developer Guide</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.5.1/additional/quotas"><span title="Additional" class="categoryLinkLabel_W154">Additional</span></a></div></li></ul></nav><button type="button" title="Collapse sidebar" aria-label="Collapse sidebar" class="button button--secondary button--outline collapseSidebarButton_PEFL"><svg width="20" height="20" aria-hidden="true" class="collapseSidebarButtonIcon_kv0_"><g fill="#7a7a7a"><path d="M9.992 10.023c0 .2-.062.399-.172.547l-4.996 7.492a.982.982 0 01-.828.454H1c-.55 0-1-.453-1-1 0-.2.059-.403.168-.551l4.629-6.942L.168 3.078A.939.939 0 010 2.528c0-.548.45-.997 1-.997h2.996c.352 0 .649.18.828.45L9.82 9.472c.11.148.172.347.172.55zm0 0"></path><path d="M19.98 10.023c0 .2-.058.399-.168.547l-4.996 7.492a.987.987 0 01-.828.454h-3c-.547 0-.996-.453-.996-1 0-.2.059-.403.168-.551l4.625-6.942-4.625-6.945a.939.939 0 01-.168-.55 1 1 0 01.996-.997h3c.348 0 .649.18.828.45l4.996 7.492c.11.148.168.347.168.55zm0 0"></path></g></svg></button></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/visual-asset-management-system/release-2.5.1/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">User Guide</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Upload Your First Asset</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Upload Your First Asset</h1></header>
+<p>This tutorial walks you through creating a database, uploading your first asset, and viewing it in the VAMS web interface. By the end, you will have a working database with an asset containing files, metadata, and optional relationships.</p>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Prerequisites</div><div class="admonitionContent_BuS1"><p>You must be signed in to VAMS with a role that grants access to the <strong>Databases</strong>, <strong>Create Asset</strong>, and <strong>Assets and Files</strong> navigation pages. If you do not see these items in the side navigation, contact your administrator.</p></div></div>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-1-create-a-database">Step 1: Create a Database<a href="#step-1-create-a-database" class="hash-link" aria-label="Direct link to Step 1: Create a Database" title="Direct link to Step 1: Create a Database" translate="no">​</a></h2>
+<p>Assets in VAMS are organized into databases. If your administrator has already created a database for you, skip to <a href="#step-2-navigate-to-the-upload-page" class="">Step 2</a>.</p>
+<ol>
+<li class="">In the side navigation, select <strong>Databases</strong>.</li>
+<li class="">Select the <strong>Create Database</strong> button in the top-right corner of the page.</li>
+<li class="">In the <strong>Create Database</strong> modal, fill in the following fields:</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field</th><th>Requirements</th><th>Description</th></tr></thead><tbody><tr><td><strong>Database Name</strong></td><td>4-64 characters, alphanumeric plus <code>-</code> and <code>_</code> only. Cannot be &quot;GLOBAL&quot;.</td><td>A unique identifier for your database. This cannot be changed after creation.</td></tr><tr><td><strong>Database Description</strong></td><td>4-256 characters.</td><td>A human-readable description of the database&#x27;s purpose.</td></tr><tr><td><strong>Default Bucket and Prefix</strong></td><td>Required. Select from available buckets.</td><td>The Amazon S3 bucket where assets in this database will be stored. If only one bucket is available, it is selected automatically.</td></tr><tr><td><strong>Restrict Metadata Outside Schemas</strong></td><td>Optional checkbox.</td><td>When enabled, only metadata fields defined in applied metadata schemas are allowed.</td></tr><tr><td><strong>Restrict File Upload Extensions</strong></td><td>Optional. Comma-separated list (e.g., <code>.jpg,.png,.pdf</code>).</td><td>Limits file uploads to specified extensions. Leave blank or enter <code>.all</code> to allow all file types.</td></tr></tbody></table>
+<ol start="4">
+<li class="">Select <strong>Create Database</strong>.</li>
+</ol>
+<p><img decoding="async" loading="lazy" alt="Database listing page with databases" src="/visual-asset-management-system/release-2.5.1/assets/images/database_page_20260323_v2.5-fe5340c1997e25bdf534e718225a9d99.png" width="3820" height="1009" class="img_ev3q"></p>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>tip</div><div class="admonitionContent_BuS1"><p>Choose a descriptive database name that reflects the type of assets it will contain, such as <code>building-models</code> or <code>site-scans-2024</code>. The name becomes part of asset URLs and cannot be changed later.</p></div></div>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-2-navigate-to-the-upload-page">Step 2: Navigate to the Upload Page<a href="#step-2-navigate-to-the-upload-page" class="hash-link" aria-label="Direct link to Step 2: Navigate to the Upload Page" title="Direct link to Step 2: Navigate to the Upload Page" translate="no">​</a></h2>
+<ol>
+<li class="">In the side navigation, select <strong>Create Asset</strong>.</li>
+<li class="">The upload wizard opens with the first step: <strong>Asset Details</strong>.</li>
+</ol>
+<p><img decoding="async" loading="lazy" alt="Create Asset page showing the Asset Details wizard step" src="/visual-asset-management-system/release-2.5.1/assets/images/create_asset_first_20260323_v2.5-2665213a907c5b12bd0bb425e0f793ff.png" width="3814" height="1132" class="img_ev3q"></p>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-3-enter-asset-details">Step 3: Enter Asset Details<a href="#step-3-enter-asset-details" class="hash-link" aria-label="Direct link to Step 3: Enter Asset Details" title="Direct link to Step 3: Enter Asset Details" translate="no">​</a></h2>
+<p>Fill in the required fields on the <strong>Asset Details</strong> step:</p>
+<ol>
+<li class="">
+<p><strong>Asset Name</strong> -- Enter a descriptive name for your asset. This is the primary display name used throughout VAMS.</p>
+</li>
+<li class="">
+<p><strong>Database</strong> -- Select the database you created in Step 1 (or any database you have access to) from the dropdown.</p>
+</li>
+<li class="">
+<p><strong>Is Distributable?</strong> -- Select <strong>Yes</strong> or <strong>No</strong>.</p>
+<p>!!! info
+The <strong>Is Distributable</strong> setting controls whether file downloads are enabled for this asset. Select <strong>Yes</strong> if users should be able to download files from this asset. Select <strong>No</strong> to restrict the asset to viewing only.</p>
+</li>
+<li class="">
+<p><strong>Description</strong> -- Enter a description of at least 4 characters. This helps other users understand what the asset contains.</p>
+</li>
+<li class="">
+<p><strong>Tags</strong> (optional) -- Select one or more tags from the dropdown to categorize your asset. Tags are defined by your administrator in the <strong>Tags Management</strong> page.</p>
+<p>!!! warning
+If your administrator has configured required tag types, you must select at least one tag from each required type before proceeding. Required tag types are listed in the constraint text below the Tags field.</p>
+</li>
+<li class="">
+<p>Select <strong>Next</strong> to proceed to the metadata step.</p>
+</li>
+</ol>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-4-add-metadata">Step 4: Add Metadata<a href="#step-4-add-metadata" class="hash-link" aria-label="Direct link to Step 4: Add Metadata" title="Direct link to Step 4: Add Metadata" translate="no">​</a></h2>
+<p>The <strong>Asset Metadata</strong> step allows you to attach key-value metadata pairs to your asset.</p>
+<ol>
+<li class="">If a metadata schema is applied to the selected database, required fields are displayed automatically. Fill in all required fields.</li>
+<li class="">To add custom metadata, use the metadata editor to add key-value pairs. Each entry requires a key name, a value, and a value type (string, number, or boolean).</li>
+<li class="">Select <strong>Commit changes</strong> to save your metadata entries before proceeding.</li>
+</ol>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>tip</div><div class="admonitionContent_BuS1"><p>Metadata makes your assets searchable and organizable. Common metadata keys include <code>project</code>, <code>location</code>, <code>captureDate</code>, <code>equipment</code>, and <code>author</code>.</p></div></div>
+<ol start="4">
+<li class="">Select <strong>Next</strong> to proceed to the relationships step.</li>
+</ol>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-5-configure-asset-relationships-optional">Step 5: Configure Asset Relationships (Optional)<a href="#step-5-configure-asset-relationships-optional" class="hash-link" aria-label="Direct link to Step 5: Configure Asset Relationships (Optional)" title="Direct link to Step 5: Configure Asset Relationships (Optional)" translate="no">​</a></h2>
+<p>The <strong>Asset Relationships</strong> step lets you link your new asset to existing assets. This step is optional -- select <strong>Next</strong> to skip it.</p>
+<p>VAMS supports three relationship types:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Relationship</th><th>Description</th></tr></thead><tbody><tr><td><strong>Parent</strong></td><td>The current asset is a child of the selected parent asset. Use this for hierarchical structures (for example, a building scan that belongs to a site).</td></tr><tr><td><strong>Child</strong></td><td>The selected asset becomes a child of the current asset.</td></tr><tr><td><strong>Related</strong></td><td>A general bidirectional association between assets with no hierarchy implied.</td></tr></tbody></table>
+<p>To add a relationship:</p>
+<ol>
+<li class="">Select the relationship type tab (<strong>Parent</strong>, <strong>Child</strong>, or <strong>Related</strong>).</li>
+<li class="">Use the asset selector to search for and select an existing asset.</li>
+<li class="">Optionally add metadata to the relationship link.</li>
+<li class="">Repeat for additional relationships.</li>
+</ol>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>Relationships can cross database boundaries. You can link an asset in one database to an asset in a different database.</p></div></div>
+<ol start="5">
+<li class="">Select <strong>Next</strong> to proceed to the file selection step.</li>
+</ol>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-6-select-files-to-upload">Step 6: Select Files to Upload<a href="#step-6-select-files-to-upload" class="hash-link" aria-label="Direct link to Step 6: Select Files to Upload" title="Direct link to Step 6: Select Files to Upload" translate="no">​</a></h2>
+<p>The <strong>Select Files to Upload</strong> step lets you attach files to your asset. This step is optional -- you can create an asset without files and upload them later.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="selecting-files">Selecting Files<a href="#selecting-files" class="hash-link" aria-label="Direct link to Selecting Files" title="Direct link to Selecting Files" translate="no">​</a></h3>
+<ol>
+<li class="">
+<p>Choose an upload mode using the toggle:</p>
+<ul>
+<li class=""><strong>File Upload</strong> -- Select one or more individual files.</li>
+<li class=""><strong>Folder Upload</strong> -- Select an entire folder, preserving the directory structure within the asset.</li>
+</ul>
+</li>
+<li class="">
+<p>Drag and drop files onto the upload zone, or select the upload zone to open the file picker.</p>
+</li>
+<li class="">
+<p>Selected files appear in a table below the upload zone, showing the file name, path, and size. You can:</p>
+<ul>
+<li class=""><strong>Remove individual files</strong> by selecting the remove button on each row.</li>
+<li class=""><strong>Remove all files</strong> to clear the selection and start over.</li>
+<li class=""><strong>Add more files</strong> by dragging additional files or using the file picker again. Duplicate files (same relative path) are automatically skipped.</li>
+</ul>
+</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="file-extension-restrictions">File Extension Restrictions<a href="#file-extension-restrictions" class="hash-link" aria-label="Direct link to File Extension Restrictions" title="Direct link to File Extension Restrictions" translate="no">​</a></h3>
+<p>If the selected database has file upload extension restrictions, an alert banner displays the allowed extensions. Files with disallowed extensions are flagged with validation errors and cannot be uploaded.</p>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>note</div><div class="admonitionContent_BuS1"><p>Preview files (filenames containing <code>.previewFile.</code>) are exempt from extension restrictions.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="preview-files">Preview Files<a href="#preview-files" class="hash-link" aria-label="Direct link to Preview Files" title="Direct link to Preview Files" translate="no">​</a></h3>
+<p>VAMS supports two types of preview files:</p>
+<ul>
+<li class=""><strong>Overall asset preview</strong> -- Use the <strong>Asset Overall Preview File</strong> uploader on the right side to select a single image (<code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.svg</code>, or <code>.gif</code>, maximum 5 MB) that represents the entire asset.</li>
+<li class=""><strong>File-level previews</strong> -- Include files named with the <code>.previewFile.{ext}</code> convention in your upload. For example, <code>model.gltf.previewFile.png</code> is automatically used as the preview thumbnail for <code>model.gltf</code>.</li>
+</ul>
+<ol start="4">
+<li class="">Select <strong>Next</strong> to proceed to the review step.</li>
+</ol>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-7-review-and-submit">Step 7: Review and Submit<a href="#step-7-review-and-submit" class="hash-link" aria-label="Direct link to Step 7: Review and Submit" title="Direct link to Step 7: Review and Submit" translate="no">​</a></h2>
+<p>The <strong>Review and Upload</strong> step displays a summary of everything you have configured:</p>
+<ul>
+<li class=""><strong>Asset Detail</strong> -- Name, database, description, distributable status, and tags.</li>
+<li class=""><strong>Linked Assets</strong> -- Parent, child, and related asset relationships.</li>
+<li class=""><strong>Asset Metadata</strong> -- All key-value metadata pairs.</li>
+<li class=""><strong>File list</strong> -- All files to be uploaded, including their paths, sizes, and types (asset file or preview file).</li>
+</ul>
+<ol>
+<li class="">Review all information carefully. To make changes, select the <strong>Edit</strong> button next to any section or use the <strong>Previous</strong> button to go back to a specific step.</li>
+<li class="">When satisfied, select <strong>Upload Object</strong> to begin the upload.</li>
+</ol>
+<p><img decoding="async" loading="lazy" alt="Upload progress showing file upload status" src="/visual-asset-management-system/release-2.5.1/assets/images/upload_asset_finalprogress_20260323_v2.5-ebf7346023ccd42c53e29dc762461439.png" width="3804" height="1500" class="img_ev3q"></p>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-8-monitor-upload-progress">Step 8: Monitor Upload Progress<a href="#step-8-monitor-upload-progress" class="hash-link" aria-label="Direct link to Step 8: Monitor Upload Progress" title="Direct link to Step 8: Monitor Upload Progress" translate="no">​</a></h2>
+<p>After submitting, the upload workflow begins:</p>
+<ol>
+<li class="">
+<p>The wizard transitions to a progress view showing the status of each operation:</p>
+<ul>
+<li class="">Asset creation in the VAMS backend</li>
+<li class="">File uploads to Amazon S3 (with individual progress bars per file)</li>
+<li class="">Workflow execution (if auto-triggered workflows are configured)</li>
+</ul>
+</li>
+<li class="">
+<p>For large files, VAMS uses multipart upload to Amazon S3 for reliability. The progress bar updates in real time as each part completes.</p>
+</li>
+<li class="">
+<p>Do not close or navigate away from the page until all uploads complete.</p>
+</li>
+</ol>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>warning</div><div class="admonitionContent_BuS1"><p>If you close the browser tab during upload, in-progress file uploads will be interrupted. Completed file uploads are retained, and you can resume uploading the remaining files from the asset detail page.</p></div></div>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-9-view-your-asset">Step 9: View Your Asset<a href="#step-9-view-your-asset" class="hash-link" aria-label="Direct link to Step 9: View Your Asset" title="Direct link to Step 9: View Your Asset" translate="no">​</a></h2>
+<p>After the upload completes:</p>
+<ol>
+<li class="">
+<p>Navigate to the asset by selecting the link in the upload completion summary, or:</p>
+<ul>
+<li class="">Go to <strong>Assets and Files</strong> in the side navigation and search for your asset.</li>
+<li class="">Go to <strong>Databases</strong>, select your database, then find your asset in the list.</li>
+</ul>
+</li>
+<li class="">
+<p>On the asset detail page, verify:</p>
+<ul>
+<li class="">The <strong>details pane</strong> shows the correct name, description, tags, and distributable status.</li>
+<li class="">The <strong>File Manager</strong> tab displays your uploaded files in a directory tree.</li>
+<li class="">The <strong>Metadata</strong> section at the bottom shows your key-value pairs.</li>
+</ul>
+</li>
+</ol>
+<p><img decoding="async" loading="lazy" alt="Asset detail page showing metadata, files, and properties" src="/visual-asset-management-system/release-2.5.1/assets/images/view_asset_page_20260323_v2.5-cf00f8e7cd55ea0172fd44dfae7d3323.png" width="3816" height="1888" class="img_ev3q"></p>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="step-10-try-the-file-viewer">Step 10: Try the File Viewer<a href="#step-10-try-the-file-viewer" class="hash-link" aria-label="Direct link to Step 10: Try the File Viewer" title="Direct link to Step 10: Try the File Viewer" translate="no">​</a></h2>
+<p>If you uploaded a file in a supported format (such as <code>.gltf</code>, <code>.obj</code>, <code>.e57</code>, <code>.png</code>, <code>.pdf</code>, or <code>.mp4</code>), you can view it directly in the browser:</p>
+<ol>
+<li class="">In the <strong>File Manager</strong> tab, select a file in the directory tree.</li>
+<li class="">In the file details panel on the right, select <strong>View File</strong>.</li>
+<li class="">VAMS opens the file in the appropriate viewer plugin. For 3D models, you can rotate, zoom, and pan the model interactively.</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="commonly-used-file-formats">Commonly Used File Formats<a href="#commonly-used-file-formats" class="hash-link" aria-label="Direct link to Commonly Used File Formats" title="Direct link to Commonly Used File Formats" translate="no">​</a></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Format</th><th>Viewer</th><th>Description</th></tr></thead><tbody><tr><td><code>.gltf</code>, <code>.glb</code>, <code>.obj</code>, <code>.fbx</code>, <code>.stl</code></td><td>Three.js Viewer</td><td>3D models with full rotation and zoom</td></tr><tr><td><code>.e57</code>, <code>.las</code>, <code>.laz</code></td><td>Potree Viewer</td><td>Point cloud data with 3D navigation</td></tr><tr><td><code>.usd</code>, <code>.usda</code>, <code>.usdc</code>, <code>.usdz</code></td><td>Needle USD Viewer</td><td>Universal Scene Description files</td></tr><tr><td><code>.png</code>, <code>.jpg</code>, <code>.svg</code>, <code>.gif</code></td><td>Image Viewer</td><td>Raster and vector images</td></tr><tr><td><code>.mp4</code>, <code>.webm</code>, <code>.mov</code></td><td>Video Player</td><td>Video playback with controls</td></tr><tr><td><code>.pdf</code></td><td>PDF Viewer</td><td>Multi-page document viewing</td></tr><tr><td><code>.csv</code></td><td>Columnar Data Viewer</td><td>Tabular data browsing</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>tip</div><div class="admonitionContent_BuS1"><p>If a file does not have a dedicated viewer but has a preview image, VAMS falls back to the preview viewer to display the thumbnail.</p></div></div>
+<hr>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="next-steps">Next Steps<a href="#next-steps" class="hash-link" aria-label="Direct link to Next Steps" title="Direct link to Next Steps" translate="no">​</a></h2>
+<p>Congratulations -- you have created your first database and asset in VAMS. To continue learning:</p>
+<ul>
+<li class=""><a class="" href="/visual-asset-management-system/release-2.5.1/user-guide/asset-management">Asset Management</a> -- Learn about versioning, file operations, relationships, and advanced asset management</li>
+<li class=""><a class="" href="/visual-asset-management-system/release-2.5.1/user-guide/web-interface">Web Interface Overview</a> -- Explore all pages and features of the VAMS interface</li>
+<li class=""><a class="" href="/visual-asset-management-system/release-2.5.1/user-guide/metadata-management">Metadata Management</a> -- Deep dive into metadata schemas and metadata operations</li>
+<li class=""><a class="" href="/visual-asset-management-system/release-2.5.1/user-guide/tags">Tags</a> -- Organize assets with tags</li>
+<li class=""><a class="" href="/visual-asset-management-system/release-2.5.1/user-guide/subscriptions">Subscriptions</a> -- Receive change notifications</li>
+</ul></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/release-2.5.1/user-guide/web-interface"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Web Interface Overview</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/release-2.5.1/user-guide/asset-management"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Asset Management</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#step-1-create-a-database" class="table-of-contents__link toc-highlight">Step 1: Create a Database</a></li><li><a href="#step-2-navigate-to-the-upload-page" class="table-of-contents__link toc-highlight">Step 2: Navigate to the Upload Page</a></li><li><a href="#step-3-enter-asset-details" class="table-of-contents__link toc-highlight">Step 3: Enter Asset Details</a></li><li><a href="#step-4-add-metadata" class="table-of-contents__link toc-highlight">Step 4: Add Metadata</a></li><li><a href="#step-5-configure-asset-relationships-optional" class="table-of-contents__link toc-highlight">Step 5: Configure Asset Relationships (Optional)</a></li><li><a href="#step-6-select-files-to-upload" class="table-of-contents__link toc-highlight">Step 6: Select Files to Upload</a><ul><li><a href="#selecting-files" class="table-of-contents__link toc-highlight">Selecting Files</a></li><li><a href="#file-extension-restrictions" class="table-of-contents__link toc-highlight">File Extension Restrictions</a></li><li><a href="#preview-files" class="table-of-contents__link toc-highlight">Preview Files</a></li></ul></li><li><a href="#step-7-review-and-submit" class="table-of-contents__link toc-highlight">Step 7: Review and Submit</a></li><li><a href="#step-8-monitor-upload-progress" class="table-of-contents__link toc-highlight">Step 8: Monitor Upload Progress</a></li><li><a href="#step-9-view-your-asset" class="table-of-contents__link toc-highlight">Step 9: View Your Asset</a></li><li><a href="#step-10-try-the-file-viewer" class="table-of-contents__link toc-highlight">Step 10: Try the File Viewer</a><ul><li><a href="#commonly-used-file-formats" class="table-of-contents__link toc-highlight">Commonly Used File Formats</a></li></ul></li><li><a href="#next-steps" class="table-of-contents__link toc-highlight">Next Steps</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.5.1/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.5.1/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.5.1/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.5.1/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/spatial/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Spatial Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/spatial/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/spatial/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
+</body>
+</html>
