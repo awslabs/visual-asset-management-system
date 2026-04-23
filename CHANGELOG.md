@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-## [2.5.1] (2026-04-29)
+## [2.5.1] (2026-04-23)
 
 ### Bug Fixes
 
@@ -25,9 +25,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   AI Steering Documents: Removed direct version references that were previosly hard-set to a particular version (like v2.5.0)
 -   Updated README and documentation to add Finch and Podman alternatives to Docker for the CDK build process
 -   Updated .gitleaksignore with false positive findings
--   Update documentation site package dependency versions to fix new npm audit findings
--   Update web viewers (vntana, veerum, threejs) package dependency versions to fix new npm audit findings
--   Update pipeline metadata3DLabeling dependency versions to fix audit findings
+-   Update several package dependency versions to fix new npm audit findings
 
 ## [2.5.0] (2026-04-21)
 

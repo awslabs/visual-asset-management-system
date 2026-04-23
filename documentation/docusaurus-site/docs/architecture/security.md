@@ -103,7 +103,7 @@ The authorizer uses a dedicated Lambda layer with the following dependencies:
 
 ```
 joserfc==1.6.1             # RFC-compliant JOSE (JWT/JWS/JWE) for Cognito
-PyJWT[crypto]==2.10.1      # External IDP JWT verification
+PyJWT[crypto]==2.12.1      # External IDP JWT verification
 cryptography==45.0.6       # Cryptographic primitives
 requests==2.32.5           # HTTP requests for JWKS retrieval
 aws-lambda-powertools==3.19.0  # Lambda Powertools for logging
