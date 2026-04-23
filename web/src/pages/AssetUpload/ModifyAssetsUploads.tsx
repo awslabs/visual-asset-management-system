@@ -112,7 +112,11 @@ const getFilesFromFileHandles = async (
                 index: i,
                 name: fileHandles[i].handle.name || `File ${i}`,
                 size: 0,
-                relativePath: fileHandles[i].path || "",
+                relativePath: prefix
+                    ? prefix.endsWith("/")
+                        ? prefix + (fileHandles[i].path || "")
+                        : prefix + "/" + (fileHandles[i].path || "")
+                    : fileHandles[i].path || "",
                 progress: 0,
                 status: "Failed",
                 loaded: 0,
@@ -188,10 +192,10 @@ export default function ModifyAssetsUploadsPage() {
                 const relativePath = state.fileTree.relativePath || "";
                 setFolderPath(relativePath);
 
-                // Ensure that "/" is properly recognized as a root path
-                // If folderPath is "/", ensure keyPrefix is also "/"
-                let prefix = state.fileTree.keyPrefix || "";
-                if (relativePath === "/" || prefix === "/") {
+                // Use relativePath as the upload prefix since keyPrefix only contains
+                // the last path segment, not the full path from the asset root
+                let prefix = relativePath;
+                if (prefix === "/" || prefix === "") {
                     prefix = "/";
                 }
                 setKeyPrefix(prefix);

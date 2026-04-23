@@ -1055,7 +1055,7 @@ def create_[domain]([domain]_data, claims_and_roles):
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce([domain]_data, "POST"):
-                raise authorization_error()
+                return authorization_error()
 
         # Create the [domain]
         logger.info(f"Creating [domain] {[domain]_data['[domain]Id']}")

@@ -23,15 +23,15 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
     const [err, setErr] = useState<any>(null);
 
     useEffect(() => {
-        if (url !== init) {
-            return;
-        }
+        setUrl(init);
+        setErr(null);
 
         const loadImage = async () => {
             console.log("ImageViewerComponent loading file:", {
                 assetId,
                 databaseId,
                 key: assetKey,
+                versionId: versionId,
                 assetVersionId: assetVersionId,
                 downloadType: "assetFile",
                 isPreviewFile,
@@ -54,7 +54,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                     } else {
                         console.log("Successfully loaded file URL:", response[1]);
                         setUrl(response[1]);
-                        return; // Success - exit early
+                        return;
                     }
                 } else {
                     throw new Error("Invalid response format");
@@ -68,7 +68,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
         if (assetKey) {
             loadImage();
         }
-    }, [assetId, assetKey, databaseId, url, versionId, isPreviewFile]);
+    }, [assetId, assetKey, databaseId, versionId, assetVersionId, isPreviewFile]);
 
     const fallback = (error: any) => {
         console.log("Image load error:", error);

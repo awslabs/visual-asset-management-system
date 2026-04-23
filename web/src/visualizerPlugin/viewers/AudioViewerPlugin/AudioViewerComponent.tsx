@@ -63,7 +63,7 @@ const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
         };
 
         loadAudio();
-    }, [assetId, assetKey, databaseId, versionId]);
+    }, [assetId, assetKey, databaseId, versionId, assetVersionId]);
 
     if (loading) {
         return (

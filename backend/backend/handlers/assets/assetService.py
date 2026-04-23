@@ -907,8 +907,8 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(asset, "PUT"):
-            raise authorization_error()
-    
+            return authorization_error()
+
     # Update the fields
     logger.info(f"Updating asset {assetId} in database {databaseId}")
     
@@ -972,8 +972,8 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(asset, "DELETE"):
-            raise authorization_error()
-        
+            return authorization_error()
+
     #Get bucket details for asset
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
@@ -1065,8 +1065,8 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(asset, "PUT"):
-            raise authorization_error()
-    
+            return authorization_error()
+
     # Get bucket details for asset
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
@@ -1152,8 +1152,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(asset, "DELETE"):
-            raise authorization_error()
-    
+            return authorization_error()
+
     #Get bucket details for asset
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
@@ -1322,72 +1322,104 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # 7. Delete from asset file versions table if available
         if versions_table and asset_versions_files_table:
             try:
-                # First get all version IDs for this asset using the table PK (databaseId:assetId)
                 versions_partition_key = f"{original_db_id}:{assetId}"
-                response = versions_table.query(
-                    KeyConditionExpression=Key('databaseId:assetId').eq(versions_partition_key)
-                )
 
-                # For each version, delete the corresponding file versions
-                for version_item in response.get('Items', []):
-                    if 'assetVersionId' in version_item:
+                # Paginate to get all asset versions
+                all_version_items = []
+                query_kwargs = {
+                    'KeyConditionExpression': Key('databaseId:assetId').eq(versions_partition_key)
+                }
+                while True:
+                    response = versions_table.query(**query_kwargs)
+                    all_version_items.extend(response.get('Items', []))
+                    if 'LastEvaluatedKey' in response:
+                        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                    else:
+                        break
+
+                # For each version, delete all corresponding file version records
+                with asset_versions_files_table.batch_writer() as batch:
+                    for version_item in all_version_items:
+                        if 'assetVersionId' not in version_item:
+                            continue
                         asset_version_id = version_item['assetVersionId']
-                        file_versions_partition_key = f"{original_db_id}:{assetId}:{asset_version_id}"
+                        file_versions_pk = f"{original_db_id}:{assetId}:{asset_version_id}"
 
-                        # Query to find all file versions for this asset version using the table PK
-                        file_response = asset_versions_files_table.query(
-                            KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(file_versions_partition_key)
-                        )
+                        # Paginate file version records for this asset version
+                        file_query_kwargs = {
+                            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(file_versions_pk)
+                        }
+                        while True:
+                            file_response = asset_versions_files_table.query(**file_query_kwargs)
+                            for file_item in file_response.get('Items', []):
+                                if 'fileKey' in file_item:
+                                    batch.delete_item(Key={
+                                        'databaseId:assetId:assetVersionId': file_versions_pk,
+                                        'fileKey': file_item['fileKey']
+                                    })
+                            if 'LastEvaluatedKey' in file_response:
+                                file_query_kwargs['ExclusiveStartKey'] = file_response['LastEvaluatedKey']
+                            else:
+                                break
 
-                        # Delete each file version
-                        for file_item in file_response.get('Items', []):
-                            if 'fileKey' in file_item:
-                                asset_versions_files_table.delete_item(Key={
-                                    'databaseId:assetId:assetVersionId': file_versions_partition_key,
-                                    'fileKey': file_item['fileKey']
-                                })
-                                deleted_items["dynamodb_tables"].append(f"{asset_versions_files_table_name} (databaseId:assetId:assetVersionId={file_versions_partition_key}, fileKey={file_item['fileKey']})")
+                # Delete the version records themselves
+                with versions_table.batch_writer() as batch:
+                    for version_item in all_version_items:
+                        if 'assetVersionId' in version_item:
+                            batch.delete_item(Key={
+                                'databaseId:assetId': versions_partition_key,
+                                'assetVersionId': version_item['assetVersionId']
+                            })
 
-                # Delete from versions table after getting all version IDs
-                for version_item in response.get('Items', []):
-                    if 'assetVersionId' in version_item:
-                        versions_table.delete_item(Key={
-                            'databaseId:assetId': versions_partition_key,
-                            'assetVersionId': version_item['assetVersionId']
-                        })
-                        deleted_items["dynamodb_tables"].append(f"{asset_versions_table_name} (databaseId:assetId={versions_partition_key}, assetVersionId={version_item['assetVersionId']})")
+                deleted_items["dynamodb_tables"].append(f"{asset_versions_files_table_name} (all file versions)")
+                deleted_items["dynamodb_tables"].append(f"{asset_versions_table_name} (all versions)")
             except Exception as e:
                 logger.warning(f"Error deleting asset file versions: {e}")
 
         # 8. Delete from asset file metadata versions table if available
         if asset_file_metadata_versions_table and versions_table:
             try:
-                # Get all version IDs for this asset
                 versions_partition_key = f"{original_db_id}:{assetId}"
-                response = versions_table.query(
-                    KeyConditionExpression=Key('databaseId:assetId').eq(versions_partition_key)
-                )
 
-                for version_item in response.get('Items', []):
-                    if 'assetVersionId' in version_item:
+                # Paginate to get all asset versions
+                all_version_items = []
+                query_kwargs = {
+                    'KeyConditionExpression': Key('databaseId:assetId').eq(versions_partition_key)
+                }
+                while True:
+                    response = versions_table.query(**query_kwargs)
+                    all_version_items.extend(response.get('Items', []))
+                    if 'LastEvaluatedKey' in response:
+                        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                    else:
+                        break
+
+                with asset_file_metadata_versions_table.batch_writer() as batch:
+                    for version_item in all_version_items:
+                        if 'assetVersionId' not in version_item:
+                            continue
                         asset_version_id = version_item['assetVersionId']
                         metadata_pk = f"{original_db_id}:{assetId}:{asset_version_id}"
 
-                        # Query all metadata version records for this asset version
-                        metadata_response = asset_file_metadata_versions_table.query(
-                            KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(metadata_pk)
-                        )
+                        # Paginate metadata version records for this asset version
+                        meta_query_kwargs = {
+                            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(metadata_pk)
+                        }
+                        while True:
+                            metadata_response = asset_file_metadata_versions_table.query(**meta_query_kwargs)
+                            for metadata_item in metadata_response.get('Items', []):
+                                sk_value = metadata_item.get('type:filePath:metadataKey')
+                                if sk_value:
+                                    batch.delete_item(Key={
+                                        'databaseId:assetId:assetVersionId': metadata_pk,
+                                        'type:filePath:metadataKey': sk_value
+                                    })
+                            if 'LastEvaluatedKey' in metadata_response:
+                                meta_query_kwargs['ExclusiveStartKey'] = metadata_response['LastEvaluatedKey']
+                            else:
+                                break
 
-                        # Delete each metadata version record
-                        for metadata_item in metadata_response.get('Items', []):
-                            sk_value = metadata_item.get('type:filePath:metadataKey')
-                            if sk_value:
-                                asset_file_metadata_versions_table.delete_item(Key={
-                                    'databaseId:assetId:assetVersionId': metadata_pk,
-                                    'type:filePath:metadataKey': sk_value
-                                })
-
-                        deleted_items["dynamodb_tables"].append(f"{asset_file_metadata_versions_table_name} (databaseId:assetId:assetVersionId={metadata_pk})")
+                deleted_items["dynamodb_tables"].append(f"{asset_file_metadata_versions_table_name} (all metadata versions)")
             except Exception as e:
                 logger.warning(f"Error deleting asset file metadata versions: {e}")
 

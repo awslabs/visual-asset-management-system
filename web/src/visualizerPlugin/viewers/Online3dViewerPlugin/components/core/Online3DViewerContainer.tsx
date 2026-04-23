@@ -60,6 +60,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                                 assetId: assetId,
                                 databaseId: databaseId,
                                 key: key,
+                                versionId: versionId,
                                 assetVersionId: assetVersionId,
                                 downloadType: "assetFile",
                             });
@@ -85,6 +86,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                         assetId: assetId,
                         databaseId: databaseId,
                         key: assetKey || "",
+                        versionId: versionId,
                         assetVersionId: assetVersionId,
                         downloadType: "assetFile",
                     });
@@ -122,7 +124,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
         };
 
         loadAssets();
-    }, [assetId, assetKey, databaseId, versionId, multiFileKeys, updateState]);
+    }, [assetId, assetKey, databaseId, versionId, assetVersionId, multiFileKeys, updateState]);
 
     // Load model URLs into viewer when both viewer and URLs are ready
     useEffect(() => {

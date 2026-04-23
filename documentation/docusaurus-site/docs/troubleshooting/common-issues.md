@@ -28,7 +28,7 @@ This issue typically occurs only when toggling multiple pipelines simultaneously
 
 ### Docker Buildx Container Image Errors
 
-When deploying with AWS CDK, you may encounter errors related to Docker container image builds, particularly `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
+When deploying with AWS CDK using Docker, you may encounter errors related to container image builds, particularly `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
 
 **Symptoms:**
 
@@ -56,6 +56,10 @@ docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
 :::tip
 Set `BUILDX_NO_DEFAULT_ATTESTATIONS=1` permanently in your shell profile (`.bashrc`, `.zshrc`) to avoid repeating this step on every deployment.
+:::
+
+:::note[Alternative container engines]
+If you are using [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/) instead of Docker, buildx-specific issues may not apply. However, you may encounter different container build errors specific to your engine. Verify the issue reproduces with Docker before reporting. See the [Prerequisites](../deployment/prerequisites.md#docker-alternatives) page for alternative container engine setup.
 :::
 
 ### Web Build or Infrastructure CDK Errors

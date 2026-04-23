@@ -365,7 +365,7 @@ def create_metadata_schema(schema_data, claims_and_roles):
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(auth_object, "POST"):
-                raise authorization_error()
+                return authorization_error()
         
         # Generate unique ID
         metadata_schema_id = str(uuid.uuid4())
@@ -446,7 +446,7 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(auth_object, "POST"):  # Uses POST permission for updates
-                raise authorization_error()
+                return authorization_error()
         
         # Update the fields
         logger.info(f"Updating metadata schema {metadataSchemaId}")
@@ -519,7 +519,7 @@ def delete_metadata_schema(metadataSchemaId, claims_and_roles):
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(auth_object, "DELETE"):
-                raise authorization_error()
+                return authorization_error()
         
         # Delete the schema
         logger.info(f"Deleting metadata schema {metadataSchemaId}")

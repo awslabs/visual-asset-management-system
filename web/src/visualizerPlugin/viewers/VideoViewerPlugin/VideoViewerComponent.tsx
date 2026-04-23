@@ -63,7 +63,7 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
         };
 
         loadVideo();
-    }, [assetId, assetKey, databaseId, versionId]);
+    }, [assetId, assetKey, databaseId, versionId, assetVersionId]);
 
     if (loading) {
         return (
