@@ -7,7 +7,7 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 ## Project Identity
 
 -   **Name**: VAMS (Visual Asset Management System) -- CDK Infrastructure
--   **Version**: 2.5.0 (tracked in `config/config.ts` as `VAMS_VERSION`)
+-   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`)
 -   **Runtime**: AWS CDK v2 (TypeScript), targeting `aws-cdk-lib`
 -   **Node**: NODEJS_20_X for Lambda and CDK
 -   **Python**: PYTHON_3_12 for all Lambda functions
@@ -266,7 +266,7 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 
 | Constant                          | Value                                     |
 | --------------------------------- | ----------------------------------------- |
-| `VAMS_VERSION`                    | `"2.5.0"`                                 |
+| `VAMS_VERSION`                    | `"2.X.0"`                                 |
 | `LAMBDA_PYTHON_RUNTIME`           | `Runtime.PYTHON_3_12`                     |
 | `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_20_X`                     |
 | `LAMBDA_MEMORY_SIZE`              | `5308`                                    |

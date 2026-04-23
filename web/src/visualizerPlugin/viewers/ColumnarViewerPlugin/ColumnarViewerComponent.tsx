@@ -10,6 +10,7 @@ import FCS from "fcs";
 import arrayBufferToBuffer from "arraybuffer-to-buffer";
 import { downloadAsset } from "../../../services/APIService";
 import { ViewerPluginProps } from "../../core/types";
+import LoadingSpinner from "../../components/LoadingSpinner";
 
 interface Column {
     key: string;
@@ -114,6 +115,7 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
             if (!assetKey) return;
 
             try {
+                setLoaded(false);
                 setError(null);
 
                 console.log("ColumnarViewerComponent loading file:", {
@@ -128,6 +130,7 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey,
+                    versionId: versionId,
                     assetVersionId: assetVersionId,
                     downloadType: "assetFile",
                 });
@@ -140,6 +143,7 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
                         if (assetKey.indexOf(".fcs") !== -1) {
                             try {
                                 readFcsFile(response[1], setColumns, setRows);
+                                setLoaded(true);
                             } catch (error) {
                                 console.error("Error reading FCS file:", error);
                                 setError("Failed to read FCS file format");
@@ -147,6 +151,7 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
                         } else {
                             try {
                                 readCsvFile(response[1], setColumns, setRows);
+                                setLoaded(true);
                             } catch (error) {
                                 console.error("Error reading CSV file:", error);
                                 setError("Failed to read CSV file format");
@@ -162,11 +167,10 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
             }
         };
 
-        if (!loaded && assetKey !== "") {
+        if (assetKey !== "") {
             loadAsset();
-            setLoaded(true);
         }
-    }, [loaded, assetKey, assetId, databaseId, versionId]);
+    }, [assetKey, assetId, databaseId, versionId, assetVersionId]);
 
     if (error) {
         return (
@@ -186,20 +190,7 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
     }
 
     if (!loaded || columns.length === 0) {
-        return (
-            <div
-                style={{
-                    display: "flex",
-                    justifyContent: "center",
-                    alignItems: "center",
-                    height: "100%",
-                    fontSize: "16px",
-                    color: "#666",
-                }}
-            >
-                Loading data...
-            </div>
-        );
+        return <LoadingSpinner message="Loading data..." />;
     }
 
     return (

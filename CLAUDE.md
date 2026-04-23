@@ -16,7 +16,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 
 | Component            | Version/Runtime                                                                                             |
 | -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| VAMS version         | 2.5.0 (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)                                        |
+| VAMS version         | (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)                                              |
 | Python (Lambda)      | 3.12                                                                                                        |
 | Python (development) | 3.13+                                                                                                       |
 | Node (Lambda)        | 20.x                                                                                                        |
@@ -464,7 +464,7 @@ When implementing new features, follow the patterns in these files:
 ## 🔀 **Git Workflow**
 
 -   **Branch naming**: `release/X.Y.Z` for releases, `feature/description` for features
--   **Current branch**: `release/2.5.0`
+-   **Current branch**: `release/2.X.0` based on version in (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)
 -   **Main branch**: `main`
 -   **Changelog format**: `standard-version` format in `CHANGELOG.md`
 -   **Commit style**: Descriptive imperative mood ("Fix bugs", "Add cognito user management")

@@ -63,6 +63,7 @@ export class Gr00tCodeBuildConstruct extends Construct {
             // per deployment (avoids collisions across multiple VAMS stacks in the same region)
             const repository = new ecr.Repository(this, `EcrRepo-${pipelineKey}`, {
                 removalPolicy: RemovalPolicy.DESTROY,
+                emptyOnDelete: true,
                 imageScanOnPush: true,
                 lifecycleRules: [
                     {

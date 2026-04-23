@@ -147,7 +147,7 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
         if (assetKey) {
             loadFile();
         }
-    }, [assetId, assetKey, databaseId, versionId]);
+    }, [assetId, assetKey, databaseId, versionId, assetVersionId]);
 
     // Copy content to clipboard
     const copyToClipboard = async () => {

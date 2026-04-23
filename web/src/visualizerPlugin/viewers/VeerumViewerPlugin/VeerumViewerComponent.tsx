@@ -365,7 +365,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                 }
             }
         };
-    }, [assetKey, multiFileKeys, assetId, databaseId, versionId]);
+    }, [assetKey, multiFileKeys, assetId, databaseId, versionId, assetVersionId]);
 
     return (
         <div

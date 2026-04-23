@@ -195,7 +195,7 @@ def create_user_roles(request_model: CreateUserRolesRequestModel, claims_and_rol
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(user_role_check, "POST"):
-                raise authorization_error()
+                return authorization_error()
         
         items_to_insert.append(user_role)
     
@@ -262,7 +262,7 @@ def update_user_roles(request_model: UpdateUserRolesRequestModel, claims_and_rol
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(create_user_role_check, "POST"):
-                raise authorization_error()
+                return authorization_error()
         
         user_roles_to_create.append(create_user_role)
     
@@ -281,7 +281,7 @@ def update_user_roles(request_model: UpdateUserRolesRequestModel, claims_and_rol
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(delete_user_role_check, "DELETE"):
-                raise authorization_error()
+                return authorization_error()
         
         user_roles_to_delete.append(delete_user_role)
     
@@ -336,7 +336,7 @@ def delete_user_roles(request_model: DeleteUserRolesRequestModel, claims_and_rol
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if not casbin_enforcer.enforce(user_role_check, "DELETE"):
-                raise authorization_error()
+                return authorization_error()
         
         items_to_delete.append(user_role)
     

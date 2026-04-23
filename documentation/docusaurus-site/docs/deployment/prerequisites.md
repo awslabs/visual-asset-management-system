@@ -31,6 +31,30 @@ cdk --version
 
 :::
 
+### Docker alternatives
+
+Docker is the default and most widely tested container engine for building VAMS. However, AWS CDK also supports Docker-compatible alternatives. If your organization restricts Docker Desktop or prefers open-source tooling, you can use one of the following:
+
+-   **[Finch](https://aws.github.io/finch/)** (AWS recommended) — An open-source container development tool from AWS that provides a native CLI experience on macOS and Windows without requiring Docker Desktop.
+-   **[Podman](https://podman.io/)** — A daemonless, open-source container engine that can serve as a drop-in replacement for Docker.
+
+To use an alternative container engine with AWS CDK, you must configure the `CDK_DOCKER` environment variable to point to your chosen tool's CLI. For detailed setup instructions, see:
+
+-   [Building and deploying container assets with AWS CDK](https://docs.aws.amazon.com/cdk/v2/guide/build-containers.html)
+-   [AWS CDK ECR Assets module reference](https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_ecr_assets/README.html)
+
+```bash
+# Example: Using Finch as the container engine for CDK
+export CDK_DOCKER=finch
+
+# Example: Using Podman as the container engine for CDK
+export CDK_DOCKER=podman
+```
+
+:::warning[Docker alternatives compatibility]
+While Finch and Podman are supported by AWS CDK, Docker remains the primary tested container engine for VAMS deployments. If you encounter container build issues when using an alternative engine, verify the issue reproduces with Docker before reporting it.
+:::
+
 ### Optional software
 
 | Software    | Purpose                                          |
@@ -103,20 +127,20 @@ You must also set `app.useFips` to `true` in the VAMS configuration file. See th
 
 The build machine requires outbound internet access to download dependencies from the following sources:
 
-| Source                              | Protocol | Purpose                                       |
-| ----------------------------------- | -------- | --------------------------------------------- |
-| npm registry (`registry.npmjs.org`) | HTTPS    | Node.js packages for frontend and CDK         |
-| PyPI (`pypi.org`)                   | HTTPS    | Python packages for Lambda layers             |
-| Docker Hub / Amazon ECR Public      | HTTPS    | Base container images for pipeline builds     |
-| AWS service endpoints               | HTTPS    | CDK deployment, AWS CloudFormation operations |
+| Source                              | Protocol | Purpose                                             |
+| ----------------------------------- | -------- | --------------------------------------------------- |
+| npm registry (`registry.npmjs.org`) | HTTPS    | Node.js packages for frontend and CDK               |
+| PyPI (`pypi.org`)                   | HTTPS    | Python packages for Lambda layers                   |
+| Docker Hub / Amazon ECR Public      | HTTPS    | Base container images for pipeline container builds |
+| AWS service endpoints               | HTTPS    | CDK deployment, AWS CloudFormation operations       |
 
 :::note[Network-restricted environments]
-For deployments in VPC-isolated or network-restricted environments, you must pre-stage all npm packages, Python packages, and Docker images in internal registries. Consult the [Plan your deployment](plan-your-deployment.md) page for VPC-isolated deployment architecture.
+For deployments in VPC-isolated or network-restricted environments, you must pre-stage all npm packages, Python packages, and container images in internal registries. Consult the [Plan your deployment](plan-your-deployment.md) page for VPC-isolated deployment architecture.
 :::
 
 ### SSL proxy considerations
 
-If you are deploying behind an HTTPS SSL proxy that requires network nodes to have a custom SSL certificate, additional Docker and npm configuration is needed. Refer to the **CDK SSL Deploy with Custom SSL Cert Proxy** section in the [Developer Guide](../developer/setup.md) for detailed instructions on configuring custom certificates for CDK container builds.
+If you are deploying behind an HTTPS SSL proxy that requires network nodes to have a custom SSL certificate, additional container engine and npm configuration is needed. Refer to the **CDK SSL Deploy with Custom SSL Cert Proxy** section in the [Developer Guide](../developer/setup.md) for detailed instructions on configuring custom certificates for CDK container builds.
 
 ## Next steps
 

@@ -32,60 +32,68 @@ from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS
 
 class ProgressDisplay:
     """Display upload progress in the terminal."""
-    
+
     def __init__(self, hide_progress: bool = False, json_output: bool = False, total_sequences: int = 1):
         self.hide_progress = hide_progress or json_output  # Suppress progress in JSON mode
         self.json_output = json_output
         self.total_sequences = total_sequences
         self.last_update = 0
         self.update_interval = 0.5  # Update every 500ms
-        
+        self._lines_printed = 0
+
     def update(self, progress: UploadProgress):
         """Update the progress display."""
         if self.hide_progress:
             return
-            
+
         current_time = time.time()
         if current_time - self.last_update < self.update_interval:
             return
-            
+
         self.last_update = current_time
-        
-        # Clear previous lines
-        click.echo('\033[2K\033[1A' * 12, nl=False)  # Clear up to 12 lines
-        
+
+        # Clear only the lines we actually printed last time
+        if self._lines_printed > 0:
+            click.echo('\033[2K\033[1A' * self._lines_printed, nl=False)
+            click.echo('\033[2K', nl=False)
+
+        lines_count = 0
+
         # Sequence status (if multiple sequences)
         if self.total_sequences > 1:
             initialized = progress.initialized_sequences
             uploaded = progress.uploaded_sequences
             completed = progress.completed_sequences
-            click.echo(f"\nSequences: {initialized} initialized, {uploaded} uploaded, {completed} completed, {self.total_sequences} total")
-        
+            click.echo(f"Sequences: {initialized} initialized, {uploaded} uploaded, {completed} completed, {self.total_sequences} total")
+            lines_count += 1
+
         # Overall progress
         overall_pct = progress.overall_progress
         completed_size_str = format_file_size(progress.completed_size)
         total_size_str = format_file_size(progress.total_size)
-        
+
         # Progress bar
         bar_width = 40
         filled = int(bar_width * overall_pct / 100)
         bar = '█' * filled + '░' * (bar_width - filled)
-        
-        click.echo(f"\nOverall Progress: [{bar}] {overall_pct:.1f}% ({completed_size_str}/{total_size_str})")
-        
+
+        click.echo(f"Overall Progress: [{bar}] {overall_pct:.1f}% ({completed_size_str}/{total_size_str})")
+        lines_count += 1
+
         # Speed and ETA
         speed_str = format_file_size(int(progress.upload_speed)) + "/s"
         eta = progress.estimated_time_remaining
         eta_str = format_duration(eta) if eta else "calculating..."
-        
+
         # Show throttling message if detected
         throttle_msg = ""
         if hasattr(progress, 'is_throttled') and progress.is_throttled:
             retry_count = getattr(progress, 'throttle_retry_count', 0)
-            throttle_msg = f" | ⚠️ Processing times undergoing expected throttling (retry {retry_count}, 60s backoff)"
-        
+            throttle_msg = f" | Throttled (retry {retry_count}, 60s backoff)"
+
         click.echo(f"Speed: {speed_str} | Active: {progress.active_uploads} | ETA: {eta_str}{throttle_msg}")
-        
+        lines_count += 1
+
         # File progress - show actively uploading files first, then pending
         # Sort by status priority: uploading > pending > completed > failed
         status_priority = {"uploading": 0, "pending": 1, "completed": 2, "failed": 3}
@@ -93,15 +101,16 @@ class ProgressDisplay:
             progress.file_progress.items(),
             key=lambda x: (status_priority.get(x[1]["status"], 4), x[0])
         )
-        
+
         files_shown = 0
         for file_key, file_progress in sorted_files:
             if files_shown >= 5:
                 remaining = len(progress.file_progress) - files_shown
                 if remaining > 0:
                     click.echo(f"... and {remaining} more files")
+                    lines_count += 1
                 break
-                
+
             file_pct = (file_progress["completed_size"] / file_progress["total_size"]) * 100 if file_progress["total_size"] > 0 else 0
             status_icon = {
                 "pending": "⏳",
@@ -109,14 +118,17 @@ class ProgressDisplay:
                 "completed": "✅",
                 "failed": "❌"
             }.get(file_progress["status"], "❓")
-            
+
             # Truncate long filenames
             display_name = file_key
             if len(display_name) > 50:
                 display_name = "..." + display_name[-47:]
-                
+
             click.echo(f"  {status_icon} {display_name}: {file_pct:.1f}%")
             files_shown += 1
+            lines_count += 1
+
+        self._lines_printed = lines_count
 
 
 def parse_json_input(json_input: str) -> dict:
@@ -371,8 +383,8 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         
         # Run upload
         log_debug(f"Starting upload manager with {parallel_uploads} parallel uploads, {retry_attempts} retry attempts, force_skip={force_skip}")
+        progress_display = ProgressDisplay(hide_progress, json_output, total_sequences=len(sequences))
         async def run_upload():
-            progress_display = ProgressDisplay(hide_progress, json_output, total_sequences=len(sequences))
             
             async with UploadManager(
                 api_client=api_client,
@@ -426,8 +438,9 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             result = clean_result
         
         # Clear progress display (only in CLI mode)
-        if not json_output and not hide_progress:
-            click.echo('\033[2K\033[1A' * 10, nl=False)  # Clear progress lines
+        if not json_output and not hide_progress and progress_display._lines_printed > 0:
+            click.echo('\033[2K\033[1A' * progress_display._lines_printed, nl=False)
+            click.echo('\033[2K', nl=False)
         
         # Check for asynchronous processing across all completion results
         has_async_processing = False

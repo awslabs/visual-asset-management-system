@@ -1005,7 +1005,16 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
         loadTilesets();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [assetId, assetKey, multiFileKeys, databaseId, versionId, config, viewerRef.current]);
+    }, [
+        assetId,
+        assetKey,
+        multiFileKeys,
+        databaseId,
+        versionId,
+        assetVersionId,
+        config,
+        viewerRef.current,
+    ]);
 
     if (error) {
         return (

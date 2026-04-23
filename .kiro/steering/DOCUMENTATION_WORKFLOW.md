@@ -220,7 +220,7 @@ VAMS backend Lambdas use Python 3.12 (defined in `LAMBDA_PYTHON_RUNTIME`).
 
 <!-- INCORRECT -->
 
-VAMS version 2.5.0 requires Python 3.12.
+VAMS requires Python 3.12.
 ```
 
 ### **Rule 6: Follow AWS Documentation Writing Standards**
