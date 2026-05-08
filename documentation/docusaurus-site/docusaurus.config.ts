@@ -105,8 +105,8 @@ const config: Config = {
                             href: "https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/",
                         },
                         {
-                            label: "AWS Spatial Blog",
-                            href: "https://aws.amazon.com/blogs/spatial/",
+                            label: "AWS Physical AI Blog",
+                            href: "https://aws.amazon.com/blogs/physical-ai/",
                         },
                     ],
                 },
@@ -115,11 +115,11 @@ const config: Config = {
                     items: [
                         {
                             label: "GPU-Accelerated Robotic Simulation with Isaac Lab",
-                            href: "https://aws.amazon.com/blogs/spatial/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/",
+                            href: "https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/",
                         },
                         {
                             label: "Production-Ready 3D Pipelines",
-                            href: "https://aws.amazon.com/blogs/spatial/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/",
+                            href: "https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/",
                         },
                     ],
                 },

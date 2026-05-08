@@ -13,8 +13,15 @@ All notable changes to this project will be documented in this file. See [standa
 ### Bug Fixes
 
 -   Fixed Gaussian Splat open pipeline function to properly have permissions send task failure callbacks if an error is caught during initialization
+-   Fixed NVIDIA Comos Transfer and Predict pipeline build pipeline failure due to Cosmos python upgrade to 3.13 which breaks build since v2.5.0. Pin docker python version to 3.10 to prevent this.
+-   Fixed NVIDIA Comos and Gr00t pipelines that may result in container deadlock due to output buffer overflows during hugging face model downloads
+-   Fixed NVIDIA Comos Predict v1 reference in CDK that was still forcing a local Docker build of predict v1 instead of using only v2.5 deployments (wasn't being used but caused longer CDK deployment times)
+-   Programatically stripping NVIDIA Cosmos, Gr00t, and IsaacLab CRLF line endings on entrypoint files to account for different deployment machine OSs (Windows vs Linux/Mac) that could cause pipeline failures
 
 ### Chores
+
+-   Update documentation to point to new physical-ai blog locations (AWS spatial blogs migrated to physical-ai tag)
+-   Updated root README to now point all documentation to the documentation website and not the source markdown files
 
 ### Known Outstanding Issues
 

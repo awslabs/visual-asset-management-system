@@ -204,5 +204,5 @@ VAMS is designed for extensibility. You can add custom viewer plugins, processin
 
 ### AWS Blog posts
 
--   [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/spatial/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) — Learn how VAMS integrates with NVIDIA Isaac Lab for reinforcement learning training and evaluation on AWS GPU instances.
--   [Building Production-Ready 3D Pipelines with AWS VAMS and 4D Pipeline](https://aws.amazon.com/blogs/spatial/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/) — Explore how to build scalable 3D processing pipelines using VAMS with partner integrations.
+-   [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) — Learn how VAMS integrates with NVIDIA Isaac Lab for reinforcement learning training and evaluation on AWS GPU instances.
+-   [Building Production-Ready 3D Pipelines with AWS VAMS and 4D Pipeline](https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/) — Explore how to build scalable 3D processing pipelines using VAMS with partner integrations.

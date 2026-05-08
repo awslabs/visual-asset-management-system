@@ -85,16 +85,17 @@ def run_training(
     for key, value in env_mappings.items():
         env[key] = value
 
-    # Build command
+    # Build command (-u = unbuffered stdio so training progress streams live to CloudWatch)
     if num_gpus > 1:
         cmd = [
-            "python", "-m", "torch.distributed.run",
+            "python", "-u", "-m", "torch.distributed.run",
             f"--nproc_per_node={num_gpus}",
             FINETUNE_SCRIPT,
         ]
     else:
         cmd = [
             "python",
+            "-u",
             FINETUNE_SCRIPT,
         ]
 
@@ -110,22 +111,24 @@ def run_training(
     logger.info(f"  Command: {' '.join(cmd)}")
 
     try:
+        # Don't capture output so the child process writes directly to
+        # stdout/stderr (visible in CloudWatch). Capturing with
+        # capture_output=True fills the OS pipe buffer (~64KB) during a
+        # multi-hour fine-tune run (HF model download, torch init, training
+        # metrics) and deadlocks the child on write() while the parent
+        # blocks in wait().
         result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
             cmd,
             env=env,
             check=True,
-            capture_output=True,
             text=True,
-            cwd=GROOT_REPO_DIR
+            cwd=GROOT_REPO_DIR,
         )  # nosemgrep: dangerous-subprocess-use-audit
 
         logger.info("Training completed successfully")
-        logger.info(f"stdout (last 2000 chars): {result.stdout[-2000:]}")
 
         return output_dir
 
     except subprocess.CalledProcessError as e:
-        logger.error(f"Training failed with exit code {e.returncode}")
-        logger.error(f"stdout: {e.stdout[-2000:]}")
-        logger.error(f"stderr: {e.stderr[-2000:]}")
-        raise RuntimeError(f"Training failed: {e.stderr[-500:]}")
+        logger.error(f"Training failed with exit code {e.returncode}. Check CloudWatch logs for full error output.")
+        raise RuntimeError(f"Training failed with exit code {e.returncode}. Check CloudWatch logs for full error output.")

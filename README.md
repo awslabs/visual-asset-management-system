@@ -83,7 +83,7 @@ cd ../infra && npm install
 # 3. Bootstrap CDK (first time only)
 cdk bootstrap aws://ACCOUNT_ID/REGION
 
-# 4. Configure deployment (edit config.json)
+# 4. Configure deployment (edit config.json and viewerConfig.json)
 #    See documentation/docs/deployment/configuration-reference.md
 
 # 5. Deploy
@@ -92,7 +92,7 @@ cdk deploy --all --require-approval never
 
 After deployment, find your URL in the CDK output and check your email for temporary credentials.
 
-> For detailed instructions, see the [Deployment Guide](./documentation/docusaurus-site/docs/deployment/deploy-the-solution.md).
+> For detailed instructions, see the [Deployment Guide](https://awslabs.github.io/visual-asset-management-system/deployment/deploy-the-solution).
 
 ## Documentation
 
@@ -110,18 +110,18 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 
 ### Documentation sections
 
-| Section                                                                                  | Description                                                |
-| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [Solution Overview](./documentation/docusaurus-site/docs/overview/solution-overview.md)  | What VAMS is and its capabilities                          |
-| [Core Concepts](./documentation/docusaurus-site/docs/concepts/overview.md)               | Databases, Assets, Files, Pipelines, Metadata, Permissions |
-| [Architecture](./documentation/docusaurus-site/docs/architecture/overview.md)            | Architecture diagrams, AWS resources, security, networking |
-| [Deployment Guide](./documentation/docusaurus-site/docs/deployment/prerequisites.md)     | Prerequisites, configuration, deploy, update, uninstall    |
-| [User Guide](./documentation/docusaurus-site/docs/user-guide/getting-started.md)         | Web interface, asset management, search, metadata          |
-| [CLI Reference](./documentation/docusaurus-site/docs/cli/getting-started.md)             | Installation, command reference, automation                |
-| [Pipelines](./documentation/docusaurus-site/docs/pipelines/overview.md)                  | Built-in pipelines and custom pipeline development         |
-| [Developer Guide](./documentation/docusaurus-site/docs/developer/setup.md)               | Backend, frontend, CDK, and viewer plugin development      |
-| [API Reference](./documentation/docusaurus-site/docs/api/overview.md)                    | Complete REST API documentation                            |
-| [Troubleshooting](./documentation/docusaurus-site/docs/troubleshooting/common-issues.md) | Common issues, known limitations, FAQ                      |
+| Section                                                                                                   | Description                                                |
+| --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [Solution Overview](https://awslabs.github.io/visual-asset-management-system/overview/solution-overview)  | What VAMS is and its capabilities                          |
+| [Core Concepts](https://awslabs.github.io/visual-asset-management-system/concepts/overview)               | Databases, Assets, Files, Pipelines, Metadata, Permissions |
+| [Architecture](https://awslabs.github.io/visual-asset-management-system/architecture/overview)            | Architecture diagrams, AWS resources, security, networking |
+| [Deployment Guide](https://awslabs.github.io/visual-asset-management-system/deployment/prerequisites)     | Prerequisites, configuration, deploy, update, uninstall    |
+| [User Guide](https://awslabs.github.io/visual-asset-management-system/user-guide/getting-started)         | Web interface, asset management, search, metadata          |
+| [CLI Reference](https://awslabs.github.io/visual-asset-management-system/cli/getting-started)             | Installation, command reference, automation                |
+| [Pipelines](https://awslabs.github.io/visual-asset-management-system/pipelines/overview)                  | Built-in pipelines and custom pipeline development         |
+| [Developer Guide](https://awslabs.github.io/visual-asset-management-system/developer/setup)               | Backend, frontend, CDK, and viewer plugin development      |
+| [API Reference](https://awslabs.github.io/visual-asset-management-system/api/overview)                    | Complete REST API documentation                            |
+| [Troubleshooting](https://awslabs.github.io/visual-asset-management-system/troubleshooting/common-issues) | Common issues, known limitations, FAQ                      |
 
 ## Access methods
 
@@ -141,7 +141,7 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 
 ## Configuration
 
-See the [Configuration Reference](./documentation/docusaurus-site/docs/deployment/configuration-reference.md) for all deployment options, or start with one of the provided templates:
+See the [Configuration Reference](https://awslabs.github.io/visual-asset-management-system/deployment/configuration-reference) for all deployment options, or start with one of the provided templates:
 
 -   `infra/config/config.template.commercial.json` — AWS commercial regions
 -   `infra/config/config.template.govcloud.json` — AWS GovCloud (US)
@@ -153,15 +153,15 @@ cd infra
 cdk destroy --all
 ```
 
-Some resources (S3 buckets, DynamoDB tables) are retained by default. See the [Uninstall Guide](./documentation/docusaurus-site/docs/deployment/uninstall.md) for complete cleanup instructions.
+Some resources (S3 buckets, DynamoDB tables) are retained by default. See the [Uninstall Guide](https://awslabs.github.io/visual-asset-management-system/deployment/uninstall) for complete cleanup instructions.
 
 ## Security
 
-VAMS follows the [AWS Shared Responsibility Model](https://aws.amazon.com/compliance/shared-responsibility-model/). See the [Security documentation](./documentation/docusaurus-site/docs/architecture/security.md) for details on authentication, authorization, encryption, and compliance.
+VAMS follows the [AWS Shared Responsibility Model](https://aws.amazon.com/compliance/shared-responsibility-model/). See the [Security documentation](https://awslabs.github.io/visual-asset-management-system/architecture/security) for details on authentication, authorization, encryption, and compliance.
 
 ## Costs
 
-Costs depend on deployment configuration, data volume, and usage patterns. A minimal deployment starts at approximately $10-15/month. See the [Cost Estimation guide](./documentation/docusaurus-site/docs/overview/costs.md) for detailed breakdowns.
+Costs depend on deployment configuration, data volume, and usage patterns. A minimal deployment starts at approximately $10-15/month. See the [Cost Estimation guide](https://awslabs.github.io/visual-asset-management-system/overview/costs) for detailed breakdowns.
 
 ## Contributing
 
