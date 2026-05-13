@@ -10,7 +10,9 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { Stack, NestedStack } from "aws-cdk-lib";
 import { GarnetFrameworkBuilderNestedStack } from "./garnetFramework/garnetFrameworkBuilder-nestedStack";
+import { PhysnaSyncBuilderNestedStack } from "./physna/physnaSyncBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as Config from "../../../config/config";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_NODE_RUNTIME } from "../../../config/config";
@@ -24,6 +26,7 @@ export interface AddonBuilderNestedStackProps extends cdk.StackProps {
     isolatedSubnets: ec2.ISubnet[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
+    api: apigwv2.HttpApi;
 }
 
 /**
@@ -51,6 +54,23 @@ export class AddonBuilderNestedStack extends NestedStack {
                     vpc: props.vpc,
                     isolatedSubnets: props.isolatedSubnets,
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                }
+            );
+        }
+
+        //Physna Sync
+        if (props.config.app.addons.usePhysnaSync.enabled) {
+            const physnaSyncBuilderNestedStack = new PhysnaSyncBuilderNestedStack(
+                this,
+                "PhysnaSyncBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    isolatedSubnets: props.isolatedSubnets,
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    api: props.api,
                 }
             );
         }

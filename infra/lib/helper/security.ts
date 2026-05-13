@@ -28,6 +28,7 @@ interface CSPAdditionalConfig {
     mediaSrc?: string[];
     fontSrc?: string[];
     styleSrc?: string[];
+    frameSrc?: string[];
 }
 
 /**
@@ -383,12 +384,16 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3").Endpoint}/`,
     ];
 
-    let scriptSrc = [
-        "'self'",
-        "'unsafe-hashes'",
-        "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
-        "'sha256-zALIqLOBMfzjoNUL1W5BfmSMZYfNkxV6aRuqPjSB8Mo='", // script in index.html
-    ];
+    // `'unsafe-inline'` is used intentionally here instead of per-script SHA
+    // hashes or a nonce. External viewer plugins (Physna's hosted viewer,
+    // etc.) embed inline `<script>` blocks whose contents we do not control
+    // and which rev frequently. Maintaining a rolling SHA allowlist for
+    // those blocks is unsustainable, and a CSP nonce requires propagating a
+    // new value on every page render (which the viewers cannot cooperate
+    // with). Note that modern browsers ignore `'unsafe-inline'` whenever a
+    // hash or nonce source is present, so this directive only takes effect
+    // when neither is used.
+    let scriptSrc = ["'self'", "'unsafe-hashes'", "'unsafe-inline'"];
 
     let workerSrc = ["'self'", "blob:", "data:"];
 
@@ -398,6 +403,13 @@ export function generateContentSecurityPolicy(
 
     let fontSrc = ["'self'"];
     let styleSrc = ["'self'", "'unsafe-inline'"];
+
+    // frame-src controls what URLs can be loaded into <iframe>s. Without an
+    // explicit directive the browser falls back to default-src ('none'),
+    // which blocks blob:-URL iframes used by add-on viewers (e.g., the
+    // Physna Viewer wraps the Physna-hosted HTML in a sandboxed Blob URL).
+    // 'self' plus blob: covers both same-origin iframes and blob-URL iframes.
+    let frameSrc = ["'self'", "blob:"];
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
@@ -420,6 +432,28 @@ export function generateContentSecurityPolicy(
         connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
     }
 
+    // When the Physna add-on is enabled the viewer plugin embeds Physna's
+    // hosted viewer URL directly in an `<iframe src>`. Allow that origin
+    // in `frame-src` so the iframe isn't blocked by CSP, and in
+    // `connect-src` so any auxiliary fetches the VAMS frontend makes
+    // against Physna also pass. We add only the origin portion (not the
+    // full config URL, which may include a path) because CSP source
+    // expressions match on scheme + host + port.
+    if (
+        config.app.addons?.usePhysnaSync?.enabled &&
+        config.app.addons.usePhysnaSync.apiBaseEndpoint
+    ) {
+        try {
+            const physnaUrl = new URL(config.app.addons.usePhysnaSync.apiBaseEndpoint);
+            const origin = `${physnaUrl.protocol}//${physnaUrl.host}`;
+            connectSrc.push(origin);
+            frameSrc.push(origin);
+        } catch {
+            // Config validation in getConfig() already rejects invalid URLs,
+            // so this is defensive — never raise during CSP generation.
+        }
+    }
+
     // Merge additional CSP sources if configuration is loaded
     if (additionalCSPConfig) {
         connectSrc = mergeCSPSources(connectSrc, additionalCSPConfig.connectSrc);
@@ -429,6 +463,7 @@ export function generateContentSecurityPolicy(
         mediaSrc = mergeCSPSources(mediaSrc, additionalCSPConfig.mediaSrc);
         fontSrc = mergeCSPSources(fontSrc, additionalCSPConfig.fontSrc);
         styleSrc = mergeCSPSources(styleSrc, additionalCSPConfig.styleSrc);
+        frameSrc = mergeCSPSources(frameSrc, additionalCSPConfig.frameSrc);
     }
 
     const csp =
@@ -439,6 +474,7 @@ export function generateContentSecurityPolicy(
         `worker-src ${workerSrc.join(" ")}; ` +
         `img-src ${imgSrc.join(" ")}; ` +
         `media-src ${mediaSrc.join(" ")}; ` +
+        `frame-src ${frameSrc.join(" ")}; ` +
         `object-src 'none'; ` +
         `frame-ancestors 'none'; font-src ${fontSrc.join(" ")}; ` +
         `manifest-src 'self'`;

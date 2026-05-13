@@ -135,6 +135,9 @@ infra/
       addon/
         addonBuilder-nestedStack.ts        # Addon orchestrator
         garnetFramework/                   # Garnet NGSI-LD digital twin framework
+        physna/                            # Physna 3D/CAD geometric search sync (Phase 1)
+                                             # Builds physnaFileSync, physnaAssetSync,
+                                             # and physnaViewer lambdas for addon API.
   test/
     infra.test.ts              # Single snapshot test (outdated, uses legacy @aws-cdk/assert)
   deploymentDataMigration/     # Data migration utilities
@@ -162,7 +165,7 @@ CoreVAMSStack (root)
   |     |     |     +-- StaticWeb (CloudFront or ALB hosting)
   |     |     |     +-- SearchBuilder (OpenSearch)
   |     |     |     +-- PipelineBuilder (all use-case pipelines)
-  |     |     |     +-- AddonBuilder (Garnet)
+  |     |     |     +-- AddonBuilder (Garnet, Physna Sync)
   |     |
   +-- LocationService (conditional: useLocationService.enabled)
   +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
@@ -284,7 +287,7 @@ The `ConfigPublic` interface (~200 lines in `config/config.ts`) defines all depl
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
 -   `app.pipelines`: useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
--   `app.addons`: useGarnetFramework
+-   `app.addons`: useGarnetFramework, usePhysnaSync
 -   `app.authProvider`: useCognito (enabled, useSaml, useUserPasswordAuthFlow), useExternalOAuthIdp, authorizerOptions.allowedIpRanges
 -   `app.api`: globalRateLimit (default 50), globalBurstLimit (default 100)
 -   `app.govCloud`: enabled, il6Compliant

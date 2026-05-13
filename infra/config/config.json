@@ -217,6 +217,15 @@
                 "garnetApiEndpoint": "",
                 "garnetApiToken": "",
                 "garnetIngestionQueueSqsUrl": ""
+            },
+            "usePhysnaSync": {
+                "enabled": false,
+                "tenantId": "",
+                "apiBaseEndpoint": "https://app-api.physna.com/v3/",
+                "authTokenEndpoint": "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token",
+                "authType": "cognito",
+                "clientId": "",
+                "clientSecret": ""
             }
         },
         "authProvider": {

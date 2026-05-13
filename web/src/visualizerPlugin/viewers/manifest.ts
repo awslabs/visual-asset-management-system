@@ -34,6 +34,8 @@ export const VIEWER_COMPONENTS = {
         "NeedleUSDViewerPlugin/NeedleUSDViewerComponent",
     "./viewers/ThreeJSViewerPlugin/ThreeJSViewerComponent":
         "ThreeJSViewerPlugin/ThreeJSViewerComponent",
+    "./viewers/PhysnaViewerPlugin/PhysnaViewerComponent":
+        "PhysnaViewerPlugin/PhysnaViewerComponent",
 } as const;
 
 // Dependency manager paths - add new dependency managers here

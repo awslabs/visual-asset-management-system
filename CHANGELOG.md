@@ -10,12 +10,19 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   Physna Sync add-on (Phase 1) — Optional one-way synchronization of supported VAMS files, file metadata, file attributes, and asset metadata to a Physna tenant. Enable via `app.addons.usePhysnaSync` in `infra/config/config.json`. See the [Physna Integration documentation](documentation/docusaurus-site/docs/developer/physna-integration.md) for details.
+-   **Web** Physna Viewer frontend plugin — New VAMS viewer plugin that embeds the Physna-hosted 3D/CAD viewer inside VAMS asset pages for files that have been synced to Physna. Backed by a new `GET /addon/physna/viewer` proxy endpoint that enforces VAMS two-tier authorization and keeps Physna credentials off the client. Enabled automatically whenever the Physna Sync add-on is deployed.
+-   **Web** Addec CSP "nonce-" CDK configuration and support for iframe or inline scripting support (used in Physna viewer currently)
+-   **Web** Continue to add additional retry/skip steps to the various web file upload stages if certain network calls fail
+
 ### Bug Fixes
 
+-   Fixed bug in S3 bucket indexing function where filenames with certain special characters were not getting properly processed
 -   Fixed Gaussian Splat open pipeline function to properly have permissions send task failure callbacks if an error is caught during initialization
 -   Fixed NVIDIA Comos Transfer and Predict pipeline build pipeline failure due to Cosmos python upgrade to 3.13 which breaks build since v2.5.0. Pin docker python version to 3.10 to prevent this.
 -   Fixed NVIDIA Comos and Gr00t pipelines that may result in container deadlock due to output buffer overflows during hugging face model downloads
 -   Fixed NVIDIA Comos Predict v1 reference in CDK that was still forcing a local Docker build of predict v1 instead of using only v2.5 deployments (wasn't being used but caused longer CDK deployment times)
+-   Fixed NVIDIA IsaacLabs pipeline to now properly lookup asset input locations to allow relative pathing in the submitted configuration files
 -   Programatically stripping NVIDIA Cosmos, Gr00t, and IsaacLab CRLF line endings on entrypoint files to account for different deployment machine OSs (Windows vs Linux/Mac) that could cause pipeline failures
 
 ### Chores

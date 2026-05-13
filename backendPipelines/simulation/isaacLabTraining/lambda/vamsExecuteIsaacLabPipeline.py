@@ -70,8 +70,18 @@ def lambda_handler(event, context):
         job_name = f"isaaclab-training-{uuid.uuid4().hex[:8]}"
 
         # Build Step Functions input from standard VAMS messagePayload
+        # bucketAsset + inputAssetLocationKey define the asset root in S3 and are
+        # required by openPipeline to resolve relative paths (checkpointPath,
+        # customEnvironmentPath) and scope policy auto-discovery. Deriving the
+        # asset root from inputS3AssetFilePath alone is unreliable because assets
+        # can have files nested at arbitrary depths under the asset root.
         sfn_input = {
             "jobName": job_name,
+            "bucketAsset": data.get("bucketAsset", ""),
+            "inputAssetLocationKey": data.get("inputAssetLocationKey", ""),
+            "inputAssetFileKey": data.get("inputAssetFileKey", ""),
+            "assetId": data.get("assetId", ""),
+            "databaseId": data.get("databaseId", ""),
             "inputS3AssetFilePath": data.get("inputS3AssetFilePath", ""),
             "outputS3AssetFilesPath": data.get("outputS3AssetFilesPath", ""),
             "outputS3AssetPreviewPath": data.get("outputS3AssetPreviewPath", ""),

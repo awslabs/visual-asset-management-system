@@ -312,8 +312,16 @@ export class CoreVAMSStack extends cdk.Stack {
                 vpc: this.vpc,
                 isolatedSubnets: this.subnetsIsolated,
                 privateSubnets: this.subnetsPrivate,
+                api: apiNestedStack.apiGatewayV2,
             });
             addonBuilderNestedStack.addDependency(storageResourcesNestedStack);
+
+            // The Physna add-on frontend features (viewer today, more planned)
+            // are gated by a single feature flag so the web UI only surfaces
+            // them when the add-on is deployed.
+            if (props.config.app.addons.usePhysnaSync.enabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
+            }
 
             //Write final output configurations (pulling forward from nested stacks)
             const gatewayURLParamsOutput = new cdk.CfnOutput(this, "APIGatewayEndpointOutput", {

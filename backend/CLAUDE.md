@@ -68,6 +68,11 @@ backend/
 │   │   ├── userRoles/                   # User-role assignment
 │   │   ├── workflows/                   # Step Functions workflow management (modernized:
 │   │                                    #   Pydantic models, builder pattern for ASL generation)
+│   │   ├── addon/                        # Add-on integrations
+│   │   │   ├── garnetFramework/          # Garnet NGSI-LD indexer Lambdas
+│   │   │   └── physna/                   # Physna Sync Lambdas (one-way sync to Physna ISV)
+│   │   │                                   # Handlers: physnaFileSync, physnaAssetSync,
+│   │   │                                   #           physnaViewer (GET /addon/physna/viewer proxy)
 │   │   └── [handlerType]/               # Handler-type specific handlers
 │   └── models/                          # Pydantic models
 │       ├── assetsV3.py                  # GOLD STANDARD model file -- follow this pattern

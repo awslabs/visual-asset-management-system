@@ -8,6 +8,7 @@ import os
 import boto3
 import time
 import hashlib
+import urllib.parse
 from customLogging.logger import safeLogger
 from handlers.assets.createAsset import create_asset
 from models.assetsV3 import CreateAssetRequestModel
@@ -739,6 +740,31 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         logger.exception(f"Error creating asset: {e}")
         return None
 
+def decode_s3_event_key(raw_key: str) -> str:
+    """Decode an S3 key from an S3 event notification.
+
+    AWS documents that S3 event notifications URL-encode object keys using
+    form encoding (spaces → '+', other specials → '%XX'). The canonical
+    AWS SDK convention for reversing this is ``urllib.parse.unquote_plus``.
+
+    However, literal '+' characters in real S3 keys are also common (VAMS
+    file uploads include filenames like ``BACC66K41F158AM+---.CATPart``),
+    and some event sources deliver the key without any encoding applied.
+    Blindly calling ``unquote_plus`` on a literal ``+`` turns it into a
+    space, which then 404s on ``head_object``.
+
+    Strategy: return the ``unquote_plus`` form if it actually differs
+    (indicating the event WAS encoded); otherwise return the raw key.
+    Callers that make an S3 API call with this key should additionally
+    fall back to the raw key if the decoded-first attempt 404s — see
+    ``update_s3_metadata`` for the template.
+    """
+    if not raw_key:
+        return raw_key
+    decoded = urllib.parse.unquote_plus(raw_key)
+    return decoded if decoded != raw_key else raw_key
+
+
 def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asset_id: str) -> bool:
     """
     Update S3 object metadata
@@ -752,36 +778,58 @@ def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asse
     Returns:
         bool: True if updated successfully, False otherwise
     """
+    # S3 event keys may arrive form-encoded ('+' for space, %XX for other
+    # specials) or as literal text depending on the source. Try the key
+    # as-given first; on 404, try the alternative (decoded <-> raw) so we
+    # tolerate both shapes. This prevents uploads with special characters
+    # like '+' in the filename (e.g., BACC66K41F158AM+---.CATPart) from
+    # failing when the event pipeline delivered one shape but the object
+    # was stored with the other.
+    def _head_with_fallback():
+        try:
+            return s3_client.head_object(Bucket=bucket_name, Key=object_key), object_key
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") not in ("404", "NoSuchKey"):
+                raise
+            # 404 path — try the alternative encoding
+            alt_key = urllib.parse.unquote_plus(object_key)
+            if alt_key == object_key:
+                # Try re-encoding instead (raw key that should have been encoded)
+                alt_key = urllib.parse.quote(object_key, safe="/+")
+            if alt_key == object_key:
+                raise  # nothing else to try
+            logger.info(
+                f"head_object 404 for key {object_key!r}; retrying with "
+                f"alternative encoding {alt_key!r}"
+            )
+            return s3_client.head_object(Bucket=bucket_name, Key=alt_key), alt_key
+
     try:
-        # Get the current object metadata
-        response = s3_client.head_object(
-            Bucket=bucket_name,
-            Key=object_key
-        )
-        
+        response, effective_key = _head_with_fallback()
+
         # Check if metadata already matches
         current_metadata = response.get('Metadata', {})
         if current_metadata.get('databaseid') == database_id and current_metadata.get('assetid') == asset_id:
-            logger.info(f"Metadata already matches for {object_key}")
+            logger.info(f"Metadata already matches for {effective_key}")
             return True
-        
+
         # Copy the object to itself with updated metadata
         metadata = {**current_metadata, 'databaseid': database_id, 'assetid': asset_id}
-        
+
         # Use boto3 resource copy() which automatically handles multipart for large files
         copy_source = {
             'Bucket': bucket_name,
-            'Key': object_key
+            'Key': effective_key
         }
-        s3_resource.Object(bucket_name, object_key).copy(
+        s3_resource.Object(bucket_name, effective_key).copy(
             copy_source,
             ExtraArgs={
                 'Metadata': metadata,
                 'MetadataDirective': 'REPLACE'
             }
         )
-        
-        logger.info(f"Updated metadata for {object_key}")
+
+        logger.info(f"Updated metadata for {effective_key}")
         return True
     except Exception as e:
         logger.exception(f"Error updating S3 metadata: {e}")
@@ -1209,11 +1257,25 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         if not record.get('s3'):
             return False, False, "Record does not contain S3 information"
 
-        # Extract bucket name and object key
+        # Extract bucket name and object key. S3 event notifications deliver
+        # the key URL-encoded per AWS spec (spaces → '+', specials → '%XX');
+        # decode it here so downstream comparisons, prefix checks, and S3
+        # API calls operate on the actual object key. The update_s3_metadata
+        # helper has an additional fallback to the raw form in case this
+        # particular event source delivered the key literally.
         bucket_name = record['s3']['bucket']['name']
-        object_key = record['s3']['object']['key']
-        
-        logger.info(f"Processing S3 record for bucket {bucket_name}, key {object_key}")
+        raw_object_key = record['s3']['object']['key']
+        object_key = decode_s3_event_key(raw_object_key)
+
+        if object_key != raw_object_key:
+            logger.info(
+                f"Processing S3 record for bucket {bucket_name}, "
+                f"key {object_key} (decoded from {raw_object_key})"
+            )
+        else:
+            logger.info(
+                f"Processing S3 record for bucket {bucket_name}, key {object_key}"
+            )
 
         #Copy prefix
         prefix = asset_bucket_prefix
@@ -1374,12 +1436,30 @@ def on_storage_event_created(event):
                 else:
                     logger.info(f"Successfully processed record but skipping indexing: {message}")
             else:
-                if "skipping" in message.lower():
-                    skip_count += 1
-                    logger.info(f"Skipped record: {message}")
-                else:
+                # Classify a non-success result as a skip (benign, expected) vs
+                # an error (something that actually failed mid-action). Skips
+                # are events we intentionally decline to process — wrong
+                # bucket/prefix, special folders like temp-uploads, invalid
+                # asset IDs, etc. Errors are downstream action failures like
+                # "Failed to ..." or "Could not get or create ...".
+                #
+                # Note: the message comes from process_s3_record above. None
+                # of its benign-skip messages naturally contain the word
+                # "skipping", so the older substring-based check was
+                # miscategorizing every skip as an error. We now match against
+                # the error-prefix set explicitly and default to skip.
+                _error_prefixes = (
+                    "Record does not contain S3 information",
+                    "Failed to",
+                    "Could not get or create",
+                    "Error processing",
+                )
+                if any(message.startswith(p) for p in _error_prefixes):
                     error_count += 1
                     logger.error(f"Error processing record: {message}")
+                else:
+                    skip_count += 1
+                    logger.info(f"Skipped record: {message}")
         except Exception as e:
             # Catch any unexpected exceptions during record processing
             error_count += 1
