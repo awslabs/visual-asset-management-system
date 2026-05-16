@@ -17,6 +17,7 @@ import { RapidPipelineNestedStack } from "./multi/rapidPipeline/rapidPipeline-ne
 import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipelineEKS-nestedStack";
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
 import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
+import { CoordinateTransformBuilderNestedStack } from "./conversion/coordinateTransform/coordinateTransformBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
 import { IsaacLabTrainingBuilderNestedStack } from "./simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack";
 import { Preview3dThumbnailBuilderNestedStack } from "./preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack";
@@ -243,6 +244,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
             props.config.app.pipelines.usePreview3dThumbnail.enabled ||
             props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
+            props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
             props.config.app.pipelines.useModelOps.enabled ||
@@ -266,6 +268,31 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
                     previewPcPotreeViewerPipelineNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            if (props.config.app.pipelines.useConversionCoordinateTransform?.enabled) {
+                const coordinateTransformPipelineNestedStack =
+                    new CoordinateTransformBuilderNestedStack(
+                        this,
+                        "CoordinateTransformBuilderNestedStack",
+                        {
+                            ...props,
+                            config: props.config,
+                            vpc: props.vpc,
+                            pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                            pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                            lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                            assetAuxiliaryBucket:
+                                props.storageResources.s3.assetAuxiliaryBucket,
+                            kmsKey: props.storageResources.encryption.kmsKey,
+                            importGlobalPipelineWorkflowFunctionName:
+                                props.importGlobalPipelineWorkflowFunctionName,
+                        }
+                    );
+
+                this.pipelineVamsLambdaFunctionNames.push(
+                    coordinateTransformPipelineNestedStack.pipelineVamsLambdaFunctionName
                 );
             }
 

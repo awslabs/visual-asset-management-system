@@ -306,10 +306,6 @@ export function getConfig(app: cdk.App): Config {
         config.app.addons.useGarnetFramework.enabled = false;
     }
 
-    if (config.app.addons.usePhysnaSync.enabled == undefined) {
-        config.app.addons.usePhysnaSync.enabled = false;
-    }
-
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
@@ -320,6 +316,22 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled == undefined) {
         config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = false;
+    }
+
+    if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
+        config.app.pipelines.useConversionCoordinateTransform = {
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: false,
+            autoRegisterAutoTriggerOnFileUpload: false,
+        };
+    }
+    if (
+        config.app.pipelines.useConversionCoordinateTransform.useCodeBuild ==
+        undefined
+    ) {
+        config.app.pipelines.useConversionCoordinateTransform.useCodeBuild =
+            false;
     }
 
     if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
@@ -464,6 +476,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
         config.app.pipelines.useSplatToolbox.enabled ||
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
+        config.app.pipelines.useConversionCoordinateTransform?.enabled ||
         config.app.pipelines.useRapidPipeline.useEcs.enabled ||
         config.app.pipelines.useRapidPipeline.useEks.enabled ||
         config.app.pipelines.useModelOps.enabled ||
@@ -989,79 +1002,6 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    // Physna Sync Configuration Validation
-    if (config.app.addons.usePhysnaSync.enabled) {
-        const physna = config.app.addons.usePhysnaSync;
-
-        // tenantId must be a UUID
-        const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (!physna.tenantId || !uuidPattern.test(physna.tenantId)) {
-            throw new Error(
-                `Configuration Error: Physna Sync requires tenantId to be a valid UUID when enabled. Got: ${physna.tenantId}`
-            );
-        }
-
-        // apiBaseEndpoint required, must be a valid URL ending with /
-        if (
-            !physna.apiBaseEndpoint ||
-            physna.apiBaseEndpoint === "UNDEFINED" ||
-            physna.apiBaseEndpoint === ""
-        ) {
-            throw new Error(
-                "Configuration Error: Physna Sync requires apiBaseEndpoint when enabled"
-            );
-        }
-        try {
-            new URL(physna.apiBaseEndpoint);
-        } catch (e) {
-            throw new Error(
-                `Configuration Error: Physna Sync apiBaseEndpoint must be a valid URL. Got: ${physna.apiBaseEndpoint}`
-            );
-        }
-        if (!physna.apiBaseEndpoint.endsWith("/")) {
-            throw new Error(
-                `Configuration Error: Physna Sync apiBaseEndpoint must end with a trailing slash '/'. Got: ${physna.apiBaseEndpoint}`
-            );
-        }
-
-        // authTokenEndpoint required, must be a valid URL
-        if (
-            !physna.authTokenEndpoint ||
-            physna.authTokenEndpoint === "UNDEFINED" ||
-            physna.authTokenEndpoint === ""
-        ) {
-            throw new Error(
-                "Configuration Error: Physna Sync requires authTokenEndpoint when enabled"
-            );
-        }
-        try {
-            new URL(physna.authTokenEndpoint);
-        } catch (e) {
-            throw new Error(
-                `Configuration Error: Physna Sync authTokenEndpoint must be a valid URL. Got: ${physna.authTokenEndpoint}`
-            );
-        }
-
-        // authType must be "cognito" (only supported mode phase 1)
-        if (physna.authType !== "cognito") {
-            throw new Error(
-                `Configuration Error: Physna Sync authType must be "cognito" (only supported value in phase 1). Got: ${physna.authType}`
-            );
-        }
-
-        // clientId and clientSecret must be non-empty
-        if (!physna.clientId || physna.clientId === "UNDEFINED" || physna.clientId === "") {
-            throw new Error("Configuration Error: Physna Sync requires clientId when enabled");
-        }
-        if (
-            !physna.clientSecret ||
-            physna.clientSecret === "UNDEFINED" ||
-            physna.clientSecret === ""
-        ) {
-            throw new Error("Configuration Error: Physna Sync requires clientSecret when enabled");
-        }
-    }
-
     return config;
 }
 
@@ -1152,6 +1092,12 @@ export interface ConfigPublic {
             };
             useConversionCadMeshMetadataExtraction: {
                 enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+            };
+            useConversionCoordinateTransform: {
+                enabled: boolean;
+                useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
             };
@@ -1296,15 +1242,6 @@ export interface ConfigPublic {
                 garnetApiEndpoint: string;
                 garnetApiToken: string;
                 garnetIngestionQueueSqsUrl: string;
-            };
-            usePhysnaSync: {
-                enabled: boolean;
-                tenantId: string;
-                apiBaseEndpoint: string;
-                authTokenEndpoint: string;
-                authType: string;
-                clientId: string;
-                clientSecret: string;
             };
         };
         authProvider: {
