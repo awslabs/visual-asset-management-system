@@ -8,7 +8,6 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 | Version       | Date       | Key Changes                                                                                                                                                                                                                                                                                      |
 | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [2.6.0](#260) | 2026-05-08 | Physna Sync add-on (Phase 1): one-way synchronization of supported VAMS files and metadata to a Physna tenant                                                                                                                                                                                    |
 | [2.5.1](#251) | 2026-04-29 | Bug fixes: upload subfolder paths, file version history cleanup on delete, S3 version pagination, authorization error handling, image viewer version switching, CLI download pagination, CLI upload progress display                                                                             |
 | [2.5.0](#250) | 2026-04-21 | Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates |
 | [2.4.1](#241) | 2026-01-30 | GovCloud deployment fixes, CloudFront KMS fix, metadata schema navigation fix, file manager UX improvements                                                                                                                                                                                      |
@@ -21,15 +20,6 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 ---
 
 ## Version Details
-
-### 2.6.0
-
-**Release date:** 2026-05-08
-
-**Added:**
-
--   **Physna Sync add-on (Phase 1)** — Optional one-way synchronization of supported VAMS files, file metadata, file attributes, and asset metadata to a Physna tenant for geometric and semantic 3D search. Enable via `app.addons.usePhysnaSync` in `infra/config/config.json`. See [Physna Integration](../developer/physna-integration.md).
--   **Physna Viewer plugin** — New viewer plugin that embeds the Physna-hosted 3D/CAD viewer directly inside VAMS asset pages. Enabled automatically whenever the Physna Sync add-on is deployed; uses a new VAMS-authorized proxy endpoint (`GET /addon/physna/viewer`) so Physna credentials never reach the browser. See [Physna Integration](../developer/physna-integration.md#physna-viewer).
 
 ### 2.5.1
 

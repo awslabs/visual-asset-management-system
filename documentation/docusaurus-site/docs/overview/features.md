@@ -185,12 +185,13 @@ Pipelines support three execution types for integration with different processin
 
 ### Built-In Pipelines
 
-VAMS includes twelve built-in processing pipelines, each deployable through configuration flags:
+VAMS includes thirteen built-in processing pipelines, each deployable through configuration flags:
 
 | Pipeline                     | Config Flag                              | Description                                                                                                                                                                                   | Default  |
 | ---------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | 3D Conversion Basic          | `useConversion3dBasic`                   | Format conversion using Trimesh and Blender                                                                                                                                                   | Enabled  |
 | CAD/Mesh Metadata Extraction | `useConversionCadMeshMetadataExtraction` | Geometric metadata extraction using CADQuery                                                                                                                                                  | Disabled |
+| Coordinate Transform         | `useConversionCoordinateTransform`       | CRS reprojection for point clouds with per-asset metadata overrides                                                                                                                           | Disabled |
 | Point Cloud Potree Viewer    | `usePreviewPcPotreeViewer`               | Potree octree generation for browser streaming                                                                                                                                                | Disabled |
 | Gaussian Splat Toolbox       | `useSplatToolbox`                        | 3D Gaussian splat generation from media files                                                                                                                                                 | Disabled |
 | GenAI Metadata 3D Labeling   | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling via Amazon Bedrock                                                                                                                                               | Disabled |
@@ -254,18 +255,17 @@ Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` t
 
 VAMS uses a feature flag system to conditionally enable capabilities at deployment time. Feature flags are persisted to Amazon DynamoDB and read by the web interface at runtime.
 
-| Feature Flag                    | Description                                                                                                                                                          |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode                                                                                                                               |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (CesiumJS, Needle USD)                                                                                                   |
-| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
-| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
-| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |
-| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                              |
-| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                                                                                                                              |
-| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                                                                                                                        |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                                                                                                                             |
-| `PHYSNA_ADDON`                  | Enables Physna add-on frontend features (viewer plugin, future Physna-powered UI surfaces). Emitted automatically when `app.addons.usePhysnaSync.enabled` is `true`. |
+| Feature Flag                    | Description                                                        |
+| ------------------------------- | ------------------------------------------------------------------ |
+| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode                             |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (CesiumJS, Needle USD) |
+| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views          |
+| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution               |
+| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                       |
+| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                            |
+| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                            |
+| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                      |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                           |
 
 ### Additional Configuration
 
@@ -275,4 +275,4 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 -   **Metadata schema auto-loading** -- Control which default metadata schemas are loaded on deployment
 -   **External asset buckets** -- Register existing Amazon S3 buckets with VAMS for asset management
 -   **Custom Amazon S3 bucket policies** -- Additional bucket policy statements via `s3AdditionalBucketPolicyConfig.json`
--   **Addon framework** -- Garnet Framework integration for NGSI-LD digital twin data synchronization; Physna Sync add-on for one-way synchronization of supported 3D/CAD files and metadata to a Physna for geometric and semantic 3D search
+-   **Addon framework** -- Garnet Framework integration for NGSI-LD digital twin data synchronization

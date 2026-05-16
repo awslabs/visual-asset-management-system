@@ -138,7 +138,7 @@ graph TD
     StaticWeb["StaticWeb<br/>(CloudFront or ALB)"]
     Search["SearchBuilder<br/>(OpenSearch)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
-    Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync)"]
+    Addons["AddonBuilder<br/>(Garnet Framework)"]
     Location["LocationService<br/>(Conditional)"]
     Features["CustomFeatureEnabledConfig<br/>(Feature Flags to DynamoDB)"]
 

@@ -314,6 +314,17 @@ Extracts metadata from CAD and mesh file formats. Does not require a VPC.
 | `app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.                            |
 | `app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads matching supported file types. |
 
+### Coordinate transform (`app.pipelines.useConversionCoordinateTransform`)
+
+Reprojects E57, LAS, LAZ, and PLY point clouds between coordinate reference systems. **Requires VPC.** Uses AWS CodeBuild to build the container image during deployment. Supports per-asset CRS configuration via VAMS metadata fields.
+
+| Field                                                                                    | Type    | Default | Description                                                                                                              |
+| ---------------------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `app.pipelines.useConversionCoordinateTransform.enabled`                                 | boolean | `false` | Enables the coordinate transform pipeline.                                                                               |
+| `app.pipelines.useConversionCoordinateTransform.useCodeBuild`                            | boolean | `true`  | Build the container image via AWS CodeBuild during deployment. CodeBuild runs outside the VPC to pull public base images. |
+| `app.pipelines.useConversionCoordinateTransform.autoRegisterWithVAMS`                    | boolean | `true`  | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                |
+| `app.pipelines.useConversionCoordinateTransform.autoRegisterAutoTriggerOnFileUpload`     | boolean | `false` | Automatically triggers the pipeline when E57, LAS, LAZ, or PLY files are uploaded.                                       |
+
 ### Point cloud Potree viewer (`app.pipelines.usePreviewPcPotreeViewer`)
 
 Processes E57, LAS, and LAZ point cloud files for Potree web viewing. **Requires VPC.** Uses a GPL-licensed library.
@@ -506,22 +517,6 @@ Integration with the Garnet Framework external knowledge graph for NGSI-LD data 
 | `app.addons.useGarnetFramework.garnetApiEndpoint`          | string  | _(required when enabled)_ | Garnet Framework API endpoint URL (for example, `https://XXX.execute-api.us-east-1.amazonaws.com`). Must be a valid URL. |
 | `app.addons.useGarnetFramework.garnetApiToken`             | string  | _(required when enabled)_ | API authentication token for the Garnet Framework.                                                                       |
 | `app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl` | string  | _(required when enabled)_ | Amazon SQS queue URL for Garnet Framework data ingestion. Format: `https://sqs.REGION.amazonaws.com/ACCOUNT/QUEUE_NAME`. |
-
-### Physna Sync (`app.addons.usePhysnaSync`)
-
-One-way synchronization of supported VAMS files and metadata to a Physna tenant for geometric and semantic 3D search.
-
-| Field                                        | Type    | Default                                                            | Description                                                           |
-| -------------------------------------------- | ------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| `app.addons.usePhysnaSync.enabled`           | boolean | `false`                                                            | Enables the Physna Sync add-on.                                       |
-| `app.addons.usePhysnaSync.tenantId`          | string  | _(required when enabled)_                                          | Physna tenant UUID.                                                   |
-| `app.addons.usePhysnaSync.apiBaseEndpoint`   | string  | `https://app-api.physna.com/v3/`                                   | Physna REST API base URL. Must end with `/`.                          |
-| `app.addons.usePhysnaSync.authTokenEndpoint` | string  | `https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token` | OAuth2 token endpoint for Physna's Cognito user pool.                 |
-| `app.addons.usePhysnaSync.authType`          | string  | `cognito`                                                          | Authentication mode. Only `cognito` is supported in phase 1.          |
-| `app.addons.usePhysnaSync.clientId`          | string  | _(required when enabled)_                                          | Cognito client ID. Written to AWS Secrets Manager at deploy time.     |
-| `app.addons.usePhysnaSync.clientSecret`      | string  | _(required when enabled)_                                          | Cognito client secret. Written to AWS Secrets Manager at deploy time. |
-
-Enabling the Physna Sync add-on also enables the in-app Physna add-on frontend features (currently the Physna Viewer plugin; more Physna-powered UI surfaces are planned). The backend emits a `PHYSNA_ADDON` feature flag in `/api/secure-config` whenever `app.addons.usePhysnaSync.enabled` is `true`, and the frontend consumes that flag to decide whether to surface Physna add-on features for supported file types. No separate configuration is required.
 
 ## Example configurations
 
