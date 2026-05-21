@@ -95,7 +95,7 @@ const sidebars: SidebarsConfig = {
                     type: "category",
                     label: "Addons",
                     collapsed: true,
-                    items: ["developer/garnet-framework"],
+                    items: ["developer/garnet-framework", "developer/physna-integration"],
                 },
                 {
                     type: "category",
@@ -103,7 +103,6 @@ const sidebars: SidebarsConfig = {
                     collapsed: true,
                     items: [
                         "pipelines/overview",
-                        "pipelines/coordinate-transform",
                         "pipelines/potree-viewer",
                         "pipelines/3d-thumbnail",
                         "pipelines/3d-conversion",
@@ -168,6 +167,7 @@ const sidebars: SidebarsConfig = {
                         "api/tags",
                         "api/subscriptions",
                         "api/auth",
+                        "api/addon",
                     ],
                 },
                 {
