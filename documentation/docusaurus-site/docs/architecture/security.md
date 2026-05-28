@@ -365,7 +365,7 @@ Every CDK Nag suppression must include a detailed justification explaining why t
 | ------------------- | --------------------------------------------------------------------------------------------------- |
 | `AwsSolutions-IAM5` | Amazon S3 `grantReadWrite` generates wildcard actions; scoped to VAMS buckets                       |
 | `AwsSolutions-IAM4` | Managed policies (`AWSLambdaBasicExecutionRole`, `AWSLambdaVPCAccessExecutionRole`) used for Lambda |
-| `AwsSolutions-L1`   | Lambda runtimes are explicitly managed (Python 3.12, Node.js 20.x)                                  |
+| `AwsSolutions-L1`   | Lambda runtimes are explicitly managed (Python 3.12, Node.js 22.x)                                  |
 | `AwsSolutions-COG3` | Amazon Cognito AdvancedSecurityMode not available in AWS GovCloud                                   |
 | `AwsSolutions-S1`   | Access logs bucket cannot log to itself                                                             |
 | `AwsSolutions-SQS3` | Dead-letter queues not used for bucket sync queues (files easily re-driven)                         |

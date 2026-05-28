@@ -108,19 +108,39 @@ Card sizes can be configured through preferences (small, medium, or large).
 ### Map view
 
 :::note
-Map view requires the **Location Services** feature to be enabled in your VAMS deployment and is only available in Assets mode.
+Map view requires the **Location Services** feature to be enabled in your VAMS deployment. It is available in both Assets and Files modes.
 :::
 
-The map view plots assets on an interactive map based on their location metadata. Assets appear on the map if they have:
+The map view plots search hits on an interactive map. The web UI reads each result's location in this order:
 
--   A **location** metadata field containing an LLA-type JSON object with `longitude` and `latitude` properties, or
--   Separate **latitude** and **longitude** metadata fields (string or number type).
+1. **`geo_MD_location`** — the GeoJSON shape derived by the backend indexer from each asset or file's metadata. This drives both the map view and the geospatial search filter.
+2. A **location** metadata field containing GeoJSON or a `{longitude, latitude, altitude}` object (legacy fallback).
+3. Separate **latitude** and **longitude** metadata fields (legacy fallback).
 
-When you switch to map view, location-related metadata filters are automatically added to ensure only geolocated assets are returned. Clicking a map marker opens a popup with the asset name, database, description, tags, and a **View Asset Details** button.
+When you switch to map view, location-related metadata filters are automatically added so only geolocated results are returned. Clicking a map marker opens a popup with the entity's name, database, description, tags, and a **View Asset Details** button (or **View Parent Asset** for file results).
 
-GeoJSON polygon data is rendered as filled shapes on the map with outline borders.
+GeoJSON polygons and multi-polygons are rendered as filled shapes with outline borders. Points are rendered as map markers.
 
 ![Map view showing assets plotted on a geographic map](/img/asset_search_mapView__dark_20260323_v2.5.png)
+
+### Geospatial filter
+
+The **Geospatial filter** panel in the sidebar (visible when Location Services is enabled) lets you constrain results to a geographic area. Three modes are available:
+
+-   **Point + radius** — Filter to results within a circle around a (latitude, longitude) center.
+-   **Bounding box** — Filter to results inside an axis-aligned rectangle defined by the top-left and bottom-right corners.
+-   **GeoJSON** — Paste a GeoJSON Geometry, Feature, or FeatureCollection (Polygon, MultiPolygon, etc.) for arbitrary shapes.
+
+The **Relation** dropdown controls the spatial relationship between the input shape and the indexed geometry:
+
+| Relation     | Match condition                                            |
+| ------------ | ---------------------------------------------------------- |
+| `intersects` | Indexed shape overlaps the input shape (default).          |
+| `within`     | Indexed shape lies entirely inside the input shape.        |
+| `contains`   | Indexed shape fully contains the input shape.              |
+| `disjoint`   | Indexed shape has no spatial overlap with the input shape. |
+
+The geospatial filter applies in addition to all other filters; results must satisfy every active filter group. Documents indexed before the introduction of `geo_MD_location` are excluded from the filter until they are reindexed; in the meantime, the map view continues to plot them using the legacy fallbacks above.
 
 ## Preview thumbnails
 
@@ -132,7 +152,7 @@ The **Show Thumbnails** toggle in the sidebar enables inline preview images in t
 Clicking a thumbnail opens a full-size preview modal with download options.
 
 :::tip
-When the **Map Thumbnails** toggle is enabled (available only in Assets mode with Location Services), a static map image column appears in the table showing the geographic location of each asset.
+When the **Map Thumbnails** toggle is enabled (and Location Services is on), a small map column appears in the table showing the geographic location of each asset or file with valid location data.
 :::
 
 ## Column customization

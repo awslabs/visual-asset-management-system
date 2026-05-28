@@ -25,6 +25,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.indexing import AssetDocumentModel, AssetIndexRequest, IndexOperationResponse
+from common.indexing.geoLocation import build_geo_location
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -524,45 +525,88 @@ def build_asset_document(request: AssetIndexRequest, asset_details: Dict[str, An
     # Add metadata fields with MD_ prefix
     if asset_metadata:
         doc.add_metadata_fields(asset_metadata)
-    
+
+    # Derive geo_MD_location from metadata (location key takes priority over lat/lon/alt)
+    geo_shape = build_geo_location(asset_metadata)
+    if geo_shape is not None:
+        doc.geo_MD_location = geo_shape
+
     return doc
 
 #######################
 # OpenSearch Operations
 #######################
 
+def _is_invalid_geo_shape_error(error: Exception) -> bool:
+    """Detect OpenSearch's mapper_parsing_exception for an invalid geo_shape.
+
+    A degenerate polygon (self-intersecting, zero-area, coincident edges) drawn
+    in the metadata map editor surfaces as a 400 mapper_parsing_exception. We
+    don't want one bad geometry to block the rest of the document from being
+    indexed, so callers retry without the geo field.
+    """
+    msg = str(error)
+    return (
+        "mapper_parsing_exception" in msg
+        and ("invalid_shape_exception" in msg or "geo_shape" in msg)
+    )
+
+
 def index_asset_document(document: AssetDocumentModel) -> bool:
-    """Index an asset document in OpenSearch with retry logic for 429 errors"""
+    """Index an asset document in OpenSearch with retry logic for 429 errors.
+
+    If OpenSearch rejects the document because of a malformed geo_MD_location
+    shape (e.g. a self-intersecting polygon authored in the metadata map
+    editor), we retry once without the geo field so the rest of the document --
+    including MD_ metadata -- still lands in the index.
+    """
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
-        
+
         client = opensearch_manager.get_client()
 
         # Normalize databaseId for storage (addition of #deleted suffix if archived)
         normalized_database_id = document.str_databaseid
         if(document.bool_archived and "#deleted" not in normalized_database_id):
             normalized_database_id = f"{normalized_database_id}#deleted"
-        
+
         # Create document ID from key components
         doc_id = f"{normalized_database_id}#{document.str_assetid}"
-        
+
         # Convert document to dict for indexing
         doc_dict = document.dict(exclude_unset=True)
-        
-        # Index the document with retry logic
-        response = opensearch_operation_with_retry(
-            lambda: client.index(
-                index=opensearch_asset_index,
-                id=doc_id,
-                body=doc_dict
-            ),
-            operation_name=f"index asset {doc_id}"
-        )
-        
+
+        try:
+            response = opensearch_operation_with_retry(
+                lambda: client.index(
+                    index=opensearch_asset_index,
+                    id=doc_id,
+                    body=doc_dict,
+                ),
+                operation_name=f"index asset {doc_id}",
+            )
+        except Exception as e:
+            if _is_invalid_geo_shape_error(e) and "geo_MD_location" in doc_dict:
+                bad_geo = doc_dict.pop("geo_MD_location", None)
+                logger.warning(
+                    f"OpenSearch rejected geo_MD_location for {doc_id}: {e}. "
+                    f"Retrying without the geo field. Bad shape: {bad_geo}"
+                )
+                response = opensearch_operation_with_retry(
+                    lambda: client.index(
+                        index=opensearch_asset_index,
+                        id=doc_id,
+                        body=doc_dict,
+                    ),
+                    operation_name=f"index asset {doc_id} (geo dropped)",
+                )
+            else:
+                raise
+
         logger.info(f"Indexed asset document: {doc_id}")
         return response.get('result') in ['created', 'updated']
-        
+
     except Exception as e:
         logger.exception(f"Error indexing asset document: {e}")
         return False

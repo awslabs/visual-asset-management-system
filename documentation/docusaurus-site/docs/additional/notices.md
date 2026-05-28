@@ -82,7 +82,7 @@ Some viewer plugins and processing pipelines require separate commercial license
 
 **NVIDIA Cosmos Transfer Pipeline (v2.5):** Uses NVIDIA Cosmos-Transfer2.5-2B model for video transformation with control signal conditioning, licensed under the [NVIDIA Open Model License](https://developer.nvidia.com/cosmos-license). The Transfer pipeline generates stylized videos from source videos combined with control signals (edge, depth, segmentation, or visual blur). The pipeline downloads `nvidia/Cosmos-Transfer2.5-2B` (~20GB), `video-depth-anything` (~2GB, Apache 2.0) for depth map generation, and `sam2` (~5GB, Apache 2.0) for semantic segmentation from HuggingFace. The Transfer model requires 65.4GB VRAM and runs exclusively on p4d.24xlarge instances with 8x A100 40GB GPUs. Users must accept all model licenses on HuggingFace before deployment.
 
-Per the NVIDIA Open Model License, applications using Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"**. See the full pipeline documentation ([Cosmos Predict](../pipelines/nvidia-cosmos.md), [Cosmos Reason](../pipelines/nvidia-cosmos-reason.md), [Cosmos Transfer](../pipelines/nvidia-cosmos-transfer.md)) for details.
+Per the NVIDIA Open Model License, applications using Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"**. See the full pipeline documentation ([Cosmos Predict](../pipelines/nvidia-cosmos-predict.md), [Cosmos Reason](../pipelines/nvidia-cosmos-reason.md), [Cosmos Transfer](../pipelines/nvidia-cosmos-transfer.md)) for details.
 
 ---
 

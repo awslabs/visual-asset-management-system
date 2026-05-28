@@ -1,0 +1,60 @@
+{
+    "comments": "Configuration for VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3)",
+
+    "_comment_function": "Lambda function name from CDK stack output 'ReindexerFunctionNameOutput'",
+    "reindexer_function_name": "vams-core-prod5-us-west-2-Se-crOsReindexer518D309B-leWYo1RTszB9",
+
+    "_comment_operation": "What to reindex: 'assets', 'files', or 'both' (default: both)",
+    "operation": "both",
+
+    "_comment_safety": "Safety options",
+    "dry_run": false,
+    "limit": null,
+    "_comment_clear": "v3 indexes are empty after the v2.6 CDK deploy, so leave clear_indexes=false on first run. Set it to true only when re-running against an already-populated v3 index.",
+    "clear_indexes": false,
+
+    "_comment_aws": "AWS configuration (optional - override with CLI flags)",
+    "aws_profile": null,
+    "aws_region": "us-west-2",
+
+    "_comment_logging": "Logging settings",
+    "log_level": "INFO",
+
+    "_comment_instructions": "How to use this configuration file",
+    "_instructions": [
+        "=== SETUP ===",
+        "1. Get the reindexer Lambda function name from the CDK stack outputs:",
+        "   aws cloudformation describe-stacks --stack-name your-vams-stack \\",
+        "     --query 'Stacks[0].Outputs[?OutputKey==`ReindexerFunctionNameOutput`].OutputValue' \\",
+        "     --output text",
+        "",
+        "2. Set 'reindexer_function_name' in this file to that value.",
+        "",
+        "=== EXECUTION ===",
+        "3. Run a dry run first (HIGHLY RECOMMENDED):",
+        "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --dry-run",
+        "",
+        "4. Run the production migration:",
+        "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json",
+        "",
+        "5. (Re-run only) Clear the v3 indexes first if a previous run partially populated them:",
+        "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --clear-indexes",
+        "",
+        "=== WHAT THIS DOES ===",
+        "- Invokes the deployed reindexer Lambda (handlers.indexing.crReindexer)",
+        "- Repopulates the new vams-assets-v3 and vams-files-v3 indexes from DynamoDB and S3",
+        "- The new geo_MD_location field is automatically derived by the indexer from each entity's metadata",
+        "",
+        "=== OPENSEARCH 3.5 UPGRADE NOTE (PROVISIONED ONLY) ===",
+        "If you are running provisioned OpenSearch (config.app.openSearch.useProvisioned.enabled=true) and the",
+        "v2.6 CDK deploy of the OpenSearch domain version upgrade (2.7 -> 3.5) fails on an existing domain,",
+        "deploy first with config.app.openSearch.useProvisioned.enabled=false to delete the domain, then redeploy",
+        "with it re-enabled. The new domain is created on 3.5 and this migration repopulates it from source data.",
+        "Serverless deployments are unaffected by the engine upgrade.",
+        "",
+        "=== SAFETY ===",
+        "- dry_run: Lambda performs a no-op count pass without writing to OpenSearch",
+        "- limit: Caps the number of assets/files processed (testing only)",
+        "- clear_indexes: defaults to false; v3 starts empty so the first run never needs it"
+    ]
+}

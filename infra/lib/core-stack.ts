@@ -339,6 +339,18 @@ export class CoreVAMSStack extends cdk.Stack {
                 }
             );
 
+            if (searchBuilderNestedStack.reindexerFunctionName) {
+                const reindexerFunctionNameOutput = new cdk.CfnOutput(
+                    this,
+                    "OpenSearchReindexerFunctionNameOutput",
+                    {
+                        value: searchBuilderNestedStack.reindexerFunctionName,
+                        description:
+                            "Lambda function name for the OpenSearch reindexer (used by data-migration scripts)",
+                    }
+                );
+            }
+
             let useCasefunctionNumber = 1;
             for (const pipelineVamsExecuteLambdaFunction of pipelineBuilderNestedStack.pipelineVamsLambdaFunctionNames) {
                 const pipelineVamsExecuteLambdaFunctionOutput = new cdk.CfnOutput(

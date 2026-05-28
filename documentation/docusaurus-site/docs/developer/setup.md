@@ -9,7 +9,7 @@ Before starting, ensure you have the following installed on your development mac
 | Tool        | Minimum Version    | Purpose                             |
 | ----------- | ------------------ | ----------------------------------- |
 | Python      | 3.13+              | Backend Lambda handlers, CLI tool   |
-| Node.js     | 20.18.1+           | Frontend build, CDK infrastructure  |
+| Node.js     | 22.22.3+           | Frontend build, CDK infrastructure  |
 | npm         | Included with Node | Package management (never use yarn) |
 | Docker      | Latest             | CDK deployment, container pipelines |
 | AWS CLI     | v2                 | AWS account access                  |

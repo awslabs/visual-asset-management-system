@@ -371,7 +371,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         setCurrentView(view);
 
         // When switching TO map view, add location metadata filters
-        if (view === "map" && previousView !== "map" && recordType === "asset") {
+        if (view === "map" && previousView !== "map") {
             // Add location metadata filters (disabled from editing)
             // Include both lowercase and capitalized versions to handle different capitalizations
             const locationFilters: MetadataFilter[] = [
@@ -459,7 +459,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         // if (allowedViews.includes('card')) {
         //     viewOptions.push({ text: 'Grid', id: 'card' });
         // }
-        if (allowedViews.includes("map") && useMapView && recordType === "asset") {
+        if (allowedViews.includes("map") && useMapView) {
             viewOptions.push({ text: "Map", id: "map" });
         }
 
@@ -503,7 +503,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 );
 
             case "map":
-                if (useMapView && recordType === "asset") {
+                if (useMapView) {
                     return <SearchPageMapView state={searchState} dispatch={() => {}} />;
                 }
                 // Fall through to table view if map not available

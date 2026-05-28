@@ -29,6 +29,8 @@ import { Service } from "../../helper/service-helper";
 import * as cr from "aws-cdk-lib/custom-resources";
 
 export class SearchBuilderNestedStack extends NestedStack {
+    public reindexerFunctionName = "";
+
     constructor(
         parent: Construct,
         name: string,
@@ -41,7 +43,15 @@ export class SearchBuilderNestedStack extends NestedStack {
     ) {
         super(parent, name);
 
-        searchBuilder(this, config, api, storageResources, lambdaCommonBaseLayer, vpc, subnets);
+        this.reindexerFunctionName = searchBuilder(
+            this,
+            config,
+            api,
+            storageResources,
+            lambdaCommonBaseLayer,
+            vpc,
+            subnets
+        );
     }
 }
 
@@ -53,7 +63,7 @@ export function searchBuilder(
     lambdaCommonBaseLayer: LayerVersion,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
-) {
+): string {
     const searchFun = buildSearchFunction(
         scope,
         lambdaCommonBaseLayer,
@@ -424,14 +434,6 @@ export function searchBuilder(
         description: "The OpenSearch index name for files",
     });
 
-    // Output reindexer function name if it was created
-    if (reindexerFunction) {
-        const reindexerFunctionOutput = new cdk.CfnOutput(scope, "ReindexerFunctionNameOutput", {
-            value: reindexerFunction.functionName,
-            description: "The Lambda function name for the OpenSearch reindexer",
-        });
-    }
-
     //Nag supressions
     NagSuppressions.addResourceSuppressions(
         scope,
@@ -482,4 +484,6 @@ export function searchBuilder(
         ],
         true
     );
+
+    return reindexerFunction ? reindexerFunction.functionName : "";
 }

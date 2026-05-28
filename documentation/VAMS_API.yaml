@@ -9914,6 +9914,8 @@ components:
                     type: boolean
                     default: false
                     description: "Include archived items"
+                geoSearch:
+                    $ref: "#/components/schemas/geoSearch"
                 from:
                     type: integer
                     minimum: 0
@@ -9992,6 +9994,8 @@ components:
                     type: boolean
                     default: true
                     description: "Enhanced highlighting"
+                geoSearch:
+                    $ref: "#/components/schemas/geoSearch"
                 from:
                     type: integer
                     minimum: 0
@@ -10005,7 +10009,59 @@ components:
                     default: 100
                     description: "Number of results to return"
             required: []
-        
+
+        geoSearch:
+            type: object
+            description: |
+                Geospatial filter applied to the geo_MD_location field on indexed asset and file
+                documents. The indexer derives geo_MD_location from a metadata 'location' key
+                (GeoJSON or {latitude, longitude, altitude}) or from individual latitude /
+                longitude / altitude metadata fields. Provide exactly one of point, bbox, or
+                geoJson.
+            properties:
+                relation:
+                    type: string
+                    enum: [intersects, within, contains, disjoint]
+                    default: intersects
+                    description: "Spatial relation between input shape and indexed shapes"
+                point:
+                    type: object
+                    description: "Single point with optional radius (meters) for proximity filtering"
+                    properties:
+                        lat:
+                            type: number
+                            minimum: -90
+                            maximum: 90
+                        lon:
+                            type: number
+                            minimum: -180
+                            maximum: 180
+                        radiusMeters:
+                            type: number
+                            exclusiveMinimum: 0
+                            description: "Optional radius in meters; treated as a circle around (lat, lon)"
+                    required: [lat, lon]
+                bbox:
+                    type: object
+                    description: "Axis-aligned geographic bounding box"
+                    properties:
+                        topLeft:
+                            type: object
+                            properties:
+                                lat: { type: number, minimum: -90, maximum: 90 }
+                                lon: { type: number, minimum: -180, maximum: 180 }
+                            required: [lat, lon]
+                        bottomRight:
+                            type: object
+                            properties:
+                                lat: { type: number, minimum: -90, maximum: 90 }
+                                lon: { type: number, minimum: -180, maximum: 180 }
+                            required: [lat, lon]
+                    required: [topLeft, bottomRight]
+                geoJson:
+                    type: object
+                    description: "GeoJSON Geometry, Feature, or FeatureCollection"
+
         searchToken:
             type: object
             properties:

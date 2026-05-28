@@ -27,6 +27,38 @@
             Required for SharedArrayBuffer and WASM features.
         -->
         <script src="/coi-serviceworker.js"></script>
+        <!--
+            __publicField polyfill. esbuild's class-field lowering (used by
+            Vite's dependency pre-bundler) emits `__publicField(this, "x", val)`
+            in some maplibre-gl chunks but does not always inject the helper,
+            producing "ReferenceError: __publicField is not defined" the first
+            time we touch any maplibre-gl class method that uses class fields
+            (setData, addLayer, etc). Defining it here on the global scope
+            *before* any module bundle loads guarantees it is in scope no
+            matter which chunk references it.
+        -->
+        <script>
+            // Define BOTH on window and as a global var. ESM modules are
+            // strict-mode and don't auto-fall-back to global scope for
+            // unqualified identifiers, so we also need the bare global
+            // declaration. The `var` at script top-level attaches to the
+            // global object in non-module classic scripts, which makes the
+            // identifier resolvable from any later module.
+            var __publicField = function (obj, key, value) {
+                if (typeof key !== "symbol" && typeof key !== "string") {
+                    key = key + "";
+                }
+                Object.defineProperty(obj, key, {
+                    enumerable: true,
+                    configurable: true,
+                    writable: true,
+                    value: value,
+                });
+                return value;
+            };
+            window.__publicField = __publicField;
+            globalThis.__publicField = __publicField;
+        </script>
         <script type="application/javascript">
             // Check if SharedArrayBuffer is available (required for WASM)
             if (typeof SharedArrayBuffer !== "undefined") {

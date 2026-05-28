@@ -183,6 +183,17 @@ You cannot enable both OpenSearch Serverless and OpenSearch Provisioned simultan
 OpenSearch Provisioned creates service-linked roles that may not propagate immediately. If you encounter the error _"Before you can proceed, you must enable a service-linked role"_, wait 5 minutes and redeploy. See [Common deployment errors](deploy-the-solution.md#common-deployment-errors) for additional troubleshooting.
 :::
 
+:::warning[OpenSearch Provisioned is for advanced deployments]
+Amazon OpenSearch Serverless is the recommended option for most VAMS deployments. The provisioned option is intended for advanced deployments that require dedicated capacity, custom instance sizing, or features unsupported by Serverless, and it introduces several operational considerations that can disrupt AWS CloudFormation stack deployments:
+
+-   **VPC requirement** -- A VPC with at least 3 Availability Zones must already exist or be created by the same deploy.
+-   **Fragile AWS CloudFormation updates** -- Domain configuration changes (instance type, EBS size, engine version) trigger blue/green updates that can take 30+ minutes and occasionally exceed the AWS CloudFormation custom-resource timeout. Major engine-version upgrades (for example 2.7 to 3.5 in v2.6) sometimes fail in place and require redeploying with OpenSearch disabled, then re-enabling, before the upgrade succeeds.
+-   **Service-linked role propagation** -- First-time deploys may fail with a service-linked-role error and require waiting 5 minutes before retrying.
+-   **Reindex required after index-name or schema bumps** -- Provisioned domains do not auto-populate new indexes; you must run the version-specific data migration script to repopulate them. See [Update the solution](update-the-solution.md) and the migration READMEs under `infra/deploymentDataMigration/`.
+
+If you do not have a specific requirement that mandates Provisioned, prefer `app.openSearch.useServerless.enabled = true`.
+:::
+
 ## Amazon Location Service (`app.useLocationService`)
 
 | Field                            | Type    | Default | Description                                                                                                                                                                     |

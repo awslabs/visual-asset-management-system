@@ -9,7 +9,7 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 -   **Name**: VAMS (Visual Asset Management System) -- CDK Infrastructure
 -   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`)
 -   **Runtime**: AWS CDK v2 (TypeScript), targeting `aws-cdk-lib`
--   **Node**: NODEJS_20_X for Lambda and CDK
+-   **Node**: NODEJS_22_X for Lambda and CDK
 -   **Python**: PYTHON_3_12 for all Lambda functions
 -   **Lambda Memory**: 5308 MB (all functions)
 -   **Lambda Timeout**: 15 minutes (all functions)
@@ -271,7 +271,7 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 | --------------------------------- | ----------------------------------------- |
 | `VAMS_VERSION`                    | `"2.X.0"`                                 |
 | `LAMBDA_PYTHON_RUNTIME`           | `Runtime.PYTHON_3_12`                     |
-| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_20_X`                     |
+| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_22_X`                     |
 | `LAMBDA_MEMORY_SIZE`              | `5308`                                    |
 | `OPENSEARCH_VERSION`              | `OPENSEARCH_2_7`                          |
 | `CUSTOM_AUTHORIZER_IGNORED_PATHS` | `["/api/amplify-config", "/api/version"]` |

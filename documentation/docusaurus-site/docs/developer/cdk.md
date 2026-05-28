@@ -8,7 +8,7 @@ This guide covers development patterns for the VAMS AWS CDK infrastructure, incl
 | --------------------- | --------------------------------------- |
 | Framework             | AWS CDK v2 (TypeScript), `aws-cdk-lib`  |
 | VAMS Version          | Defined in `config.ts` (`VAMS_VERSION`) |
-| Node Lambda Runtime   | NODEJS_20_X                             |
+| Node Lambda Runtime   | NODEJS_22_X                             |
 | Python Lambda Runtime | PYTHON_3_12                             |
 | Lambda Memory         | 5308 MB (all functions)                 |
 | Lambda Timeout        | 15 minutes (all functions)              |
@@ -205,7 +205,7 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 | ----------------------- | ----------------------------------------- |
 | `VAMS_VERSION`          | Current release version (see `config.ts`) |
 | `LAMBDA_PYTHON_RUNTIME` | `Runtime.PYTHON_3_12`                     |
-| `LAMBDA_NODE_RUNTIME`   | `Runtime.NODEJS_20_X`                     |
+| `LAMBDA_NODE_RUNTIME`   | `Runtime.NODEJS_22_X`                     |
 | `LAMBDA_MEMORY_SIZE`    | `5308`                                    |
 
 ### Adding a New Configuration Property

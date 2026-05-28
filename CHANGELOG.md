@@ -8,16 +8,29 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### ⚠ BREAKING CHANGES
 
+-   OpenSearch index names rolled forward to `vams-assets-v3` and `vams-files-v3`. The schema-deploy custom resource creates the empty v3 indexes; the previous v2 indexes are abandoned and left in place until you delete them manually. A reindex is required to populate v3.
+-   `OPENSEARCH_VERSION` switched from `OPENSEARCH_2_7` to `OPENSEARCH_3_5`. Provisioned OpenSearch domains will perform a major-version engine upgrade. Serverless collections are unaffected.
+
+**Recommended Upgrade Path:** Run the upgrade script to redindex opensearch data if using OpenSearch serverless or provisioned: `infra\deploymentDataMigration\v2.5_to_v2.6\upgrade`
+
 ### Features
 
+-   **Web** Geospatial search and map view across both assets and files. New map selectors for metadata geospatial types and search filtering.
+    -   The web search sidebar exposes a Geospatial filter panel, and the map view (including mini-map thumbnails) now works for both assets and files and renders polygon/multi-polygon shapes in addition to points.
+    -   The asset and file OpenSearch indexes now declare a derived `geo_MD_location` field of type `geo_shape`.
+    -   The asset and file indexers populate it from a `location` metadata key (GeoPoint, GeoJSON or `{latitude, longitude, altitude}` payload) or from individual `latitude`/`longitude`/`altitude` metadata fields.
+    -   Search APIs (`POST /search` and `POST /search/simple`) and the `vamscli search assets|files|simple` commands accept a new `geoSearch` payload (point + radius, bounding box, or arbitrary GeoJSON) with `intersects`/`within`/`contains`/`disjoint` relations.
+    -   Open search index names rolled to new version suffixes; run `infra/deploymentDataMigration/v2.5_to_v2.6/upgrade` to repopulate the new indexes from source data after deploying.
+-   **Web** Minor adjustments made to asset and file search page to help further streamline component placement and use
 -   Physna Sync add-on (Phase 1) — Optional one-way synchronization of supported VAMS files, file metadata, file attributes, and asset metadata to a Physna tenant. Enable via `app.addons.usePhysnaSync` in `infra/config/config.json`. See the [Physna Integration documentation](documentation/docusaurus-site/docs/developer/physna-integration.md) for details.
 -   **Web** Physna Viewer frontend plugin — New VAMS viewer plugin that embeds the Physna-hosted 3D/CAD viewer inside VAMS asset pages for files that have been synced to Physna. Backed by a new `GET /addon/physna/viewer` proxy endpoint that enforces VAMS two-tier authorization and keeps Physna credentials off the client. Enabled automatically whenever the Physna Sync add-on is deployed.
--   **Web** Addec CSP "nonce-" CDK configuration and support for iframe or inline scripting support (used in Physna viewer currently)
 -   **Web** Continue to add additional retry/skip steps to the various web file upload stages if certain network calls fail
 
 ### Bug Fixes
 
+-   Fixed some broken cross-reference links in the documentation
 -   Fixed bug in S3 bucket indexing function where filenames with certain special characters were not getting properly processed
+-   Fixed bug in `CustomFeatureEnabledConfigNestedStack` where feature flags removed between deployments (e.g., disabling Physna Sync, switching off CloudFront in favor of ALB) remained in the `appFeatureEnabledStorageTable` DynamoDB table indefinitely. The custom resource now defines an `onDelete` handler that issues a `DeleteItem` for the feature when its CloudFormation resource is removed from the synthesized template.
 -   Fixed Gaussian Splat open pipeline function to properly have permissions send task failure callbacks if an error is caught during initialization
 -   Fixed NVIDIA Comos Transfer and Predict pipeline build pipeline failure due to Cosmos python upgrade to 3.13 which breaks build since v2.5.0. Pin docker python version to 3.10 to prevent this.
 -   Fixed NVIDIA Comos and Gr00t pipelines that may result in container deadlock due to output buffer overflows during hugging face model downloads
@@ -27,8 +40,15 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
+-   \*_Web_ Asset and file search now sort filter drop-downs alphabetically
+-   OpenSearch engine version bumped from `OPENSEARCH_2_7` to `OPENSEARCH_3_5` (provisioned deployments only; serverless is unaffected). The reindex required by the engine upgrade is bundled with the v2.5 → v2.6 migration.
+-   Added additional checks for metadata GeoJSON saving to account for different "bad" shape combiniations that may cause issues with OpenSearch indexing
+-   Bumped minimum supported Node.js version for development and build tooling from 20.18.1 to 22.22.3 to address the AWS SDK for JavaScript v3 `NodeVersionSupportWarning` (versions published after the first week of January 2027 will require Node 22+). Updated `web/.nvmrc`, root/`web`/`infra`/`documentation/docusaurus-site` `package.json` engines, `@types/node` in `web` (^18 → ^22), and all README/documentation references.
+-   Bumped Lambda Node.js runtime from `NODEJS_20_X` to `NODEJS_22_X` (`infra/config/config.ts` `LAMBDA_NODE_RUNTIME`). Affects all Node-based Lambdas (Schema Deploy custom resource, etc.).
+-   **Web** Bumped Vite `build.target` and `optimizeDeps.esbuildOptions.target` from `es2020` to `es2022`.
 -   Update documentation to point to new physical-ai blog locations (AWS spatial blogs migrated to physical-ai tag)
 -   Updated root README to now point all documentation to the documentation website and not the source markdown files
+-   Update various package dependencies across the solution
 
 ### Known Outstanding Issues
 

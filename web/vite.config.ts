@@ -60,13 +60,19 @@ export default defineConfig({
     ],
     optimizeDeps: {
         esbuildOptions: {
-            loader: {
-                ".js": "tsx",
-            },
+            // es2022 is required for native class-field syntax. Anything
+            // lower causes esbuild to lower class fields to a `__publicField`
+            // helper that does not always get injected into pre-bundled ESM
+            // deps — and the bug is invisible until those deps' worker
+            // bundles execute, which happens deep inside maplibre-gl when
+            // setData/addLayer/etc. fire. Browser support for class fields
+            // is universal across our prod target (>0.2%, not dead).
+            target: "es2022",
         },
         // Only scan the app entry point — prevents Vite from scanning viewer plugin HTML files
         // in customInstalls/ and public/viewers/ directories
         entries: ["index.html"],
+        include: ["maplibre-gl"],
         exclude: ["maplibre-gl-js-amplify"],
     },
     server: {
@@ -83,7 +89,7 @@ export default defineConfig({
     build: {
         outDir: "dist",
         sourcemap: true,
-        target: "es2020",
+        target: "es2022",
         chunkSizeWarningLimit: 1500, // Large third-party libs: maplibre-gl (~1MB), pdf.worker (~1MB), jodit (~870KB)
         rollupOptions: {
             // Stub out @aws-amplify/geo — it's a transitive dep from

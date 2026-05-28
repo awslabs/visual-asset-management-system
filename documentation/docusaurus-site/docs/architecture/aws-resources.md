@@ -114,7 +114,7 @@ VAMS deploys approximately 50 Lambda functions across 17 builder files. All func
 | ----------------------------------- | ---------------------------------------------- |
 | Amplify Config Lambda               | Serves `/api/amplify-config` (unauthenticated) |
 | VAMS Version Lambda                 | Serves `/api/version` (unauthenticated)        |
-| Schema Deploy Lambda (Node.js 20.x) | Custom resource for OpenSearch index creation  |
+| Schema Deploy Lambda (Node.js 22.x) | Custom resource for OpenSearch index creation  |
 | Populate S3 Asset Buckets Lambda    | Custom resource for bucket table population    |
 
 ## Amazon API Gateway
@@ -137,13 +137,17 @@ VAMS creates Step Functions state machines dynamically for each workflow definit
 
 | Configuration     | Serverless                                         | Provisioned                         |
 | ----------------- | -------------------------------------------------- | ----------------------------------- |
-| **Deployment**    | OpenSearch Serverless collection                   | OpenSearch Service domain (v2.7)    |
+| **Deployment**    | OpenSearch Serverless collection                   | OpenSearch Service domain (v3.5)    |
 | **Indexes**       | Asset index + File index (dual-index architecture) | Asset index + File index            |
 | **Access**        | IAM-based access policies                          | VPC-based access (3 AZ)             |
 | **Configuration** | `openSearch.useServerless.enabled`                 | `openSearch.useProvisioned.enabled` |
 
 :::info[No OpenSearch Mode]
 Both OpenSearch modes can be disabled. When neither is enabled, the `NOOPENSEARCH` feature flag is set and search functionality is unavailable in the UI.
+:::
+
+:::warning[Provisioned is for advanced deployments only]
+OpenSearch Serverless is the recommended option for most VAMS deployments. The provisioned option requires a 3-AZ VPC, performs blue/green updates on domain configuration changes (instance type, EBS size, engine version) that can exceed the AWS CloudFormation custom-resource timeout, and may need a deploy-disabled-then-re-enabled recovery during major engine-version upgrades (for example, 2.7 to 3.5 in v2.6). Use it only when dedicated capacity, custom instance sizing, or features unsupported by Serverless are required. See the [OpenSearch configuration reference](../deployment/configuration-reference.md#amazon-opensearch-service-appopensearch) for the full caveat list.
 :::
 
 ## Amazon Cognito

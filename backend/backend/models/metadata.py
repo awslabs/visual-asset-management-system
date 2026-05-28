@@ -41,6 +41,162 @@ class UpdateType(str, Enum):
     REPLACE_ALL = "replace_all"
 
 
+# GeoJSON geometry types that VAMS accepts for the GEOJSON metadata value type.
+# Mirrors the OpenSearch geo_shape mapping accepted on the asset/file indexes.
+_VALID_GEOJSON_GEOMETRY_TYPES = {
+    "Point",
+    "MultiPoint",
+    "LineString",
+    "MultiLineString",
+    "Polygon",
+    "MultiPolygon",
+    "GeometryCollection",
+}
+
+
+def _validate_lon_lat(coord: Any, label: str) -> None:
+    """Range check a single [lon, lat] (or [lon, lat, alt]) coordinate."""
+    if not isinstance(coord, (list, tuple)) or len(coord) < 2:
+        raise ValueError(f"{label} must be a [lon, lat] coordinate pair")
+    lon, lat = coord[0], coord[1]
+    if not isinstance(lon, (int, float)) or not isinstance(lat, (int, float)):
+        raise ValueError(f"{label} must contain numeric lon/lat values")
+    if lon < -180 or lon > 180:
+        raise ValueError(f"{label} longitude must be between -180 and 180 (got {lon})")
+    if lat < -90 or lat > 90:
+        raise ValueError(f"{label} latitude must be between -90 and 90 (got {lat})")
+
+
+def _validate_linear_ring(ring: Any, label: str) -> None:
+    """Validate a single GeoJSON linear ring.
+
+    OpenSearch's geo_shape rejects degenerate or self-intersecting rings with
+    'invalid_shape_exception', which causes the whole document index call to
+    fail. We pre-empt that here so a write to the metadata API surfaces a clear
+    400 instead of silently dropping the metadata at index time.
+
+    Checks:
+      - The ring is a list of >= 4 positions.
+      - First and last position are identical (ring closure).
+      - No consecutive duplicate vertices.
+      - The first vertex does not repeat anywhere in the middle of the ring
+        (a common failure mode -- the metadata picker sees the user click the
+        starting vertex again, treats that as a vertex, and produces a self-
+        intersecting ring).
+      - At least 3 unique vertices.
+    """
+    if not isinstance(ring, list) or len(ring) < 4:
+        raise ValueError(
+            f"{label} must contain at least 4 positions (3 unique + closing)"
+        )
+    for i, pos in enumerate(ring):
+        _validate_lon_lat(pos, f"{label}[{i}]")
+    first = ring[0]
+    last = ring[-1]
+    if first[0] != last[0] or first[1] != last[1]:
+        raise ValueError(
+            f"{label} must be closed: first and last positions must be identical"
+        )
+    for i in range(1, len(ring)):
+        prev = ring[i - 1]
+        curr = ring[i]
+        if prev[0] == curr[0] and prev[1] == curr[1]:
+            raise ValueError(
+                f"{label} contains consecutive duplicate vertex at index {i}"
+            )
+    # A mid-ring duplicate of the first vertex creates a self-intersecting ring
+    # (this is exactly what OpenSearch rejects with 'edges adjacent to ... coincide').
+    for i in range(1, len(ring) - 1):
+        if ring[i][0] == first[0] and ring[i][1] == first[1]:
+            raise ValueError(
+                f"{label} closes prematurely at index {i}; the starting vertex "
+                f"may only appear at the beginning and end of the ring"
+            )
+    unique = {tuple(p[:2]) for p in ring[:-1]}
+    if len(unique) < 3:
+        raise ValueError(f"{label} must have at least 3 unique vertices")
+
+
+def _validate_geometry(geom: Any, label: str = "geometry") -> None:
+    """Recursively validate a GeoJSON Geometry object's structure and coordinates."""
+    if not isinstance(geom, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    g_type = geom.get("type")
+    if g_type not in _VALID_GEOJSON_GEOMETRY_TYPES:
+        raise ValueError(
+            f"{label} type '{g_type}' is not a supported GeoJSON geometry type "
+            f"(expected one of: {', '.join(sorted(_VALID_GEOJSON_GEOMETRY_TYPES))})"
+        )
+    if g_type == "GeometryCollection":
+        geometries = geom.get("geometries")
+        if not isinstance(geometries, list) or not geometries:
+            raise ValueError(f"{label} GeometryCollection must contain a non-empty geometries array")
+        for i, sub in enumerate(geometries):
+            _validate_geometry(sub, f"{label}.geometries[{i}]")
+        return
+
+    coords = geom.get("coordinates")
+    if coords is None:
+        raise ValueError(f"{label} must contain coordinates")
+
+    if g_type == "Point":
+        _validate_lon_lat(coords, f"{label}.coordinates")
+    elif g_type == "MultiPoint" or g_type == "LineString":
+        if not isinstance(coords, list) or not coords:
+            raise ValueError(f"{label}.coordinates must be a non-empty array")
+        for i, c in enumerate(coords):
+            _validate_lon_lat(c, f"{label}.coordinates[{i}]")
+        if g_type == "LineString" and len(coords) < 2:
+            raise ValueError(f"{label} LineString needs at least 2 positions")
+    elif g_type == "MultiLineString":
+        if not isinstance(coords, list) or not coords:
+            raise ValueError(f"{label}.coordinates must be a non-empty array")
+        for i, line in enumerate(coords):
+            if not isinstance(line, list) or len(line) < 2:
+                raise ValueError(f"{label}.coordinates[{i}] needs at least 2 positions")
+            for j, c in enumerate(line):
+                _validate_lon_lat(c, f"{label}.coordinates[{i}][{j}]")
+    elif g_type == "Polygon":
+        if not isinstance(coords, list) or not coords:
+            raise ValueError(f"{label}.coordinates must be a non-empty array of rings")
+        for i, ring in enumerate(coords):
+            _validate_linear_ring(ring, f"{label}.coordinates[{i}]")
+    elif g_type == "MultiPolygon":
+        if not isinstance(coords, list) or not coords:
+            raise ValueError(f"{label}.coordinates must be a non-empty array of polygons")
+        for i, polygon in enumerate(coords):
+            if not isinstance(polygon, list) or not polygon:
+                raise ValueError(f"{label}.coordinates[{i}] must be a non-empty array of rings")
+            for j, ring in enumerate(polygon):
+                _validate_linear_ring(ring, f"{label}.coordinates[{i}][{j}]")
+
+
+def _validate_geojson_value(parsed: Any, label: str = "GeoJSON") -> None:
+    """Validate a parsed GeoJSON value -- accepts Geometry, Feature, or FeatureCollection."""
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} value must be a JSON object")
+    g_type = parsed.get("type")
+    if g_type == "Feature":
+        geom = parsed.get("geometry")
+        if geom is None:
+            raise ValueError(f"{label} Feature must contain a geometry")
+        _validate_geometry(geom, f"{label}.geometry")
+        return
+    if g_type == "FeatureCollection":
+        features = parsed.get("features")
+        if not isinstance(features, list) or not features:
+            raise ValueError(f"{label} FeatureCollection must contain a non-empty features array")
+        for i, feat in enumerate(features):
+            if not isinstance(feat, dict) or feat.get("type") != "Feature":
+                raise ValueError(f"{label}.features[{i}] must be a GeoJSON Feature")
+            geom = feat.get("geometry")
+            if geom is None:
+                raise ValueError(f"{label}.features[{i}] must contain a geometry")
+            _validate_geometry(geom, f"{label}.features[{i}].geometry")
+        return
+    _validate_geometry(parsed, label)
+
+
 def validate_metadata_value_common(value: str, value_type: MetadataValueType) -> str:
     """Common validation function for metadata values
     
@@ -158,26 +314,30 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
             
     elif value_type == MetadataValueType.GEOPOINT:
         try:
-            # Use GeoJSON library for validation
-            geojson_obj = geojson.loads(value)
             json_obj = json.loads(value)
-            
-            # Check if it's a valid GeoJSON Point
-            if json_obj.get('type') != 'Point':
-                raise ValueError("GEOPOINT type must be 'Point'")
-                
-        except (json.JSONDecodeError, ValueError) as e:
-            if "GEOPOINT" in str(e):
-                raise e
+        except json.JSONDecodeError as e:
             raise ValueError(f"GEOPOINT validation failed: {str(e)}")
-            
+        if not isinstance(json_obj, dict):
+            raise ValueError("GEOPOINT value must be a JSON object")
+        if json_obj.get("type") != "Point":
+            raise ValueError("GEOPOINT type must be 'Point'")
+        try:
+            # Reuse the shared geometry validator so coordinate range checks apply.
+            _validate_geometry(json_obj, label="GEOPOINT")
+        except ValueError as e:
+            raise ValueError(f"GEOPOINT validation failed: {str(e)}")
+
     elif value_type == MetadataValueType.GEOJSON:
         try:
-            # Use GeoJSON library for validation
-            geojson_obj = geojson.loads(value)
-            # geojson.loads() will raise an exception if it's not valid GeoJSON
-            
-        except (json.JSONDecodeError, ValueError) as e:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"GEOJSON validation failed: {str(e)}")
+        try:
+            # Validate Geometry / Feature / FeatureCollection structure plus coordinate
+            # ranges and linear-ring integrity. Pre-empts OpenSearch's
+            # 'invalid_shape_exception' by rejecting self-intersecting rings here.
+            _validate_geojson_value(parsed, label="GEOJSON")
+        except ValueError as e:
             raise ValueError(f"GEOJSON validation failed: {str(e)}")
             
     elif value_type == MetadataValueType.LLA:

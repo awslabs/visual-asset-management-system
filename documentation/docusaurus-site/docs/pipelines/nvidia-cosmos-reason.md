@@ -388,7 +388,7 @@ For commercial use, review the NVIDIA Open Model License terms to ensure complia
 
 ## Related pages
 
--   [NVIDIA Cosmos Predict](nvidia-cosmos.md)
+-   [NVIDIA Cosmos Predict](nvidia-cosmos-predict.md)
 -   [NVIDIA Cosmos Transfer](nvidia-cosmos-transfer.md)
 -   [Pipeline overview](overview.md)
 -   [Custom pipelines](custom-pipelines.md)

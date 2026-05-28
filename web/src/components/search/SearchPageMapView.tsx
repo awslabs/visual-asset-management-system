@@ -24,17 +24,21 @@ import {
     Icon,
 } from "@cloudscape-design/components";
 import { appCache } from "../../services/appCache";
-import { LngLatBoundsLike } from "maplibre-gl";
+import type { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
 import { SearchExplanation, getTotalResultCount } from "./types";
 import { extractLocationData } from "./utils/locationUtils";
+import { colorForKey } from "./utils/polygonColor";
 
 interface LocationDataWithDetails {
     id: string;
     type: "point" | "geojson";
+    rectype: "asset" | "file";
     databaseId: string;
     assetId: string;
     assetName: string;
+    fileKey?: string;
+    fileExt?: string;
     description?: string;
     tags?: string[];
     explanation?: SearchExplanation;
@@ -244,12 +248,18 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             const location = extractLocationData(source);
             if (location && location.type) {
                 const { metadata, attributes } = extractMetadata(source);
+                const isFile = source._rectype === "file";
                 validData.push({
                     ...location,
                     id: hit._id,
+                    rectype: isFile ? "file" : "asset",
                     databaseId: source.str_databaseid,
                     assetId: source.str_assetid,
-                    assetName: source.str_assetname || "Unnamed Asset",
+                    assetName:
+                        source.str_assetname ||
+                        (isFile ? source.str_key || "Unnamed File" : "Unnamed Asset"),
+                    fileKey: source.str_key,
+                    fileExt: source.str_fileext,
                     description: source.str_description,
                     tags: source.list_tags,
                     explanation: hit.explanation,
@@ -270,37 +280,71 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         setSelectedItem(null);
     }, [locationData]);
 
-    // Calculate bounds and fit map when location data changes
+    // Calculate bounds and fit map when location data changes. Considers BOTH
+    // point markers and polygon/line shapes so a results page that contains only
+    // GeoJSON shapes (no points) still gets framed correctly. Previously this
+    // only inspected points, leaving the map stuck on a default San Francisco
+    // viewport whenever every result was polygon-based.
     useEffect(() => {
-        if (mapRef.current && locationData.length > 0) {
-            const allLats: number[] = [];
-            const allLons: number[] = [];
+        if (!mapRef.current || locationData.length === 0) return;
 
-            locationData.forEach((item) => {
-                if (item.type === "point" && item.latitude && item.longitude) {
-                    allLats.push(item.latitude);
-                    allLons.push(item.longitude);
-                }
-            });
+        const allLats: number[] = [];
+        const allLons: number[] = [];
 
-            if (allLats.length > 0) {
-                const minLat = Math.min(...allLats);
-                const maxLat = Math.max(...allLats);
-                const minLon = Math.min(...allLons);
-                const maxLon = Math.max(...allLons);
-
-                const padding = 0.01;
-                const bounds: LngLatBoundsLike = [
-                    [minLon - padding, minLat - padding],
-                    [maxLon + padding, maxLat + padding],
-                ];
-
-                mapRef.current.fitBounds(bounds, {
-                    padding: 40,
-                    duration: 1000,
-                });
+        // Walk arbitrary nested coordinate arrays from a GeoJSON geometry.
+        const collectCoords = (coords: any) => {
+            if (!Array.isArray(coords)) return;
+            if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+                allLons.push(coords[0]);
+                allLats.push(coords[1]);
+                return;
             }
-        }
+            for (const c of coords) collectCoords(c);
+        };
+
+        locationData.forEach((item) => {
+            if (
+                item.type === "point" &&
+                item.latitude !== undefined &&
+                item.longitude !== undefined
+            ) {
+                allLats.push(item.latitude);
+                allLons.push(item.longitude);
+                return;
+            }
+            if (item.type === "geojson" && item.geoJson) {
+                const geom =
+                    item.geoJson?.type === "Feature" ? item.geoJson.geometry : item.geoJson;
+                if (geom?.coordinates) collectCoords(geom.coordinates);
+                if (geom?.geometries) {
+                    // GeometryCollection
+                    for (const sub of geom.geometries) {
+                        if (sub?.coordinates) collectCoords(sub.coordinates);
+                    }
+                }
+            }
+        });
+
+        if (allLats.length === 0) return;
+
+        const minLat = Math.min(...allLats);
+        const maxLat = Math.max(...allLats);
+        const minLon = Math.min(...allLons);
+        const maxLon = Math.max(...allLons);
+
+        const padding = 0.01;
+        const bounds: LngLatBoundsLike = [
+            [minLon - padding, minLat - padding],
+            [maxLon + padding, maxLat + padding],
+        ];
+
+        mapRef.current.fitBounds(bounds, {
+            padding: 40,
+            duration: 1000,
+            // For a single point, fitBounds collapses to a tiny bbox; cap the zoom
+            // so we don't slam to street-level on a single result.
+            maxZoom: 14,
+        });
     }, [locationData]);
 
     // Handle pagination
@@ -329,19 +373,47 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         );
     }
 
-    // Calculate initial view state from first point
-    const firstPoint = locationData.find((item) => item.type === "point");
-    const initialViewState = firstPoint
-        ? {
-              latitude: firstPoint.latitude!,
-              longitude: firstPoint.longitude!,
-              zoom: 11,
-          }
-        : {
-              latitude: 37.8,
-              longitude: -122.4,
-              zoom: 11,
-          };
+    // Calculate initial view state from the first piece of location data we can
+    // anchor to -- a point if available, otherwise the first vertex of the first
+    // GeoJSON shape. fitBounds (above) immediately reframes once the data loads,
+    // but this seeds the initial render so we're already in roughly the right
+    // region. Falls back to a neutral world view if nothing has coordinates.
+    const initialViewState = (() => {
+        for (const item of locationData) {
+            if (
+                item.type === "point" &&
+                item.latitude !== undefined &&
+                item.longitude !== undefined
+            ) {
+                return { latitude: item.latitude, longitude: item.longitude, zoom: 11 };
+            }
+            if (item.type === "geojson" && item.geoJson) {
+                const geom =
+                    item.geoJson?.type === "Feature" ? item.geoJson.geometry : item.geoJson;
+                let firstCoord: [number, number] | null = null;
+                const findFirst = (coords: any): boolean => {
+                    if (!Array.isArray(coords)) return false;
+                    if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+                        firstCoord = [coords[0], coords[1]];
+                        return true;
+                    }
+                    for (const c of coords) {
+                        if (findFirst(c)) return true;
+                    }
+                    return false;
+                };
+                if (geom?.coordinates) findFirst(geom.coordinates);
+                if (firstCoord) {
+                    return {
+                        latitude: (firstCoord as [number, number])[1],
+                        longitude: (firstCoord as [number, number])[0],
+                        zoom: 6,
+                    };
+                }
+            }
+        }
+        return { latitude: 0, longitude: 0, zoom: 2 };
+    })();
 
     return (
         <SpaceBetween direction="vertical" size="m">
@@ -358,10 +430,21 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             {/* Warning when no location data */}
             {locationData.length === 0 && state?.result?.hits?.total?.value > 0 && (
                 <Box variant="p" color="text-status-warning">
-                    No results have valid location data. Assets need either:
+                    No results have valid location data. The map view recognizes the following
+                    metadata field types:
                     <ul>
-                        <li>Location metadata field with GeoJSON data</li>
-                        <li>Latitude and Longitude metadata fields with valid coordinates</li>
+                        <li>
+                            A <strong>location</strong> metadata field containing an LLA object
+                            (e.g. <code>{`{"lat":..,"long":..,"alt":..}`}</code>), a GeoPoint (e.g.{" "}
+                            <code>{`{"type":"Point","coordinates":[lon,lat]}`}</code>), or any
+                            GeoJSON Geometry / Feature / FeatureCollection (Point, Polygon,
+                            MultiPolygon).
+                        </li>
+                        <li>
+                            Or individual <strong>latitude</strong>, <strong>longitude</strong>, and
+                            optional <strong>altitude</strong> metadata fields (numeric or string
+                            values).
+                        </li>
                     </ul>
                 </Box>
             )}
@@ -392,36 +475,43 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             >
                 <NavigationControl position="bottom-right" showZoom showCompass={false} />
 
-                {/* Render GeoJSON features (polygons, etc.) */}
+                {/* Render GeoJSON features (polygons, etc.). Each result gets a
+                    deterministic color from a palette so multiple polygons are
+                    visually distinct. Selected item still uses the highlight color
+                    and a thicker outline so it stays foregrounded. */}
                 {locationData
                     .filter((item) => item.type === "geojson" && item.geoJson)
-                    .map((item) => (
-                        <Source
-                            key={item.id}
-                            id={`geojson-source-${item.id}`}
-                            type="geojson"
-                            data={item.geoJson}
-                        >
-                            <Layer
-                                id={`geojson-fill-${item.id}`}
-                                type="fill"
-                                paint={{
-                                    "fill-color":
-                                        selectedItem?.id === item.id ? "#0972d3" : "#d91515",
-                                    "fill-opacity": 0.3,
-                                }}
-                            />
-                            <Layer
-                                id={`geojson-outline-${item.id}`}
-                                type="line"
-                                paint={{
-                                    "line-color":
-                                        selectedItem?.id === item.id ? "#0972d3" : "#d91515",
-                                    "line-width": 2,
-                                }}
-                            />
-                        </Source>
-                    ))}
+                    .map((item) => {
+                        const isSelected = selectedItem?.id === item.id;
+                        const baseColor = colorForKey(item.id);
+                        const fillColor = isSelected ? "#0972d3" : baseColor;
+                        const lineColor = isSelected ? "#0972d3" : baseColor;
+                        return (
+                            <Source
+                                key={item.id}
+                                id={`geojson-source-${item.id}`}
+                                type="geojson"
+                                data={item.geoJson}
+                            >
+                                <Layer
+                                    id={`geojson-fill-${item.id}`}
+                                    type="fill"
+                                    paint={{
+                                        "fill-color": fillColor,
+                                        "fill-opacity": isSelected ? 0.45 : 0.3,
+                                    }}
+                                />
+                                <Layer
+                                    id={`geojson-outline-${item.id}`}
+                                    type="line"
+                                    paint={{
+                                        "line-color": lineColor,
+                                        "line-width": isSelected ? 3 : 2,
+                                    }}
+                                />
+                            </Source>
+                        );
+                    })}
 
                 {/* Render point markers */}
                 {locationData
@@ -490,9 +580,11 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                     </Box>
                                 )}
 
-                                {/* Asset Name with explanation and metadata icons */}
+                                {/* Asset / File Name with explanation and metadata icons */}
                                 <Box>
-                                    <Box variant="awsui-key-label">Asset Name</Box>
+                                    <Box variant="awsui-key-label">
+                                        {selectedItem.rectype === "file" ? "File" : "Asset Name"}
+                                    </Box>
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <Box variant="h3">{selectedItem.assetName}</Box>
                                         {selectedItem.explanation && (
@@ -511,6 +603,14 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                         )}
                                     </SpaceBetween>
                                 </Box>
+
+                                {/* File path (file results only) */}
+                                {selectedItem.rectype === "file" && selectedItem.fileKey && (
+                                    <Box>
+                                        <Box variant="awsui-key-label">Path</Box>
+                                        <Box>{selectedItem.fileKey}</Box>
+                                    </Box>
+                                )}
 
                                 {/* Database */}
                                 <Box>
@@ -536,12 +636,14 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                     </Box>
                                 )}
 
-                                {/* View Asset Button */}
+                                {/* View Details Button - links to parent asset for files */}
                                 <Link
                                     href={`#/databases/${selectedItem.databaseId}/assets/${selectedItem.assetId}`}
                                 >
                                     <Button variant="primary" fullWidth>
-                                        View Asset Details
+                                        {selectedItem.rectype === "file"
+                                            ? "View Parent Asset"
+                                            : "View Asset Details"}
                                     </Button>
                                 </Link>
                             </SpaceBetween>
@@ -552,10 +654,11 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
             {/* Informational note about location requirements */}
             <Box variant="p" color="text-body-secondary">
-                <Icon name="status-info" /> <strong>Note:</strong> Assets appear on the map if they
-                have a <strong>"location"</strong> metadata field (LLA-type with longitude/latitude
-                JSON object) or separate <strong>"latitude"</strong> and{" "}
-                <strong>"longitude"</strong> metadata fields (string or number type).
+                <Icon name="status-info" /> <strong>Note:</strong> Results appear on the map if they
+                have a {`"location"`} metadata field (LLA, GeoPoint, or GeoJSON Geometry / Feature /
+                FeatureCollection — Point, Polygon, MultiPolygon) or separate {`"latitude"`},{" "}
+                {`"longitude"`}, and optional {`"altitude"`} metadata fields (numeric or string
+                values).
             </Box>
         </SpaceBetween>
     );

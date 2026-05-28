@@ -18,9 +18,9 @@ dotenv.config();
 export const VAMS_VERSION = "2.6.0";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
-export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
+export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
 export const LAMBDA_MEMORY_SIZE = 5308;
-export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
+export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_3_5;
 
 export const STACK_WAF_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-WAF) (version:" +
@@ -117,8 +117,8 @@ export function getConfig(app: cdk.App): Config {
     );
 
     //OpenSearch Variables - Dual Index Configuration
-    config.openSearchAssetIndexName = "vams-assets-v2";
-    config.openSearchFileIndexName = "vams-files-v2";
+    config.openSearchAssetIndexName = "vams-assets-v3";
+    config.openSearchFileIndexName = "vams-files-v3";
     config.openSearchAssetIndexNameSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "aos", "assetIndexName"].join("/");
     config.openSearchFileIndexNameSSMParam =

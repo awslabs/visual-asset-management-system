@@ -821,8 +821,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
     }
 
     // Add or remove map thumbnail column based on showMapThumbnails toggle
-    // Only for assets when maps are enabled
-    if (state.showMapThumbnails && state.useMapView && state.filters._rectype.value === "asset") {
+    // Available for both asset and file results when maps are enabled
+    if (state.showMapThumbnails && state.useMapView) {
         const config = appCache.getItem("config");
         const mapStyleUrl = config?.locationServiceApiUrl;
 
@@ -837,14 +837,31 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
             enhancedColumnDefinitions.splice(insertIndex, 0, {
                 id: "mapThumbnail",
                 header: "Map",
-                cell: (item: any) => (
-                    <MapThumbnail
-                        assetData={item}
-                        mapStyleUrl={mapStyleUrl}
-                        width={200}
-                        height={150}
-                    />
-                ),
+                cell: (item: any) => {
+                    const source = item?._source ?? item;
+                    const isFile = source?._rectype === "file";
+                    const expandHeader =
+                        source?.str_assetname ||
+                        (isFile ? source?.str_key : undefined) ||
+                        "Map preview";
+                    // Stable id used to stagger polygon colors so adjacent rows differ
+                    // even when each row only contains a single polygon.
+                    const colorKey =
+                        item?._id ||
+                        source?.str_assetid ||
+                        source?.str_key ||
+                        source?.str_databaseid;
+                    return (
+                        <MapThumbnail
+                            assetData={item}
+                            mapStyleUrl={mapStyleUrl}
+                            width={200}
+                            height={150}
+                            expandHeader={expandHeader}
+                            colorKey={colorKey}
+                        />
+                    );
+                },
                 sortingField: undefined, // Not sortable - client-side column
                 isRowHeader: false,
                 width: 230,
