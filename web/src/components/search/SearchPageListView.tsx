@@ -416,16 +416,23 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             fontSize: "13px",
         };
         if (isFileMode && navigate && !isArchived) {
+            // Encode the file path in BOTH the href (`?filePath=`) and the
+            // router state. The href is what right-click → "Open in new
+            // tab" copies, so it must carry enough information to reach
+            // the target file on a fresh page load. The state remains
+            // for the in-app left-click path so we don't have to re-parse
+            // the URL on the receiving side.
+            const filePathQuery = `?filePath=${encodeURIComponent(value)}`;
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
                         <span style={pathStyle}>
                             <Link
-                                href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}
+                                href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}${filePathQuery}`}
                                 onFollow={(event) => {
                                     event.preventDefault();
                                     navigate(
-                                        `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`,
+                                        `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}${filePathQuery}`,
                                         {
                                             state: { filePathToNavigate: value },
                                         }

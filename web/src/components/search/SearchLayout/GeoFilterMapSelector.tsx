@@ -181,9 +181,11 @@ const GeoFilterMapSelector: React.FC<GeoFilterMapSelectorProps> = ({
     const mapRef = useRef<MapRef>(null);
 
     // Re-seed every time the modal opens. Also reset mapLoaded so the next
-    // modal open waits for a fresh onLoad before rendering overlays —
-    // Cloudscape's Modal hides its body via display:none, which destroys
-    // and recreates the canvas each time.
+    // modal open is treated as "not yet ready" until we either re-detect
+    // an already-loaded GL instance synchronously (the common case under
+    // Cloudscape's Modal, which hides its body via display:none and thus
+    // preserves the underlying MapLibre instance) or wait for a fresh
+    // onLoad event (the cold-start case on the very first open).
     useEffect(() => {
         if (!visible) {
             setMapLoaded(false);
@@ -197,6 +199,21 @@ const GeoFilterMapSelector: React.FC<GeoFilterMapSelectorProps> = ({
         setCorners(next.corners);
         setPolygon(next.polygon);
         setError(null);
+
+        // If the GL instance is preserved from a previous open (Cloudscape's
+        // Modal hides via display:none rather than unmounting), `onLoad`
+        // won't fire again on this open. Without this re-arm, the
+        // setMapLoaded(false) on close above would gate the overlay
+        // management effect off forever — leaving the previously-drawn
+        // bbox or polygon visible on the map and silently ignoring new
+        // map clicks because the overlay source can't be updated.
+        // Detect the still-loaded instance and flip mapLoaded back on
+        // synchronously so the overlay effect re-runs with the freshly
+        // re-seeded data (often empty after a panel-side filter clear).
+        const map = mapRef.current?.getMap?.();
+        if (map && typeof map.isStyleLoaded === "function" && map.isStyleLoaded()) {
+            setMapLoaded(true);
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [visible]);
 

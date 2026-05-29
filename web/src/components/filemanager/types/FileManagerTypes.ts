@@ -113,6 +113,14 @@ export interface EnhancedFileManagerProps {
     assetFiles?: FileKey[];
     filePathToNavigate?: string; // Optional file path to navigate to and select
     assetVersionId?: string; // Optional version ID to filter files by a specific asset version
+    /**
+     * Notifies the parent every time the user-selected file/folder path
+     * changes (including transitioning to/from the asset root "/").
+     * Receives `null` when nothing is selected. The asset detail page uses
+     * this to keep the URL `?filePath=` query param in sync so the page
+     * is refresh- and share-safe.
+     */
+    onSelectedPathChange?: (path: string | null) => void;
 }
 
 export interface SetPrimaryTypeModalProps {

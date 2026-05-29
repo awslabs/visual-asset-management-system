@@ -11,12 +11,15 @@ interface FileManagerTabProps {
     assetName: string;
     filePathToNavigate?: string; // Optional file path to navigate to
     assetVersionId?: string; // Optional version ID to filter files
+    /** Bubbled-up notification when the user changes the file/folder selection. */
+    onSelectedPathChange?: (path: string | null) => void;
 }
 
 export const FileManagerTab: React.FC<FileManagerTabProps> = ({
     assetName,
     filePathToNavigate,
     assetVersionId,
+    onSelectedPathChange,
 }) => {
     return (
         <ErrorBoundary componentName="File Manager">
@@ -24,6 +27,7 @@ export const FileManagerTab: React.FC<FileManagerTabProps> = ({
                 assetName={assetName}
                 filePathToNavigate={filePathToNavigate}
                 assetVersionId={assetVersionId}
+                onSelectedPathChange={onSelectedPathChange}
             />
         </ErrorBoundary>
     );

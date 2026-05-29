@@ -32,6 +32,7 @@ export function EnhancedFileManager({
     assetFiles = [],
     filePathToNavigate,
     assetVersionId,
+    onSelectedPathChange,
 }: EnhancedFileManagerProps) {
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
@@ -153,10 +154,38 @@ export function EnhancedFileManager({
         }
     }, [filePathToNavigate, state.loadingPhase, state.fileTree, assetFiles]);
 
-    // Reset navigation flag when filePathToNavigate changes
+    // Reset navigation flag when filePathToNavigate changes. Skip the
+    // reset when the new path matches what's already selected — this
+    // happens when the parent (ViewAsset) writes `?filePath=` in
+    // response to OUR `onSelectedPathChange` callback, which causes the
+    // memoized prop to cycle. Without this guard we'd redundantly
+    // re-dispatch SELECT_ITEM for the item that's already selected.
     useEffect(() => {
+        if (filePathToNavigate && state.selectedItem?.relativePath === filePathToNavigate) {
+            // Treat as already-navigated so the navigation effect skips.
+            hasNavigatedRef.current = true;
+            return;
+        }
         hasNavigatedRef.current = false;
-    }, [filePathToNavigate]);
+    }, [filePathToNavigate, state.selectedItem]);
+
+    // Notify the parent whenever the active selection path changes so the
+    // asset detail page can keep the URL `?filePath=` query param in sync.
+    // We watch `state.selectedItem` (rather than `selectedItemPath`, which
+    // is only populated for legacy single-selection writes) because every
+    // SELECT_ITEM / TOGGLE / RANGE_SELECT path updates `selectedItem` in
+    // the reducer. Skip while the selection is still null (initial load
+    // before the deep-link navigation has settled) to avoid clobbering
+    // an inbound `?filePath=` query param before its target is selected.
+    const lastNotifiedPathRef = useRef<string | null | undefined>(undefined);
+    useEffect(() => {
+        if (!onSelectedPathChange) return;
+        const path = state.selectedItem?.relativePath ?? null;
+        if (path === null) return; // initial / cleared selection — leave URL alone
+        if (lastNotifiedPathRef.current === path) return;
+        lastNotifiedPathRef.current = path;
+        onSelectedPathChange(path);
+    }, [state.selectedItem, onSelectedPathChange]);
 
     // Handle assetId changes - reset and reload data for new asset
     useEffect(() => {

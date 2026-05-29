@@ -25,6 +25,8 @@ interface TabbedContainerProps {
     workflowExecutedTrigger?: number; // Trigger value that changes when workflow is executed
     filePathToNavigate?: string; // Optional file path to navigate to in File Manager
     assetVersionId?: string; // Optional version ID to filter files and metadata
+    /** Bubbled-up notification when the user changes the file/folder selection. */
+    onSelectedPathChange?: (path: string | null) => void;
 }
 
 export const TabbedContainer: React.FC<TabbedContainerProps> = ({
@@ -36,6 +38,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     workflowExecutedTrigger,
     filePathToNavigate,
     assetVersionId,
+    onSelectedPathChange,
 }) => {
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
@@ -74,6 +77,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                             assetName={assetName}
                                             filePathToNavigate={filePathToNavigate}
                                             assetVersionId={assetVersionId}
+                                            onSelectedPathChange={onSelectedPathChange}
                                         />
                                     </Suspense>
                                 ),

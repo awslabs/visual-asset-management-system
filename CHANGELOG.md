@@ -26,6 +26,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Physna Viewer frontend plugin — New VAMS viewer plugin that embeds the Physna-hosted 3D/CAD viewer inside VAMS asset pages for files that have been synced to Physna. Backed by a new `GET /addon/physna/viewer` proxy endpoint that enforces VAMS two-tier authorization and keeps Physna credentials off the client. Enabled automatically whenever the Physna Sync add-on is deployed.
 -   **Web** Continue to add additional retry/skip steps to the various web file upload stages if certain network calls fail
 -   **Web** BabylonJS and PlayCanvas Gaussian Splat viewers now ship a floating 3-tab control panel that has similar functionality of the ThreeJS UI controls panel, but appropriate for gaussian splats.
+-   **Web** `View Asset` page now tracks the selected file in the manager as `?filePath=` query param and search now uses this path instead of sending state. This helps with opening assets in new tabs, direct navigations, or view asset page refreshes.
 
 ### Bug Fixes
 
