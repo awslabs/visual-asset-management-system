@@ -25,6 +25,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   Physna Sync add-on (Phase 1) — Optional one-way synchronization of supported VAMS files, file metadata, file attributes, and asset metadata to a Physna tenant. Enable via `app.addons.usePhysnaSync` in `infra/config/config.json`. See the [Physna Integration documentation](documentation/docusaurus-site/docs/developer/physna-integration.md) for details.
 -   **Web** Physna Viewer frontend plugin — New VAMS viewer plugin that embeds the Physna-hosted 3D/CAD viewer inside VAMS asset pages for files that have been synced to Physna. Backed by a new `GET /addon/physna/viewer` proxy endpoint that enforces VAMS two-tier authorization and keeps Physna credentials off the client. Enabled automatically whenever the Physna Sync add-on is deployed.
 -   **Web** Continue to add additional retry/skip steps to the various web file upload stages if certain network calls fail
+-   **Web** BabylonJS and PlayCanvas Gaussian Splat viewers now ship a floating 3-tab control panel that has similar functionality of the ThreeJS UI controls panel, but appropriate for gaussian splats.
 
 ### Bug Fixes
 
