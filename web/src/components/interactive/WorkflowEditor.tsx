@@ -9,7 +9,6 @@ import { useState, useEffect, useContext, useMemo } from "react";
 import ReactFlow, { MiniMap, Controls, Background, Elements, Position } from "react-flow-renderer";
 import { Button, Icon } from "@cloudscape-design/components";
 import { useParams } from "react-router";
-//import AssetSelector from "../selectors/AssetSelector";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
 import { WorkflowContext } from "../../context/WorkflowContext";
 

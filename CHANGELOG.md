@@ -46,6 +46,7 @@ All notable changes to this project will be documented in this file. See [standa
 ### Chores
 
 -   **Web** Removed the unused legacy `web-ifc` dependency from the core `web/package.json`
+-   **Web** Removed legacy Asset Selector component and file type constants that were no longer used in the code
 -   OpenSearch engine version bumped from `OPENSEARCH_2_7` to `OPENSEARCH_3_5` (provisioned deployments only; serverless is unaffected). The reindex required by the engine upgrade is bundled with the v2.5 → v2.6 migration.
 -   Bumped minimum supported Node.js version for development and build tooling from 20.18.1 to 22.22.3 to address the AWS SDK for JavaScript v3 `NodeVersionSupportWarning` (versions published after the first week of January 2027 will require Node 22+). Updated `web/.nvmrc`, root/`web`/`infra`/`documentation/docusaurus-site` `package.json` engines, `@types/node` in `web` (^18 → ^22), and all README/documentation references.
 -   Bumped Lambda Node.js runtime from `NODEJS_20_X` to `NODEJS_22_X` (`infra/config/config.ts` `LAMBDA_NODE_RUNTIME`). Affects all Node-based Lambdas (Schema Deploy custom resource, etc.).

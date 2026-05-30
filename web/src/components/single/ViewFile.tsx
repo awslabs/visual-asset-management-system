@@ -27,7 +27,6 @@ import { fetchAsset, fetchFileInfo } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
-import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
@@ -93,11 +92,18 @@ export default function ViewFile() {
     const location = useLocation();
     const navigate = useNavigate();
     const { state } = location as { state: ViewFileState };
-    const { databaseId, assetId, pathViewType } = useParams<{
+    const { databaseId, assetId } = useParams<{
         databaseId: string;
         assetId: string;
-        pathViewType?: string;
     }>();
+
+    // This view requires an asset to render. If no asset context is available
+    // (e.g. the route was reached without an assetId), redirect to the assets list.
+    useEffect(() => {
+        if (!assetId) {
+            navigate("/assets");
+        }
+    }, [assetId, navigate]);
 
     // Extract file path from URL for direct path access
     const getFilePathFromUrl = (): string | null => {
@@ -536,10 +542,10 @@ export default function ViewFile() {
                 }
             }
         };
-        if (reload && !pathViewType) {
+        if (reload) {
             getData();
         }
-    }, [reload, assetId, databaseId, pathViewType]);
+    }, [reload, assetId, databaseId]);
 
     // Update URL when version changes to keep URL copy/paste accurate
     useEffect(() => {
@@ -989,7 +995,6 @@ export default function ViewFile() {
                     )}
                 </>
             )}
-            {pathViewType && <AssetSelectorWithModal pathViewType={pathViewType} />}
             <div style={{ paddingBottom: "20px" }} />
         </div>
     );
