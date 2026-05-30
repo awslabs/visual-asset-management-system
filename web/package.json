@@ -59,7 +59,6 @@
         "styled-components": "^5.3.3",
         "tough-cookie": "^4.1.3",
         "typescript": "^5.0.0",
-        "web-ifc": "^0.0.39",
         "web-vitals": "^1.1.2"
     },
     "overrides": {
@@ -83,7 +82,7 @@
         "build.lowmem": "node --max-old-space-size=4096 node_modules/vite/bin/vite.js build --sourcemap false",
         "preview": "vite preview",
         "test": "jest --coverage",
-        "postinstall": "node ./customInstalls/needletools-usd-viewer/usdViewerInstall.js && node ./customInstalls/veerum/veerumInstall.js && node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/threejs/install.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js"
+        "postinstall": "node ./customInstalls/needletools-usd-viewer/usdViewerInstall.js && node ./customInstalls/veerum/veerumInstall.js && node ./customInstalls/babylonjs/babylonjsInstall.js && node ./customInstalls/threejs/install.js && node ./customInstalls/playcanvas/playcanvasInstall.js && node ./customInstalls/vntana/vntanaInstall.js && node ./customInstalls/potree/potreeInstall.js && node ./customInstalls/cesium/cesiumInstall.js && node ./customInstalls/online3dviewer/online3dviewerInstall.js && node ./customInstalls/thatopenwebifc/thatOpenWebIfcInstall.js"
     },
     "devDependencies": {
         "@babel/plugin-proposal-private-property-in-object": "^7.21.11",

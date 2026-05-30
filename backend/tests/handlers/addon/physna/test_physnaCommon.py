@@ -20,8 +20,49 @@ class TestSupportedExtension:
     def test_stp_igs_iges_stl_obj_supported(self):
         from backend.backend.handlers.addon.physna.physnaCommon import is_supported_file
 
-        for ext in ("stp", "igs", "iges", "stl", "obj", "3ds", "ply"):
+        for ext in (
+            "stp",
+            "igs",
+            "iges",
+            "stl",
+            "obj",
+            "3ds",
+            "asm",
+            "catpart",
+            "catproduct",
+            "glb",
+            "iam",
+            "ipt",
+            "jt",
+            "par",
+            "prt",
+            "sldasm",
+            "sldprt",
+            "x_b",
+            "x_t",
+        ):
             assert is_supported_file(f"/file.{ext}") is True
+
+    def test_formats_physna_rejects_are_not_supported(self):
+        # Regression: these extensions were previously (incorrectly) in the
+        # supported set. Physna's upload endpoint rejects them server-side with
+        # HTTP 400 "Invalid path extension", so VAMS must not attempt to sync
+        # them. .ifc in particular triggered the original bug. Note .glb IS
+        # supported but .gltf is NOT.
+        from backend.backend.handlers.addon.physna.physnaCommon import is_supported_file
+
+        for ext in (
+            "ifc",
+            "ply",
+            "sat",
+            "3mf",
+            "fbx",
+            "dae",
+            "dwg",
+            "dxf",
+            "gltf",
+        ):
+            assert is_supported_file(f"/file.{ext}") is False
 
     def test_text_file_not_supported(self):
         from backend.backend.handlers.addon.physna.physnaCommon import is_supported_file

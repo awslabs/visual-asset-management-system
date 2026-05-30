@@ -70,34 +70,40 @@ def apply_vams_reserved_metadata(
 
 # Physna-supported 3D/CAD file extensions (source: Physna API docs).
 # Extending this list requires a code change — we want the gate explicit.
+#
+# This MUST stay in sync with Physna's actual upload-accepted 3D formats. The
+# upload endpoint validates the `path` extension server-side and rejects any
+# unsupported extension with HTTP 400 "Invalid path extension", so listing an
+# extension here that Physna does not accept causes every such file to fail
+# the sync. Physna's accepted 3D set (per their docs) is:
+#   .3ds .asm .catpart .catproduct .glb .iam .iges .igs .ipt .jt .obj .par
+#   .prt .sldasm .sldprt .stl .step .stp .x_b .x_t
+# Notably Physna does NOT accept .ifc, .ply, .sat, .3mf, .fbx, .dae, .dwg,
+# .dxf, or .gltf (only the binary .glb form). Physna also accepts documents
+# (.txt .pdf) and images (.gif .jpeg .jpg .png), but VAMS intentionally only
+# syncs 3D/CAD geometry to Physna — those non-geometry formats are excluded.
 SUPPORTED_EXTENSIONS = frozenset(
     {
-        "step",
-        "stp",
-        "iges",
-        "igs",
-        "stl",
-        "obj",
         "3ds",
-        "ply",
-        "sldprt",
-        "sldasm",
-        "prt",
-        "par",
+        "asm",
         "catpart",
         "catproduct",
-        "x_t",
-        "x_b",
-        "sat",
-        "jt",
-        "3mf",
-        "fbx",
-        "dae",
-        "dwg",
-        "dxf",
-        "ifc",
-        "gltf",
         "glb",
+        "iam",
+        "iges",
+        "igs",
+        "ipt",
+        "jt",
+        "obj",
+        "par",
+        "prt",
+        "sldasm",
+        "sldprt",
+        "stl",
+        "step",
+        "stp",
+        "x_b",
+        "x_t",
     }
 )
 

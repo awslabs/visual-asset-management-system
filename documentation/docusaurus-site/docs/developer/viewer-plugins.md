@@ -1,6 +1,6 @@
 # Viewer Plugin Development
 
-This guide covers the VAMS Visualizer Plugin System, a modular architecture for file viewers that supports 17 viewer plugins for 3D models, point clouds, media, documents, and data formats.
+This guide covers the VAMS Visualizer Plugin System, a modular architecture for file viewers that supports viewer plugins for 3D models, point clouds, media, documents, and data formats.
 
 ## Architecture Overview
 
@@ -37,7 +37,7 @@ graph TD
 
 ## Current Viewers
 
-VAMS ships with 17 viewer plugins across five categories: 3D, Media, Document, Data, and Preview.
+VAMS ships with viewer plugins across five categories: 3D, Media, Document, Data, and Preview.
 
 For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 

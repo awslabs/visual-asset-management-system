@@ -24,13 +24,16 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Minor adjustments made to asset and file search page to help further streamline component placement and use
 -   Physna Sync add-on (Phase 1) — Optional one-way synchronization of supported VAMS files, file metadata, file attributes, and asset metadata to a Physna tenant. Enable via `app.addons.usePhysnaSync` in `infra/config/config.json`. See the [Physna Integration documentation](documentation/docusaurus-site/docs/developer/physna-integration.md) for details.
 -   **Web** Physna Viewer frontend plugin — New VAMS viewer plugin that embeds the Physna-hosted 3D/CAD viewer inside VAMS asset pages for files that have been synced to Physna. Backed by a new `GET /addon/physna/viewer` proxy endpoint that enforces VAMS two-tier authorization and keeps Physna credentials off the client. Enabled automatically whenever the Physna Sync add-on is deployed.
+-   **Web** ThatOpen IFC BIM Viewer frontend plugin — New VAMS viewer plugin that renders IFC (Industry Foundation Classes) Building Information Models in the browser using the open-source That Open Engine (`web-ifc`, MIT / MPL-2.0). Supports `.ifc` and `.ifczip`, with a spatial model tree, element property inspection, hide/isolate, section planes, and measurements. Vendored as a self-contained `customInstalls/thatopenwebifc` UMD bundle (nothing added to the core web dependencies) and enabled by default. Uses the multithreaded `web-ifc-mt.wasm` build when cross-origin isolation is available (COI service worker) and falls back to single-thread otherwise; does not require `ALLOWUNSAFEEVAL`.
 -   **Web** Continue to add additional retry/skip steps to the various web file upload stages if certain network calls fail
 -   **Web** BabylonJS and PlayCanvas Gaussian Splat viewers now ship a floating 3-tab control panel that has similar functionality of the ThreeJS UI controls panel, but appropriate for gaussian splats.
 -   **Web** `View Asset` page now tracks the selected file in the manager as `?filePath=` query param and search now uses this path instead of sending state. This helps with opening assets in new tabs, direct navigations, or view asset page refreshes.
+-   **Web** Asset and file search now sort filter drop-downs alphabetically
 
 ### Bug Fixes
 
 -   Fixed some broken cross-reference links in the documentation
+-   Added additional checks for metadata GeoJSON saving to account for different "bad" shape combiniations that may cause issues with OpenSearch indexing
 -   Fixed bug in S3 bucket indexing function where filenames with certain special characters were not getting properly processed
 -   Fixed bug in `CustomFeatureEnabledConfigNestedStack` where feature flags removed between deployments (e.g., disabling Physna Sync, switching off CloudFront in favor of ALB) remained in the `appFeatureEnabledStorageTable` DynamoDB table indefinitely. The custom resource now defines an `onDelete` handler that issues a `DeleteItem` for the feature when its CloudFormation resource is removed from the synthesized template.
 -   Fixed Gaussian Splat open pipeline function to properly have permissions send task failure callbacks if an error is caught during initialization
@@ -42,9 +45,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
--   \*_Web_ Asset and file search now sort filter drop-downs alphabetically
+-   **Web** Removed the unused legacy `web-ifc` dependency from the core `web/package.json`
 -   OpenSearch engine version bumped from `OPENSEARCH_2_7` to `OPENSEARCH_3_5` (provisioned deployments only; serverless is unaffected). The reindex required by the engine upgrade is bundled with the v2.5 → v2.6 migration.
--   Added additional checks for metadata GeoJSON saving to account for different "bad" shape combiniations that may cause issues with OpenSearch indexing
 -   Bumped minimum supported Node.js version for development and build tooling from 20.18.1 to 22.22.3 to address the AWS SDK for JavaScript v3 `NodeVersionSupportWarning` (versions published after the first week of January 2027 will require Node 22+). Updated `web/.nvmrc`, root/`web`/`infra`/`documentation/docusaurus-site` `package.json` engines, `@types/node` in `web` (^18 → ^22), and all README/documentation references.
 -   Bumped Lambda Node.js runtime from `NODEJS_20_X` to `NODEJS_22_X` (`infra/config/config.ts` `LAMBDA_NODE_RUNTIME`). Affects all Node-based Lambdas (Schema Deploy custom resource, etc.).
 -   **Web** Bumped Vite `build.target` and `optimizeDeps.esbuildOptions.target` from `es2020` to `es2022`.

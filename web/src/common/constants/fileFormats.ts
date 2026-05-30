@@ -30,6 +30,7 @@ export const modelFileFormats = [
     ".off",
     ".bim",
     ".ifc",
+    ".ifczip",
     ".amf",
     ".usdz",
     ".usd",

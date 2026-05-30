@@ -6,7 +6,7 @@ This is the root-level Claude Code steering document for VAMS. It is auto-loaded
 
 VAMS is an AWS-native Visual Asset Management System for managing, visualizing, and processing 3D assets, point clouds, CAD files, and other visual content. It deploys as a CloudFormation/CDK stack with:
 
--   **React frontend** (`web/`) -- Cloudscape UI, 17 viewer plugins for 3D/media
+-   **React frontend** (`web/`) -- Cloudscape UI, many viewer plugins for 3D/media
 -   **Python Lambda backend** (`backend/`) -- Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) -- 10 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) -- Click framework, profile-based config
@@ -511,15 +511,15 @@ For user-facing documentation:
 
 ### **Frontend (`web/`)**
 
-| Technology               | Usage                                                            |
-| ------------------------ | ---------------------------------------------------------------- |
-| React 17.0.2             | UI framework                                                     |
-| Cloudscape Design System | AWS UI component library                                         |
-| AWS Amplify v6           | Auth integration                                                 |
-| Custom apiClient         | Fetch-based API client with auto auth headers                    |
-| HashRouter               | Client-side routing                                              |
-| TypeScript               | All source `.tsx`/`.ts` (only `__mocks__/*.js` remain as JS)     |
-| Viewer plugins (17)      | Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, etc. |
+| Technology               | Usage                                                                     |
+| ------------------------ | ------------------------------------------------------------------------- |
+| React 17.0.2             | UI framework                                                              |
+| Cloudscape Design System | AWS UI component library                                                  |
+| AWS Amplify v6           | Auth integration                                                          |
+| Custom apiClient         | Fetch-based API client with auto auth headers                             |
+| HashRouter               | Client-side routing                                                       |
+| TypeScript               | All source `.tsx`/`.ts` (only `__mocks__/*.js` remain as JS)              |
+| Viewer plugins (18)      | Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, IFC/BIM, etc. |
 
 ### **Backend (`backend/`)**
 

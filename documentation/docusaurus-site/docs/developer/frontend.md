@@ -47,7 +47,7 @@ web/src/
 
   pages/                  # Thin page wrappers (lazy-loaded)
   components/             # Domain/feature components
-  visualizerPlugin/       # 3D/media viewer plugin system (17 viewers)
+  visualizerPlugin/       # 3D/media viewer plugin system (viewers)
   layout/Navigation.tsx   # Left sidebar navigation
   styles/theme.css        # CSS custom properties for dark/light theme
   utils/authTokenUtils.ts # Dual-mode token utilities

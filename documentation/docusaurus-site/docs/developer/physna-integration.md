@@ -78,7 +78,9 @@ Because the secret is created from plaintext values in the configuration file, t
 
 Physna accepts a specific set of 3D/CAD formats. The add-on gates uploads by file extension and silently skips any file whose extension is not in the list below:
 
-`step, stp, iges, igs, stl, obj, 3ds, ply, sldprt, sldasm, prt, par, catpart, catproduct, x_t, x_b, sat, jt, 3mf, fbx, dae, dwg, dxf, ifc, gltf, glb`
+`3ds, asm, catpart, catproduct, glb, iam, iges, igs, ipt, jt, obj, par, prt, sldasm, sldprt, stl, step, stp, x_b, x_t`
+
+This list reflects the 3D/CAD formats Physna's upload endpoint accepts. Files whose extension is not on this list are rejected by Physna with an HTTP 400 `Invalid path extension` response, so VAMS does not attempt to sync them. Note that Physna does **not** accept `ifc`, `ply`, `sat`, `3mf`, `fbx`, `dae`, `dwg`, `dxf`, or `gltf` (only the binary `glb` form). While Physna also accepts document (`txt`, `pdf`) and image (`gif`, `jpeg`, `jpg`, `png`) formats, VAMS intentionally syncs only 3D/CAD geometry to Physna.
 
 Extending this list requires a code change in `backend/backend/handlers/addon/physna/physnaCommon.py` (constant `SUPPORTED_EXTENSIONS`).
 

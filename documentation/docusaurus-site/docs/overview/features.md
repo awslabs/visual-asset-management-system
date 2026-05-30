@@ -10,7 +10,7 @@ The VAMS web interface is a React 17 application built with Vite and the AWS Clo
 
 ### Viewer Plugins
 
-VAMS includes 17 built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
+VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, and IFC/BIM models. The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
