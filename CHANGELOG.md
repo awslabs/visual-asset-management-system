@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.5.2] (2026-06-02)
+
+### Bug Fixes
+
+-   Fixed a Casbin authz implementation bug that could allow injecting additional policies through field values that would be regex evaluated. Low impact as Casbin policies are only able to be set by admins by default. Added additional backend tests for this case.
+-   Fixed latent defect of backend test framework not being updated with changes from v2.5, causing some test failures.
+
 ## [2.5.1] (2026-04-23)
 
 ### Bug Fixes

@@ -296,7 +296,7 @@ def test_delete_role_missing_id(mock_validate_pagination, mock_casbin_enforcer,
     # Assert
     assert response['statusCode'] == 400
     response_body = json.loads(response['body'])
-    assert 'Role Name is required' in response_body['message']
+    assert 'Role name is required' in response_body['message']
 
 
 @patch('backend.backend.handlers.roles.roleService.request_to_claims')
