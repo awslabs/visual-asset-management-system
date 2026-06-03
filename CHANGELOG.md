@@ -45,6 +45,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   Fixed NVIDIA IsaacLabs pipeline to now properly lookup asset input locations to allow relative pathing in the submitted configuration files
 -   Fixed NVIDIA IsaacLabs pipeline to have a unique SFN name per deployment configuration to avoid same-region multi-vams instance deployments
 -   Programatically stripping NVIDIA Cosmos, Gr00t, and IsaacLab CRLF line endings on entrypoint files to account for different deployment machine OSs (Windows vs Linux/Mac) that could cause pipeline failures
+-   Fixed a Casbin authz implementation bug that could allow injecting additional policies through field values that would be regex evaluated. Low impact as Casbin policies are only able to be set by admins by default. Added additional backend tests for this case.
+-   Fixed latent defect of backend test framework not being updated with changes from v2.5, causing some test failures.
 
 ### Chores
 
