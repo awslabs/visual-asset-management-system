@@ -13,6 +13,7 @@ import { Construct } from "constructs";
 import { Service } from "../../../helper/service-helper";
 import { authResources } from "../../auth/authBuilder-nestedStack";
 import * as Config from "../../../../config/config";
+import { suppressCdkNagLambda } from "../../../helper/security";
 
 /**
  * Additional configuration needed to use federated identities
@@ -212,6 +213,8 @@ export class AmplifyConfigLambdaConstruct extends Construct {
 
         // add lambda policies
         lambdaFn.grantInvoke(Service("APIGATEWAY").Principal);
+
+        suppressCdkNagLambda(lambdaFn);
 
         // add lambda integration
         const lambdaFnIntegration = new apigwIntegrations.HttpLambdaIntegration(

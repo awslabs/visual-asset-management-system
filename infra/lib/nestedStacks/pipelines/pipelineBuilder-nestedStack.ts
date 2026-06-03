@@ -28,6 +28,7 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_NODE_RUNTIME } from "../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { NagSuppressions } from "cdk-nag";
+import { suppressCdkNagLambda } from "../../helper/security";
 
 export interface PipelineBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -443,5 +444,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     : undefined,
             timeout: cdk.Duration.seconds(1),
         });
+
+        suppressCdkNagLambda(lambdaFn);
     }
 }

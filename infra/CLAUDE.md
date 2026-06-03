@@ -85,7 +85,8 @@ infra/
           dynamodb-authdefaults-ro-construct.ts
       apiLambda/
         apigatewayv2-amplify-nestedStack.ts  # API Gateway V2 HttpApi + Lambda authorizer
-        apiBuilder-nestedStack.ts            # ~1375 lines: all API routes + Lambda wiring
+        apiBuilder-nestedStack.ts            # Primary API routes + Lambda wiring (asset, database, metadata, auth, pipeline, workflow, etc.)
+        apiBuilder2-nestedStack.ts           # Secondary API stack: self-contained domains moved to free ApiBuilder headroom (currently Tags, Tag Types)
         lambdaLayersBuilder-nestedStack.ts   # Lambda layer construction
         constructs/
           apigatewayv2-lambda-construct.ts       # Route attachment helper
@@ -161,7 +162,8 @@ CoreVAMSStack (root)
   |     |     |
   |     |     +-- ApiGatewayV2Amplify (API Gateway + authorizer)
   |     |     |     |
-  |     |     |     +-- ApiBuilder (all API route Lambda wiring)
+  |     |     |     +-- ApiBuilder (primary API route Lambda wiring; includes pipeline + workflow)
+  |     |     |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types; depends on ApiBuilder)
   |     |     |     +-- StaticWeb (CloudFront or ALB hosting)
   |     |     |     +-- SearchBuilder (OpenSearch)
   |     |     |     +-- PipelineBuilder (all use-case pipelines)
@@ -359,9 +361,9 @@ const fun = new lambda.Function(scope, name, {
 });
 ```
 
-### 4 Required Security Calls (Every Lambda Builder)
+### Required Security Calls (Every Lambda Builder)
 
-Every lambda builder function MUST include these four calls after creating the function:
+Every lambda builder function MUST include these calls after creating the function:
 
 ```typescript
 // 1. KMS permissions (if encryption enabled)
@@ -373,16 +375,26 @@ setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 // 3. Global environment variables (Cognito auth flag)
 globalLambdaEnvironmentsAndPermissions(fun, config);
 
-// 4. CDK Nag suppression for S3 grant patterns
+// 4. Per-Lambda CDK Nag suppressions (IAM4 execution roles + wildcard KMS actions)
+suppressCdkNagLambda(fun);
+
+// 5. CDK Nag suppression for S3 grant patterns (only if the function uses grantRead/grantReadWrite)
 suppressCdkNagErrorsByGrantReadWrite(scope);
 ```
+
+`suppressCdkNagLambda(fun)` is REQUIRED on every authored Lambda function (including those built inside
+constructs and custom resources). It replaces the old stack-wide suppression that `CoreVAMSStack` previously
+applied with `applyToChildren=true` — that approach stamped the suppression metadata onto every resource in
+every nested stack and bloated the synthesized CloudFormation templates. Scope the suppression to the function.
 
 ### What the Security Helpers Do
 
 -   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key
 -   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Adds env vars for AUTH_TABLE_NAME, CONSTRAINTS_TABLE_NAME, USER_ROLES_TABLE_NAME, ROLES_TABLE_NAME + 9 audit log group env vars. Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all audit log groups.
 -   **`globalLambdaEnvironmentsAndPermissions`**: Sets COGNITO_AUTH_ENABLED based on Cognito + VPC configuration
+-   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
 -   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
+-   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
 
 ---
 
@@ -566,12 +578,13 @@ When `config.app.govCloud.il6Compliant = true`:
     - `memorySize: Config.LAMBDA_MEMORY_SIZE`
     - VPC conditional on `config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas`
 3. Grant DynamoDB table permissions (grantReadData or grantReadWriteData)
-4. Apply ALL 4 security calls:
+4. Apply the security calls:
     - `kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey)`
     - `setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources)`
     - `globalLambdaEnvironmentsAndPermissions(fun, config)`
-    - `suppressCdkNagErrorsByGrantReadWrite(scope)`
-5. Wire the function to API Gateway in `apiBuilder-nestedStack.ts` using `attachFunctionToApi()`
+    - `suppressCdkNagLambda(fun)` — required on every Lambda
+    - `suppressCdkNagErrorsByGrantReadWrite(scope)` — only if the function uses grantRead/grantReadWrite
+5. Wire the function to API Gateway using `attachFunctionToApi()`. Prefer `apiBuilder2-nestedStack.ts` for new endpoints (the primary `apiBuilder-nestedStack.ts` is near the CFN per-stack resource limit). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there.
 
 ### 3. Adding a New Nested Stack
 
@@ -673,10 +686,11 @@ export function buildMyNewFunction(
     // Grant DynamoDB permissions
     storageResources.dynamo.myTable.grantReadWriteData(fun);
 
-    // Required security calls (all 4)
+    // Required security calls
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

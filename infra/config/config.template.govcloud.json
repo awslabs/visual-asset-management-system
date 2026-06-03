@@ -132,6 +132,7 @@
             "useIsaacLabTraining": {
                 "enabled": false,
                 "acceptNvidiaEula": false,
+                "useCodeBuild": false,
                 "autoRegisterWithVAMS": true,
                 "keepWarmInstance": false
             },

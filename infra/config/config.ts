@@ -5,6 +5,7 @@
  */
 import { RemovalPolicy } from "aws-cdk-lib";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
+import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import { readFileSync } from "fs";
 import { join } from "path";
 import * as dotenv from "dotenv";
@@ -21,6 +22,7 @@ export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
 export const LAMBDA_MEMORY_SIZE = 5308;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_3_5;
+export const CODEBUILD_BUILD_IMAGE = codebuild.LinuxBuildImage.STANDARD_7_0;
 
 export const STACK_WAF_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-WAF) (version:" +
@@ -176,6 +178,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useIsaacLabTraining = {
             enabled: false,
             acceptNvidiaEula: false,
+            useCodeBuild: false,
             autoRegisterWithVAMS: true,
             keepWarmInstance: false,
         };
@@ -183,6 +186,10 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.pipelines.useIsaacLabTraining.enabled == undefined) {
         config.app.pipelines.useIsaacLabTraining.enabled = false;
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining.useCodeBuild == undefined) {
+        config.app.pipelines.useIsaacLabTraining.useCodeBuild = false;
     }
 
     if (config.app.pipelines.useIsaacLabTraining.keepWarmInstance == undefined) {
@@ -1206,6 +1213,7 @@ export interface ConfigPublic {
             useIsaacLabTraining: {
                 enabled: boolean;
                 acceptNvidiaEula: boolean;
+                useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
                 keepWarmInstance: boolean;
             };

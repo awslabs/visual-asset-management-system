@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### ⚠ BREAKING CHANGES
 
--   OpenSearch index names rolled forward to `vams-assets-v3` and `vams-files-v3`. The schema-deploy custom resource creates the empty v3 indexes; the previous v2 indexes are abandoned and left in place until you delete them manually. A reindex is required to populate v3.
+-   OpenSearch index names rolled forward to `vams-assets-v3` and `vams-files-v3`. The schema-deploy custom resource creates the empty v3 indexes; the previous v2 indexes are abandoned and left in place until you delete them manually. A reindex is required to populate v3 for all OpenSearch deployments.
 -   `OPENSEARCH_VERSION` switched from `OPENSEARCH_2_7` to `OPENSEARCH_3_5`. Provisioned OpenSearch domains will perform a major-version engine upgrade. Serverless collections are unaffected.
 
 **Recommended Upgrade Path:** Run the upgrade script to redindex opensearch data if using OpenSearch serverless or provisioned: `infra\deploymentDataMigration\v2.5_to_v2.6\upgrade`
@@ -29,10 +29,12 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** BabylonJS and PlayCanvas Gaussian Splat viewers now ship a floating 3-tab control panel that has similar functionality of the ThreeJS UI controls panel, but appropriate for gaussian splats.
 -   **Web** `View Asset` page now tracks the selected file in the manager as `?filePath=` query param and search now uses this path instead of sending state. This helps with opening assets in new tabs, direct navigations, or view asset page refreshes.
 -   **Web** Asset and file search now sort filter drop-downs alphabetically
+-   NVIDIA Isaac Lab Training pipeline now supports a configuration building its container image via AWS CodeBuild + ECR instead of a local Docker build, matching the existing NVIDIA Cosmos and Gr00t pipelines.
 
 ### Bug Fixes
 
 -   Fixed some broken cross-reference links in the documentation
+-   Fixed Potree pipeline PDAL pipeline container build failures due to internal dependency upgrades that caused test failures
 -   Added additional checks for metadata GeoJSON saving to account for different "bad" shape combiniations that may cause issues with OpenSearch indexing
 -   Fixed bug in S3 bucket indexing function where filenames with certain special characters were not getting properly processed
 -   Fixed bug in `CustomFeatureEnabledConfigNestedStack` where feature flags removed between deployments (e.g., disabling Physna Sync, switching off CloudFront in favor of ALB) remained in the `appFeatureEnabledStorageTable` DynamoDB table indefinitely. The custom resource now defines an `onDelete` handler that issues a `DeleteItem` for the feature when its CloudFormation resource is removed from the synthesized template.
@@ -41,10 +43,13 @@ All notable changes to this project will be documented in this file. See [standa
 -   Fixed NVIDIA Comos and Gr00t pipelines that may result in container deadlock due to output buffer overflows during hugging face model downloads
 -   Fixed NVIDIA Comos Predict v1 reference in CDK that was still forcing a local Docker build of predict v1 instead of using only v2.5 deployments (wasn't being used but caused longer CDK deployment times)
 -   Fixed NVIDIA IsaacLabs pipeline to now properly lookup asset input locations to allow relative pathing in the submitted configuration files
+-   Fixed NVIDIA IsaacLabs pipeline to have a unique SFN name per deployment configuration to avoid same-region multi-vams instance deployments
 -   Programatically stripping NVIDIA Cosmos, Gr00t, and IsaacLab CRLF line endings on entrypoint files to account for different deployment machine OSs (Windows vs Linux/Mac) that could cause pipeline failures
 
 ### Chores
 
+-   **CDK** Added a second backend API nested stack (`ApiBuilder2NestedStack`) and moved the self-contained Tags and Tag Types API functions and routes into it. `ApiBuilderNestedStack` was approaching the CloudFormation per-stack resource limit; the move frees headroom (primary stack ~186 resources, secondary ~17) and new API endpoints can be added to the secondary stack going forward. Only domains whose Lambda functions are self-contained — no cross-stack function references and no IAM role ARNs persisted into long-lived resources — are moved; the pipeline and workflow functions intentionally stay in `ApiBuilder` because the workflow IAM role's path-derived name is baked into existing Step Functions state machines.
+-   **CDK** Replaced the three stack-wide Lambda CDK Nag suppressions (`AWSLambdaBasicExecutionRole`, `AWSLambdaVPCAccessExecutionRole`, and wildcard KMS actions) in `CoreVAMSStack` with a per-Lambda `suppressCdkNagLambda()` helper called from every Lambda builder, plus a targeted `suppressCdkNagLambdaFrameworkResources()` pass. Scoping the suppressions to the resources that actually need them reduces the per-resource metadata footprint (the unused execution-role suppression reason dropped from 873 to 425 occurrences across the synthesized templates).
 -   **Web** Removed the unused legacy `web-ifc` dependency from the core `web/package.json`
 -   **Web** Removed legacy Asset Selector component and file type constants that were no longer used in the code
 -   OpenSearch engine version bumped from `OPENSEARCH_2_7` to `OPENSEARCH_3_5` (provisioned deployments only; serverless is unaffected). The reindex required by the engine upgrade is bundled with the v2.5 → v2.6 migration.

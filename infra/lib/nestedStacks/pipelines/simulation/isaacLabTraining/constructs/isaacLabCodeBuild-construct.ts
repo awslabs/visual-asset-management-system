@@ -7,18 +7,16 @@ import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as codebuild from "aws-cdk-lib/aws-codebuild";
-import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
-import * as Config from "../../../../../../../config/config";
+import * as Config from "../../../../../../config/config";
 
-export interface Gr00tCodeBuildConstructProps extends cdk.StackProps {
+export interface IsaacLabCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
-    modelCacheBucket: s3.Bucket;
     vpc: ec2.IVpc;
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
@@ -26,31 +24,35 @@ export interface Gr00tCodeBuildConstructProps extends cdk.StackProps {
 
 export interface PipelineEcrRepo {
     repository: ecr.Repository;
-    imageUri: string;
     codeBuildProjectName: string;
 }
 
 /**
- * Gr00tCodeBuildConstruct
+ * IsaacLabCodeBuildConstruct
  *
- * Builds Gr00t container images via CodeBuild and pushes them to ECR.
+ * Builds the Isaac Lab training container image via CodeBuild and pushes it to ECR.
  * This avoids local Docker builds of large GPU images, which are extremely slow.
  *
- * For the enabled finetune pipeline, this construct creates:
+ * For the enabled Isaac Lab Training pipeline, this construct creates:
  * - An ECR repository for the container image
  * - An S3 asset upload of the container source directory
  * - A CodeBuild project configured with Docker layer caching
  * - A custom resource that triggers the build on Create/Update
+ *
+ * The Isaac Lab base image (nvcr.io/nvidia/isaac-lab) requires explicit acceptance
+ * of the NVIDIA Software License Agreement. The ACCEPT_EULA flag from config is passed
+ * to the build as an environment variable, which the buildspec forwards to `docker build`
+ * as a `--build-arg`.
  */
-export class Gr00tCodeBuildConstruct extends Construct {
-    public finetuneRepo?: PipelineEcrRepo;
+export class IsaacLabCodeBuildConstruct extends Construct {
+    public trainingRepo?: PipelineEcrRepo;
 
-    constructor(parent: Construct, name: string, props: Gr00tCodeBuildConstructProps) {
+    constructor(parent: Construct, name: string, props: IsaacLabCodeBuildConstructProps) {
         super(parent, name);
 
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
-        const gr00tConfig = props.config.app.pipelines.useNvidiaGr00t;
+        const isaacLabConfig = props.config.app.pipelines.useIsaacLabTraining;
 
         /**
          * Helper: Create ECR repo, CodeBuild project, and trigger for a single pipeline.
@@ -68,7 +70,7 @@ export class Gr00tCodeBuildConstruct extends Construct {
                 lifecycleRules: [
                     {
                         maxImageCount: 10,
-                        description: `Keep last 10 images for vams-gr00t-${pipelineKey}`,
+                        description: `Keep last 10 images for vams-isaaclab-${pipelineKey}`,
                     },
                 ],
             });
@@ -82,7 +84,7 @@ export class Gr00tCodeBuildConstruct extends Construct {
             // CodeBuild Project — runs in the same private VPC/subnets as pipeline Batch compute.
             // Private subnets have NAT Gateway egress for pulling Docker base images and cloning repos.
             const project = new codebuild.Project(this, `CodeBuild-${pipelineKey}`, {
-                description: `Build Gr00t ${pipelineKey} container image and push to ECR`,
+                description: `Build Isaac Lab ${pipelineKey} container image and push to ECR`,
                 environment: {
                     buildImage: Config.CODEBUILD_BUILD_IMAGE,
                     computeType: codebuild.ComputeType.LARGE,
@@ -96,6 +98,11 @@ export class Gr00tCodeBuildConstruct extends Construct {
                         },
                         AWS_DEFAULT_REGION: {
                             value: region,
+                        },
+                        // NVIDIA EULA acceptance — forwarded to `docker build --build-arg` by the
+                        // buildspec. The Isaac Lab Dockerfile fails the build unless ACCEPT_EULA=Y.
+                        ACCEPT_EULA: {
+                            value: isaacLabConfig.acceptNvidiaEula ? "Y" : "N",
                         },
                     },
                 },
@@ -177,9 +184,6 @@ def handler(event, context):
                 },
             });
 
-            // Image URI: latest tag
-            const imageUri = `${repository.repositoryUri}:latest`;
-
             /**
              * CDK Nag Suppressions
              */
@@ -190,7 +194,7 @@ def handler(event, context):
                 [
                     {
                         id: "AwsSolutions-CB4",
-                        reason: "Gr00t CodeBuild project uses default AWS-managed encryption. Build artifacts are transient container images pushed to ECR which has its own encryption.",
+                        reason: "Isaac Lab CodeBuild project uses default AWS-managed encryption. Build artifacts are transient container images pushed to ECR which has its own encryption.",
                     },
                     {
                         id: "AwsSolutions-CB3",
@@ -248,22 +252,22 @@ def handler(event, context):
                 true
             );
 
-            return { repository, imageUri, codeBuildProjectName: project.projectName };
+            return { repository, codeBuildProjectName: project.projectName };
         };
 
         /**
-         * Conditional creation: finetune
-         * Enabled if the gr00tN1_5_3B finetune model is enabled.
+         * Conditional creation: training
+         * Enabled if the Isaac Lab Training pipeline is enabled.
          */
-        if (gr00tConfig.modelsFinetune.gr00tN1_5_3B.enabled) {
-            this.finetuneRepo = createPipelineBuild(
-                "gr00t-finetune",
-                "../../../../../../../../backendPipelines/genAi/nvidia/gr00t/container"
+        if (isaacLabConfig.enabled) {
+            this.trainingRepo = createPipelineBuild(
+                "training",
+                "../../../../../../../backendPipelines/simulation/isaacLabTraining/container"
             );
-            new cdk.CfnOutput(this, "Gr00tFinetuneCodeBuildProject", {
-                value: this.finetuneRepo.codeBuildProjectName,
+            new cdk.CfnOutput(this, "IsaacLabTrainingCodeBuildProject", {
+                value: this.trainingRepo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Gr00t Finetune container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Isaac Lab Training container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
             });
         }
     }

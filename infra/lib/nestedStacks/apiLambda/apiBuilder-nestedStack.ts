@@ -58,7 +58,6 @@ import { NestedStack } from "aws-cdk-lib";
 import { buildMetadataSchemaService } from "../../lambdaBuilder/metadataSchemaFunctions";
 import { buildMetadataService } from "../../lambdaBuilder/metadataFunctions";
 import { buildAuthFunctions } from "../../lambdaBuilder/authFunctions";
-import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
 import {
     buildSubscriptionService,
     buildCheckSubscriptionFunction,
@@ -69,10 +68,6 @@ import {
     buildCreateAssetLinkFunction,
 } from "../../lambdaBuilder/assetsLinkFunctions";
 import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
-import {
-    buildTagTypeService,
-    buildCreateTagTypeFunction,
-} from "../../lambdaBuilder/tagTypeFunctions";
 import { buildRoleService, buildCreateRoleFunction } from "../../lambdaBuilder/roleFunctions";
 import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
 import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";
@@ -316,84 +311,6 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, userRolesService, {
             routePath: "/user-roles",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
-        });
-
-        //Tags Resources
-        const tagService = buildTagService(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, tagService, {
-            routePath: "/tags",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        attachFunctionToApi(this, tagService, {
-            routePath: "/tags/{tagId}",
-            method: apigateway.HttpMethod.DELETE,
-            api: api,
-        });
-
-        const createTagFunction = buildCreateTagFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, createTagFunction, {
-            routePath: "/tags",
-            method: apigateway.HttpMethod.POST,
-            api: api,
-        });
-        attachFunctionToApi(this, createTagFunction, {
-            routePath: "/tags",
-            method: apigateway.HttpMethod.PUT,
-            api: api,
-        });
-
-        //Tag Types Resources
-        const tagTypeService = buildTagTypeService(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, tagTypeService, {
-            routePath: "/tag-types",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        attachFunctionToApi(this, tagTypeService, {
-            routePath: "/tag-types/{tagTypeId}",
-            method: apigateway.HttpMethod.DELETE,
-            api: api,
-        });
-
-        const createTagTypeFunction = buildCreateTagTypeFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, createTagTypeFunction, {
-            routePath: "/tag-types",
-            method: apigateway.HttpMethod.POST,
-            api: api,
-        });
-        attachFunctionToApi(this, createTagTypeFunction, {
-            routePath: "/tag-types",
-            method: apigateway.HttpMethod.PUT,
             api: api,
         });
 

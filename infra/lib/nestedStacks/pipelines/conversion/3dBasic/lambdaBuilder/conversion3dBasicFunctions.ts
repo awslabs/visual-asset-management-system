@@ -25,6 +25,7 @@ import {
     grantReadPermissionsToAllAssetBuckets,
 } from "../../../../../helper/security";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 
 export function buildVamsExecute3dBasicConversionPipelineFunction(
     scope: Construct,
@@ -65,5 +66,6 @@ export function buildVamsExecute3dBasicConversionPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
