@@ -30,6 +30,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** `View Asset` page now tracks the selected file in the manager as `?filePath=` query param and search now uses this path instead of sending state. This helps with opening assets in new tabs, direct navigations, or view asset page refreshes.
 -   **Web** Asset and file search now sort filter drop-downs alphabetically
 -   NVIDIA Isaac Lab Training pipeline now supports a configuration building its container image via AWS CodeBuild + ECR instead of a local Docker build, matching the existing NVIDIA Cosmos and Gr00t pipelines.
+-   Asset/File search APIs now include additional fields when passing general search filter queries (asset id, database id, s3 bucket id/name, s3 bucket prefix)
 
 ### Bug Fixes
 
@@ -47,9 +48,12 @@ All notable changes to this project will be documented in this file. See [standa
 -   Programatically stripping NVIDIA Cosmos, Gr00t, and IsaacLab CRLF line endings on entrypoint files to account for different deployment machine OSs (Windows vs Linux/Mac) that could cause pipeline failures
 -   Fixed a Casbin authz implementation bug that could allow injecting additional policies through field values that would be regex evaluated. Low impact as Casbin policies are only able to be set by admins by default. Added additional backend tests for this case.
 -   Fixed latent defect of backend test framework not being updated with changes from v2.5, causing some test failures.
+-   **Web** Pipeline create/update and other components using ListPages now approrpriately displays API errors to the user
+-   Fixed bug in various backend handlers with how it handles reserved S3 prefix names (preview, temp-upload, etc) and `*.previewFile.*` patterns where it overly excluded or didn't exclude certain files from indexing. This caused files that started with reserved names to be skipped or some previewFiles to be added for indexing and various sync processes.
 
 ### Chores
 
+-   Pipelines and Workflow backend logic now checks to make sure IDs are unique across all databases (and GLOBAL), this help prevent overlap of IDs for old references that don't include the pipeline/workflow database Id as a secondary index
 -   **CDK** Added a second backend API nested stack (`ApiBuilder2NestedStack`) and moved the self-contained Tags and Tag Types API functions and routes into it. `ApiBuilderNestedStack` was approaching the CloudFormation per-stack resource limit; the move frees headroom (primary stack ~186 resources, secondary ~17) and new API endpoints can be added to the secondary stack going forward. Only domains whose Lambda functions are self-contained — no cross-stack function references and no IAM role ARNs persisted into long-lived resources — are moved; the pipeline and workflow functions intentionally stay in `ApiBuilder` because the workflow IAM role's path-derived name is baked into existing Step Functions state machines.
 -   **CDK** Replaced the three stack-wide Lambda CDK Nag suppressions (`AWSLambdaBasicExecutionRole`, `AWSLambdaVPCAccessExecutionRole`, and wildcard KMS actions) in `CoreVAMSStack` with a per-Lambda `suppressCdkNagLambda()` helper called from every Lambda builder, plus a targeted `suppressCdkNagLambdaFrameworkResources()` pass. Scoping the suppressions to the resources that actually need them reduces the per-resource metadata footprint (the unused execution-role suppression reason dropped from 873 to 425 occurrences across the synthesized templates).
 -   **Web** Removed the unused legacy `web-ifc` dependency from the core `web/package.json`
@@ -65,7 +69,6 @@ All notable changes to this project will be documented in this file. See [standa
 ### Known Outstanding Issues
 
 -   With multiple S3 bucket support, identical assetIds across different buckets/prefixes in different databases can cause lookup conflicts in comments and subscriptions. This only occurs with manual S3 changes, as VAMS-generated assetIds use unique GUIDs.
--   Using the same pipeline ID in both GLOBAL and non-GLOBAL databases causes overlap conflicts.
 -   Pipeline metadata inputs have a size limit when sent to ECS pipelines. Assets or files with extensive metadata may exceed the 8K character ECS JSON input limit. A future pipeline overhaul will convert metadata input to a file-based approach.
 -   For assets with hundreds to thousands of files or very large files (TB-size), some API operations may time out after 29 seconds while the Lambda continues processing (up to 15 minutes). OpenSearch re-indexing with hundreds of thousands to millions of files may not complete within the 15-minute Lambda timeout and may require local or containerized re-indexing. Asynchronous methods and optional containerized processing are being evaluated.
 

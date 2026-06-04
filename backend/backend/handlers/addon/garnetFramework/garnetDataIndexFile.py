@@ -91,12 +91,12 @@ def should_skip_file(s3_key: str) -> bool:
     if any(pattern in s3_key for pattern in excluded_patterns):
         return True
     
-    # Check if s3_key starts with any excluded prefixes
+    # Check if any path component is a reserved excluded folder.
     path_parts = s3_key.split('/')
     for part in path_parts:
-        if any(part.startswith(prefix) for prefix in excluded_prefixes):
+        if part in excluded_prefixes:
             return True
-    
+
     return False
 
 #######################
@@ -607,12 +607,15 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Ignoring file with excluded pattern: {s3_key}")
             return True
         
+        # Excluded prefixes are reserved directory segment names, so match a whole path
+        # segment exactly - a base filename like "preview.jpg" must NOT be excluded, while
+        # a reserved folder like ".../preview/..." still is.
         path_parts = s3_key.split('/')
         for part in path_parts:
-            if any(part.startswith(prefix) for prefix in excluded_prefixes):
+            if part in excluded_prefixes:
                 logger.info(f"Ignoring excluded prefix file: {s3_key}")
                 return True
-        
+
         logger.info(f"Processing S3 event: {event_name} for {s3_key}")
         
         # Get S3 object metadata to extract asset/database IDs

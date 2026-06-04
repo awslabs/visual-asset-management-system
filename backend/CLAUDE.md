@@ -135,6 +135,27 @@ backend/
 10. **NEVER use `os.environ["KEY"]` outside of the module-level try/except block.**
     All environment variable loading happens once at cold start.
 
+11. **NEVER echo request input into error messages returned to the client.** Keep
+    error response messages generic and free of user-supplied values (IDs, names,
+    paths, etc.) and of internal details (other databases' IDs, ARNs, stack traces).
+    Log the specifics with `logger` for debugging, but return a generic message.
+
+    ```python
+    # WRONG -- leaks the input id and an internal database id back to the caller
+    return validation_error(
+        body={'message': f"Pipeline ID '{pipeline_id}' already exists in '{other_db}'."},
+        event=event
+    )
+
+    # CORRECT -- generic client message; details only in the log
+    logger.info(f"pipelineId {pipeline_id} conflicts with database {other_db}")
+    return validation_error(
+        body={'message': "Pipeline ID is already in use by another database. "
+                         "Choose a different ID."},
+        event=event
+    )
+    ```
+
 ---
 
 ## Gold Standard Handler Pattern
@@ -1057,6 +1078,17 @@ return {'statusCode': 400, 'body': 'bad request'}
 
 # CORRECT
 return validation_error(body={'message': 'Specific error description'}, event=event)
+```
+
+### 11. Echoing request input or internal details in client error messages
+
+```python
+# WRONG -- reflects user input and internal data back to the caller
+return validation_error(body={'message': f"Workflow '{workflow_id}' conflicts with '{other_db}'"}, event=event)
+
+# CORRECT -- generic client message; specifics go to the log only
+logger.info(f"workflowId {workflow_id} conflicts with database {other_db}")
+return validation_error(body={'message': "Workflow ID is already in use by another database."}, event=event)
 ```
 
 ---

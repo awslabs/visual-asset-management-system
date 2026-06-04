@@ -812,7 +812,12 @@ class ReindexUtility:
         """Process all objects in a bucket and update AssetsMetadata table."""
         # Excluded patterns and prefixes from fileIndexer
         excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
-        excluded_patterns = [] # '.previewFile.' not included here as the fileIndexer processes these in a special way
+        # '.previewFile.' files must be excluded here. The reindexer "touches" the
+        # metadata table to trigger indexing, which fires the DynamoDB metadata-stream
+        # path in fileIndexer (handle_metadata_stream). That path does NOT perform the
+        # base-file rewrite that the S3-event path does, so touching a '.previewFile.'
+        # record would index the preview file as its own standalone document. Skip them.
+        excluded_patterns = ['.previewFile.']
         
         results = {
             'success': 0,
@@ -857,11 +862,11 @@ class ReindexUtility:
                         results['skipped_excluded'] += 1
                         continue
                     
-                    # Check if any path component starts with excluded prefixes
+                    # Check if any path component is a reserved excluded folder.
                     path_parts = s3_key.split('/')
                     skip_file = False
                     for part in path_parts:
-                        if any(part.startswith(prefix) for prefix in excluded_prefixes):
+                        if part in excluded_prefixes:
                             results['skipped_excluded'] += 1
                             skip_file = True
                             break

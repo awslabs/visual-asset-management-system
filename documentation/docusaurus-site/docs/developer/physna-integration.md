@@ -76,13 +76,31 @@ Because the secret is created from plaintext values in the configuration file, t
 
 ## Supported file types
 
-Physna accepts a specific set of 3D/CAD formats. The add-on gates uploads by file extension and silently skips any file whose extension is not in the list below:
+The add-on gates uploads by file extension and silently skips any file whose extension Physna does not accept. There are **two distinct extension sets**, because the formats VAMS uploads to Physna are broader than the formats the embedded Physna Viewer can render:
+
+### Uploaded (synced) to Physna
+
+VAMS uploads the following formats to Physna so they are indexed and searchable in the customer's tenant:
+
+| Category | Extensions                                                                                                             |
+| -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 3D/CAD   | `3ds, asm, catpart, catproduct, glb, iam, iges, igs, ipt, jt, obj, par, prt, sldasm, sldprt, stl, step, stp, x_b, x_t` |
+| Document | `txt, pdf`                                                                                                             |
+| Image    | `gif, jpeg, jpg, png`                                                                                                  |
+
+Files whose extension is not in this set are rejected by Physna with an HTTP 400 `Invalid path extension` response, so VAMS does not attempt to sync them. Note that Physna does **not** accept `ifc`, `ply`, `sat`, `3mf`, `fbx`, `dae`, `dwg`, `dxf`, or `gltf` (only the binary `glb` form).
+
+This set is defined by the constant `SYNC_SUPPORTED_EXTENSIONS` in `backend/backend/handlers/addon/physna/physnaCommon.py`.
+
+### Rendered by the Physna Viewer
+
+Only 3D/CAD geometry formats can be rendered by the embedded Physna Viewer:
 
 `3ds, asm, catpart, catproduct, glb, iam, iges, igs, ipt, jt, obj, par, prt, sldasm, sldprt, stl, step, stp, x_b, x_t`
 
-This list reflects the 3D/CAD formats Physna's upload endpoint accepts. Files whose extension is not on this list are rejected by Physna with an HTTP 400 `Invalid path extension` response, so VAMS does not attempt to sync them. Note that Physna does **not** accept `ifc`, `ply`, `sat`, `3mf`, `fbx`, `dae`, `dwg`, `dxf`, or `gltf` (only the binary `glb` form). While Physna also accepts document (`txt`, `pdf`) and image (`gif`, `jpeg`, `jpg`, `png`) formats, VAMS intentionally syncs only 3D/CAD geometry to Physna.
+Documents and images are synced to Physna for search and indexing but are **not** shown through the Physna Viewer — VAMS displays those through its own PDF, image, and text viewers. This set is defined by the constant `VIEWER_SUPPORTED_EXTENSIONS` in the same module, and is mirrored in the frontend at `web/src/visualizerPlugin/config/viewerConfig.json` (the `physna-viewer` entry's `supportedExtensions`).
 
-Extending this list requires a code change in `backend/backend/handlers/addon/physna/physnaCommon.py` (constant `SUPPORTED_EXTENSIONS`).
+Extending either list requires a code change. When changing the viewer set, update **both** the backend `VIEWER_SUPPORTED_EXTENSIONS` constant and the frontend `viewerConfig.json` entry so they stay in sync.
 
 ---
 
@@ -180,7 +198,7 @@ Theme is handled entirely on the frontend. The viewer plugin detects VAMS's curr
 
 ### Supported file types
 
-The viewer supports the same extensions as the Physna sync path. See the extensions list in the [sync section above](#how-vams-integrates-with-physna) — anything outside that set is rejected with a "Unsupported file type" message before any Physna calls are made.
+The Physna Viewer renders **only the 3D/CAD geometry formats**, which is a narrower set than what VAMS uploads to Physna. Documents (`txt`, `pdf`) and images (`gif`, `jpeg`, `jpg`, `png`) are synced to Physna for indexing but are not rendered by the embedded viewer — VAMS displays them through its own PDF, image, and text viewers. See [Rendered by the Physna Viewer](#rendered-by-the-physna-viewer) above for the exact list. A file whose extension is outside the viewer set is rejected with an "Unsupported file type" message before any Physna calls are made.
 
 ### API reference
 

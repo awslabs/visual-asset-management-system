@@ -74,10 +74,10 @@ def should_skip_file(s3_key: str, file_path: str) -> bool:
         logger.info(f"Skipping file with excluded pattern: {s3_key}")
         return True
     
-    # Check if s3_key starts with any excluded prefixes
+    # Check if any path component is a reserved excluded folder.
     path_parts = s3_key.split('/')
     for part in path_parts:
-        if any(part.startswith(prefix) for prefix in excluded_prefixes):
+        if part in excluded_prefixes:
             logger.info(f"Skipping file with excluded prefix: {s3_key}")
             return True
     

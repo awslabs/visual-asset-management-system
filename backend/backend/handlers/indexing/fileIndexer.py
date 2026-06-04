@@ -37,7 +37,10 @@ retry_config = Config(
 
 #Excluded patterns or prefixes from file paths to exclude
 excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
-excluded_patterns = [] # '.previewFile.' not included here as the fileIndexer processes these in a special way
+excluded_patterns = [] # PREVIEW_FILE_PATTERN not included here as the fileIndexer processes these in a special way
+
+# Marker substring identifying a file-level preview file ({base}.previewFile.{ext}).
+PREVIEW_FILE_PATTERN = '.previewFile.'
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 s3_client = boto3.client('s3', config=retry_config)
@@ -614,7 +617,7 @@ def find_preview_file_key(bucket_name: str, s3_key: str) -> str:
         The S3 key of the preview file if found, or empty string if not.
     """
     try:
-        prefix = s3_key + '.previewFile.'
+        prefix = s3_key + PREVIEW_FILE_PATTERN
         response = s3_client.list_objects_v2(
             Bucket=bucket_name,
             Prefix=prefix,
@@ -985,11 +988,10 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 operation="skip"
             )
 
-        # Check if s3_key starts with any excluded prefixes (after any bucket prefix)
-        # We need to check the path components, not just the raw key
+        # Check if any path component is a reserved excluded folder (after any bucket prefix).
         path_parts = s3_key.split('/')
         for part in path_parts:
-            if any(part.startswith(prefix) for prefix in excluded_prefixes):
+            if part in excluded_prefixes:
                 logger.info(f"Ignoring excluded patterns or prefixes (pipeline, preview, temp-upload file, etc.) from indexing: {s3_key}")
                 return IndexOperationResponse(
                     success=True,
@@ -1004,8 +1006,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
         # Placed after excluded_prefixes check so preview files under excluded
         # prefixes (e.g. pipelines/) are still ignored.
         is_preview_rewrite = False
-        if '.previewFile.' in s3_key:
-            base_file_key = s3_key.split('.previewFile.')[0]
+        if PREVIEW_FILE_PATTERN in s3_key:
+            base_file_key = s3_key.split(PREVIEW_FILE_PATTERN)[0]
             logger.info(f"Preview file event detected: {s3_key}, checking base file: {base_file_key}")
 
             # Check if the base file exists in S3
@@ -1398,7 +1400,7 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 )
             
             database_id, asset_id, file_path = parts
-            
+
             # Skip if it's asset-level (file_path is just "/")
             if file_path == '/':
                 logger.info("Asset-level metadata REMOVE, skipping for file index")
@@ -1408,7 +1410,20 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                     indexName=opensearch_file_index,
                     operation="skip"
                 )
-            
+
+            # Skip preview files (.previewFile.*). Unlike the S3-event path, the
+            # metadata stream does not rewrite a preview file to its base file, so
+            # indexing one here would create a standalone document. The base file's
+            # str_previewfilekey is kept in sync by the S3-event path instead.
+            if PREVIEW_FILE_PATTERN in file_path:
+                logger.info(f"Preview file metadata REMOVE, skipping for file index: {file_path}")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Preview file, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
+
             # Skip folder paths
             if is_folder_path(file_path):
                 logger.info(f"Folder path metadata REMOVE, skipping: {file_path}")
@@ -1504,7 +1519,7 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
             )
         
         database_id, asset_id, file_path = parts
-        
+
         # Skip if it's asset-level (file_path is just "/")
         if file_path == '/':
             logger.info("Asset-level metadata, skipping for file index")
@@ -1514,7 +1529,20 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 indexName=opensearch_file_index,
                 operation="skip"
             )
-        
+
+        # Skip preview files (.previewFile.*). Unlike the S3-event path, the
+        # metadata stream does not rewrite a preview file to its base file, so
+        # indexing one here would create a standalone document. The base file's
+        # str_previewfilekey is kept in sync by the S3-event path instead.
+        if PREVIEW_FILE_PATTERN in file_path:
+            logger.info(f"Preview file metadata, skipping for file index: {file_path}")
+            return IndexOperationResponse(
+                success=True,
+                message="Preview file, skipping",
+                indexName=opensearch_file_index,
+                operation="skip"
+            )
+
         # Skip folder paths
         if is_folder_path(file_path):
             logger.info(f"Folder path metadata, skipping: {file_path}")

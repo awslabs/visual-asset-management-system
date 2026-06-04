@@ -68,21 +68,36 @@ def apply_vams_reserved_metadata(
     return metadata_payload
 
 
-# Physna-supported 3D/CAD file extensions (source: Physna API docs).
-# Extending this list requires a code change — we want the gate explicit.
+# ---------------------------------------------------------------------------
+# Physna file-extension gates.
 #
-# This MUST stay in sync with Physna's actual upload-accepted 3D formats. The
-# upload endpoint validates the `path` extension server-side and rejects any
-# unsupported extension with HTTP 400 "Invalid path extension", so listing an
-# extension here that Physna does not accept causes every such file to fail
-# the sync. Physna's accepted 3D set (per their docs) is:
-#   .3ds .asm .catpart .catproduct .glb .iam .iges .igs .ipt .jt .obj .par
-#   .prt .sldasm .sldprt .stl .step .stp .x_b .x_t
+# There are TWO distinct gates here because "what VAMS uploads to Physna" and
+# "what the Physna Viewer can render inside VAMS" are different sets:
+#
+#   * SYNC  (VIEWER_SUPPORTED_EXTENSIONS ∪ documents ∪ images) — every format
+#     Physna's upload endpoint accepts. The sync path pushes all of these to
+#     Physna so they are indexed and searchable in the customer's tenant.
+#   * VIEWER (3D/CAD only) — only the geometry formats Physna's embedded 3D
+#     viewer can render. Documents and images are synced for search/indexing
+#     but are NOT shown through the Physna Viewer (VAMS has dedicated PDF/
+#     image/text viewers for those).
+#
+# Each list requires a code change to extend — we want the gates explicit.
+# The upload endpoint validates the `path` extension server-side and rejects
+# any extension it does not accept with HTTP 400 "Invalid path extension", so
+# listing an extension in the SYNC set that Physna does not accept causes
+# every such file to fail the sync. Physna's accepted set (per their docs):
+#   3D/CAD: .3ds .asm .catpart .catproduct .glb .iam .iges .igs .ipt .jt .obj
+#           .par .prt .sldasm .sldprt .stl .step .stp .x_b .x_t
+#   Document: .txt .pdf
+#   Image: .gif .jpeg .jpg .png
 # Notably Physna does NOT accept .ifc, .ply, .sat, .3mf, .fbx, .dae, .dwg,
-# .dxf, or .gltf (only the binary .glb form). Physna also accepts documents
-# (.txt .pdf) and images (.gif .jpeg .jpg .png), but VAMS intentionally only
-# syncs 3D/CAD geometry to Physna — those non-geometry formats are excluded.
-SUPPORTED_EXTENSIONS = frozenset(
+# .dxf, or .gltf (only the binary .glb form).
+# ---------------------------------------------------------------------------
+
+# 3D/CAD geometry formats — these are the only formats the embedded Physna
+# Viewer can render, so this set gates the viewer proxy (physnaViewer).
+VIEWER_SUPPORTED_EXTENSIONS = frozenset(
     {
         "3ds",
         "asm",
@@ -107,20 +122,53 @@ SUPPORTED_EXTENSIONS = frozenset(
     }
 )
 
+# Document and image formats Physna accepts for upload/indexing but that the
+# Physna Viewer does not render.
+DOCUMENT_SUPPORTED_EXTENSIONS = frozenset({"txt", "pdf"})
+IMAGE_SUPPORTED_EXTENSIONS = frozenset({"gif", "jpeg", "jpg", "png"})
+
+# Full set VAMS uploads to Physna: geometry + documents + images.
+SYNC_SUPPORTED_EXTENSIONS = (
+    VIEWER_SUPPORTED_EXTENSIONS
+    | DOCUMENT_SUPPORTED_EXTENSIONS
+    | IMAGE_SUPPORTED_EXTENSIONS
+)
+
 
 # Physna-accepted metadata value types. Everything else falls back to string.
 _PHYSNA_NATIVE_TYPES = frozenset({"string", "number", "boolean", "date"})
 
 
-def is_supported_file(file_path: str) -> bool:
-    """Return True if the file extension is in the Physna-supported set."""
+def _file_extension(file_path: str) -> Optional[str]:
+    """Return the lowercased extension of a file path, or None if it has none."""
     if not file_path:
-        return False
+        return None
     base = os.path.basename(file_path)
     if "." not in base:
-        return False
-    ext = base.rsplit(".", 1)[-1].lower()
-    return ext in SUPPORTED_EXTENSIONS
+        return None
+    return base.rsplit(".", 1)[-1].lower()
+
+
+def is_sync_supported_file(file_path: str) -> bool:
+    """Return True if the file extension is in the Physna upload/sync set.
+
+    This is the gate the sync Lambda (physnaFileSync) uses to decide whether
+    to push a file to Physna. It is broader than the viewer gate — it includes
+    documents and images that Physna indexes but does not render in its viewer.
+    """
+    ext = _file_extension(file_path)
+    return ext is not None and ext in SYNC_SUPPORTED_EXTENSIONS
+
+
+def is_viewer_supported_file(file_path: str) -> bool:
+    """Return True if the file extension can be rendered by the Physna Viewer.
+
+    Only 3D/CAD geometry formats qualify. Documents and images are synced to
+    Physna but shown through VAMS's own PDF/image/text viewers, not the
+    embedded Physna Viewer.
+    """
+    ext = _file_extension(file_path)
+    return ext is not None and ext in VIEWER_SUPPORTED_EXTENSIONS
 
 
 def _normalize_relative(relative_path: str) -> str:

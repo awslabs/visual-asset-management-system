@@ -454,15 +454,20 @@ class FieldClassifier:
     
     @staticmethod
     def get_searchable_core_fields(index_type: str = "asset") -> List[str]:
-        """Get list of core fields that should be included in general text search"""
+        """Get list of core fields that should be included in general text search.
+        """
         if index_type == "asset":
             return [
                 "str_assetname", "str_description", "str_assettype",
-                "list_tags", "str_asset_version_comment"
+                "list_tags", "str_asset_version_comment",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix"
             ]
         elif index_type == "file":
             return [
-                "str_key", "str_assetname", "str_fileext", "str_etag", "list_tags"
+                "str_key", "str_assetname", "str_fileext", "str_etag", "list_tags",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix"
             ]
         return []
     
@@ -977,16 +982,23 @@ class SimpleSearchQueryBuilder:
         }
     
     def _get_simple_searchable_fields(self, index_type: str) -> List[str]:
-        """Get searchable fields for simple search - includes flat object _value fields"""
+        """Get searchable fields for simple search - includes flat object _value fields.
+        """
         if index_type == "asset":
             return [
                 "str_assetname", "str_description", "str_assettype",
-                "list_tags", "str_asset_version_comment", "MD_._value"
+                "list_tags", "str_asset_version_comment",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix",
+                "MD_._value"
             ]
         elif index_type == "file":
             return [
-                "str_key", "str_assetname", "str_fileext", "str_etag", 
-                "list_tags", "MD_._value", "AB_._value"
+                "str_key", "str_assetname", "str_fileext", "str_etag",
+                "list_tags",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix",
+                "MD_._value", "AB_._value"
             ]
         return []
 

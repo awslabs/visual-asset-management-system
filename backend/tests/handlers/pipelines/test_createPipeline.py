@@ -121,6 +121,11 @@ def test_lambda_handler_success(
     table.get_item.return_value = {
         "Item": {"databaseId": "default", "pipelineExecutionType": "Lambda"}
     }
+    # The cross-database uniqueness check scans for the pipelineId. Only the
+    # request's own database owns it here, so there is no conflict.
+    table.scan.return_value = {
+        "Items": [{"databaseId": "default", "pipelineId": "demo"}]
+    }
     mock_dynamodb.Table.return_value = table
 
     response = lambda_handler(_make_event(), None)
@@ -153,3 +158,71 @@ def test_lambda_handler_object_level_denied(
 
     assert response["statusCode"] == 403
     assert json.loads(response["body"])["message"] == "Not Authorized"
+
+
+@patch("backend.backend.handlers.pipelines.createPipeline.dynamodb")
+@patch("backend.backend.handlers.pipelines.createPipeline.request_to_claims")
+@patch("backend.backend.handlers.pipelines.createPipeline.CasbinEnforcer")
+def test_lambda_handler_cross_database_id_conflict(
+    mock_enforcer, mock_request_to_claims, mock_dynamodb
+):
+    """A pipelineId already owned by a different database is rejected with 400."""
+    mock_request_to_claims.return_value = {"tokens": ["test-token"]}
+
+    enforcer_instance = MagicMock()
+    enforcer_instance.enforceAPI.return_value = True   # Tier 1 allow
+    enforcer_instance.enforce.return_value = True      # Tier 2 allow
+    mock_enforcer.return_value = enforcer_instance
+
+    table = MagicMock()
+    table.get_item.return_value = {"Item": {"databaseId": "default"}}
+    # Same pipelineId already exists under a DIFFERENT database -> conflict
+    table.scan.return_value = {
+        "Items": [{"databaseId": "other-db", "pipelineId": "demo"}]
+    }
+    mock_dynamodb.Table.return_value = table
+
+    response = lambda_handler(_make_event(), None)
+
+    assert response["statusCode"] == 400
+    message = json.loads(response["body"])["message"]
+    assert "already in use" in message
+    # The generic message must NOT leak the conflicting database id or the input id
+    assert "other-db" not in message
+    assert "demo" not in message
+    # The pipeline row must NOT have been written
+    assert table.update_item.call_count == 0
+
+
+@patch("backend.backend.handlers.pipelines.createPipeline.to_update_expr")
+@patch("backend.backend.handlers.pipelines.createPipeline.update_pipeline_workflows")
+@patch("backend.backend.handlers.pipelines.createPipeline.dynamodb")
+@patch("backend.backend.handlers.pipelines.createPipeline.request_to_claims")
+@patch("backend.backend.handlers.pipelines.createPipeline.CasbinEnforcer")
+def test_lambda_handler_deleted_id_not_a_conflict(
+    mock_enforcer, mock_request_to_claims, mock_dynamodb, mock_update_workflows, mock_to_update_expr
+):
+    """A pipelineId that exists only in a soft-deleted partition is reusable."""
+    mock_request_to_claims.return_value = {"tokens": ["test-token"]}
+
+    enforcer_instance = MagicMock()
+    enforcer_instance.enforceAPI.return_value = True
+    enforcer_instance.enforce.return_value = True
+    mock_enforcer.return_value = enforcer_instance
+
+    mock_to_update_expr.return_value = ({"#f0": "enabled"}, {":v0": True}, "SET #f0 = :v0")
+
+    table = MagicMock()
+    table.get_item.return_value = {
+        "Item": {"databaseId": "default", "pipelineExecutionType": "Lambda"}
+    }
+    # The only other record holding this pipelineId is soft-deleted -> not a conflict
+    table.scan.return_value = {
+        "Items": [{"databaseId": "other-db#deleted", "pipelineId": "demo"}]
+    }
+    mock_dynamodb.Table.return_value = table
+
+    response = lambda_handler(_make_event(), None)
+
+    assert response["statusCode"] == 200
+    assert table.update_item.call_count == 1

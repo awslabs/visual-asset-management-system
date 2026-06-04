@@ -95,7 +95,7 @@ When the Physna Sync add-on is enabled:
 
 #### Supported file types
 
-Only CAD and 3D geometry formats are supported by Physna. Files outside the supported set are silently skipped. See [Physna Integration](../developer/physna-integration.md) for the full extension list.
+VAMS uploads 3D/CAD geometry formats, documents (`txt`, `pdf`), and images (`gif`, `jpeg`, `jpg`, `png`) to Physna for indexing and search. Files outside the supported set are silently skipped. The embedded **Physna Viewer** renders only the 3D/CAD geometry formats — documents and images are synced for search but shown through VAMS's own viewers. See [Physna Integration](../developer/physna-integration.md#supported-file-types) for the full extension lists.
 
 #### Event flow
 

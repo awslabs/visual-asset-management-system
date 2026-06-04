@@ -44,7 +44,7 @@ from .physnaCommon import (
     get_database_id_for_asset_id,
     get_file_metadata,
     get_physna_asset,
-    is_supported_file,
+    is_sync_supported_file,
     lookup_physna_asset_id,
     merge_metadata,
     physna_format_metadata,
@@ -74,7 +74,7 @@ def _should_skip_s3_key(s3_key: str) -> bool:
     if any(p in s3_key for p in _EXCLUDED_PATTERNS):
         return True
     for part in s3_key.split("/"):
-        if any(part.startswith(p) for p in _EXCLUDED_PREFIXES):
+        if part in _EXCLUDED_PREFIXES:
             return True
     return False
 
@@ -811,11 +811,11 @@ def _handle_s3_record(record: Dict[str, Any]) -> bool:
         return True
 
     relative = resolved["relativePath"]
-    if not is_supported_file(relative):
+    if not is_sync_supported_file(relative):
         logger.info(
             f"Skipping S3 event for unsupported file type (Physna only accepts "
-            f"specific CAD/3D formats): bucket={bucket}, s3Key={s3_key}, "
-            f"relativePath={relative}, eventName={event_name}"
+            f"specific 3D/CAD, document, and image formats): bucket={bucket}, "
+            f"s3Key={s3_key}, relativePath={relative}, eventName={event_name}"
         )
         return True
 
@@ -860,11 +860,11 @@ def _handle_file_metadata_stream(record: Dict[str, Any]) -> bool:
     database_id, asset_id, relative = parts
     if relative == "/":
         return True  # asset-level change is handled by physnaAssetSync
-    if not is_supported_file(relative):
+    if not is_sync_supported_file(relative):
         logger.info(
             f"Skipping VAMS metadata stream event for unsupported file type "
-            f"(Physna only accepts specific CAD/3D formats): "
-            f"databaseId={database_id}, assetId={asset_id}, "
+            f"(Physna only accepts specific 3D/CAD, document, and image "
+            f"formats): databaseId={database_id}, assetId={asset_id}, "
             f"relativePath={relative}, eventName={event_name}"
         )
         return True

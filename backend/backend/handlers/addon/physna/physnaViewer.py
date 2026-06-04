@@ -52,7 +52,7 @@ from .physnaCommon import (
     PhysnaClient,
     build_physna_path,
     get_physna_asset,
-    is_supported_file,
+    is_viewer_supported_file,
     lookup_physna_asset_id,
 )
 
@@ -214,7 +214,7 @@ def _authorize_and_lookup(
     its cached OAuth2 token for a follow-up ``/viewer/token`` mint or a
     ``GET /assets/{uuid}`` state read.
     """
-    if not is_supported_file(relative_path):
+    if not is_viewer_supported_file(relative_path):
         return (
             None,
             _status_response(

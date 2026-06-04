@@ -99,6 +99,12 @@ def setup_mock_imports():
     
     dynamodb_module = import_module_from_path('common.dynamodb', os.path.join(mocks_base_path, 'common', 'dynamodb.py'))
     sys.modules['common.dynamodb'] = dynamodb_module
+
+    indexing_pkg_module = import_module_from_path('common.indexing', os.path.join(mocks_base_path, 'common', 'indexing', '__init__.py'))
+    sys.modules['common.indexing'] = indexing_pkg_module
+
+    geolocation_module = import_module_from_path('common.indexing.geoLocation', os.path.join(mocks_base_path, 'common', 'indexing', 'geoLocation.py'))
+    sys.modules['common.indexing.geoLocation'] = geolocation_module
     
     # Import customLogging modules
     customLogging_module = import_module_from_path('customLogging', os.path.join(mocks_base_path, 'customLogging', '__init__.py'))

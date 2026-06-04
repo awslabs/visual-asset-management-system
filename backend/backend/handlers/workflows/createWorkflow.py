@@ -6,6 +6,7 @@ import boto3
 import botocore
 from botocore.exceptions import ClientError
 from botocore.config import Config
+from boto3.dynamodb.conditions import Attr
 import json
 import datetime
 import uuid
@@ -101,6 +102,50 @@ def get_existing_workflow(database_id, workflow_id):
     except Exception as e:
         logger.exception(f"Error checking existing workflow for {workflow_id}: {e}")
         raise VAMSGeneralErrorResponse("Error checking workflow existence")
+
+
+def find_conflicting_database(database_id, workflow_id):
+    """Find an active workflow with the same workflowId owned by a different database.
+
+    Workflow IDs must be unique across all databases (including GLOBAL) because
+    downstream records reference a workflow only by its workflowId, without the
+    owning databaseId. Soft-deleted records (databaseId ending in '#deleted') and
+    the record being created/updated (same databaseId) are not treated as conflicts.
+
+    Args:
+        database_id: The databaseId of the incoming request.
+        workflow_id: The workflowId being created or updated.
+
+    Returns:
+        The conflicting databaseId string, or None if the workflowId is available.
+
+    Raises:
+        VAMSGeneralErrorResponse: On database errors.
+    """
+    try:
+        table = dynamodb.Table(workflow_Database)
+        scan_kwargs = {'FilterExpression': Attr('workflowId').eq(workflow_id)}
+        while True:
+            response = table.scan(**scan_kwargs)
+            for item in response.get('Items', []):
+                existing_database_id = item.get('databaseId', '')
+                # Ignore soft-deleted records - their IDs are considered free
+                if '#deleted' in existing_database_id:
+                    continue
+                # The record being created/updated is not a conflict with itself
+                if existing_database_id == database_id:
+                    continue
+                return existing_database_id
+            if 'LastEvaluatedKey' not in response:
+                break
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+        return None
+    except ClientError as e:
+        logger.exception(f"Error checking workflowId uniqueness for {workflow_id}: {e}")
+        raise VAMSGeneralErrorResponse("Error checking workflow uniqueness")
+    except Exception as e:
+        logger.exception(f"Error checking workflowId uniqueness for {workflow_id}: {e}")
+        raise VAMSGeneralErrorResponse("Error checking workflow uniqueness")
 
 
 def verify_state_machine_exists(workflow_arn):
@@ -568,6 +613,20 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         if not workflow_allowed:
             return authorization_error()
+
+        # Enforce cross-database uniqueness of the workflowId
+        conflicting_database_id = find_conflicting_database(body['databaseId'], body['workflowId'])
+        if conflicting_database_id:
+            logger.info(
+                f"workflowId '{body['workflowId']}' already in use by database '{conflicting_database_id}'"
+            )
+            return validation_error(
+                body={
+                    'message': "Workflow ID is already in use by another database. Workflow IDs must be "
+                               "unique across all databases (including GLOBAL). Choose a different ID."
+                },
+                event=event
+            )
 
         result = create_workflow(body, claims_and_roles)
         return success(body=json.loads(result))
