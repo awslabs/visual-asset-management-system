@@ -213,6 +213,24 @@
             "enabled": true
         },
         {
+            "id": "supersplat-viewer",
+            "name": "SuperSplat Editor (PlayCanvas)",
+            "description": "View and edit 3D Gaussian Splats (.lcc, .ply, .sog, .splat) with the full PlayCanvas SuperSplat editor UI.",
+            "componentPath": "./viewers/SuperSplatViewerPlugin/SuperSplatViewerComponent",
+            "supportedExtensions": [".lcc", ".ply", ".sog", ".splat"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 1,
+            "dependencies": ["supersplat"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"],
+            "customParameters": {
+                "basePath": "/viewers/supersplat/index.html"
+            },
+            "enabled": true
+        },
+        {
             "id": "gaussian-splat-viewer-playcanvas",
             "name": "Gaussian Splat Viewer (PlayCanvas)",
             "description": "View Gaussian Splat files (.ply, .sog) with 3D visualization using PlayCanvas",
@@ -224,7 +242,7 @@
             "supportedExtensions": [".ply", ".sog"],
             "supportsMultiFile": false,
             "canFullscreen": true,
-            "priority": 2,
+            "priority": 5,
             "dependencies": ["playcanvas"],
             "loadStrategy": "lazy",
             "category": "3d",

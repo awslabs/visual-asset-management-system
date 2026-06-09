@@ -38,6 +38,8 @@ export const VIEWER_COMPONENTS = {
         "PhysnaViewerPlugin/PhysnaViewerComponent",
     "./viewers/ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent":
         "ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent",
+    "./viewers/SuperSplatViewerPlugin/SuperSplatViewerComponent":
+        "SuperSplatViewerPlugin/SuperSplatViewerComponent",
 } as const;
 
 // Dependency manager paths - add new dependency managers here

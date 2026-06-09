@@ -476,7 +476,13 @@ export function generateContentSecurityPolicy(
         `media-src ${mediaSrc.join(" ")}; ` +
         `frame-src ${frameSrc.join(" ")}; ` +
         `object-src 'none'; ` +
-        `frame-ancestors 'none'; font-src ${fontSrc.join(" ")}; ` +
+        // frame-ancestors controls who may embed VAMS pages in a frame. 'self'
+        // permits same-origin framing only, which is required by iframe-embedded
+        // viewers that load a VAMS-hosted document (e.g. the SuperSplat editor under
+        // /viewers/supersplat/). External sites still cannot frame VAMS, so this does
+        // not reintroduce clickjacking exposure. Keep in sync with the X-Frame-Options
+        // SAMEORIGIN setting on the CloudFront ResponseHeadersPolicy.
+        `frame-ancestors 'self'; font-src ${fontSrc.join(" ")}; ` +
         `manifest-src 'self'`;
 
     return csp;

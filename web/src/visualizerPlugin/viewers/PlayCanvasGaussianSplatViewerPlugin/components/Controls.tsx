@@ -54,7 +54,7 @@ const Controls: React.FC<ControlsProps> = ({
     const getSceneBoundingInfo = useCallback(() => {
         if (!splatEntity || !pc) return null;
         try {
-            const aabb = splatEntity.gsplat?.meshInstance?.aabb;
+            const aabb = splatEntity.gsplat?.instance?.meshInstance?.aabb;
             if (!aabb) return null;
             const center = aabb.center;
             const halfExtents = aabb.halfExtents;

@@ -69,7 +69,7 @@ const SplatInfo: React.FC<SplatInfoProps> = ({ app, camera, splatEntity, fileNam
     };
 
     const getBounds = () => {
-        const aabb = splatEntity?.gsplat?.meshInstance?.aabb;
+        const aabb = splatEntity?.gsplat?.instance?.meshInstance?.aabb;
         if (!aabb) return null;
         try {
             const center = aabb.center;

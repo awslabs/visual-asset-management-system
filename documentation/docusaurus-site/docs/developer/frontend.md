@@ -524,7 +524,7 @@ export default MyComponent;
 
 ## Content Security Policy and Inline Scripts
 
-The VAMS web app ships with a Content Security Policy generated at deploy time by `infra/lib/helper/security.ts` and embedded in the static-web nested stack's response headers. The policy is permissive enough to accommodate external viewer plugins whose inline `<script>` blocks we cannot pre-hash, while remaining restrictive elsewhere (`default-src 'none'`, `object-src 'none'`, `frame-ancestors 'none'`, HTTPS upgrades, etc.).
+The VAMS web app ships with a Content Security Policy generated at deploy time by `infra/lib/helper/security.ts` and embedded in the static-web nested stack's response headers. The policy is permissive enough to accommodate external viewer plugins whose inline `<script>` blocks we cannot pre-hash, while remaining restrictive elsewhere (`default-src 'none'`, `object-src 'none'`, `frame-ancestors 'self'` for same-origin framing only, HTTPS upgrades, etc.).
 
 ### `script-src` uses `'unsafe-inline'`
 

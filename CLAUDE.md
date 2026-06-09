@@ -519,7 +519,7 @@ For user-facing documentation:
 | Custom apiClient         | Fetch-based API client with auto auth headers                             |
 | HashRouter               | Client-side routing                                                       |
 | TypeScript               | All source `.tsx`/`.ts` (only `__mocks__/*.js` remain as JS)              |
-| Viewer plugins (18)      | Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, IFC/BIM, etc. |
+| Viewer plugins           | Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, IFC/BIM, etc. |
 
 ### **Backend (`backend/`)**
 

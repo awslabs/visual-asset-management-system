@@ -300,16 +300,21 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | ----------------- | --------------------------------------------------------------- |
 | `base-uri`        | `'none'`                                                        |
 | `default-src`     | `'none'`                                                        |
-| `script-src`      | `'self'`, `'unsafe-hashes'`, SHA-256 hashes for inline scripts  |
+| `script-src`      | `'self'`, `'unsafe-hashes'`, `'unsafe-inline'`                  |
 | `style-src`       | `'self'`, `'unsafe-inline'`                                     |
 | `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, Amazon S3 endpoint |
 | `worker-src`      | `'self'`, `blob:`, `data:`                                      |
 | `img-src`         | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                  |
 | `media-src`       | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                  |
 | `object-src`      | `'none'`                                                        |
-| `frame-ancestors` | `'none'`                                                        |
+| `frame-src`       | `'self'`, `blob:`                                               |
+| `frame-ancestors` | `'self'`                                                        |
 | `font-src`        | `'self'`                                                        |
 | `manifest-src`    | `'self'`                                                        |
+
+:::note[Framing directives]
+`frame-src` controls which documents VAMS may load into an `<iframe>`; `'self'` plus `blob:` covers same-origin iframe viewers (such as the SuperSplat editor served under `/viewers/supersplat/`) and Blob-URL iframes used by add-on viewers (such as the Physna Viewer). `frame-ancestors 'self'` controls who may embed VAMS pages in a frame — same-origin only, so external sites cannot frame VAMS (clickjacking protection is preserved) while VAMS-hosted iframe viewers still work. The CloudFront distribution sets a matching `X-Frame-Options: SAMEORIGIN` response header as the legacy equivalent of `frame-ancestors`.
+:::
 
 ### Conditional CSP Sources
 
@@ -320,10 +325,11 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | External OAuth IDP               | IDP auth provider URL in `connect-src`                                   |
 | `allowUnsafeEvalFeatures = true` | `'unsafe-eval'` in `script-src` (required for certain 3D viewer plugins) |
 | Amazon Location Service enabled  | Maps endpoint in `connect-src`                                           |
+| Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`                    |
 
 ### Extensible CSP
 
-Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConfig.json`. This JSON file supports adding entries to `connectSrc`, `scriptSrc`, `workerSrc`, `imgSrc`, `mediaSrc`, `fontSrc`, and `styleSrc` arrays.
+Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConfig.json`. This JSON file supports adding entries to `connectSrc`, `scriptSrc`, `workerSrc`, `imgSrc`, `mediaSrc`, `fontSrc`, `styleSrc`, and `frameSrc` arrays.
 
 ## IP Range Restrictions
 

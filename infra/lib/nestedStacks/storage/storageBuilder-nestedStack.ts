@@ -300,7 +300,14 @@ export function storageResourcesBuilder(
                         s3.HttpMethods.POST,
                         s3.HttpMethods.HEAD,
                     ],
-                    exposedHeaders: ["ETag"],
+                    // Expose range/streaming headers for file streaming
+                    exposedHeaders: [
+                        "ETag",
+                        "Accept-Ranges",
+                        "Content-Range",
+                        "Content-Length",
+                        "Content-Encoding",
+                    ],
                 },
             ],
             lifecycleRules: [

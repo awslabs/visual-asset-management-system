@@ -37,6 +37,22 @@ const npmInstall = async () => {
     }
 };
 
+// Best-effort: apply safe (non-breaking) npm audit fixes before building/packaging.
+// Non-fatal — `npm audit fix` exits non-zero when unfixable vulnerabilities remain
+// (those need --force/manual review, which we do NOT apply) and a registry hiccup
+// must not break the viewer install.
+const auditFix = async () => {
+    console.log("Online3DViewer: Running npm audit fix (safe fixes only)...");
+    try {
+        await execSync("npm audit fix", { cwd: npmPackageDir, stdio: "inherit" });
+        console.log("Online3DViewer: npm audit fix complete");
+    } catch (err) {
+        console.warn(
+            "Online3DViewer: npm audit fix reported unresolved/unfixable vulnerabilities (continuing)."
+        );
+    }
+};
+
 // Function to copy files to public directory for dynamic loading
 const copyFiles = async () => {
     try {
@@ -97,6 +113,7 @@ const main = async () => {
         }
 
         await npmInstall();
+        await auditFix();
         await copyFiles();
 
         console.log("=".repeat(60));

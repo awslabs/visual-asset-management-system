@@ -386,9 +386,19 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                 // Create entity with Gaussian Splat component
                                 const entity = new pc.Entity("GaussianSplat");
 
-                                // Add GSplat component
+                                // Add GSplat component.
+                                // unified:false is required for PlayCanvas >= 2.19.0. As of
+                                // 2.19.0 GSplatComponent#unified defaults to true, which renders
+                                // the splat via an internal _placement and leaves
+                                // entity.gsplat.instance (and .material) null. This viewer's
+                                // control panels (splat scale, splat count/bounds) read
+                                // entity.gsplat.instance.*, so the legacy non-unified path is
+                                // needed to keep them working. NOTE: unified=false is deprecated
+                                // upstream and slated for removal; when it goes, migrate the
+                                // panels to the unified API (_placement / asset.resource) instead.
                                 entity.addComponent("gsplat", {
                                     asset: asset,
+                                    unified: false,
                                 });
 
                                 // Add to scene
@@ -411,7 +421,10 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                 // Auto-fit camera to the actual splat bounding box.
                                 // We wait one frame so the gsplat AABB is populated.
                                 app.once("update", () => {
-                                    const aabb = entity.gsplat?.meshInstance?.aabb;
+                                    // The AABB lives on the GSplatInstance's meshInstance, not
+                                    // on the gsplat component itself (the component has no
+                                    // meshInstance getter in any PlayCanvas version).
+                                    const aabb = entity.gsplat?.instance?.meshInstance?.aabb;
                                     if (aabb) {
                                         const center = aabb.center;
                                         const radius = aabb.halfExtents.length();
