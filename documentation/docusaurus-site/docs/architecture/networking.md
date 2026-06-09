@@ -76,6 +76,7 @@ In this mode:
 -   The ALB can be deployed in public or private subnets (`useAlb.usePublicSubnet`)
 -   An optional AWS WAF Web ACL (regional) protects the ALB
 -   VPC is required (`useGlobalVpc.enabled = true`)
+-   A dedicated Amazon S3 interface VPC endpoint forwards static web file requests from the ALB to the Amazon S3 web-app bucket (see [ALB Amazon S3 interface endpoint](#vpc-endpoints))
 
 ### VPC-Isolated Deployment (GovCloud)
 
@@ -208,33 +209,27 @@ These interface endpoints are always created when VPC endpoints are enabled:
 
 ### Conditional Interface Endpoints
 
-These endpoints are created based on the deployment configuration:
+These non-pipeline endpoints are created based on the deployment configuration:
 
-| Endpoint               | Condition                                 | Purpose                  |
-| ---------------------- | ----------------------------------------- | ------------------------ |
-| AWS KMS                | `useKmsCmkEncryption.enabled`             | KMS key operations       |
-| AWS KMS (FIPS)         | `useKmsCmkEncryption.enabled` + `useFips` | FIPS-compliant KMS       |
-| AWS Batch              | Any pipeline enabled                      | Pipeline job submission  |
-| Amazon ECR API         | Any pipeline enabled                      | Container image registry |
-| Amazon ECR Docker      | Any pipeline enabled                      | Container image pulls    |
-| Amazon EFS             | NVIDIA Cosmos enabled                     | Model cache file system  |
-| Amazon ECS             | Pipeline with compute needs               | Container orchestration  |
-| Amazon ECS Agent       | Isaac Lab Training                        | ECS agent communication  |
-| Amazon ECS Telemetry   | Isaac Lab Training                        | ECS telemetry            |
-| Amazon Bedrock Runtime | GenAI Metadata + all Lambdas in VPC       | AI model invocation      |
-| Amazon Rekognition     | GenAI Metadata + all Lambdas in VPC       | Image analysis           |
+| Endpoint            | Condition                                      | Purpose                           |
+| ------------------- | ---------------------------------------------- | --------------------------------- |
+| AWS KMS             | `useKmsCmkEncryption.enabled`                  | KMS key operations                |
+| AWS KMS (FIPS)      | `useKmsCmkEncryption.enabled` + `useFips`      | FIPS-compliant KMS                |
+| Amazon S3 (ALB web) | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint` | ALB-to-S3 static web file serving |
 
-### Pipeline-Required Endpoints
+:::info[ALB Amazon S3 interface endpoint]
+In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3 **interface** VPC endpoint (separate from the S3 **gateway** endpoint above) so the ALB can forward requests for the React web application to the Amazon S3 web-app bucket. This endpoint is created by the static web construct (not the VPC builder) and differs from the common interface endpoints in several ways:
 
-The following endpoints are created when any of these pipelines are enabled: Point Cloud Potree Viewer, 3D Preview Thumbnail, GenAI Metadata Labeling, RapidPipeline (ECS/EKS), ModelOps, Splat Toolbox, Isaac Lab Training, or NVIDIA Cosmos (Predict, Reason, Transfer).
+-   It is gated by `useAlb.addAlbS3SpecialVpcEndpoint` (default `true`) and is created **independently of** `useGlobalVpc.addVpcEndpoints` — it exists whenever ALB mode is used, because the ALB listener/target group depends on it. Set `addAlbS3SpecialVpcEndpoint` to `false` only when the endpoint already exists in your VPC (for example, when it must be created manually outside the stack).
+-   It is created with `privateDnsEnabled: false` and placed in the ALB (web app) subnets rather than the isolated subnets.
+-   Its endpoint policy restricts access to the specific web-app Amazon S3 bucket (`s3:Get*`, `s3:List*`), and a Lambda-backed custom resource registers the endpoint's network interface IPs as ALB targets.
+    :::
 
--   AWS Batch
--   Amazon ECR API
--   Amazon ECR Docker
+### Pipeline Interface Endpoints
 
-:::info[ECS Endpoint Consolidation]
-Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled. VAMS consolidates ECS endpoint subnets across pipeline types, with private subnets taking priority over isolated subnets when both are needed.
-:::
+VPC-requiring pipelines (AWS Batch Fargate and GPU pipelines) create their own interface endpoints — a shared set of **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** whenever any AWS Batch pipeline is enabled, plus additional per-pipeline endpoints (Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry, Amazon EFS, Amazon Bedrock Runtime, Amazon Rekognition) depending on which pipelines are enabled.
+
+The authoritative per-pipeline endpoint matrix lives with the pipeline documentation. See [Pipeline System Overview — VPC and Network Requirements](../pipelines/overview.md#vpc-and-network-requirements) for the full chart of which interface endpoints each pipeline requires.
 
 ## Security Groups
 

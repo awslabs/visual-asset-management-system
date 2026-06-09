@@ -126,12 +126,34 @@ When `autoRegisterWithVAMS` is enabled, the CDK deployment creates a custom reso
 }
 ```
 
-### VPC Requirements
+### VPC and Network Requirements
 
-Pipelines that use AWS Batch (Fargate or GPU) require a VPC. When any VPC-requiring pipeline is enabled, VAMS automatically enables the global VPC configuration (`app.useGlobalVpc.enabled`). The VPC builder creates the necessary subnets, security groups, and VPC endpoints (Amazon ECR, AWS Batch, Amazon ECR Docker) for pipeline operation.
+Pipelines that use AWS Batch (Fargate or GPU) require a VPC. When any VPC-requiring pipeline is enabled, VAMS automatically enables the global VPC configuration (`app.useGlobalVpc.enabled`) and the VPC builder provisions the subnets, security groups, and VPC interface endpoints that each enabled pipeline needs.
+
+This chart is the single source of truth for per-pipeline networking requirements. The [Network Architecture](../architecture/networking.md) page references it rather than duplicating the list, so when a pipeline is added or changed, only this table needs updating.
+
+All AWS Batch pipelines share a common set of interface endpoints: **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** (created whenever any AWS Batch pipeline is enabled). The **Additional VPC Interface Endpoints** column lists endpoints required _beyond_ that shared set.
+
+| Pipeline                                | VPC Required | Compute Target      | Additional VPC Interface Endpoints                 |
+| :-------------------------------------- | :----------- | :------------------ | :------------------------------------------------- |
+| 3D Basic Conversion                     | No           | AWS Lambda          | — (runs outside VPC)                               |
+| CAD/Mesh Metadata Extraction            | No           | AWS Lambda          | — (runs outside VPC)                               |
+| Potree Point Cloud Viewer               | Yes          | AWS Batch (Fargate) | — (shared Batch/ECR endpoints only)                |
+| 3D Preview Thumbnail                    | Yes          | AWS Batch (Fargate) | — (shared Batch/ECR endpoints only)                |
+| GenAI Metadata Labeling                 | Yes          | AWS Batch (Fargate) | Amazon Bedrock Runtime, Amazon Rekognition¹        |
+| Gaussian Splatting                      | Yes          | AWS Batch (GPU)     | Amazon ECS                                         |
+| NVIDIA Cosmos (Predict/Reason/Transfer) | Yes          | AWS Batch (GPU)     | Amazon EFS, Amazon ECS                             |
+| NVIDIA Gr00t Fine-Tuning                | Yes          | AWS Batch (GPU)     | Amazon EFS, Amazon ECS                             |
+| NVIDIA Isaac Lab Training               | Yes          | AWS Batch (GPU)     | Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry |
+
+¹ Amazon Bedrock Runtime and Amazon Rekognition endpoints are created only when GenAI Metadata Labeling is enabled **and** all Lambda functions run in the VPC (`useGlobalVpc.useForAllLambdas`).
+
+:::info[Endpoint placement and ECS consolidation]
+Pipeline interface endpoints are placed in the isolated subnets, except the Amazon ECS endpoint, which is placed in private subnets for GPU/marketplace pipelines (Gaussian Splatting, NVIDIA Cosmos, NVIDIA Gr00t) and in isolated subnets for Isaac Lab Training. Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled, so VAMS consolidates ECS endpoint subnets across pipeline types — private subnets take priority over isolated subnets when both are needed. Amazon ECS Agent and Amazon ECS Telemetry are distinct services from Amazon ECS and do not conflict with that single ECS endpoint.
+:::
 
 :::warning[VPC Endpoint Costs]
-Enabling VPC-required pipelines creates several VPC Interface Endpoints, each of which incurs hourly charges. Review the [Configuration Guide](../deployment/configuration-reference.md) for details on VPC endpoint management.
+Enabling VPC-required pipelines creates several VPC interface endpoints, each of which incurs hourly charges. Review the [Configuration Guide](../deployment/configuration-reference.md) for details on VPC endpoint management.
 :::
 
 ## Pipeline S3 Output Paths
