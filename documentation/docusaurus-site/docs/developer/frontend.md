@@ -51,6 +51,14 @@ web/src/
   layout/Navigation.tsx   # Left sidebar navigation
   styles/theme.css        # CSS custom properties for dark/light theme
   utils/authTokenUtils.ts # Dual-mode token utilities
+
+  common/constants/       # Shared constants
+    fileFormats.ts        # Preview file formats and .previewFile. pattern
+    featuresEnabled.ts    # Feature flag name constants
+    actions.ts            # Action name constants
+    permissionConstraintTypes.ts  # Permission constraint type constants
+  constants/
+    uploadLimits.ts       # Upload limits (part sizes, file counts, preview size)
 ```
 
 ## Critical Rules
@@ -445,6 +453,36 @@ description={`Please provide a reason for archiving this ${Synonyms.asset}.`}
 // WRONG -- do not use Synonyms in API body values
 const body = { entityName: "Asset" }; // Keep hardcoded for API
 ```
+
+## Shared Constants
+
+Shared literal values (file format lists, file-name patterns, upload limits) are defined once in dedicated constants files. Always import these constants instead of redefining the literal values in components or pages, so all usages can be found and changed in one place.
+
+| File                                  | Defines                                                                   |
+| ------------------------------------- | ------------------------------------------------------------------------- |
+| `common/constants/fileFormats.ts`     | `previewFileFormats` (allowed preview extensions), `PREVIEW_FILE_PATTERN` |
+| `constants/uploadLimits.ts`           | Upload part sizes, file counts, retry attempts, `MAX_PREVIEW_FILE_SIZE`   |
+| `common/constants/featuresEnabled.ts` | Feature flag name constants                                               |
+
+### Preview File Constants
+
+`common/constants/fileFormats.ts` is the single source of truth for the file-level preview file pattern and the allowed preview image extensions:
+
+```typescript
+import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
+
+// Check whether a file is a preview file ({baseFile}.previewFile.{ext})
+const isPreview = fileName.includes(PREVIEW_FILE_PATTERN);
+
+// Validate a preview file extension
+const isAllowed = previewFileFormats.includes(fileExt);
+```
+
+`constants/uploadLimits.ts` re-exports `previewFileFormats` as `ALLOWED_PREVIEW_EXTENSIONS` alongside the upload limit values, so upload code can import everything from one place.
+
+:::note[Backend Mirror]
+The preview file pattern and allowed preview extensions are mirrored in the backend at `backend/backend/common/s3PathPatterns.py` (`PREVIEW_FILE_PATTERN`, `ALLOWED_PREVIEW_FILE_EXTENSIONS`). Keep the two in sync when changing them.
+:::
 
 ## Adding New Pages and Components
 

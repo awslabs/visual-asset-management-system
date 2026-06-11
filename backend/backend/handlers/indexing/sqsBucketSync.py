@@ -33,6 +33,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_DIRECT,
     normalize_history_file_path,
 )
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
 
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
@@ -43,8 +44,6 @@ s3_resource = boto3.resource('s3')
 lambda_client = boto3.client('lambda')
 dynamodb_client = boto3.client('dynamodb')
 logger = safeLogger(service_name="sqsBucketSync")
-
-reservedPrefixFolders = ['temp-upload', 'temp-uploads', 'preview','previews', 'pipeline', 'pipelines', 'workspace', 'workspaces']
 
 # Environment variables
 try:
@@ -1398,7 +1397,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             return False, False, f"Could not extract asset ID from {object_key}"
         
         # 1.c Check if asset ID is a special folder to skip
-        if asset_id in reservedPrefixFolders:
+        if asset_id in RESERVED_S3_PREFIX_FOLDERS:
             logger.info(f"Asset ID {asset_id} is a special folder, skipping")
             return False, False, f"Asset ID {asset_id} is a special folder"
         
@@ -1808,7 +1807,7 @@ def lambda_handler_deleted(event, context):
                         continue
                     
                     # Skip special folders
-                    if asset_id in reservedPrefixFolders:
+                    if asset_id in RESERVED_S3_PREFIX_FOLDERS:
                         logger.info(f"Asset ID {asset_id} is a special folder, skipping")
                         continue
                     

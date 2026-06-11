@@ -41,7 +41,8 @@ import {
 } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import DatabaseSelector from "../../components/selectors/DatabaseSelector";
-import { previewFileFormats } from "../../common/constants/fileFormats";
+import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
+import { MAX_PREVIEW_FILE_SIZE } from "../../constants/uploadLimits";
 import { Metadata } from "../../components/single/Metadata";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import { validateNonZeroLengthTextAsYouType, validateRequiredTagTypeSelected } from "./validations";
@@ -870,9 +871,6 @@ const getFilesFromFileHandles = async (fileHandles: any[]) => {
     return fileUploadTableItems;
 };
 
-// Maximum preview file size (5MB)
-const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
-
 const AssetFileInfo = ({
     setFileUploadTableItems,
     setValid,
@@ -893,7 +891,7 @@ const AssetFileInfo = ({
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
         if (!assetDetailState.Asset) return false;
-        return assetDetailState.Asset.some((item) => item.name.includes(".previewFile."));
+        return assetDetailState.Asset.some((item) => item.name.includes(PREVIEW_FILE_PATTERN));
     }, [assetDetailState.Asset]);
 
     // Validate files whenever Asset files or restrictions change
@@ -980,8 +978,8 @@ const AssetFileInfo = ({
                                 </div>
                                 <div style={{ fontSize: "0.9em", marginTop: "8px" }}>
                                     <em>
-                                        Note: Preview files (containing .previewFile. in the
-                                        filename) are exempt from these restrictions.
+                                        Note: Preview files (containing {PREVIEW_FILE_PATTERN} in
+                                        the filename) are exempt from these restrictions.
                                     </em>
                                 </div>
                             </SpaceBetween>
@@ -1014,10 +1012,10 @@ const AssetFileInfo = ({
 
                 <Alert header="Preview File Information" type="info">
                     <p>
-                        Files with <strong>.previewFile.</strong> in the filename will be ingested
-                        as preview files for their associated files. For example,{" "}
-                        <code>model.gltf.previewFile.png</code> will be used as a preview for{" "}
-                        <code>model.gltf</code>.
+                        Files with <strong>{PREVIEW_FILE_PATTERN}</strong> in the filename will be
+                        ingested as preview files for their associated files. For example,{" "}
+                        <code>model.gltf{PREVIEW_FILE_PATTERN}png</code> will be used as a preview
+                        for <code>model.gltf</code>.
                     </p>
                     <p>
                         <strong>Important notes:</strong>
@@ -1310,14 +1308,15 @@ const AssetUploadReview = ({
                             header: "Type",
                             cell: (item: FileUploadTableItem) => {
                                 if (item.index === 99999) return "Preview File";
-                                if (item.name.includes(".previewFile.")) return "Preview File";
+                                if (item.name.includes(PREVIEW_FILE_PATTERN)) return "Preview File";
                                 return `${Synonyms.Asset} File`;
                             },
                             sortingField: "type",
                             sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) => {
                                 const getType = (item: FileUploadTableItem) => {
                                     if (item.index === 99999) return "Preview File";
-                                    if (item.name.includes(".previewFile.")) return "Preview File";
+                                    if (item.name.includes(PREVIEW_FILE_PATTERN))
+                                        return "Preview File";
                                     return `${Synonyms.Asset} File`;
                                 };
                                 return getType(a).localeCompare(getType(b));

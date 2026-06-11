@@ -23,6 +23,10 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_USER_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_UPLOAD,
 )
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+)
 from models.common import VAMSGeneralErrorResponse
 
 # Configure AWS clients with retry configuration
@@ -40,10 +44,8 @@ lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="SqsUploadFileLarge")
 
 # Constants
-TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'
-PREVIEW_PREFIX = 'previews/'
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
-allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Load environment variables
 try:
@@ -214,7 +216,7 @@ def is_preview_file(file_path: str) -> bool:
     Returns:
         True if the file is a preview file, False otherwise
     """
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
 def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str,
                    database_id: str, asset_id: str, user_id: str = None) -> bool:
@@ -275,12 +277,12 @@ def validate_preview_file_extension(file_path: str) -> bool:
         True if the file has an allowed extension, False otherwise
     """
     import os
-    
+
     # Extract the extension after .previewFile.
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1].lower()
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1].lower()
         return extension in allowed_preview_extensions
-    
+
     # For direct assetPreview uploads, check the file extension
     file_extension = os.path.splitext(file_path)[1].lower()
     return file_extension in allowed_preview_extensions

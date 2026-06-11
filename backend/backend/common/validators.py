@@ -4,6 +4,8 @@
 import re
 import json
 
+from common.s3PathPatterns import PIPELINES_PREFIX, PIPELINE_OUTPUT_PREFIX
+
 #Define patterns as global constants
 id_pattern = r'^[-_a-zA-Z0-9]{3,63}$'
 uuid_pattern = r'^[0-9a-fA-F]{8}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{12}$'
@@ -134,26 +136,26 @@ def validate_asset_path_pipeline(name, value):
         return (False, name + " is invalid. Cannot contain consecutive forward slashes (//).")
     
     # Check for the required structure and minimum lengths
-    if not value.startswith('pipelines/'):
-        return (False, name + " is invalid. Must start with 'pipelines/'.")
-    
+    if not value.startswith(PIPELINES_PREFIX):
+        return (False, name + f" is invalid. Must start with '{PIPELINES_PREFIX}'.")
+
     # Split the path into sections
-    remaining = value[len('pipelines/'):]
-    outputs_parts = remaining.split('/output/', 1)
-    
+    remaining = value[len(PIPELINES_PREFIX):]
+    outputs_parts = remaining.split(PIPELINE_OUTPUT_PREFIX, 1)
+
     if len(outputs_parts) != 2:
-        return (False, name + " is invalid. Must contain '/output/' exactly once.")
-    
+        return (False, name + f" is invalid. Must contain '{PIPELINE_OUTPUT_PREFIX}' exactly once.")
+
     middle_section = outputs_parts[0]
     end_section = outputs_parts[1]
-    
+
     # Check middle section has at least one forward slash and is at least 4 characters
     if '/' not in middle_section or len(middle_section) < 4:
-        return (False, name + " is invalid. Section between 'pipelines/' and '/output/' must contain at least one forward slash and be at least 4 characters long.")
+        return (False, name + f" is invalid. Section between '{PIPELINES_PREFIX}' and '{PIPELINE_OUTPUT_PREFIX}' must contain at least one forward slash and be at least 4 characters long.")
     
     # Check end section is at least 2 characters (not counting the trailing slash)
     if not end_section.endswith('/') or len(end_section.rstrip('/')) < 2:
-        return (False, name + " is invalid. Section after '/output/' must be at least 2 characters long and end with a forward slash.")
+        return (False, name + f" is invalid. Section after '{PIPELINE_OUTPUT_PREFIX}' must be at least 2 characters long and end with a forward slash.")
     
     return (True, '')
 

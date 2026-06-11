@@ -70,6 +70,8 @@ from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
 )
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
+from common.dynamoDbMetadataKeys import REINDEX_METADATA_RECORD_KEY
 from common.validators import validate
 
 # Configure logging
@@ -747,7 +749,7 @@ class ReindexUtility:
                     composite_key = f"{database_id}:{asset_id}:/"
                     
                     item = {
-                        'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                        'metadataKey': {'S': REINDEX_METADATA_RECORD_KEY},
                         'databaseId:assetId:filePath': {'S': composite_key},
                         'metadataValue': {'S': timestamp},
                         'metadataValueType': {'S': 'string'}
@@ -791,7 +793,7 @@ class ReindexUtility:
                     items_to_delete.append({
                         'DeleteRequest': {
                             'Key': {
-                                'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                                'metadataKey': {'S': REINDEX_METADATA_RECORD_KEY},
                                 'databaseId:assetId:filePath': {'S': composite_key}
                             }
                         }
@@ -889,13 +891,13 @@ class ReindexUtility:
     ) -> Dict:
         """Process all objects in a bucket and update AssetsMetadata table."""
         # Excluded patterns and prefixes from fileIndexer
-        excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
+        excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
         # '.previewFile.' files must be excluded here. The reindexer "touches" the
         # metadata table to trigger indexing, which fires the DynamoDB metadata-stream
         # path in fileIndexer (handle_metadata_stream). That path does NOT perform the
         # base-file rewrite that the S3-event path does, so touching a '.previewFile.'
         # record would index the preview file as its own standalone document. Skip them.
-        excluded_patterns = ['.previewFile.']
+        excluded_patterns = [PREVIEW_FILE_PATTERN]
         
         results = {
             'success': 0,
@@ -1094,7 +1096,7 @@ class ReindexUtility:
                     composite_key = f"{database_id}:{original_asset_id}:{relative_path}"
                     
                     item = {
-                        'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                        'metadataKey': {'S': REINDEX_METADATA_RECORD_KEY},
                         'databaseId:assetId:filePath': {'S': composite_key},
                         'metadataValue': {'S': timestamp},
                         'metadataValueType': {'S': 'string'}
@@ -1141,7 +1143,7 @@ class ReindexUtility:
                     items_to_delete.append({
                         'DeleteRequest': {
                             'Key': {
-                                'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                                'metadataKey': {'S': REINDEX_METADATA_RECORD_KEY},
                                 'databaseId:assetId:filePath': {'S': composite_key}
                             }
                         }

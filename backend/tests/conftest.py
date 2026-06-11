@@ -79,6 +79,24 @@ _s3mk_spec = _s3mk_importlib_util.spec_from_file_location(
 _s3mk_module = _s3mk_importlib_util.module_from_spec(_s3mk_spec)
 _s3mk_spec.loader.exec_module(_s3mk_module)
 sys.modules['common.s3MetadataKeys'] = _s3mk_module
+# s3PathPatterns is pure constants (no AWS deps), so load the REAL module by path
+# rather than a MagicMock (same approach as s3MetadataKeys above).
+_s3pp_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.s3PathPatterns',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 's3PathPatterns.py')
+)
+_s3pp_module = _s3mk_importlib_util.module_from_spec(_s3pp_spec)
+_s3pp_spec.loader.exec_module(_s3pp_module)
+sys.modules['common.s3PathPatterns'] = _s3pp_module
+# dynamoDbMetadataKeys is pure constants (no AWS deps), so load the REAL module
+# by path rather than a MagicMock (same approach as s3MetadataKeys above).
+_ddbmk_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.dynamoDbMetadataKeys',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'dynamoDbMetadataKeys.py')
+)
+_ddbmk_module = _s3mk_importlib_util.module_from_spec(_ddbmk_spec)
+_ddbmk_spec.loader.exec_module(_ddbmk_module)
+sys.modules['common.dynamoDbMetadataKeys'] = _ddbmk_module
 # s3 is a simple validation module with no AWS side effects at import, but it is not
 # in the root conftest mock layer. Load the mock s3 module by path so tests that import
 # handlers which depend on common.s3 can collect cleanly.

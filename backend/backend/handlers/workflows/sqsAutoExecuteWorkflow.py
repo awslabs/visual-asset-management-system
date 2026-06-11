@@ -19,6 +19,7 @@ from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
 )
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from models.common import APIGatewayProxyResponseV2, internal_error, success
 
 # Configure AWS clients with retry configuration
@@ -34,8 +35,8 @@ lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="SqsAutoExecuteWorkflow")
 
 # Excluded patterns or prefixes from file paths to exclude
-excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
-excluded_patterns = ['.previewFile.']
+excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
+excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
 
 # Load environment variables with error handling
 try:

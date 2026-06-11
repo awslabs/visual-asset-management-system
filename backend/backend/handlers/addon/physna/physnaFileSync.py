@@ -29,6 +29,7 @@ from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
 )
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 
 from . import physnaCommon
 from .physnaCommon import (
@@ -57,17 +58,8 @@ from .physnaCommon import (
 logger = safeLogger(service_name="PhysnaFileSync")
 
 # Reuse the same skip set as Garnet
-_EXCLUDED_PREFIXES = (
-    "pipeline",
-    "pipelines",
-    "preview",
-    "previews",
-    "temp-upload",
-    "temp-uploads",
-    "workspace",
-    "workspaces",
-)
-_EXCLUDED_PATTERNS = (".previewFile.",)
+_EXCLUDED_PREFIXES = RESERVED_S3_PREFIX_FOLDERS
+_EXCLUDED_PATTERNS = EXCLUDED_FILE_PATH_PATTERNS
 
 _s3 = boto3.client("s3", config=physnaCommon._retry_config)
 

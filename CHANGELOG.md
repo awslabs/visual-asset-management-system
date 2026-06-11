@@ -59,6 +59,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
+-   Backend and web frontend work to breakout reserved keywords or variables like S3 prefixes or extension names to common constants location files
 -   **Web** All plugin viewers with at custom install that use a dynamic NPM package install will now perform a `npm audit fix` before building the packages to implement easy real-time security patches
 -   Pipelines and Workflow backend logic now checks to make sure IDs are unique across all databases (and GLOBAL), this help prevent overlap of IDs for old references that don't include the pipeline/workflow database Id as a secondary index
 -   **CDK** Added a second backend API nested stack (`ApiBuilder2NestedStack`) and moved the self-contained Tags and Tag Types API functions and routes into it. `ApiBuilderNestedStack` was approaching the CloudFormation per-stack resource limit; the move frees headroom (primary stack ~186 resources, secondary ~17) and new API endpoints can be added to the secondary stack going forward. Only domains whose Lambda functions are self-contained — no cross-stack function references and no IAM role ARNs persisted into long-lived resources — are moved; the pipeline and workflow functions intentionally stay in `ApiBuilder` because the workflow IAM role's path-derived name is baked into existing Step Functions state machines.

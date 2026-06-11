@@ -24,6 +24,14 @@ from common.stepfunctions_builder import (
     update_state_machine,
     get_task_builder
 )
+from common.s3PathPatterns import (
+    PIPELINES_PREFIX,
+    AUXILIARY_PREVIEW_PREFIX,
+    PIPELINE_OUTPUT_PREFIX,
+    PIPELINE_OUTPUT_FILES_PREFIX,
+    PIPELINE_OUTPUT_PREVIEWS_PREFIX,
+    PIPELINE_OUTPUT_METADATA_PREFIX,
+)
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -206,17 +214,19 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
     first_pipeline_name = pipelines[0]['name']
     first_job_name = job_names[0]
 
-    global_output_s3_asset_files_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/files/', $.bucketAsset, $$.Execution.Name)"
-    global_output_s3_asset_preview_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/previews/', $.bucketAsset, $$.Execution.Name)"
-    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/metadata/', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_files_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_preview_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}', $.bucketAsset, $$.Execution.Name)"
 
     # Build list of pipeline states
     states = []
 
     for i, pipeline in enumerate(pipelines):
-        assetAuxiliaryAssetSubFolderName = "pipelines"
+        # Auxiliary-bucket subfolder: previewFile pipelines write to the singular
+        # 'preview/' subfolder; standard pipelines write to 'pipelines/'.
+        assetAuxiliaryAssetSubFolderName = PIPELINES_PREFIX.rstrip('/')
         if pipeline.get('pipelineType', 'standardFile') == 'previewFile':
-            assetAuxiliaryAssetSubFolderName = "preview"
+            assetAuxiliaryAssetSubFolderName = AUXILIARY_PREVIEW_PREFIX.rstrip('/')
 
         inputOutput_s3_assetAuxiliary_files_uri = f"States.Format('s3://{{}}/{{}}/{assetAuxiliaryAssetSubFolderName}/{pipeline['name']}/', $.bucketAssetAuxiliary, $.inputAssetFileKey)"
 
@@ -282,9 +292,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
             "workflowDatabaseId.$": "$.workflowDatabaseId",
             "workflowId.$": "$.workflowId",
             "assetLocationKey.$": "$.inputAssetLocationKey",
-            "filesPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/files/', $$.Execution.Name)",
-            "metadataPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/metadata/', $$.Execution.Name)",
-            "previewPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/previews/', $$.Execution.Name)",
+            "filesPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $$.Execution.Name)",
+            "metadataPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}', $$.Execution.Name)",
+            "previewPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $$.Execution.Name)",
             "description": f'Output from {last_job_name}',
             "executionId.$": "$$.Execution.Name",
             "pipeline": last_pipeline['name'],

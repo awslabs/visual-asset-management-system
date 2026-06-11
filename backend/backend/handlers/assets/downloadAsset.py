@@ -41,9 +41,6 @@ s3 = boto3.client('s3', region_name=region, config=s3_config)
 dynamodb = boto3.resource('dynamodb')
 logger = safeLogger(service_name="DownloadAsset")
 
-# Constants
-PREVIEW_PREFIX = 'previews/'
-
 # Load environment variables
 try:
     s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]

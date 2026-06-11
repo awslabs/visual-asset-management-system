@@ -4,6 +4,7 @@
  */
 
 import { FileUploadTableItem } from "../pages/AssetUpload/FileUploadTable";
+import { PREVIEW_FILE_PATTERN } from "../common/constants/fileFormats";
 import Synonyms from "../synonyms";
 
 /**
@@ -43,7 +44,7 @@ export function getFileExtension(fileName: string): string {
  * Check if a file is a preview file (contains .previewFile. in the name)
  */
 export function isPreviewFile(fileName: string): boolean {
-    return fileName.includes(".previewFile.");
+    return fileName.includes(PREVIEW_FILE_PATTERN);
 }
 
 /**
@@ -155,8 +156,7 @@ export function formatValidationErrors(validationResult: ValidationResult): stri
     });
 
     message += `\nAllowed extensions: ${allowedExtensions?.join(", ") || "none"}`;
-    message +=
-        "\n\nNote: Preview files (containing .previewFile. in the filename) are exempt from these restrictions.";
+    message += `\n\nNote: Preview files (containing ${PREVIEW_FILE_PATTERN} in the filename) are exempt from these restrictions.`;
 
     return message;
 }

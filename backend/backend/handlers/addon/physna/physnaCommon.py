@@ -12,6 +12,8 @@ loader) are added in later tasks.
 import os
 from typing import Any, Dict, Optional
 
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record
+
 
 # ---------------------------------------------------------------------------
 # VAMS-reserved metadata keys written onto every synced Physna asset.
@@ -975,7 +977,7 @@ def get_file_metadata(
     for item in meta_response.get("Items", []):
         key = item.get("metadataKey")
         value = item.get("metadataValue")
-        if not key or not value or key == "REINDEX_METADATA_RECORD":
+        if not key or not value or is_excluded_metadata_record(key):
             continue
         metadata[key] = {
             "value": value,
@@ -1010,7 +1012,7 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Dict[str, s
     for item in response.get("Items", []):
         key = item.get("metadataKey")
         value = item.get("metadataValue")
-        if not key or not value or key == "REINDEX_METADATA_RECORD":
+        if not key or not value or is_excluded_metadata_record(key):
             continue
         metadata[key] = {
             "value": value,

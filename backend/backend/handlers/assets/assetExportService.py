@@ -17,6 +17,8 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -85,7 +87,7 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
 # Constants
 COMPRESSION_THRESHOLD = 102400  # 100KB
-ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 #######################
 # Utility Functions
@@ -625,16 +627,16 @@ def get_asset_link_metadata(assetLinkId: str) -> Dict:
 
 def is_preview_file(file_path: str) -> bool:
     """Determine if a file is a preview file based on its path"""
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
 def get_base_file_for_preview(preview_file_path: str) -> str:
     """Get the base file path for a preview file"""
-    return preview_file_path.split('.previewFile.')[0]
+    return preview_file_path.split(PREVIEW_FILE_PATTERN)[0]
 
 def is_allowed_preview_extension(file_path: str) -> bool:
     """Check if a preview file has an allowed extension"""
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1]
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1]
         return extension.lower() in ALLOWED_PREVIEW_EXTENSIONS
     return False
 
@@ -748,7 +750,7 @@ def process_asset_batch(
             if request_model.includeAssetMetadata:
                 raw_metadata = get_asset_metadata(asset_info['databaseId'], asset_info['assetId'])
                 for key, value in raw_metadata.items():
-                    if not key.startswith('_'):
+                    if not key.startswith(HIDDEN_FIELD_PREFIX):
                         asset_metadata[key] = {
                             'valueType': 'string',
                             'value': str(value)
@@ -815,7 +817,7 @@ def process_asset_batch(
                     )
                     if raw_file_metadata:
                         for key, value in raw_file_metadata.items():
-                            if not key.startswith('_'):
+                            if not key.startswith(HIDDEN_FIELD_PREFIX):
                                 file_metadata[key] = {
                                     'valueType': 'string',
                                     'value': str(value)
@@ -828,7 +830,7 @@ def process_asset_batch(
                     )
                     if raw_file_attributes:
                         for key, value in raw_file_attributes.items():
-                            if not key.startswith('_'):
+                            if not key.startswith(HIDDEN_FIELD_PREFIX):
                                 file_attributes[key] = {
                                     'valueType': 'string',
                                     'value': str(value)

@@ -34,6 +34,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_FILE_REVERT,
     normalize_history_file_path,
 )
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.authz import CasbinEnforcer
@@ -90,7 +91,7 @@ file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribu
 asset_file_version_history_table = dynamodb.Table(asset_file_version_history_table_name) if asset_file_version_history_table_name else None
 
 # Define allowed extensions
-allowed_previewFile_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+allowed_previewFile_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Change-provenance columns surfaced on file version-history entries.
 CHANGE_HISTORY_COLUMNS = (
@@ -1448,7 +1449,7 @@ def is_preview_file(file_path: str) -> bool:
         True if the file is a preview file, False otherwise
     """
     # Check if the file path contains the preview file pattern
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
 def get_base_file_for_preview(preview_file_path: str) -> str:
     """Get the base file path for a preview file
@@ -1460,7 +1461,7 @@ def get_base_file_for_preview(preview_file_path: str) -> str:
         The base file path
     """
     # Remove the .previewFile.X suffix
-    return preview_file_path.split('.previewFile.')[0]
+    return preview_file_path.split(PREVIEW_FILE_PATTERN)[0]
 
 def is_allowed_preview_extension(file_path: str) -> bool:
     """Check if a preview file has an allowed extension
@@ -1473,8 +1474,8 @@ def is_allowed_preview_extension(file_path: str) -> bool:
     """
     
     # Extract the extension after .previewFile.
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1]
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1]
         return extension.lower() in allowed_previewFile_extensions
     
     return False
@@ -1500,7 +1501,7 @@ def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
         prefix = f"{directory}/" if directory else ""
         
         # Create the pattern to match preview files for this base file
-        pattern = f"{filename}.previewFile."
+        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
         
         logger.info(f"Searching for preview files in bucket {bucket} with prefix {prefix}")
         logger.info(f"Looking for pattern: {pattern}")
@@ -1545,7 +1546,7 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
         prefix = f"{directory}/" if directory else ""
         
         # Create the pattern to match preview files for this base file
-        pattern = f"{filename}.previewFile."
+        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
         
         logger.info(f"Searching for preview files (including archived) in bucket {bucket} with prefix {prefix}")
         logger.info(f"Looking for pattern: {pattern}")

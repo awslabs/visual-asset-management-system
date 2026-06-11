@@ -108,6 +108,22 @@ def setup_mock_imports():
     )
     sys.modules['common.s3MetadataKeys'] = s3_metadata_keys_module
 
+    # s3PathPatterns is pure constants with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    s3_path_patterns_module = import_module_from_path(
+        'common.s3PathPatterns',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 's3PathPatterns.py')
+    )
+    sys.modules['common.s3PathPatterns'] = s3_path_patterns_module
+
+    # dynamoDbMetadataKeys is pure constants with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    dynamodb_metadata_keys_module = import_module_from_path(
+        'common.dynamoDbMetadataKeys',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'dynamoDbMetadataKeys.py')
+    )
+    sys.modules['common.dynamoDbMetadataKeys'] = dynamodb_metadata_keys_module
+
     # s3 is a simple validation module; load the mock by path
     s3_mock_module = import_module_from_path('common.s3', os.path.join(mocks_base_path, 'common', 's3.py'))
     sys.modules['common.s3'] = s3_mock_module

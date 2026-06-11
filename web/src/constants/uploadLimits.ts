@@ -29,4 +29,6 @@ export const MAX_RETRY_ATTEMPTS = 3;
 
 // Preview file limits
 export const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-export const ALLOWED_PREVIEW_EXTENSIONS = [".png", ".jpg", ".jpeg", ".svg", ".gif"];
+
+// Allowed preview extensions are defined once in common/constants/fileFormats.ts
+export { previewFileFormats as ALLOWED_PREVIEW_EXTENSIONS } from "../common/constants/fileFormats";

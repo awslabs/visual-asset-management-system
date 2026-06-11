@@ -26,6 +26,7 @@ from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.indexing import AssetDocumentModel, AssetIndexRequest, IndexOperationResponse
 from common.indexing.geoLocation import build_geo_location
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -360,7 +361,7 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
             metadata_value_type = item.get('metadataValueType')
             
             # Skip system metadata records that conflict with OpenSearch field mappings
-            if metadata_key == 'REINDEX_METADATA_RECORD':
+            if is_excluded_metadata_record(metadata_key):
                 logger.debug(f"Skipping system metadata: {metadata_key}")
                 continue  # Skip this metadata, but continue processing others
             

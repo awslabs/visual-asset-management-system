@@ -26,6 +26,12 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    TEMPORARY_UPLOAD_PREFIX,
+    PREVIEW_PREFIX,
+)
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -68,13 +74,11 @@ logger = safeLogger(service_name="UploadFile")
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 7  # TTL for upload records and S3 multipart uploads
-TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'  # Prefix for temporary uploads
-PREVIEW_PREFIX = 'previews/'
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
 MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
 LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
-allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Load environment variables
 try:
@@ -586,7 +590,7 @@ def is_preview_file(file_path: str) -> bool:
     Returns:
         True if the file is a preview file, False otherwise
     """
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
 def get_base_file_path(preview_file_path: str) -> str:
     """Extract base file path from preview file path
@@ -601,7 +605,7 @@ def get_base_file_path(preview_file_path: str) -> str:
         return preview_file_path
     
     # Split at .previewFile. and take the first part
-    return preview_file_path.split('.previewFile.')[0]
+    return preview_file_path.split(PREVIEW_FILE_PATTERN)[0]
 
 def validate_preview_files_with_base_files(files_in_request, asset_base_key, bucket_name):
     """Validate that all preview files in the request have corresponding base files
@@ -707,10 +711,10 @@ def validate_preview_file_extension(file_path: str) -> bool:
     """
     
     # Extract the extension after .previewFile.
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1].lower()
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1].lower()
         return extension in allowed_preview_extensions
-    
+
     # For direct assetPreview uploads, check the file extension
     file_extension = os.path.splitext(file_path)[1].lower()
     return file_extension in allowed_preview_extensions
@@ -736,7 +740,7 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
         prefix = f"{directory}/" if directory else ""
         
         # Create the pattern to match preview files for this base file
-        pattern = f"{filename}.previewFile."
+        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
         
         # List objects in the directory
         paginator = s3.get_paginator('list_objects_v2')

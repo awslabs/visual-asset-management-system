@@ -29,6 +29,8 @@ from common.s3MetadataKeys import (
     SEARCHABLE_VAMS_METADATA_KEYS,
     is_system_metadata_key,
 )
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
 
 # Helper function to convert Decimal to int/float for JSON serialization
@@ -52,8 +54,8 @@ sqs = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="GarnetFileIndexer")
 
 # Excluded patterns or prefixes from file paths to exclude
-excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
-excluded_patterns = ['.previewFile.']
+excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
+excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
 
 # Load environment variables with error handling
 try:
@@ -193,7 +195,7 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[
             metadata_value_type = item.get('metadataValueType', 'string')
             
             # Skip system metadata records
-            if metadata_key == 'REINDEX_METADATA_RECORD':
+            if is_excluded_metadata_record(metadata_key):
                 logger.debug(f"Skipping system metadata: {metadata_key}")
                 continue
             

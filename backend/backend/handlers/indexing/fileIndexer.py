@@ -32,6 +32,8 @@ from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse
 from common.indexing.geoLocation import build_geo_location
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -42,11 +44,8 @@ retry_config = Config(
 )
 
 #Excluded patterns or prefixes from file paths to exclude
-excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
+excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
 excluded_patterns = [] # PREVIEW_FILE_PATTERN not included here as the fileIndexer processes these in a special way
-
-# Marker substring identifying a file-level preview file ({base}.previewFile.{ext}).
-PREVIEW_FILE_PATTERN = '.previewFile.'
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 s3_client = boto3.client('s3', config=retry_config)
@@ -478,7 +477,7 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> tuple[
             metadata_value_type = item.get('metadataValueType')
 
             # Skip system metadata records that conflict with OpenSearch field mappings
-            if metadata_key == 'REINDEX_METADATA_RECORD':
+            if is_excluded_metadata_record(metadata_key):
                 logger.debug(f"Skipping system metadata: {metadata_key}")
                 continue
 

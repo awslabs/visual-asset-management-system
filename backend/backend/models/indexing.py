@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 from typing import Dict, List, Optional, Any, Union
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
+from common.dynamoDbMetadataKeys import is_internal_metadata_field
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="DualIndexingModels")
@@ -68,7 +69,7 @@ def _determine_field_name_and_type(field_name: str, field_value: Any) -> tuple[s
         Tuple of (opensearch_field_name, processed_value) or (None, None) if excluded
     """
     # Exclude VAMS_* and _* prefixed fields (internal VAMS fields)
-    if field_name.startswith('VAMS_') or field_name.startswith('_'):
+    if is_internal_metadata_field(field_name):
         return None, None
     
     # Sanitize the field name for OpenSearch compatibility

@@ -14,6 +14,7 @@ from common.s3MetadataKeys import (
     DATABASE_ID_METADATA_KEY,
     UPLOAD_ID_METADATA_KEY,
 )
+from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -558,7 +559,7 @@ def lambda_handler(event, context):
                         logger.error("Multiple files present in pipeline output preview folder. Limiting to top 1 for now.")
                     
                     # Filter for image files
-                    image_files = [f for f in files if f.endswith('.jpeg') or f.endswith('.jpg') or f.endswith('.png') or f.endswith('.gif') or f.endswith('.svg')]
+                    image_files = [f for f in files if f.endswith(ALLOWED_PREVIEW_FILE_EXTENSIONS)]
                     
                     if image_files:
                         # Only process the first image file

@@ -39,6 +39,12 @@ backend/
 │   │   ├── dynamodb.py                  # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
 │   │   ├── validators.py                # Input validation regex patterns and validate() dispatcher
 │   │   ├── s3.py                        # S3 file validation (extension + MIME type checks)
+│   │   ├── s3MetadataKeys.py            # Canonical S3 object user-metadata keys (assetid, vams-*)
+│   │   ├── s3PathPatterns.py            # Reserved S3 prefix folders, .previewFile. pattern,
+│   │   │                                #   allowed preview extensions (mirrored in
+│   │   │                                #   web/src/common/constants/fileFormats.ts)
+│   │   ├── dynamoDbMetadataKeys.py      # Special DynamoDB metadata keys (REINDEX_METADATA_RECORD)
+│   │   │                                #   and internal field prefixes (VAMS_, _)
 │   │   └── stepfunctions_builder.py     # ASL builder for workflows (builder pattern:
 │   │                                    #   TaskStateBuilder, LambdaTaskBuilder,
 │   │                                    #   SqsTaskBuilder, EventBridgeTaskBuilder)
