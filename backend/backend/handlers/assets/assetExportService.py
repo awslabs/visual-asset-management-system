@@ -16,6 +16,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -565,7 +566,7 @@ def list_s3_files(bucket: str, prefix: str) -> List[Dict]:
                     
                     # Get primaryType from metadata
                     metadata = version_info.get('Metadata', {})
-                    primary_type = metadata.get('vams-primarytype', '')
+                    primary_type = metadata.get(VAMS_PRIMARY_TYPE_METADATA_KEY, '')
                     item['primaryType'] = primary_type if primary_type else None
                     
                 except Exception as e:

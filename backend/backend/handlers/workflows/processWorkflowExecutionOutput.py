@@ -9,6 +9,11 @@ import uuid
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    UPLOAD_ID_METADATA_KEY,
+)
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -168,7 +173,7 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
         current_metadata = head_response.get('Metadata', {})
         
         # Merge existing metadata with new metadata
-        metadata = {**current_metadata, 'databaseid': database_id, 'assetid': asset_id, 'uploadid': upload_id}
+        metadata = {**current_metadata, DATABASE_ID_METADATA_KEY: database_id, ASSET_ID_METADATA_KEY: asset_id, UPLOAD_ID_METADATA_KEY: upload_id}
         
         # Use boto3 resource copy() which automatically handles multipart for large files
         s3_resource = boto3.resource('s3')
@@ -190,7 +195,7 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
         logger.exception(f"Error updating S3 object metadata: {e}")
         return False
 
-def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context):
+def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None):
     """Process an external upload using the fileIngestion Lambda"""
     try:
         # Prepare the request payload
@@ -203,26 +208,29 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
                     file_name = file_key[len(baseFileKeyPrefix):]
                 else:
                     file_name = file_key
-                
+
                 # Remove leading slash if present
                 if file_name.startswith('/'):
                     file_name = file_name[1:]
             else:
                 # For other upload types (like assetPreview), just use the filename
                 file_name = os.path.basename(file_key)
-            
+
             # Add to file list
             file_list.append({
                 "relativeKey": file_name,
                 "tempKey": file_key
             })
-        
+
         # Create the request body
         body = {
             "assetId": asset_id,
             "databaseId": database_id,
             "uploadType": upload_type,
-            "files": file_list
+            "files": file_list,
+            "workflowId": workflow_id,
+            "workflowExecutionId": execution_id,
+            "changeUserId": change_user_id
         }
         
         # Create the Lambda payload to simulate an API Gateway request
@@ -582,7 +590,10 @@ def lambda_handler(event, context):
                                 "assetPreview",
                                 [preview_file],
                                 previewPathKey,
-                                requestContext
+                                requestContext,
+                                workflow_id=event.get('workflowId'),
+                                execution_id=event.get('executionId'),
+                                change_user_id=event.get('executingUserName')
                             )
                             
                             if result:
@@ -640,7 +651,10 @@ def lambda_handler(event, context):
                                 "assetFile",
                                 files,
                                 filesPathKey,
-                                requestContext
+                                requestContext,
+                                workflow_id=event.get('workflowId'),
+                                execution_id=event.get('executionId'),
+                                change_user_id=event.get('executingUserName')
                             )
                             
                             if result:

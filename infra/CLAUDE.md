@@ -212,6 +212,7 @@ interface storageResources {
         assetUploadsStorageTable;
         assetVersionsStorageTable;
         assetFileVersionsStorageTable;
+        assetFileVersionHistoryStorageTable;
         assetFileMetadataVersionsStorageTable;
         authEntitiesStorageTable;
         commentStorageTable;

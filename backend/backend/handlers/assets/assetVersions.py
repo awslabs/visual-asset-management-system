@@ -1588,7 +1588,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         logger.info(f"Successfully saved metadata snapshot for reverted version {new_assetVersionId}")
     
     #Get user of request
-    username = claims_and_roles.get("tokens", ["system"])[0]
+    username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
 
     # Update asset version metadata with [REVERTED FROM Vx] prefix
     if request_model.comment:

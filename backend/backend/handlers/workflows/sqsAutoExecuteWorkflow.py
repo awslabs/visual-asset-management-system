@@ -15,6 +15,10 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success
 
 # Configure AWS clients with retry configuration
@@ -379,9 +383,9 @@ def handle_s3_notification(event_record: Dict[str, Any], asset_bucket_name: Opti
             s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
             s3_metadata = s3_response.get('Metadata', {})
             
-            asset_id = s3_metadata.get('assetid')
-            database_id = s3_metadata.get('databaseid')
-            
+            asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+            database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
+
             if not asset_id or not database_id:
                 logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
                 return {'skipped': 'missing metadata'}

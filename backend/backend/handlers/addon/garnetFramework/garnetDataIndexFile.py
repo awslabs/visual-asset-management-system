@@ -23,6 +23,12 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from customLogging.logger import safeLogger
 from common.validators import validate
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    SEARCHABLE_VAMS_METADATA_KEYS,
+    is_system_metadata_key,
+)
 from models.common import VAMSGeneralErrorResponse
 
 # Helper function to convert Decimal to int/float for JSON serialization
@@ -237,9 +243,9 @@ def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, 
             # Extract additional metadata from S3 object metadata
             s3_metadata = response.get('Metadata', {})
             for key, value in s3_metadata.items():
-                if not key.startswith('vams-') and key not in ['assetid', 'databaseid', 'uploadid']:
+                if not is_system_metadata_key(key):
                     file_info[f"s3_{key}"] = value
-                if key in ['vams-primarytype']:
+                if key in SEARCHABLE_VAMS_METADATA_KEYS:
                     file_info[f"s3_{key}"] = value
             
             return file_info, False  # Not archived
@@ -623,9 +629,9 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
             s3_metadata = s3_response.get('Metadata', {})
             
-            asset_id = s3_metadata.get('assetid')
-            database_id = s3_metadata.get('databaseid')
-            
+            asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+            database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
+
             if not asset_id or not database_id:
                 logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
                 return True  # Skip, not an error

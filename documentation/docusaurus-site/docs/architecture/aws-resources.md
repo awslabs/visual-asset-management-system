@@ -4,7 +4,7 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 ## Amazon DynamoDB Tables
 
-VAMS deploys 28 Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
+VAMS deploys 29 Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
 ### Core Data Tables
 
@@ -24,6 +24,7 @@ VAMS deploys 28 Amazon DynamoDB tables for persistent data storage. All tables u
 | AssetVersionsStorageTable (V2)        | `databaseId:assetId`                | `assetVersionId`            | --                                                                                                    | Asset version records                  |
 | AssetFileVersionsStorageTable (V2)    | `databaseId:assetId:assetVersionId` | `fileKey`                   | `databaseIdAssetIdIndex` (PK: databaseId:assetId)                                                     | File version records per asset version |
 | AssetFileMetadataVersionsStorageTable | `databaseId:assetId:assetVersionId` | `type:filePath:metadataKey` | `databaseIdAssetIdIndex` (PK: databaseId:assetId)                                                     | Metadata snapshot per asset version    |
+| AssetFileVersionHistoryStorageTable   | `databaseId:assetId:filePath`       | `versionId`                 | `DatabaseIdAssetIdIndex` (PK: databaseId:assetId, SK: versionId)                                      | Per-version file change provenance     |
 | AssetUploadsStorageTable              | `uploadId`                          | `assetId`                   | `AssetIdGSI` (PK: assetId), `DatabaseIdGSI` (PK: databaseId), `UserIdGSI` (PK: UserId, SK: createdAt) | In-progress upload tracking            |
 
 ### Metadata and Attribute Tables

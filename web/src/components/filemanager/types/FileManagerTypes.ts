@@ -14,6 +14,8 @@ export interface FileKey {
     isPermanentlyDeleted?: boolean;
     primaryType?: string | null;
     previewFile?: string;
+    changeSource?: string;
+    changeUserId?: string;
 }
 
 export interface FileTree {
@@ -33,6 +35,8 @@ export interface FileTree {
     isPermanentlyDeleted?: boolean;
     primaryType?: string | null;
     previewFile?: string;
+    changeSource?: string;
+    changeUserId?: string;
 }
 
 export type LoadingPhase =

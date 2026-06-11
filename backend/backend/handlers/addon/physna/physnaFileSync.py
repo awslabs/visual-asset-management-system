@@ -25,6 +25,10 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.exceptions import ClientError
 
 from customLogging.logger import safeLogger
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+)
 
 from . import physnaCommon
 from .physnaCommon import (
@@ -207,8 +211,8 @@ def _resolve_asset_from_s3_event(bucket_name: str, s3_key: str) -> Optional[Dict
     # canonical key for all downstream calls (download, Physna path, etc.).
     s3_key = head_result["key"]
     s3_metadata = head.get("Metadata", {}) or {}
-    asset_id = s3_metadata.get("assetid")
-    database_id = s3_metadata.get("databaseid")
+    asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+    database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
     if not asset_id or not database_id:
         logger.warning(f"Missing assetid/databaseid in S3 metadata for {s3_key}")
         return None

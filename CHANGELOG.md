@@ -33,6 +33,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Asset and file search now sort filter drop-downs alphabetically
 -   NVIDIA Isaac Lab Training pipeline now supports a configuration building its container image via AWS CodeBuild + ECR instead of a local Docker build, matching the existing NVIDIA Cosmos and Gr00t pipelines.
 -   Asset/File search APIs now include additional fields when passing general search filter queries (asset id, database id, s3 bucket id/name, s3 bucket prefix)
+-   Asset file change history — VAMS now tracks per-version change provenance (how a file version was created and by whom) for uploads, workflow executions, copies, moves, renames, archives, and direct S3 changes. Provenance is stamped as `vams-change*` S3 object metadata when a version is created and recorded into a new `assetFileVersionHistoryStorageTable` Amazon DynamoDB table on ingest. File list/detail responses surface the current version's change source and modifying user, and file version history surfaces the full per-version provenance (including workflow and source-location details). Exposed through the file GET APIs, the `vamscli file` commands, and the web file manager (details panel and version history view). Versions created before this release report blank provenance.
 
 ### Bug Fixes
 
@@ -52,6 +53,9 @@ All notable changes to this project will be documented in this file. See [standa
 -   Fixed latent defect of backend test framework not being updated with changes from v2.5, causing some test failures.
 -   **Web** Pipeline create/update and other components using ListPages now approrpriately displays API errors to the user
 -   Fixed bug in various backend handlers with how it handles reserved S3 prefix names (preview, temp-upload, etc) and `*.previewFile.*` patterns where it overly excluded or didn't exclude certain files from indexing. This caused files that started with reserved names to be skipped or some previewFiles to be added for indexing and various sync processes.
+-   Fixed bug in the OpenSearch reindexer (`crReindexer`) where files that did not yet have `assetid`/`databaseid` S3 object metadata (e.g. files never processed by the `sqsBucketSync` bucket-sync flow) were silently skipped during file reindexing, this includes syncing new buckets added to VAMS. Files whose key does not resolve to a valid, active asset location for the bucket are ignored.
+-   Standardize system user across the backend to use "SYSTEM" (uppercase), previously was a combination of lowercase and uppercase variations.
+-   The S3 file versions in the file versions API call now properly show up for past archived file versions, previously they wouldn't show up anymore if looking at a file that was unarchived
 
 ### Chores
 

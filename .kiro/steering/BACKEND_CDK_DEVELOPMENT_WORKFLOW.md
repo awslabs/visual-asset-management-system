@@ -1062,7 +1062,7 @@ def create_[domain]([domain]_data, claims_and_roles):
 
         # Add metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("username", "system")
+        username = claims_and_roles.get("username", "SYSTEM")
         [domain]_data['dateCreated'] = now
         [domain]_data['createdBy'] = username
 

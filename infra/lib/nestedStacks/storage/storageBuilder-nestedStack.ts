@@ -84,6 +84,7 @@ export interface storageResources {
         metadataSchemaStorageTableV2: dynamodb.Table;
         databaseMetadataStorageTable: dynamodb.Table;
         assetFileMetadataStorageTable: dynamodb.Table;
+        assetFileVersionHistoryStorageTable: dynamodb.Table;
         fileAttributeStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         rolesStorageTable: dynamodb.Table;
@@ -923,6 +924,42 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Asset File Version History — one record per (file, S3 version) change event.
+    // Captures change provenance (who/what/how) stamped as vams-change* S3
+    // metadata and ingested by sqsBucketSync. PK is the composite
+    // databaseId:assetId:filePath (matching the AssetFileMetadata convention);
+    // SK is the S3 VersionId ("null" for non-versioned buckets). The
+    // DatabaseIdAssetIdIndex GSI supports "all history for an asset" lookups.
+    const assetFileVersionHistoryStorageTable = new dynamodb.Table(
+        scope,
+        "AssetFileVersionHistoryStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "databaseId:assetId:filePath",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "versionId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    // GSI for querying all version-history records across an asset.
+    assetFileVersionHistoryStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdAssetIdIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "versionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const fileAttributeStorageTable = new dynamodb.Table(scope, "FileAttributeStorageTableV2", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -1445,6 +1482,7 @@ export function storageResourcesBuilder(
             metadataSchemaStorageTableV2: metadataSchemaStorageTableV2,
             databaseMetadataStorageTable: databaseMetadataStorageTable,
             assetFileMetadataStorageTable: assetFileMetadataStorageTable,
+            assetFileVersionHistoryStorageTable: assetFileVersionHistoryStorageTable,
             fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
             tagStorageTable: tagStorageTable,

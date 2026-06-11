@@ -156,6 +156,19 @@ backend/
     )
     ```
 
+12. **ALWAYS use a leading `/` for normalized asset-relative file paths.** When storing
+    or working with a normalized file path (e.g. DynamoDB composite keys like
+    `databaseId:assetId:filePath`, the `filePath` attribute, and file-path provenance
+    values), the path is asset-relative and begins with a single `/` (e.g.
+    `/folder/file.txt`). Normalize inputs that may or may not carry the slash before
+    storing or comparing.
+
+    ```python
+    # CORRECT -- guarantee exactly one leading slash before storing/comparing
+    file_path = "/" + raw_path.lstrip("/")
+    composite_key = f"{database_id}:{asset_id}:{file_path}"
+    ```
+
 ---
 
 ## Gold Standard Handler Pattern

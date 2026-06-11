@@ -480,7 +480,7 @@ def create_workflow(payload, claims_and_roles):
         dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
 
         # Get username from claims_and_roles tokens array
-        username = claims_and_roles["tokens"][0] if len(claims_and_roles.get("tokens", [])) > 0 else "system"
+        username = claims_and_roles["tokens"][0] if len(claims_and_roles.get("tokens", [])) > 0 else "SYSTEM"
 
         Item = {
             'databaseId': database_id,

@@ -100,6 +100,18 @@ def setup_mock_imports():
     dynamodb_module = import_module_from_path('common.dynamodb', os.path.join(mocks_base_path, 'common', 'dynamodb.py'))
     sys.modules['common.dynamodb'] = dynamodb_module
 
+    # s3MetadataKeys is pure constants with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    s3_metadata_keys_module = import_module_from_path(
+        'common.s3MetadataKeys',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 's3MetadataKeys.py')
+    )
+    sys.modules['common.s3MetadataKeys'] = s3_metadata_keys_module
+
+    # s3 is a simple validation module; load the mock by path
+    s3_mock_module = import_module_from_path('common.s3', os.path.join(mocks_base_path, 'common', 's3.py'))
+    sys.modules['common.s3'] = s3_mock_module
+
     indexing_pkg_module = import_module_from_path('common.indexing', os.path.join(mocks_base_path, 'common', 'indexing', '__init__.py'))
     sys.modules['common.indexing'] = indexing_pkg_module
 
@@ -130,11 +142,20 @@ def setup_mock_imports():
     # Mock handlers.auth and handlers.authz
     sys.modules['handlers.auth'] = MockModule()
     sys.modules['handlers.authz'] = MockModule()
-    
+
     # Mock handlers.comments
     sys.modules['handlers.comments'] = MockModule()
     sys.modules['handlers.comments.commentService'] = MockModule()
     sys.modules['handlers.comments.editComment'] = MockModule()
+
+    # Mock handlers.assets.assetVersions (imported by assetFiles and metadataService)
+    if 'handlers.assets' not in sys.modules:
+        sys.modules['handlers.assets'] = MockModule()
+    sys.modules['handlers.assets.assetVersions'] = MockModule(
+        validate_asset_version_exists=MagicMock(),
+        get_all_asset_versions=MagicMock(),
+        get_asset_metadata_version=MagicMock()
+    )
     
     # Create a base mock class with common attributes
     class MockModule:

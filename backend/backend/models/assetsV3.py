@@ -30,7 +30,7 @@ class CurrentVersionModel(BaseModel, extra='ignore'):
     DateModified: str
     Comment: str = ""
     description: str = ""
-    createdBy: str = "system"
+    createdBy: str = "SYSTEM"
     versionAlias: Optional[str] = None
 
 class AssetVersionListItemModel(BaseModel, extra='ignore'):
@@ -39,7 +39,7 @@ class AssetVersionListItemModel(BaseModel, extra='ignore'):
     DateModified: str
     Comment: str = ""
     description: str = ""
-    createdBy: str = "system"
+    createdBy: str = "SYSTEM"
     isCurrent: bool = False
     fileCount: int = 0  # Number of available files for this version
     versionAlias: Optional[str] = None
@@ -274,7 +274,10 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     uploadType: Literal["assetFile", "assetPreview"]
     files: List[ExternalFileModel]
-    
+    workflowId: Optional[str] = None
+    workflowExecutionId: Optional[str] = None
+    changeUserId: Optional[str] = None
+
     @root_validator
     def validate_fields(cls, values):
         # Ensure we have files to complete
@@ -282,20 +285,37 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
             message = "At least one file must be provided to complete the upload"
             logger.error(message)
             raise ValueError(message)
-            
+
         # For asset preview uploads, ensure we have exactly one file
         if values.get('uploadType') == "assetPreview" and len(values.get('files')) != 1:
             message = "Exactly one file must be provided for asset preview uploads"
             logger.error(message)
             raise ValueError(message)
-            
+
         # Check for duplicate keys
         keys = [file.relativeKey for file in values.get('files', [])]
         if len(keys) != len(set(keys)):
             message = "Duplicate relative keys are not allowed"
             logger.error(message)
             raise ValueError(message)
-            
+
+        # Validate optional workflow provenance fields (validate each separately since validate() returns early on None+optional)
+        if values.get('workflowId') is not None:
+            (valid, message) = validate({'workflowId': {'value': values.get('workflowId'), 'validator': 'ID'}})
+            if not valid:
+                logger.error(message)
+                raise ValueError(message)
+        if values.get('workflowExecutionId') is not None:
+            (valid, message) = validate({'workflowExecutionId': {'value': values.get('workflowExecutionId'), 'validator': 'STRING_256'}})
+            if not valid:
+                logger.error(message)
+                raise ValueError(message)
+        if values.get('changeUserId') is not None:
+            (valid, message) = validate({'changeUserId': {'value': values.get('changeUserId'), 'validator': 'USERID'}})
+            if not valid:
+                logger.error(message)
+                raise ValueError(message)
+
         return values
 
 class CompleteUploadResponseModel(BaseModel, extra='ignore'):
@@ -342,6 +362,8 @@ class AssetFileItemModel(BaseModel, extra='ignore'):
     isPermanentlyDeleted: Optional[bool] = False  # True when file no longer exists in S3 (all versions removed)
     primaryType: Optional[str] = None  # Primary type metadata from S3
     previewFile: Optional[str] = ""  # Path to preview file for this file
+    changeSource: Optional[str] = None  # How the current version was created
+    changeUserId: Optional[str] = None  # Who created the current version
 
 class ListAssetFilesRequestModel(BaseModel, extra='ignore'):
     """Query parameters for listing asset files"""
@@ -374,6 +396,14 @@ class FileVersionModel(BaseModel, extra='ignore'):
     isArchived: bool = False
     currentAssetVersionFileVersionMismatch: Optional[bool] = None  # Indicates if file version doesn't match asset version
     assetVersionIds: Optional[List[Dict]] = None  # Asset versions containing this file version, each with 'id' and 'label'
+    changeSource: Optional[str] = None  # How this version was created
+    changeUserId: Optional[str] = None  # Acting user / SYSTEM
+    changeWorkflowId: Optional[str] = None  # Source workflow id (workflowExecution only)
+    changeWorkflowExecutionId: Optional[str] = None  # Source execution id (workflowExecution only)
+    changeAssetIdFrom: Optional[str] = None  # Source asset id (copy/move/rename)
+    changeDatabaseIdFrom: Optional[str] = None  # Source database id (copy/move/rename)
+    changeAssetFilePathFrom: Optional[str] = None  # Source file path (copy/move/rename)
+    changeAssetFileVersionFrom: Optional[str] = None  # Source S3 version id (copy/move/rename/revert)
 
 class FileInfoResponseModel(BaseModel, extra='ignore'):
     """Response model for detailed file information"""
@@ -389,6 +419,8 @@ class FileInfoResponseModel(BaseModel, extra='ignore'):
     isArchived: bool = False
     primaryType: Optional[str] = None  # Primary type metadata from S3
     previewFile: Optional[str] = ""  # Path to preview file for this file
+    changeSource: Optional[str] = None  # How the current version was created
+    changeUserId: Optional[str] = None  # Who created the current version
     versions: Optional[List[FileVersionModel]] = None
 
 class MoveFileRequestModel(BaseModel, extra='ignore'):

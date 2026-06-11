@@ -274,6 +274,8 @@ export function buildSqsBucketSyncFunction(
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+            ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
             FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
                 storageResources.dynamo.fileAttributeStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
@@ -291,6 +293,7 @@ export function buildSqsBucketSyncFunction(
     });
 
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);

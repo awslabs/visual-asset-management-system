@@ -375,7 +375,7 @@ def create_metadata_schema(schema_data, claims_and_roles):
         
         # Add metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         
         # Convert fields to JSON string for storage
         fields_json = json.dumps(schema_data['fields'])
@@ -471,7 +471,7 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         
         # Update metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         schema['dateModified'] = now
         schema['modifiedBy'] = username
         

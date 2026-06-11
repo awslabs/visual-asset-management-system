@@ -15,6 +15,17 @@ from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    UPLOAD_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_USER_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_UPLOAD,
+    VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+)
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -452,9 +463,9 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id):
+def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id, extra_metadata=None):
     """Copy an object from one S3 location to another with replaced metadata
-    
+
     Args:
         source_bucket: Source S3 bucket name
         source_key: Source S3 object key
@@ -462,7 +473,8 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
         dest_key: Destination S3 object key
         database_id: Database ID to set in metadata
         asset_id: Asset ID to set in metadata
-        
+        extra_metadata: Optional dict of additional metadata fields to merge
+
     Returns:
         True if successful, False otherwise
     """
@@ -473,15 +485,19 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
             'Bucket': source_bucket,
             'Key': source_key
         }
-        
+
+        metadata = {
+            DATABASE_ID_METADATA_KEY: database_id,
+            ASSET_ID_METADATA_KEY: asset_id
+        }
+        if extra_metadata:
+            metadata.update(extra_metadata)
+
         extra_args = {
             'MetadataDirective': 'REPLACE',
-            'Metadata': {
-                "databaseid": database_id,
-                "assetid": asset_id
-            }
+            'Metadata': metadata
         }
-        
+
         s3_resource.meta.client.copy(
             CopySource=copy_source,
             Bucket=dest_bucket,
@@ -501,6 +517,35 @@ def delete_s3_object(bucket, key):
     except Exception as e:
         logger.exception(f"Error deleting S3 object {key}: {e}")
         return False
+
+def build_upload_change_metadata(user_id):
+    """Build the change-provenance metadata for a user-initiated upload.
+
+    Args:
+        user_id: Acting user id; ``None`` falls back to "SYSTEM".
+
+    Returns:
+        Dict of vams-change* S3 metadata keys describing an "upload" change.
+    """
+    return {
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM",
+    }
+
+def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
+    """Build change-provenance metadata for a workflow-execution output file.
+
+    Returns an empty dict when no workflow context is supplied so non-workflow
+    external uploads keep their default change source.
+    """
+    if not workflow_id and not execution_id:
+        return {}
+    return {
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: change_user_id or "SYSTEM",
+        VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: workflow_id or "",
+        VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
+    }
 
 def normalize_s3_path(asset_base_key, file_path):
     """
@@ -739,16 +784,17 @@ def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     
     return deleted_files
 
-def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_id: str, asset_id: str) -> bool:
+def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_id: str, asset_id: str, user_id: str = None) -> bool:
     """Create a zero-byte file in S3
-    
+
     Args:
         bucket_name: The S3 bucket name
         key: The S3 object key
         upload_id: The upload ID for metadata
         database_id: The database ID for metadata
         asset_id: The asset ID for metadata
-        
+        user_id: The acting user ID for provenance metadata (optional)
+
     Returns:
         True if successful, False otherwise
     """
@@ -759,9 +805,10 @@ def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_i
             Body=b'',  # Empty content for zero-byte file
             ContentType='application/octet-stream',
             Metadata={
-                "databaseid": database_id,
-                "assetid": asset_id,
-                "uploadid": upload_id,
+                DATABASE_ID_METADATA_KEY: database_id,
+                ASSET_ID_METADATA_KEY: asset_id,
+                UPLOAD_ID_METADATA_KEY: upload_id,
+                **build_upload_change_metadata(user_id),
             }
         )
         logger.info(f"Created zero-byte file: {key}")
@@ -951,7 +998,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     uploadType = request_model.uploadType
     
     # Extract user ID and check rate limit
-    user_id = claims_and_roles.get("tokens", ["system"])[0]
+    user_id = claims_and_roles.get("tokens", ["SYSTEM"])[0]
     
     if not check_user_rate_limit(user_id):
         # Return 429 Too Many Requests
@@ -1062,9 +1109,10 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
                 Key=temp_s3_key,
                 ContentType='application/octet-stream',
                 Metadata={
-                    "databaseid": databaseId,
-                    "assetid": assetId,
-                    "uploadid": uploadId,  # Store the overall uploadId in S3 metadata
+                    DATABASE_ID_METADATA_KEY: databaseId,
+                    ASSET_ID_METADATA_KEY: assetId,
+                    UPLOAD_ID_METADATA_KEY: uploadId,  # Store the overall uploadId in S3 metadata
+                    **build_upload_change_metadata(user_id),
                 }
             )
             s3_upload_id = resp['UploadId']
@@ -1118,7 +1166,20 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     assetId = request_model.assetId
     databaseId = request_model.databaseId
     uploadType = request_model.uploadType
-    
+
+    # Extract user ID for provenance
+    user_id = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+
+    # Extract validated workflow provenance fields from request model
+    workflow_id = request_model.workflowId
+    workflow_execution_id = request_model.workflowExecutionId
+    change_user_id = request_model.changeUserId
+
+    # Build change metadata: prefer workflow provenance, fallback to upload provenance
+    change_metadata = build_workflow_change_metadata(change_user_id, workflow_id, workflow_execution_id)
+    if not change_metadata:
+        change_metadata = build_upload_change_metadata(change_user_id or user_id)
+
     # Get upload details from DynamoDB
     upload_details = get_upload_details(uploadId, assetId)
     
@@ -1259,7 +1320,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 
                 if process_async:
                     logger.info(f"External file {file.relativeKey} ({file_size} bytes) will be processed asynchronously")
-                    
+
                     # Create file info for SQS message
                     file_info = {
                         "relativeKey": file.relativeKey,
@@ -1271,7 +1332,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         "databaseId": databaseId,
                         "assetId": assetId,
                         "uploadId": uploadId,
-                        "uploadType": uploadType
+                        "uploadType": uploadType,
+                        "changeUserId": user_id
                     }
                     
                     # Try to queue the file for asynchronous processing with comprehensive error handling
@@ -1463,14 +1525,15 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
             if deleted_files:
                 logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
-        
+
         copy_success = copy_s3_object(
-            bucket_name, 
-            file_detail['temp_s3_key'], 
-            bucket_name, 
+            bucket_name,
+            file_detail['temp_s3_key'],
+            bucket_name,
             file_detail['final_s3_key'],
             databaseId,
-            assetId
+            assetId,
+            extra_metadata=change_metadata
         )
         
         if not copy_success:
@@ -1584,7 +1647,10 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     assetId = request_model.assetId
     databaseId = request_model.databaseId
     uploadType = request_model.uploadType
-    
+
+    # Extract user ID for provenance
+    user_id = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+
     # Get upload details from DynamoDB (just for basic validation)
     upload_details = get_upload_details(uploadId, assetId)
     
@@ -1688,8 +1754,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             if file.uploadIdS3 == "zero-byte":
                 # Create zero-byte file now during completion
                 logger.info(f"Creating zero-byte file {file.relativeKey} during completion")
-                
-                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId):
+
+                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId, user_id):
                     # Create file detail for zero-byte file
                     file_detail = {
                         'relativeKey': file.relativeKey,
@@ -1731,7 +1797,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     logger.warning(f"Error aborting multipart upload for abandoned file: {abort_error}")
                 
                 # Create empty file in temporary location
-                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId):
+                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId, user_id):
                     file_detail = {
                         'relativeKey': file.relativeKey,
                         'temp_s3_key': temp_s3_key,
@@ -1817,7 +1883,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             
             if process_async:
                 logger.info(f"File {file.relativeKey} ({total_file_size} bytes) will be processed asynchronously")
-                
+
                 # Create file info for SQS message - DO NOT complete the multipart upload yet
                 file_info = {
                     "relativeKey": file.relativeKey,
@@ -1830,7 +1896,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     "assetId": assetId,
                     "uploadId": uploadId,
                     "uploadType": uploadType,
-                    "totalFileSize": total_file_size
+                    "totalFileSize": total_file_size,
+                    "changeUserId": user_id
                 }
                 
                 # Try to queue the file for asynchronous processing
@@ -1889,7 +1956,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 
                 # Extract metadata
                 metadata = head_response.get('Metadata', {})
-                s3_upload_id = metadata.get('uploadid')
+                s3_upload_id = metadata.get(UPLOAD_ID_METADATA_KEY)
                 
                 # Get file size with error handling
                 file_size = 0
@@ -2156,16 +2223,17 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     
     # Copy successful files from temporary to final location
     for file_detail in successful_files:
-        
+
         logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
-        
+
         copy_success = copy_s3_object(
-            bucket_name, 
-            file_detail['temp_s3_key'], 
-            bucket_name, 
+            bucket_name,
+            file_detail['temp_s3_key'],
+            bucket_name,
             file_detail['final_s3_key'],
             databaseId,
-            assetId
+            assetId,
+            extra_metadata=build_upload_change_metadata(user_id)
         )
         
         if not copy_success:

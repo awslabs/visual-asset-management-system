@@ -555,7 +555,7 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
             # Continue without limit check if it fails
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -753,7 +753,7 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                 raise PermissionError("Not authorized to update metadata for this asset link")
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -1717,7 +1717,7 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
             # Continue without limit check if it fails
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -1909,7 +1909,7 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                 raise PermissionError("Not authorized to update metadata for this asset")
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -2898,7 +2898,7 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
             # Continue without limit check if it fails
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -3083,7 +3083,7 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                 raise PermissionError("Not authorized to update metadata for this file")
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -3947,7 +3947,7 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
             # Continue without limit check if it fails
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -4102,7 +4102,7 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                 raise PermissionError("Not authorized to update metadata for this database")
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users

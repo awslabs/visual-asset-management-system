@@ -9,6 +9,7 @@ import boto3
 import time
 import hashlib
 import urllib.parse
+from datetime import datetime
 from customLogging.logger import safeLogger
 from handlers.assets.createAsset import create_asset
 from models.assetsV3 import CreateAssetRequestModel
@@ -18,6 +19,20 @@ from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_USER_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
+    VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY,
+    VAMS_CHANGE_DATABASE_ID_FROM_METADATA_KEY,
+    VAMS_CHANGE_ASSET_FILE_PATH_FROM_METADATA_KEY,
+    VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_DIRECT,
+    normalize_history_file_path,
+)
 
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
@@ -43,6 +58,7 @@ try:
     workflow_auto_execute_sqs_url = os.environ.get("WORKFLOW_AUTO_EXECUTE_SQS_URL", "")
     asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
     file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
+    asset_file_version_history_table_name = os.environ.get("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME")
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -53,6 +69,7 @@ if not database_id:
 # Initialize metadata tables
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
 file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribute_table_name else None
+asset_file_version_history_table = dynamodb.Table(asset_file_version_history_table_name) if asset_file_version_history_table_name else None
 
 # Cache implementation
 class SimpleCache:
@@ -720,7 +737,7 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         
         # Create the asset
         # Note: We're passing an empty dict for claims_and_roles since this is a system operation
-        response = create_asset(request_model, {"tokens": ["system"]}, True)
+        response = create_asset(request_model, {"tokens": ["SYSTEM"]}, True)
         
         # Add the new asset to the cache instead of clearing it
         cache_key = f"{bucket_id}:{asset_id}"
@@ -809,12 +826,24 @@ def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asse
 
         # Check if metadata already matches
         current_metadata = response.get('Metadata', {})
-        if current_metadata.get('databaseid') == database_id and current_metadata.get('assetid') == asset_id:
+
+        # Keep a change source already stamped by a VAMS action; objects arriving
+        # without one were changed outside VAMS, so stamp "direct".
+        desired_change_source = current_metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) or VAMS_CHANGE_SOURCE_DIRECT
+
+        if (current_metadata.get(DATABASE_ID_METADATA_KEY) == database_id
+                and current_metadata.get(ASSET_ID_METADATA_KEY) == asset_id
+                and current_metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) == desired_change_source):
             logger.info(f"Metadata already matches for {effective_key}")
             return True
 
         # Copy the object to itself with updated metadata
-        metadata = {**current_metadata, 'databaseid': database_id, 'assetid': asset_id}
+        metadata = {
+            **current_metadata,
+            DATABASE_ID_METADATA_KEY: database_id,
+            ASSET_ID_METADATA_KEY: asset_id,
+            VAMS_CHANGE_SOURCE_METADATA_KEY: desired_change_source,
+        }
 
         # Use boto3 resource copy() which automatically handles multipart for large files
         copy_source = {
@@ -1229,6 +1258,64 @@ def publish_to_workflow_execution_sqs(event):
         logger.exception(f"Error publishing to workflow auto-execute SQS queue: {e}")
         # We don't re-raise the exception here to avoid stopping the process
 
+def build_history_record(database_id, asset_id, relative_file_path, version_id,
+                         s3_metadata, s3_last_modified):
+    """Build an asset-file change-history item from an ingested object's S3 metadata.
+
+    No vams-changesource present means the file was changed outside VAMS (e.g. a
+    direct S3 upload): record changeSource="direct" with no provenance columns.
+    Otherwise map the vams-change* metadata to flat columns (skipping blanks).
+    """
+    change_source = s3_metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) or VAMS_CHANGE_SOURCE_DIRECT
+    relative_file_path = normalize_history_file_path(relative_file_path)
+    record = {
+        "databaseId:assetId:filePath": f"{database_id}:{asset_id}:{relative_file_path}",
+        "versionId": version_id or "null",
+        "databaseId:assetId": f"{database_id}:{asset_id}",
+        "databaseId": database_id,
+        "assetId": asset_id,
+        "filePath": relative_file_path,
+        "changeSource": change_source,
+        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "s3LastModified": s3_last_modified or "",
+    }
+    if change_source != VAMS_CHANGE_SOURCE_DIRECT:
+        col_map = {
+            VAMS_CHANGE_USER_ID_METADATA_KEY: "changeUserId",
+            VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: "changeWorkflowId",
+            VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: "changeWorkflowExecutionId",
+            VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY: "changeAssetIdFrom",
+            VAMS_CHANGE_DATABASE_ID_FROM_METADATA_KEY: "changeDatabaseIdFrom",
+            VAMS_CHANGE_ASSET_FILE_PATH_FROM_METADATA_KEY: "changeAssetFilePathFrom",
+            VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY: "changeAssetFileVersionFrom",
+        }
+        for meta_key, col in col_map.items():
+            val = s3_metadata.get(meta_key)
+            if val:
+                record[col] = val
+    return record
+
+
+def write_file_version_history(database_id, asset_id, relative_file_path, version_id,
+                               s3_metadata, s3_last_modified):
+    """Write a single change-history record for an ingested object version.
+
+    Best-effort: no-op when the table is not configured, and never raises -- a
+    history-write failure must not break the bucket sync / indexing flow. The
+    put_item overwrites the same PK+SK (last-write-wins, idempotent on re-sync).
+    """
+    if not asset_file_version_history_table:
+        return
+    try:
+        record = build_history_record(
+            database_id, asset_id, relative_file_path, version_id,
+            s3_metadata, s3_last_modified,
+        )
+        asset_file_version_history_table.put_item(Item=record)
+    except Exception as e:
+        logger.exception(f"Failed writing file version history for {asset_id}/{relative_file_path}: {e}")
+
+
 def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
     """
     Process a single S3 record
@@ -1374,6 +1461,24 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         # Construct the asset base key (prefix + assetId + /)
         asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
         update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+
+        # Record file version change history (best-effort; never fails the sync).
+        # Skip folder markers (no version/content). head_object returns 'null' for
+        # VersionId on buckets without versioning enabled.
+        if not object_key.endswith('/'):
+            try:
+                head = s3_client.head_object(Bucket=bucket_name, Key=object_key)
+                last_modified = head.get('LastModified')
+                write_file_version_history(
+                    database_id_to_use,
+                    asset_id,
+                    extract_relative_file_path(object_key, prefix, asset_id),
+                    head.get('VersionId', 'null'),
+                    head.get('Metadata', {}) or {},
+                    last_modified.isoformat() if last_modified else "",
+                )
+            except Exception as e:
+                logger.exception(f"History write skipped for {object_key}: {e}")
 
         # 6. Check if object key ends with '/' (folder marker) - process but skip indexing
         if object_key.endswith('/'):

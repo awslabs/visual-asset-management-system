@@ -31,6 +31,16 @@ Reindexing Strategy:
 - Files: Creates metadata record with composite key "databaseId:assetId:filePath"
 - Both operations immediately delete the created records to trigger stream events
 
+File assetId/databaseId Resolution:
+- Files are normally tagged with assetid/databaseid S3 object metadata by sqsBucketSync.
+- For files not yet processed by sqsBucketSync (no such metadata), the reindexer falls
+  back to resolving the asset context the same way sqsBucketSync does: the assetId is the
+  first path segment beneath the bucket's base prefix, and the databaseId is looked up from
+  the asset storage table by (bucketId, assetId) via the BucketIdGSI.
+- Files whose key does not yield a valid asset ID, or whose asset cannot be found as an
+  active (non-archived) asset for the bucket, are ignored (skipped), mirroring how
+  sqsBucketSync declines to process objects that are not valid asset locations.
+
 Usage:
     Direct Invocation:
     {
@@ -54,6 +64,13 @@ from decimal import Decimal
 
 import boto3
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key
+
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+)
+from common.validators import validate
 
 # Configure logging
 logger = logging.getLogger()
@@ -124,7 +141,10 @@ class ReindexUtility:
         self.asset_batch_size = min(asset_batch_size, 25)  # DynamoDB batch limit
         self.file_batch_size = file_batch_size
         self.memory_batch_size = memory_batch_size
-        
+
+        # Cache of resolved databaseId per (bucketId, assetId) for files missing S3 metadata
+        self._asset_db_cache: Dict[str, Optional[str]] = {}
+
         logger.info(f"ReindexUtility initialized:")
         logger.info(f"  Asset table (source): {asset_table_name}")
         logger.info(f"  S3 buckets table (source): {s3_buckets_table_name}")
@@ -575,6 +595,7 @@ class ReindexUtility:
             'total_count': 0,
             'buckets_processed': 0,
             'objects_scanned': 0,
+            'skipped_no_asset': 0,
             'errors': [],
             'start_time': datetime.now(timezone.utc).isoformat(),
             'end_time': None
@@ -596,24 +617,27 @@ class ReindexUtility:
             for bucket_config in bucket_configs:
                 bucket_name = bucket_config.get('bucketName')
                 base_prefix = bucket_config.get('baseAssetsPrefix', '')
-                
+                bucket_id = bucket_config.get('bucketId')
+
                 if not bucket_name:
                     logger.warning(f"Skipping invalid bucket config: {bucket_config}")
                     continue
-                
-                logger.info(f"Processing bucket: {bucket_name} (prefix: {base_prefix})")
-                
+
+                logger.info(f"Processing bucket: {bucket_name} (prefix: {base_prefix}, bucketId: {bucket_id})")
+
                 bucket_results = self._process_bucket(
                     bucket_name,
                     base_prefix,
                     dry_run,
-                    limit - results['total_count'] if limit else None
+                    limit - results['total_count'] if limit else None,
+                    bucket_id
                 )
                 
                 results['success_count'] += bucket_results['success']
                 results['failed_count'] += bucket_results['failed']
                 results['total_count'] += bucket_results['total']
                 results['objects_scanned'] += bucket_results['objects_scanned']
+                results['skipped_no_asset'] += bucket_results.get('skipped_no_asset', 0)
                 results['errors'].extend(bucket_results['errors'])
                 results['buckets_processed'] += 1
                 
@@ -631,6 +655,7 @@ class ReindexUtility:
             logger.info(f"  Buckets processed: {results['buckets_processed']}")
             logger.info(f"  Objects scanned: {results['objects_scanned']}")
             logger.info(f"  Valid files processed: {results['total_count']}")
+            logger.info(f"  Skipped (no resolvable asset): {results['skipped_no_asset']}")
             logger.info(f"  Success: {results['success_count']}")
             logger.info(f"  Failed: {results['failed_count']}")
             logger.info("=" * 80)
@@ -802,12 +827,65 @@ class ReindexUtility:
             results['errors'].append({'error': str(e), 'type': 'batch_error'})
             return results
     
+    @staticmethod
+    def _extract_asset_id_from_key(object_key: str, base_prefix: str) -> Optional[str]:
+        """Return the asset ID (first path segment beneath base_prefix), mirroring sqsBucketSync."""
+        if not base_prefix or base_prefix == '/':
+            parts = object_key.split('/')
+            return parts[0] if parts and parts[0] else None
+
+        prefix = base_prefix if base_prefix.endswith('/') else base_prefix + '/'
+        if object_key.startswith(prefix):
+            parts = object_key[len(prefix):].split('/')
+            return parts[0] if parts and parts[0] else None
+
+        return None
+
+    @staticmethod
+    def _is_valid_asset_id(asset_id: str) -> bool:
+        """Validate an asset ID with the common ASSET_ID validator (as sqsBucketSync does)."""
+        try:
+            (valid, _) = validate({'assetId': {'value': asset_id, 'validator': 'ASSET_ID'}})
+            return valid
+        except Exception as e:
+            logger.warning(f"Error validating asset ID {asset_id}: {e}")
+            return False
+
+    def _resolve_database_id(self, bucket_id: Optional[str], asset_id: str) -> Optional[str]:
+        """Resolve the active databaseId for (bucketId, assetId) via BucketIdGSI; cached, ignores archived."""
+        if not bucket_id or not asset_id:
+            return None
+
+        cache_key = f"{bucket_id}:{asset_id}"
+        if cache_key in self._asset_db_cache:
+            return self._asset_db_cache[cache_key]
+
+        database_id = None
+        try:
+            table = dynamodb_resource.Table(self.asset_table_name)
+            response = table.query(
+                IndexName="BucketIdGSI",
+                KeyConditionExpression=Key('bucketId').eq(bucket_id) & Key('assetId').eq(asset_id)
+            )
+            for item in response.get('Items', []):
+                candidate = item.get('databaseId', '')
+                if candidate and not candidate.endswith('#deleted'):  # skip archived assets
+                    database_id = candidate
+                    break
+        except Exception as e:
+            logger.warning(f"Error resolving databaseId for asset {asset_id} in bucket {bucket_id}: {e}")
+
+        # Cache hits and misses alike to avoid repeated lookups for the same asset
+        self._asset_db_cache[cache_key] = database_id
+        return database_id
+
     def _process_bucket(
         self,
         bucket_name: str,
         base_prefix: str,
         dry_run: bool,
-        limit: Optional[int] = None
+        limit: Optional[int] = None,
+        bucket_id: Optional[str] = None
     ) -> Dict:
         """Process all objects in a bucket and update AssetsMetadata table."""
         # Excluded patterns and prefixes from fileIndexer
@@ -825,14 +903,15 @@ class ReindexUtility:
             'total': 0,
             'objects_scanned': 0,
             'skipped_excluded': 0,
+            'skipped_no_asset': 0,
             'errors': []
         }
-        
+
         try:
             # Collect files in memory batches
             files_batch = []
             current_timestamp = datetime.now(timezone.utc).isoformat()
-            
+
             # Normalize base prefix - remove leading slash if present
             if base_prefix.startswith('/'):
                 base_prefix = base_prefix[1:]
@@ -886,15 +965,29 @@ class ReindexUtility:
                         )
                         
                         metadata = head_response.get('Metadata', {})
-                        
+
                         # Try both lowercase and original case for metadata keys
-                        asset_id = metadata.get('assetid') or metadata.get('assetId')
-                        database_id = metadata.get('databaseid') or metadata.get('databaseId')
-                        
-                        # Only process files with asset metadata
-                        if not asset_id or not database_id:
-                            continue
-                        
+                        asset_id = metadata.get(ASSET_ID_METADATA_KEY) or metadata.get('assetId')
+                        database_id = metadata.get(DATABASE_ID_METADATA_KEY) or metadata.get('databaseId')
+
+                        # Fallback for files not yet processed by sqsBucketSync (no asset
+                        # metadata): derive the asset ID from the key and resolve its
+                        # databaseId from the asset table, as sqsBucketSync does. Files that
+                        # don't resolve to a valid, active asset location are skipped.
+                        if not asset_id:
+                            asset_id = self._extract_asset_id_from_key(obj['Key'], base_prefix)
+                            if not asset_id or not self._is_valid_asset_id(asset_id):
+                                logger.info(f"Skipping {obj['Key']}: no valid asset ID derivable from key")
+                                results['skipped_no_asset'] += 1
+                                continue
+
+                        if not database_id:
+                            database_id = self._resolve_database_id(bucket_id, asset_id)
+                            if not database_id:
+                                logger.info(f"Skipping {obj['Key']}: asset {asset_id} not found for bucket {bucket_id}")
+                                results['skipped_no_asset'] += 1
+                                continue
+
                         # Calculate relative path from base prefix and asset ID
                         # Start with the full S3 key
                         relative_path = obj['Key']

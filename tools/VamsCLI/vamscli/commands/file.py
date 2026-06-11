@@ -776,8 +776,15 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 archived = " (archived)" if item.get('isArchived') else ""
                 size_info = f" ({item.get('size', 0)} bytes)" if not item.get('isFolder') else ""
                 primary_type = f" [{item.get('primaryType')}]" if item.get('primaryType') else ""
-                
-                lines.append(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{archived}")
+
+                change_info = ""
+                if item.get('changeSource'):
+                    change_info = f" [{item.get('changeSource')}"
+                    if item.get('changeUserId'):
+                        change_info += f" by {item.get('changeUserId')}"
+                    change_info += "]"
+
+                lines.append(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{change_info}{archived}")
             
             # Show nextToken for manual pagination
             if not data.get('autoPaginated') and data.get('NextToken'):
@@ -1194,6 +1201,20 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
                     if version.get('assetVersionIds'):
                         labels = [av.get('label', av.get('id', '')) if isinstance(av, dict) else f"v{av}" for av in version['assetVersionIds']]
                         lines.append(f"    Asset Versions: {', '.join(labels)}")
+                    if version.get('changeSource'):
+                        lines.append(f"    Change Source: {version.get('changeSource')}")
+                    if version.get('changeUserId'):
+                        lines.append(f"    Changed By: {version.get('changeUserId')}")
+                    if version.get('changeWorkflowId'):
+                        lines.append(f"    Change Workflow: {version.get('changeWorkflowId')}")
+                    if version.get('changeWorkflowExecutionId'):
+                        lines.append(f"    Change Execution: {version.get('changeWorkflowExecutionId')}")
+                    if version.get('changeAssetFilePathFrom'):
+                        src_db = version.get('changeDatabaseIdFrom', '')
+                        src_asset = version.get('changeAssetIdFrom', '')
+                        lines.append(f"    Changed From: {src_db}/{src_asset}/{version.get('changeAssetFilePathFrom')}")
+                    if version.get('changeAssetFileVersionFrom'):
+                        lines.append(f"    Changed From Version: {version.get('changeAssetFileVersionFrom')}")
 
             return '\n'.join(lines)
         

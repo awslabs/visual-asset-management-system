@@ -8258,12 +8258,18 @@ components:
                 previewFile:
                     type: string
                     description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+                changeSource:
+                    type: string
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
+                changeUserId:
+                    type: string
+                    description: "User (or SYSTEM) that created the current file version. Blank or absent for legacy versions."
             required:
                 - fileName
                 - key
                 - relativePath
                 - isFolder
-        
+
         listAssetFilesRequest:
             type: object
             properties:
@@ -8353,6 +8359,12 @@ components:
                 previewFile:
                     type: string
                     description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+                changeSource:
+                    type: string
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
+                changeUserId:
+                    type: string
+                    description: "User (or SYSTEM) that created the current file version. Blank or absent for legacy versions."
                 versions:
                     type: array
                     items:
@@ -8389,12 +8401,36 @@ components:
                                     type: string
                                 description: "List of asset version IDs that contain this specific file version"
                                 nullable: true
+                            changeSource:
+                                type: string
+                                description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for legacy versions."
+                            changeUserId:
+                                type: string
+                                description: "User (or SYSTEM) that created this version. Blank or absent for legacy versions."
+                            changeWorkflowId:
+                                type: string
+                                description: "Workflow ID that created this version, when changeSource is workflowExecution."
+                            changeWorkflowExecutionId:
+                                type: string
+                                description: "Workflow execution ID that created this version, when changeSource is workflowExecution."
+                            changeAssetIdFrom:
+                                type: string
+                                description: "Source asset ID this version was copied or moved from, when applicable."
+                            changeDatabaseIdFrom:
+                                type: string
+                                description: "Source database ID this version was copied or moved from, when applicable."
+                            changeAssetFilePathFrom:
+                                type: string
+                                description: "Source file path this version was copied, moved, or renamed from, when applicable."
+                            changeAssetFileVersionFrom:
+                                type: string
+                                description: "Source S3 version ID this version was copied, moved, renamed, or reverted from, when applicable."
             required:
                 - fileName
                 - key
                 - relativePath
                 - isFolder
-        
+
         moveFileRequest:
             type: object
             properties:
