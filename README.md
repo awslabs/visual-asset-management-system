@@ -61,7 +61,7 @@ _Use cases include:_
 
 ## Architecture
 
-![Architecture](./documentation/diagrams/Commercial-GovCloud-VAMS_Architecture.png)
+![Architecture](./documentation/diagrams/Commercial-GovCloud-VAMS_Architecture.png) 
 
 VAMS deploys as a serverless architecture using AWS CDK with 10+ nested CloudFormation stacks. Core services include Amazon API Gateway, AWS Lambda, Amazon DynamoDB, Amazon S3, Amazon OpenSearch, and Amazon Cognito.
 
