@@ -336,8 +336,8 @@ When frontend changes affect user-facing functionality, update the relevant Docu
 When system-wide frontend standards change (new rules, new patterns, new conventions), update all three locations:
 
 1. `web/CLAUDE.md` -- frontend steering document
-2. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
-3. `.clinerules/workflows/WEB_DEVELOPMENT_WORKFLOW.md` -- identical copy
+2. `.kiro/steering/WEB_FRONTEND.md` -- Kiro mirror of `web/CLAUDE.md`
+3. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
 
 ---
 
@@ -671,7 +671,8 @@ cd web
 npm install           # Install dependencies + runs postinstall (viewer installs)
 npm run start         # Dev server (port 3001)
 npm run build         # Production build (output: web/dist/)
-npm test              # Run tests (Vitest + @testing-library/react)
+npm test              # Run tests with coverage (Jest 30 + @testing-library/react)
+npx jest              # Run tests without coverage (faster)
 ```
 
 **Lint and format (from project root):**

@@ -458,11 +458,13 @@ const body = { entityName: "Asset" }; // Keep hardcoded for API
 
 Shared literal values (file format lists, file-name patterns, upload limits) are defined once in dedicated constants files. Always import these constants instead of redefining the literal values in components or pages, so all usages can be found and changed in one place.
 
-| File                                  | Defines                                                                   |
-| ------------------------------------- | ------------------------------------------------------------------------- |
-| `common/constants/fileFormats.ts`     | `previewFileFormats` (allowed preview extensions), `PREVIEW_FILE_PATTERN` |
-| `constants/uploadLimits.ts`           | Upload part sizes, file counts, retry attempts, `MAX_PREVIEW_FILE_SIZE`   |
-| `common/constants/featuresEnabled.ts` | Feature flag name constants                                               |
+| File                                  | Defines                                                                      |
+| ------------------------------------- | ---------------------------------------------------------------------------- |
+| `common/constants/fileFormats.ts`     | `previewFileFormats` (allowed preview extensions), `PREVIEW_FILE_PATTERN`    |
+| `constants/uploadLimits.ts`           | Upload part sizes, file counts, retry attempts, `MAX_PREVIEW_FILE_SIZE`      |
+| `common/constants/featuresEnabled.ts` | Feature flag name constants                                                  |
+| `common/constants/authRoutes.ts`      | Allowed-API-routes cache key/TTL, `isApiRouteAllowed()` helper               |
+| `common/constants/apiKeys.ts`         | `USER_API_KEY_MAX_EXPIRATION_DAYS` (mirrors the backend `models/apiKeys.py`) |
 
 ### Preview File Constants
 

@@ -48,7 +48,7 @@ root/
 │   │   └── metadata3dLabeling/
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
-├── .clinerules/workflows/     # Detailed workflow docs (supplementary)
+├── .kiro/steering/            # Detailed workflow docs (Kiro steering, supplementary)
 ├── .claude/commands/          # Claude Code skills (slash commands)
 └── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.4_to_v2.5)
 ```
@@ -175,16 +175,17 @@ These are the critical patterns that span multiple directories. **Every develope
 
 Adding a new API endpoint requires coordinated changes across multiple components:
 
-| Step                | File                                                         | What to do                                          |
-| ------------------- | ------------------------------------------------------------ | --------------------------------------------------- |
-| 1. Backend handler  | `backend/backend/handlers/{domain}/{handler}.py`             | Implement Lambda handler with Casbin enforcement    |
-| 2. Pydantic model   | `backend/backend/models/{domain}.py`                         | Define request/response models (Pydantic **v1**)    |
-| 3. Lambda builder   | `infra/lib/lambdaBuilder/{domain}Functions.ts`               | Build Lambda with env vars, permissions, VPC config |
-| 4. API route        | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Attach Lambda to API Gateway route                  |
-| 5. Frontend service | `web/src/services/APIService.ts`                             | Add API call method                                 |
-| 6. CLI command      | `tools/VamsCLI/vamscli/commands/{group}.py`                  | Add CLI command (if applicable)                     |
+| Step                      | File                                                         | What to do                                                                          |
+| ------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| 1. Master route (backend) | `backend/backend/common/apiRoutes.py`                        | Define the `ApiRoute` constant AND add it to the appropriate category group array   |
+| 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`             | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()` |
+| 3. Pydantic model         | `backend/backend/models/{domain}.py`                         | Define request/response models (Pydantic **v1**)                                    |
+| 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`               | Build Lambda with env vars, permissions, VPC config                                 |
+| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Attach Lambda to API Gateway route                                                  |
+| 6. Frontend service       | `web/src/services/APIService.ts`                             | Add API call method                                                                 |
+| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                  | Add CLI command (if applicable)                                                     |
 
-**Never** add an endpoint without updating all required files. A handler without a route is dead code. A route without a handler will 500.
+**Never** add an endpoint without updating all required files. A handler without a route is dead code. A route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a route missing there is invisible to constraint authoring and the CLI.
 
 ### **Pattern 2: Two-Tier Authorization**
 
@@ -488,13 +489,13 @@ When implementing new features, follow the patterns in these files:
 
 ## 📚 **Supplementary Documentation**
 
-For deep-dive workflows, see the detailed guides in `.clinerules/workflows/`:
+For deep-dive workflows, see the detailed guides in `.kiro/steering/`:
 
-| Document                                                    | Covers                                                                                  |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `.clinerules/workflows/CDK_DEVELOPMENT_WORKFLOW.md`         | CDK nested stacks, constructs, lambda builders, security patterns, pipeline development |
-| `.clinerules/workflows/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` | End-to-end API endpoint development across backend + CDK                                |
-| `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md`         | CLI commands, decorators, testing, profile support, JSON output                         |
+| Document                                             | Covers                                                                                  |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`         | CDK nested stacks, constructs, lambda builders, security patterns, pipeline development |
+| `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` | End-to-end API endpoint development across backend + CDK                                |
+| `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`         | CLI commands, decorators, testing, profile support, JSON output                         |
 
 For user-facing documentation:
 

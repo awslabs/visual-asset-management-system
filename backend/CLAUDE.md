@@ -45,6 +45,9 @@ backend/
 │   │   │                                #   web/src/common/constants/fileFormats.ts)
 │   │   ├── dynamoDbMetadataKeys.py      # Special DynamoDB metadata keys (REINDEX_METADATA_RECORD)
 │   │   │                                #   and internal field prefixes (VAMS_, _)
+│   │   ├── apiRoutes.py                 # MASTER list of all API endpoint routes (ApiRoute constants,
+│   │   │                                #   category group arrays, ALL_API_ROUTES). Handlers dispatch
+│   │   │                                #   via ApiRoute.matches(); feeds GET /auth/routes/api
 │   │   └── stepfunctions_builder.py     # ASL builder for workflows (builder pattern:
 │   │                                    #   TaskStateBuilder, LambdaTaskBuilder,
 │   │                                    #   SqsTaskBuilder, EventBridgeTaskBuilder)
@@ -84,7 +87,8 @@ backend/
 │       ├── assetsV3.py                  # GOLD STANDARD model file -- follow this pattern
 │       │                                #   Includes UpdateAssetVersionRequestModel (versionAlias, comment)
 │       │                                #   AssetVersionListItemModel/CurrentVersionModel have versionAlias, isArchived
-│       ├── apiKeys.py                   # API key request/response models
+│       ├── apiKeys.py                   # API key request/response models (admin + user self-service;
+│       │                                #   USER_API_KEY_MAX_EXPIRATION_DAYS = 365)
 │       ├── pipelines.py                 # Pipeline models (PipelineExecutionType enum, SQS/EventBridge fields)
 │       ├── workflows.py                 # Workflow models (Step Functions ASL generation)
 │       ├── common.py                    # Response helpers, error functions, APIGatewayProxyResponseV2
@@ -162,7 +166,17 @@ backend/
     )
     ```
 
-12. **ALWAYS use a leading `/` for normalized asset-relative file paths.** When storing
+12. **ALWAYS dispatch API requests via the master route constants.** Handlers that route
+    on `event['requestContext']['http']['path']` must match against the `ApiRoute`
+    constants from `common/apiRoutes.py` (e.g. `API_LIST_FILES.matches(path)`), never
+    against hard-coded path fragments (`path.endswith('/listFiles')`). When adding a new
+    API path or changing an existing one, define the `ApiRoute` constant in
+    `common/apiRoutes.py` AND add it to the appropriate category group array (e.g.
+    `ASSET_FILE_ROUTES`, `AUTH_ROUTES`) so it is included in `ALL_API_ROUTES` and served
+    by the `GET /auth/routes/api` listing. Keep the route templates in sync with the
+    routes attached in the CDK api builder stacks.
+
+13. **ALWAYS use a leading `/` for normalized asset-relative file paths.** When storing
     or working with a normalized file path (e.g. DynamoDB composite keys like
     `databaseId:assetId:filePath`, the `filePath` attribute, and file-path provenance
     values), the path is asset-relative and begins with a single `/` (e.g.

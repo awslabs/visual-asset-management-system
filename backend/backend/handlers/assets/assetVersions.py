@@ -15,6 +15,11 @@ from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import (
+    API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION,
+    API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION, API_ASSET_VERSION_BY_ID,
+    API_ASSET_VERSION_ARCHIVE, API_ASSET_VERSION_UNARCHIVE,
+)
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -2465,20 +2470,20 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.debug(f"Event path parameters: {event.get('pathParameters', {})}")
         logger.debug(f"Event query parameters: {event.get('queryStringParameters', {})}")
         
-        # Route to appropriate handler based on path pattern
-        if method == 'POST' and path.endswith('/createVersion'):
+        # Route to appropriate handler based on the master API route definitions
+        if method == 'POST' and API_CREATE_ASSET_VERSION.matches(path):
             return handle_create_version(event, context)
-        elif method == 'POST' and '/revertAssetVersion/' in path:
+        elif method == 'POST' and API_REVERT_ASSET_VERSION.matches(path):
             return handle_revert_version(event, context)
-        elif method == 'POST' and path.endswith('/archive'):
+        elif method == 'POST' and API_ASSET_VERSION_ARCHIVE.matches(path):
             return handle_archive_asset_version(event, context)
-        elif method == 'POST' and path.endswith('/unarchive'):
+        elif method == 'POST' and API_ASSET_VERSION_UNARCHIVE.matches(path):
             return handle_unarchive_asset_version(event, context)
-        elif method == 'PUT' and '/assetversions/' in path:
+        elif method == 'PUT' and API_ASSET_VERSION_BY_ID.matches(path):
             return handle_update_asset_version(event, context)
-        elif method == 'GET' and path.endswith('/getVersions'):
+        elif method == 'GET' and API_GET_ASSET_VERSIONS.matches(path):
             return handle_get_versions(event, context)
-        elif method == 'GET' and '/getVersion/' in path:
+        elif method == 'GET' and API_GET_ASSET_VERSION.matches(path):
             return handle_get_version(event, context)
         else:
             return validation_error(body={'message': "Invalid API path or method"}, event=event)

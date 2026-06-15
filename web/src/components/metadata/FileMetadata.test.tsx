@@ -7,16 +7,16 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import FileMetadata from "./FileMetadata";
 
-// Mock ControlledMetadata component
-jest.mock("./ControlledMetadata", () => {
-    return function MockControlledMetadata({ databaseId, assetId, prefix }: any) {
+// Mock the MetadataV2 container the component now renders
+jest.mock("../metadataV2", () => ({
+    MetadataContainer: function MockMetadataContainer({ databaseId, entityId, filePath }: any) {
         return (
-            <div data-testid="controlled-metadata">
-                Mock ControlledMetadata - {databaseId}/{assetId}/{prefix}
+            <div data-testid="metadata-container">
+                Mock MetadataContainer - {databaseId}/{entityId}/{filePath}
             </div>
         );
-    };
-});
+    },
+}));
 
 describe("FileMetadata", () => {
     const defaultProps = {
@@ -50,14 +50,13 @@ describe("FileMetadata", () => {
         expect(container).toHaveClass("custom-class");
     });
 
-    it("passes correct props to ControlledMetadata", async () => {
+    it("passes correct props to MetadataContainer", async () => {
         render(<FileMetadata {...defaultProps} />);
 
-        // Wait for loading to complete and ControlledMetadata to render
-        await screen.findByTestId("controlled-metadata");
+        await screen.findByTestId("metadata-container");
 
         expect(
-            screen.getByText("Mock ControlledMetadata - test-db/test-asset/test-prefix")
+            screen.getByText("Mock MetadataContainer - test-db/test-asset/test-prefix")
         ).toBeInTheDocument();
     });
 

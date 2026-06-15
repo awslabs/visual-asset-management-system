@@ -15,6 +15,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_ARCHIVE_ASSET, API_UNARCHIVE_ASSET, API_DELETE_ASSET
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -1734,7 +1735,7 @@ def handle_put_request(event):
             return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Check if this is an unarchive request
-        if path.endswith('/unarchiveAsset'):
+        if API_UNARCHIVE_ASSET.matches(path):
             request_model = parse(body, model=UnarchiveAssetRequestModel)
             result = unarchive_asset(
                 path_parameters['databaseId'],
@@ -1822,7 +1823,7 @@ def handle_delete_request(event):
             return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Determine which operation to perform based on the path
-        if path.endswith('/archiveAsset'):
+        if API_ARCHIVE_ASSET.matches(path):
             # Archive asset operation
             request_model = parse(body, model=ArchiveAssetRequestModel)
             result = archive_asset(
@@ -1833,7 +1834,7 @@ def handle_delete_request(event):
             )
             return success(body=result.dict())
             
-        elif path.endswith('/deleteAsset'):
+        elif API_DELETE_ASSET.matches(path):
             # Permanent delete operation
             request_model = parse(body, model=DeleteAssetRequestModel)
             result = delete_asset_permanent(

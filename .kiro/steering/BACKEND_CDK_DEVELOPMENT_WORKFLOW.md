@@ -840,9 +840,9 @@ When making backend or CDK changes, update the corresponding Docusaurus document
 When making changes that affect development standards, architecture patterns, or quality requirements:
 
 1. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-2. Update **both** `.kiro/steering/` and `.clinerules/workflows/` versions of this file (they must stay in sync)
-3. If the change affects frontend patterns, also update WEB_DEVELOPMENT_WORKFLOW.md in both locations
-4. If the change affects documentation standards, also update DOCUMENTATION_WORKFLOW.md in both locations
+2. Update the `.kiro/steering/` version of this file
+3. If the change affects frontend patterns, also update `WEB_DEVELOPMENT_WORKFLOW.md` and `WEB_FRONTEND.md`
+4. If the change affects documentation standards, also update `DOCUMENTATION_WORKFLOW.md`
 
 ### **Rule 10: Tests MUST Follow Comprehensive Patterns**
 

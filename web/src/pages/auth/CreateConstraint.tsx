@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import {
+    Autosuggest,
     Box,
     Button,
     Form,
@@ -18,7 +19,7 @@ import {
 import ExpandableSection from "@cloudscape-design/components/expandable-section";
 import { Optional } from "@cloudscape-design/components/internal/types";
 import { useEffect, useState } from "react";
-import { createConstraint } from "../../services/APIService";
+import { createConstraint, fetchApiRoutes } from "../../services/APIService";
 import { generateUUID } from "../../common/utils/utils";
 import RoleGroupPermissionsTable, { RoleGroupPermission } from "./RoleGroupPermissionsTable";
 import UserPermissionsTable, { UserPermission } from "./UserPermissionsTable";
@@ -104,58 +105,69 @@ export default function CreateConstraint({
         }));
     };
 
-    const [formState, setFormState] = useState<ConstraintFields>({
-        constraintId: generateUUID(),
-        ...initState,
-        criteriaAnd: ensureUniqueIds(initState?.criteriaAnd),
-        criteriaOr: ensureUniqueIds(initState?.criteriaOr),
-    });
+    // Build the form state from the current initState (create mode when
+    // undefined). Criteria referencing fields that are not valid for the
+    // constraint's objectType (deprecated fields) are filtered out.
+    const buildFormState = (): ConstraintFields => {
+        const validFields = initState?.objectType
+            ? fieldNamesToObjectTypeMapping[initState.objectType]
+            : undefined;
+        const prepareCriteria = (criteria: ConstraintCriteria[] | undefined) => {
+            const withIds = ensureUniqueIds(criteria);
+            if (!validFields) return withIds;
+            const validFieldValues = validFields.map((field) => field.value);
+            return withIds.filter((item) => validFieldValues.includes(item.field));
+        };
+        return {
+            constraintId: generateUUID(),
+            ...initState,
+            criteriaAnd: prepareCriteria(initState?.criteriaAnd),
+            criteriaOr: prepareCriteria(initState?.criteriaOr),
+        };
+    };
+
+    const [formState, setFormState] = useState<ConstraintFields>(buildFormState);
 
     const [selectedCriteriaAnd, setSelectedCriteriaAnd] = useState<ConstraintCriteria[]>([]);
     const [selectedCriteriaOr, setSelectedCriteriaOr] = useState<ConstraintCriteria[]>([]);
+    const [apiRouteOptions, setApiRouteOptions] = useState<{ value: string; label: string }[]>([]);
     // const [allMetadataChoiceFields, setAllMetadataChoiceFields] = useState<
     //     Record<string, string>[]
     // >([]);
 
     console.log("formState", formState, initState);
 
-    // Clear selection state when modal opens or initState changes
+    // Resync the form from initState whenever the modal opens or the selected
+    // constraint changes. The modal instance stays mounted between edits (only
+    // `open` toggles), so the useState initializer alone would leave stale
+    // criteria from the previous edit session in the form.
     useEffect(() => {
+        if (open) {
+            setFormState(buildFormState());
+            setFormError("");
+        }
         setSelectedCriteriaAnd([]);
         setSelectedCriteriaOr([]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open, initState]);
 
-    // Filter out invalid criteria fields when editing an existing constraint
+    // Fetch the full API route list (not cached) when authoring an 'api'
+    // constraint, so the Route Path criteria value offers valid routes.
     useEffect(() => {
-        if (initState && initState.objectType) {
-            const validFields = fieldNamesToObjectTypeMapping[initState.objectType];
-            if (validFields) {
-                const validFieldValues = validFields.map((field) => field.value);
-
-                const filterValidCriteria = (criteria: ConstraintCriteria[] | undefined) => {
-                    if (!criteria) return criteria;
-                    return criteria.filter((item) => validFieldValues.includes(item.field));
-                };
-
-                const filteredCriteriaAnd = filterValidCriteria(initState.criteriaAnd);
-                const filteredCriteriaOr = filterValidCriteria(initState.criteriaOr);
-
-                // Only update if filtering actually removed items
-                if (
-                    (initState.criteriaAnd &&
-                        filteredCriteriaAnd?.length !== initState.criteriaAnd.length) ||
-                    (initState.criteriaOr &&
-                        filteredCriteriaOr?.length !== initState.criteriaOr.length)
-                ) {
-                    setFormState({
-                        ...formState,
-                        criteriaAnd: filteredCriteriaAnd || [],
-                        criteriaOr: filteredCriteriaOr || [],
-                    });
-                }
-            }
+        if (!open || formState.objectType !== "api" || apiRouteOptions.length > 0) {
+            return;
         }
-    }, [initState]);
+        fetchApiRoutes().then((result) => {
+            if (result[0] === true && result[1]?.routes) {
+                setApiRouteOptions(
+                    result[1].routes.map((route: { path: string; methods: string[] }) => ({
+                        value: route.path,
+                        label: `${route.path} (${route.methods.join(", ")})`,
+                    }))
+                );
+            }
+        });
+    }, [open, formState.objectType]);
 
     // useEffect(() => {
     //     const getData = async () => {
@@ -175,6 +187,40 @@ export default function CreateConstraint({
 
     //     getData();
     // }, []);
+
+    // Renders the editing cell for criteria values. For 'api' constraints the
+    // route__path field offers the deployment's API routes (fetched live) via
+    // autosuggest while still allowing free text (e.g. regex patterns).
+    function renderCriteriaValueEditingCell(
+        item: ConstraintCriteria,
+        currentValue: string | undefined,
+        setValue: (value: string) => void
+    ) {
+        if (
+            formState.objectType === "api" &&
+            item.field === "route__path" &&
+            apiRouteOptions.length > 0
+        ) {
+            return (
+                <Autosuggest
+                    autoFocus={true}
+                    expandToViewport={true}
+                    value={currentValue ?? item.value}
+                    onChange={(event) => setValue(event.detail.value)}
+                    options={apiRouteOptions}
+                    enteredTextLabel={(value) => `Use: "${value}"`}
+                    placeholder="Select or enter an API route path"
+                />
+            );
+        }
+        return (
+            <Input
+                autoFocus={true}
+                value={currentValue ?? item.value}
+                onChange={(event) => setValue(event.detail.value)}
+            />
+        );
+    }
 
     function addNewConstraintAnd() {
         const newCriteria = {
@@ -376,12 +422,10 @@ export default function CreateConstraint({
                                 createConstraint(formState)
                                     .then((res) => {
                                         console.log("create auth criteria", res);
+                                        // The resync effect rebuilds the form from the
+                                        // refreshed initState on the next open.
                                         setOpen(false);
                                         setReload(true);
-                                        setFormState({
-                                            constraintId: generateUUID(),
-                                            ...initState,
-                                        });
                                         setFormError("");
                                     })
                                     .catch((err) => {
@@ -702,17 +746,12 @@ export default function CreateConstraint({
                                             },
                                             editIconAriaLabel: "editable",
                                             errorIconAriaLabel: "Criteria Values Error",
-                                            editingCell: (item, { currentValue, setValue }) => {
-                                                return (
-                                                    <Input
-                                                        autoFocus={true}
-                                                        value={currentValue ?? item.value}
-                                                        onChange={(event) =>
-                                                            setValue(event.detail.value)
-                                                        }
-                                                    />
-                                                );
-                                            },
+                                            editingCell: (item, { currentValue, setValue }) =>
+                                                renderCriteriaValueEditingCell(
+                                                    item,
+                                                    currentValue,
+                                                    setValue
+                                                ),
                                         },
                                     },
                                 ]}
@@ -926,17 +965,12 @@ export default function CreateConstraint({
                                             },
                                             editIconAriaLabel: "editable",
                                             errorIconAriaLabel: "Criteria Values Error",
-                                            editingCell: (item, { currentValue, setValue }) => {
-                                                return (
-                                                    <Input
-                                                        autoFocus={true}
-                                                        value={currentValue ?? item.value}
-                                                        onChange={(event) =>
-                                                            setValue(event.detail.value)
-                                                        }
-                                                    />
-                                                );
-                                            },
+                                            editingCell: (item, { currentValue, setValue }) =>
+                                                renderCriteriaValueEditingCell(
+                                                    item,
+                                                    currentValue,
+                                                    setValue
+                                                ),
                                         },
                                     },
                                 ]}

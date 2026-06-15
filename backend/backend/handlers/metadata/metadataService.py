@@ -15,6 +15,10 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import (
+    API_ASSET_LINK_METADATA, API_ASSET_METADATA,
+    API_FILE_METADATA, API_DATABASE_METADATA,
+)
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -4706,9 +4710,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
         
-        # Route to appropriate handler based on path
+        # Route to appropriate handler based on the master API route definitions
         # Asset Link Metadata Routes
-        if '/asset-links/' in path and '/metadata' in path:
+        if API_ASSET_LINK_METADATA.matches(path):
             if method == 'GET':
                 return handle_asset_link_metadata_get(event)
             elif method == 'POST':
@@ -4717,9 +4721,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_asset_link_metadata_put(event)
             elif method == 'DELETE':
                 return handle_asset_link_metadata_delete(event)
-        
+
         # File Metadata/Attribute Routes
-        elif '/database/' in path and '/assets/' in path and '/metadata/file' in path:
+        elif API_FILE_METADATA.matches(path):
             if method == 'GET':
                 return handle_file_metadata_get(event)
             elif method == 'POST':
@@ -4728,9 +4732,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_file_metadata_put(event)
             elif method == 'DELETE':
                 return handle_file_metadata_delete(event)
-        
+
         # Asset Metadata Routes (not file metadata)
-        elif '/database/' in path and '/assets/' in path and '/metadata' in path:
+        elif API_ASSET_METADATA.matches(path):
             if method == 'GET':
                 return handle_asset_metadata_get(event)
             elif method == 'POST':
@@ -4739,9 +4743,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_asset_metadata_put(event)
             elif method == 'DELETE':
                 return handle_asset_metadata_delete(event)
-        
+
         # Database Metadata Routes
-        elif '/database/' in path and '/metadata' in path and '/assets/' not in path:
+        elif API_DATABASE_METADATA.matches(path):
             if method == 'GET':
                 return handle_database_metadata_get(event)
             elif method == 'POST':

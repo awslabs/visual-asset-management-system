@@ -18,6 +18,7 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
@@ -1159,8 +1160,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
         
-        # Route to appropriate handler based on path pattern
-        if method == 'POST' and '/export' in path:
+        # Route to appropriate handler based on the master API route definitions
+        if method == 'POST' and API_ASSET_EXPORT.matches(path):
             return handle_post_export(event, context)
         else:
             return validation_error(body={'message': "Invalid API path or method"}, event=event)

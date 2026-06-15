@@ -8,6 +8,14 @@ import { act } from "react-dom/test-utils";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import RoleGroupPermissionsTable, { RoleGroupPermission } from "./RoleGroupPermissionsTable";
 import { useState } from "react";
+import { fetchRoles } from "../../services/APIService";
+
+// The component loads role groups through the APIService, not props
+jest.mock("../../services/APIService", () => ({
+    fetchRoles: jest.fn(),
+}));
+
+const mockFetchRoles = fetchRoles as jest.MockedFunction<any>;
 
 const crypto = require("crypto");
 
@@ -17,37 +25,30 @@ Object.defineProperty(global.self, "crypto", {
     },
 });
 
-function Harness({ fetchGroups, startPerm = [] }: any) {
+function Harness({ startPerm = [] }: any) {
     const [permissions, setPermissions] = useState<RoleGroupPermission[]>(startPerm);
 
-    return (
-        <RoleGroupPermissionsTable
-            permissions={permissions}
-            setPermissions={setPermissions}
-            fetchGroups={fetchGroups}
-        />
-    );
+    return <RoleGroupPermissionsTable permissions={permissions} setPermissions={setPermissions} />;
 }
 
 describe("Group Permissions Table", () => {
-    it("renders with an empty list", async () => {
-        const promise = Promise.resolve(["one", "two"]);
-        const fetchGroups = jest.fn(() => promise);
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockFetchRoles.mockResolvedValue([{ roleName: "one" }, { roleName: "two" }]);
+    });
 
+    it("renders with an empty list", async () => {
         await act(async () => {
-            render(<Harness fetchGroups={fetchGroups} />);
-            await promise;
+            render(<Harness />);
         });
         const wrapper = createWrapper();
         expect(wrapper.findTable()).toBeTruthy();
+        expect(mockFetchRoles).toHaveBeenCalled();
     });
 
     it("can add a row to the list of permissions", async () => {
-        const promise = Promise.resolve(["one", "two"]);
-        const fetchGroups = jest.fn(() => promise);
         await act(async () => {
-            render(<Harness fetchGroups={fetchGroups} />);
-            await promise;
+            render(<Harness />);
         });
         const wrapper = createWrapper();
         act(() => {
@@ -57,22 +58,19 @@ describe("Group Permissions Table", () => {
     });
 
     it("has an editable form", async () => {
-        const promise = Promise.resolve(["one", "two"]);
-        const fetchGroups = jest.fn(() => promise);
+        mockFetchRoles.mockResolvedValue([{ roleName: "test" }, { roleName: "other" }]);
         await act(async () => {
             render(
                 <Harness
-                    fetchGroups={fetchGroups}
                     startPerm={[
                         {
                             id: "test",
                             groupId: "test",
-                            permission: "test",
+                            permission: "GET",
                         },
                     ]}
                 />
             );
-            await promise;
         });
         const wrapper = createWrapper();
         expect(wrapper.findTable()?.findRows()).toHaveLength(1);

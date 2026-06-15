@@ -1,6 +1,6 @@
-# CLAUDE.md - VAMS Frontend (web/)
+# VAMS Web Frontend Steering (Kiro)
 
-This is the frontend-specific Claude Code steering document for the VAMS (Visual Asset Management System) web application. It is auto-loaded when working within the `web/` directory.
+This is the Kiro front-end steering document for the VAMS (Visual Asset Management System) web application (`web/`). It mirrors the canonical `web/CLAUDE.md` content for the Kiro coding agent. When front-end standards change, update both this file and `web/CLAUDE.md`.
 
 ---
 

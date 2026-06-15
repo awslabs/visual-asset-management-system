@@ -1919,8 +1919,8 @@ When making CDK infrastructure changes, update the corresponding documentation a
 When changes affect development standards, architecture patterns, or quality requirements:
 
 1. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-2. Update **both** `.kiro/steering/` and `.clinerules/workflows/` versions of affected workflow files (they must stay in sync)
-3. Keep WEB_DEVELOPMENT_WORKFLOW.md, BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, CLI_DEVELOPMENT_WORKFLOW.md, and DOCUMENTATION_WORKFLOW.md aligned when cross-component patterns change
+2. Update the `.kiro/steering/` version of affected workflow files
+3. Keep WEB_DEVELOPMENT_WORKFLOW.md, WEB_FRONTEND.md, BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, CLI_DEVELOPMENT_WORKFLOW.md, and DOCUMENTATION_WORKFLOW.md aligned when cross-component patterns change
 
 ---
 

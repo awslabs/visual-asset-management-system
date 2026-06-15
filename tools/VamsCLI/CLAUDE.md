@@ -32,7 +32,8 @@ tools/VamsCLI/
       cognito.py             # CognitoAuthenticator (SRP, USER_PASSWORD_AUTH)
     commands/
       setup.py               # Initial CLI configuration
-      auth.py                # Login, logout, status, set-override
+      auth.py                # Login, logout, status, set-override, routes (API route listing)
+      apiKey.py              # API key management (admin) + 'user' sub-group (self-service own keys)
       assets.py              # Asset CRUD operations
       asset_version.py       # Asset version management (list, get, create, update, archive, unarchive, revert)
       asset_links.py         # Asset relationship/link management

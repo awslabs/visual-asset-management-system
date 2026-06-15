@@ -15,6 +15,7 @@ from common.s3MetadataKeys import (
     UPLOAD_ID_METADATA_KEY,
 )
 from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.apiRoutes import API_UPLOAD_COMPLETE_EXTERNAL
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -242,7 +243,11 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
             },
             "body": json.dumps(body),
         }
-        lambda_payload["requestContext"]["http"]["path"] = f"/uploads/{upload_id}/complete/external"
+        # Synthetic internal route -- must match API_UPLOAD_COMPLETE_EXTERNAL in
+        # common/apiRoutes.py, which the uploadFile dispatcher matches against.
+        lambda_payload["requestContext"]["http"]["path"] = API_UPLOAD_COMPLETE_EXTERNAL.path.replace(
+            "{uploadId}", upload_id
+        )
         lambda_payload["requestContext"]["http"]["httpMethod"] = f"POST"
         
         # Invoke the Lambda function

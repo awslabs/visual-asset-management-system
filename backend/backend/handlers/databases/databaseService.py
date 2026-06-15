@@ -10,6 +10,7 @@ from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.auth import request_to_claims
@@ -610,14 +611,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
         
-        # Route request to appropriate handler based on path and method
-        if path.endswith('/database'):
+        # Route request to appropriate handler based on the master API route definitions
+        if API_DATABASE.matches(path):
             # Route: /database
             if http_method == 'GET':
                 return get_databases_handler(event, query_parameters, claims_and_roles)
             else:
                 return authorization_error(body={'message': 'Method not allowed for this route'})
-        elif '/database/' in path and path_parameters.get('databaseId'):
+        elif API_DATABASE_BY_ID.matches(path) and path_parameters.get('databaseId'):
             # Route: /database/{databaseId}
             if http_method == 'GET':
                 return get_database_handler(event, path_parameters, query_parameters, claims_and_roles)
@@ -645,7 +646,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return delete_database_handler(event, path_parameters, claims_and_roles)
             else:
                 return authorization_error(body={'message': 'Method not allowed for this route'})
-        elif path.endswith('/buckets'):
+        elif API_BUCKETS.matches(path):
             # Route: /buckets
             if http_method == 'GET':
                 return get_buckets_handler(event, query_parameters, claims_and_roles)

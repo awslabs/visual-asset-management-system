@@ -85,16 +85,18 @@ describe("Workflow Editor", () => {
     });
 
     it("makes elements a function of workflow pipelines", () => {
+        // The seed asset0 input node was removed from the reducer; an empty
+        // pipeline list now produces no elements.
         const result = workflowPipelineToElements([], "databaseid");
-        expect(result.find((x) => x.id === "asset0")).toBeTruthy();
-        expect(result.length).toEqual(1);
+        expect(result.length).toEqual(0);
     });
 
     it("makes elements a function of workflow pipelines with one pipeline", () => {
         const result = workflowPipelineToElements([null], "databaseid");
-        expect(result.find((x) => x.id === "asset0")).toBeTruthy();
         expect(result.find((x) => x.id === "pipeline0")).toBeTruthy();
-        expect(result.length).toEqual(5);
+        expect(result.find((x) => x.id === "asset1")).toBeTruthy();
+        expect(result.find((x) => x.id === "pipeline0-asset1")).toBeTruthy();
+        expect(result.length).toEqual(4);
     });
 
     it("matches the snapshot for an empty workflow pipeline list", () => {

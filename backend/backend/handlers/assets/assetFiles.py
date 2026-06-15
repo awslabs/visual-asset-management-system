@@ -35,6 +35,12 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.apiRoutes import (
+    API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
+    API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_FILE,
+    API_DELETE_ASSET_PREVIEW, API_DELETE_AUXILIARY_PREVIEW,
+    API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
+)
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.authz import CasbinEnforcer
@@ -4714,31 +4720,31 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Get API path and method
         path = event['requestContext']['http']['path']
         method = event['requestContext']['http']['method']
-        
-        # Route to appropriate handler based on path pattern
-        if method == 'GET' and path.endswith('/listFiles'):
+
+        # Route to appropriate handler based on the master API route definitions
+        if method == 'GET' and API_LIST_FILES.matches(path):
             return handle_list_files(event, context)
-        elif method == 'GET' and path.endswith('/fileInfo'):
+        elif method == 'GET' and API_FILE_INFO.matches(path):
             return handle_file_info(event, context)
-        elif method == 'POST' and path.endswith('/moveFile'):
+        elif method == 'POST' and API_MOVE_FILE.matches(path):
             return handle_move_file(event, context)
-        elif method == 'POST' and path.endswith('/copyFile'):
+        elif method == 'POST' and API_COPY_FILE.matches(path):
             return handle_copy_file(event, context)
-        elif method == 'POST' and path.endswith('/unarchiveFile'):
+        elif method == 'POST' and API_UNARCHIVE_FILE.matches(path):
             return handle_unarchive_file(event, context)
-        elif method == 'POST' and path.endswith('/createFolder'):
+        elif method == 'POST' and API_CREATE_FOLDER.matches(path):
             return handle_create_folder(event, context)
-        elif method == 'DELETE' and path.endswith('/archiveFile'):
+        elif method == 'DELETE' and API_ARCHIVE_FILE.matches(path):
             return handle_archive_file(event, context)
-        elif method == 'DELETE' and path.endswith('/deleteFile'):
+        elif method == 'DELETE' and API_DELETE_FILE.matches(path):
             return handle_delete_file(event, context)
-        elif method == 'DELETE' and path.endswith('/deleteAssetPreview'):
+        elif method == 'DELETE' and API_DELETE_ASSET_PREVIEW.matches(path):
             return handle_delete_asset_preview(event, context)
-        elif method == 'DELETE' and path.endswith('/deleteAuxiliaryPreviewAssetFiles'):
+        elif method == 'DELETE' and API_DELETE_AUXILIARY_PREVIEW.matches(path):
             return handle_delete_auxiliary_preview_asset_files(event, context)
-        elif method == 'POST' and '/revertFileVersion/' in path:
+        elif method == 'POST' and API_REVERT_FILE_VERSION.matches(path):
             return handle_revert_file_version(event, context)
-        elif method == 'PUT' and path.endswith('/setPrimaryFile'):
+        elif method == 'PUT' and API_SET_PRIMARY_FILE.matches(path):
             return handle_set_primary_file(event, context)
         else:
             return validation_error(body={'message': "Invalid API path or method"}, event=event)

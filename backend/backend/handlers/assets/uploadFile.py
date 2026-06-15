@@ -32,6 +32,7 @@ from common.s3PathPatterns import (
     TEMPORARY_UPLOAD_PREFIX,
     PREVIEW_PREFIX,
 )
+from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -2378,8 +2379,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         path = event['requestContext']['http']['path']
         method = event['requestContext']['http']['method']
         
-        # Determine which API to call based on path and method
-        if method == 'POST' and path == '/uploads':
+        # Determine which API to call based on the master API route definitions
+        if method == 'POST' and API_UPLOADS.matches(path):
             # Initialize Upload API
             request_model = parse(body, model=InitializeUploadRequestModel)
             
@@ -2416,7 +2417,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             return success(body=response.dict())
             
-        elif method == 'POST' and '/uploads/' in path and path.endswith('/complete/external'):
+        elif method == 'POST' and API_UPLOAD_COMPLETE_EXTERNAL.matches(path):
             # External Complete Upload API - Extract uploadId from path parameters
             if not event.get('pathParameters') or not event['pathParameters'].get('uploadId'):
                 return validation_error(body={'message': "Missing uploadId in path parameters"}, event=event)
@@ -2446,7 +2447,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             else:
                 return success(body=response.dict())
             
-        elif method == 'POST' and '/uploads/' in path and path.endswith('/complete'):
+        elif method == 'POST' and API_UPLOAD_COMPLETE.matches(path):
             # Complete Upload API - Extract uploadId from path parameters
             if not event.get('pathParameters') or not event['pathParameters'].get('uploadId'):
                 return validation_error(body={'message': "Missing uploadId in path parameters"}, event=event)

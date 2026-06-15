@@ -930,9 +930,9 @@ This workflow document itself MUST be updated whenever system-wide standards, im
 
 When updating this workflow document, also update the corresponding files:
 
-1. Update **both** `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` and `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md` (they must stay in sync)
+1. Update `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`
 2. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, DOCUMENTATION_WORKFLOW.md)
+3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, WEB_FRONTEND.md, DOCUMENTATION_WORKFLOW.md)
 
 #### **Workflow Maintenance Responsibility:**
 
@@ -1035,7 +1035,7 @@ Available constants are in `infra/common/vamsAppFeatures.ts`
 
 #### **Feature Switch Development Workflow Location:**
 
-This workflow document is located at `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md` and should be referenced for all VamsCLI development tasks.
+This workflow document is located at `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` and should be referenced for all VamsCLI development tasks.
 
 ### **Rule 13: CLI Integration Testing MUST Use Main CLI Entry Point**
 

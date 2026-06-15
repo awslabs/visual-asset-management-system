@@ -333,11 +333,10 @@ Use standard Markdown or Docusaurus components instead of raw HTML.
 
 ### **Rule 12: Update Steering Files When Documentation Standards Change**
 
-When documentation standards, patterns, or structure change, update all three locations:
+When documentation standards, patterns, or structure change, update both locations:
 
 1. `documentation/CLAUDE.md` -- documentation steering document
 2. `.kiro/steering/DOCUMENTATION_WORKFLOW.md` -- this file
-3. `.clinerules/workflows/DOCUMENTATION_WORKFLOW.md` -- identical copy
 
 ---
 

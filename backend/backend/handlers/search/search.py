@@ -18,6 +18,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.authz import CasbinEnforcer
@@ -2063,27 +2064,27 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         database_access_manager = DatabaseAccessManager()
         response_processor = DualIndexResponseProcessor(database_access_manager)
         
-        # Route based on path and method
+        # Route based on the master API route definitions
         if method == 'GET':
             # GET requests are only supported on the main /search endpoint for mappings
-            if path == '/search':
+            if API_SEARCH.matches(path):
                 return handle_get_request(event, search_manager)
             else:
                 return validation_error(body={'message': "GET method only supported on /search endpoint"}, event=event)
-        
+
         elif method == 'POST':
-            if path == '/search':
+            if API_SEARCH.matches(path):
                 # Regular complex search
                 query_builder = DualIndexQueryBuilder(database_access_manager)
                 return handle_post_request(event, search_manager, query_builder, response_processor, claims_and_roles)
-            
-            elif path == '/search/simple':
+
+            elif API_SEARCH_SIMPLE.matches(path):
                 # Simple search
                 simple_query_builder = SimpleSearchQueryBuilder(database_access_manager)
                 return handle_simple_post_request(event, search_manager, simple_query_builder, response_processor, claims_and_roles)
-            
+
             else:
-                return validation_error(body={'message': f"POST method not supported on path: {path}"}, event=event)
+                return validation_error(body={'message': "POST method not supported on this path"}, event=event)
         
         else:
             return validation_error(body={'message': f"Method {method} not allowed"}, event=event)

@@ -3,13 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { PropsWithChildren, Suspense, useEffect, useState } from "react";
+import React, { PropsWithChildren, Suspense, useEffect, useRef, useState } from "react";
 import { Amplify } from "aws-amplify";
 import { fetchAuthSession, getCurrentUser, signOut, signInWithRedirect } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
 import { appCache } from "../services/appCache";
 import { OAuth2Client, OAuth2Token, generateCodeVerifier } from "@badgateway/oauth2-client";
-import { getSecureConfig, getAmplifyConfig, fetchLoginProfile } from "../services/APIService";
+import {
+    getSecureConfig,
+    getAmplifyConfig,
+    fetchLoginProfile,
+    fetchAllowedApiRoutes,
+} from "../services/APIService";
 import { default as vamsConfig } from "../config";
 import { Authenticator } from "@aws-amplify/ui-react";
 import {
@@ -32,6 +37,10 @@ import styles from "./loginbox.module.css";
 import "@aws-amplify/ui-react/styles.css";
 import { Heading, useTheme } from "@aws-amplify/ui-react";
 
+import {
+    ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
+    ALLOWED_API_ROUTES_CACHE_KEY,
+} from "../common/constants/authRoutes";
 import { GlobalHeader } from "./../common/GlobalHeader";
 import { Header } from "./../authenticator/Header";
 import { Footer, PageFooter } from "./../authenticator/Footer";
@@ -365,6 +374,11 @@ const Auth: React.FC<AuthProps> = (props) => {
         localStorage.getItem("auth_error")
     );
 
+    // Tracks whether secure-config has been fetched for the current login
+    // session, so feature switches are refetched on every re-login instead of
+    // being cached forever in localStorage.
+    const secureConfigFetchedRef = useRef(false);
+
     const [ampInit, setAmpInit] = useState(false);
 
     const [isLoggedIn, setisLoggedIn] = useState(false);
@@ -598,14 +612,11 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Both Effect
     //Once logged in, get/set other configuration and profile information
     useEffect(() => {
-        //Secure Config Fetch - fetch if featuresEnabled, locationServiceApiUrl, or webDeployedUrl is missing
-        if (
-            config &&
-            (!config.featuresEnabled ||
-                !config.locationServiceApiUrl ||
-                config.webDeployedUrl === undefined) &&
-            isLoggedIn
-        ) {
+        //Secure Config Fetch - refetch once per login session so feature switches
+        //and deployment settings pick up backend changes (previously these were
+        //cached in localStorage forever until a full site-data reset).
+        if (config && !config._configError && isLoggedIn && !secureConfigFetchedRef.current) {
+            secureConfigFetchedRef.current = true;
             getSecureConfig()
                 .then((value) => {
                     config.featuresEnabled = value.featuresEnabled;
@@ -617,6 +628,9 @@ const Auth: React.FC<AuthProps> = (props) => {
                 })
                 .catch((error: Error) => {
                     console.error("Error getting secure-config:", error.message);
+
+                    // Allow a retry on the next effect run if the fetch failed
+                    secureConfigFetchedRef.current = false;
 
                     // if response status code was 401 unauthorized, token may be invalid, so sign out
                     if ((error as any).status === 401) {
@@ -652,6 +666,45 @@ const Auth: React.FC<AuthProps> = (props) => {
         }
         if (isLoggedIn) setIsLoading(false); // if logged in, can deem that the loading is complete
     }, [config, isLoggedIn]);
+
+    //Both Effect
+    //Once logged in, fetch and cache the API routes the user is authorized to
+    //call, and periodically renew the cache while the session is active. The
+    //cached list is not consumed by the UI yet -- it will drive enabling/
+    //disabling web functionality tied to API access in a future release.
+    useEffect(() => {
+        if (!isLoggedIn) {
+            return;
+        }
+
+        const refreshAllowedApiRoutes = (force = false) => {
+            if (!force && appCache.getItemWithExpiry(ALLOWED_API_ROUTES_CACHE_KEY)) {
+                return; // Cache still fresh
+            }
+            fetchAllowedApiRoutes()
+                .then((result) => {
+                    if (result[0] === true && result[1]?.routes) {
+                        appCache.setItemWithExpiry(
+                            ALLOWED_API_ROUTES_CACHE_KEY,
+                            result[1],
+                            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
+                        );
+                        console.log("Cached allowed API routes");
+                    }
+                })
+                .catch((error: Error) => {
+                    console.error("Error getting allowed API routes:", error.message);
+                });
+        };
+
+        // Fetch on login (uses cache if still fresh), then renew periodically
+        refreshAllowedApiRoutes();
+        const renewInterval = setInterval(
+            () => refreshAllowedApiRoutes(true),
+            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
+        );
+        return () => clearInterval(renewInterval);
+    }, [isLoggedIn]);
 
     //External OAUTH Function for handling sign-in
     const handleExternalOauthSignIn = async (require_mfa = false) => {
@@ -1079,6 +1132,7 @@ const resetSession = () => {
     localStorage.removeItem("user");
     localStorage.removeItem("email");
     appCache.removeItem("loginProfile");
+    appCache.removeItem(ALLOWED_API_ROUTES_CACHE_KEY);
 };
 
 // Wrapper for setExternalOauth2Token that also handles timer restart and error clearing

@@ -124,6 +124,14 @@ def setup_mock_imports():
     )
     sys.modules['common.dynamoDbMetadataKeys'] = dynamodb_metadata_keys_module
 
+    # apiRoutes is pure constants with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    api_routes_module = import_module_from_path(
+        'common.apiRoutes',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'apiRoutes.py')
+    )
+    sys.modules['common.apiRoutes'] = api_routes_module
+
     # s3 is a simple validation module; load the mock by path
     s3_mock_module = import_module_from_path('common.s3', os.path.join(mocks_base_path, 'common', 's3.py'))
     sys.modules['common.s3'] = s3_mock_module

@@ -526,7 +526,7 @@ class CasbinEnforcerService:
 
                 #Backwards compatability - add criteria to criteriaAnd (field name change to make way for OR criteria)
                 if "criteria" in policy:
-                    policy["criteriaAnd"].append(policy["criteria"])
+                    policy["criteriaAnd"].extend(policy["criteria"])
 
                 # Get the explicit criteria for the object to be of the type mentioned in "objectType"
                 obj_rule_ObjectType = self._generate_criteria_object_rules(
@@ -544,31 +544,35 @@ class CasbinEnforcerService:
                 if "criteriaOr" in policy:
                     obj_rule_Or = self._generate_criteria_object_rules(policy["criteriaOr"])
 
+                # Combine AND and OR criteria into a single rule expression:
+                # all AND criteria must be true AND (when present) at least one
+                # OR criterion must be true. Emitting one combined policy line
+                # (instead of separate AND/OR lines, which Casbin's
+                # some(where allow) effect would treat as alternatives) both
+                # enforces the combined semantics and halves the rules the
+                # matcher evaluates per request.
+                rule_parts = [obj_rule_ObjectType[0]]
+                rule_parts.extend(obj_rule_And)
+                if len(obj_rule_Or) > 0:
+                    rule_parts.append(f"({' || '.join(obj_rule_Or)})")
+                if len(obj_rule_And) == 0 and len(obj_rule_Or) == 0:
+                    # No criteria at all: skip emitting a rule for this policy
+                    continue
+                combined_obj_rule = " && ".join(rule_parts)
+
                 if "groupPermissions" in policy:
                     for group_permission in policy["groupPermissions"]:
-                        if len(obj_rule_And) > 0:
-                            policy_text = (
-                                f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
-                                f"""p, 'role::{group_permission["groupId"]}', {obj_rule_ObjectType[0]} && {" && ".join(obj_rule_And)}, {group_permission["permission"]}, {group_permission["permissionType"] or 'allow'}"""
-                            )
-                        if len(obj_rule_Or) > 0:
-                            policy_text = (
-                                f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
-                                f"""p, 'role::{group_permission["groupId"]}', {obj_rule_ObjectType[0]} && ({" || ".join(obj_rule_Or)}), {group_permission["permission"]}, {group_permission["permissionType"] or 'allow'}"""
-                            )
+                        policy_text = (
+                            f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
+                            f"""p, 'role::{group_permission["groupId"]}', {combined_obj_rule}, {group_permission["permission"]}, {group_permission["permissionType"] or 'allow'}"""
+                        )
 
                 if "userPermissions" in policy:
                     for user_permission in policy["userPermissions"]:
-                        if len(obj_rule_And) > 0:
-                            policy_text = (
-                                f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
-                                f"""p, user::{user_permission["userId"]}, {obj_rule_ObjectType[0]} && {" && ".join(obj_rule_And)}, {user_permission["permission"]}, {user_permission["permissionType"] or 'allow'}"""
-                            )
-                        if len(obj_rule_Or) > 0:
-                            policy_text = (
-                                f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
-                                f"""p, user::{user_permission["userId"]}, {obj_rule_ObjectType[0]} && ({" || ".join(obj_rule_Or)}), {user_permission["permission"]}, {user_permission["permissionType"] or 'allow'}"""
-                            )
+                        policy_text = (
+                            f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
+                            f"""p, user::{user_permission["userId"]}, {combined_obj_rule}, {user_permission["permission"]}, {user_permission["permissionType"] or 'allow'}"""
+                        )
         
         #logger.info(f"Generated policy_text with {len(policy_text)} characters")
         if len(policy_text) < 100:

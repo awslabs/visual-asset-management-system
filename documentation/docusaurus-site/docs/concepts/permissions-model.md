@@ -72,7 +72,7 @@ A constraint is a policy rule that defines what a role can do. Each constraint s
 -   **Permissions** -- The HTTP methods allowed or denied (`GET`, `PUT`, `POST`, `DELETE`).
 -   **Permission type** -- Whether the constraint is an `allow` or `deny` rule.
 
-Constraints use `criteriaAnd` (all conditions must match) and `criteriaOr` (at least one condition must match) to build complex matching rules.
+Constraints use `criteriaAnd` (all conditions must match) and `criteriaOr` (at least one condition must match) to build complex matching rules. When a constraint defines both, they combine within the same rule: access matches only if **all** `criteriaAnd` conditions are true **and at least one** `criteriaOr` condition is true.
 
 :::warning[Constraint management is an administrative operation]
 The ability to create, modify, or delete constraints is itself a privileged capability. Constraint management routes (`/auth/constraints`, `/auth/constraints/\{constraintId\}`, and `/auth/constraintsTemplateImport`) are gated at Tier 1 by the `api` object type and, in the default deployment, are granted only to the `admin` role.

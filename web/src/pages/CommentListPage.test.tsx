@@ -38,7 +38,7 @@ describe("Rendering CommentListPage", () => {
             />
         );
         // Should call fetchElements when there is a databaseId
-        expect(fetchElements).toBeCalled();
+        expect(fetchElements).toHaveBeenCalled();
     });
 
     test("Should render correctly WITHOUT databaseId", () => {
@@ -61,6 +61,6 @@ describe("Rendering CommentListPage", () => {
             />
         );
         // should call fetchAllElements when there is not a databaseId
-        expect(fetchAllElements).toBeCalled();
+        expect(fetchAllElements).toHaveBeenCalled();
     });
 });

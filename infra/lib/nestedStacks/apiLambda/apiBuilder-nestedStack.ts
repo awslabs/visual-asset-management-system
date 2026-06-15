@@ -1132,6 +1132,18 @@ export class ApiBuilderNestedStack extends NestedStack {
             api: api,
         });
 
+        attachFunctionToApi(this, authFunctions.routes, {
+            routePath: "/auth/routes/api",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.routes, {
+            routePath: "/auth/routes/api/allowed",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
         attachFunctionToApi(this, authFunctions.authLoginProfile, {
             routePath: "/auth/loginProfile/{userId}",
             method: apigateway.HttpMethod.GET,
@@ -1202,6 +1214,38 @@ export class ApiBuilderNestedStack extends NestedStack {
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/api-keys/{apiKeyId}",
+            method: apigateway.HttpMethod.DELETE,
+            api: api,
+        });
+
+        // User-level (self-service) API key routes — scoped to the requesting
+        // user's own keys with mandatory expiration (enforced by the handler).
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys/{apiKeyId}",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys/{apiKeyId}",
+            method: apigateway.HttpMethod.PUT,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys/{apiKeyId}",
             method: apigateway.HttpMethod.DELETE,
             api: api,
         });

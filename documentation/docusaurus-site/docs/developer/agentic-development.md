@@ -6,15 +6,18 @@ AI-assisted coding tools are used at your own risk. Configure agent permissions 
 
 VAMS supports AI-assisted development through a layered system of steering documents that guide AI coding agents to follow project conventions, architecture patterns, and quality standards. These documents ensure that AI agents produce code consistent with VAMS patterns regardless of which developer or agent is performing the work.
 
-Three AI coding agents are supported: Claude Code, Cline, and Kiro. Each reads from dedicated steering file locations, but the underlying guidance is consistent across all agents.
+Two AI coding agents are supported: Claude Code and Kiro. Each reads from dedicated steering file locations, but the underlying guidance is consistent across both agents.
+
+:::note[Cline support deprecated]
+The Cline agent (`.clinerules/workflows/`) is no longer supported. Its steering files have been removed. Use Claude Code or Kiro instead.
+:::
 
 ## Supported Agents
 
-| Agent       | Steering Location                       | Description                                                                                                                                |
-| ----------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Claude Code | `CLAUDE.md` files + `.claude/commands/` | Component-level steering documents placed in each major directory (auto-loaded), plus reusable slash commands for common multi-step tasks. |
-| Cline       | `.clinerules/workflows/`                | Workflow-based development guides with checklists, templates, and mandatory rules.                                                         |
-| Kiro        | `.kiro/steering/`                       | Workflow-based development guides mirrored from `.clinerules/workflows/` for Kiro compatibility.                                           |
+| Agent       | Steering Location                       | Description                                                                                                                                  |
+| ----------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code | `CLAUDE.md` files + `.claude/commands/` | Component-level steering documents placed in each major directory (auto-loaded), plus reusable slash commands for common multi-step tasks.   |
+| Kiro        | `.kiro/steering/`                       | Workflow-based development guides with checklists, templates, and mandatory rules, plus a front-end steering file mirroring `web/CLAUDE.md`. |
 
 ## Steering File Architecture
 
@@ -36,7 +39,7 @@ Each major component directory contains its own `CLAUDE.md` with patterns specif
 
 ### Layer 3: Workflow Documents
 
-The `.kiro/steering/` and `.clinerules/workflows/` directories contain detailed development workflow guides. These documents provide step-by-step checklists, code templates, and mandatory rules for complex multi-file tasks such as adding a new backend API endpoint or building a new AWS CDK nested stack.
+The `.kiro/steering/` directory contains detailed development workflow guides. These documents provide step-by-step checklists, code templates, and mandatory rules for complex multi-file tasks such as adding a new backend API endpoint or building a new AWS CDK nested stack.
 
 ## Available Steering Documents
 
@@ -53,7 +56,7 @@ The `.kiro/steering/` and `.clinerules/workflows/` directories contain detailed 
 
 ### Workflow Documents
 
-The following workflow documents exist in both `.kiro/steering/` and `.clinerules/workflows/`. The content is identical across both locations.
+The following workflow documents live in `.kiro/steering/`.
 
 | File                                  | Scope              | Key Topics                                                                                                                             |
 | ------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -61,6 +64,7 @@ The following workflow documents exist in both `.kiro/steering/` and `.clinerule
 | `CDK_DEVELOPMENT_WORKFLOW.md`         | CDK infrastructure | Nested stack patterns, configuration management, feature switches, Lambda builder templates, security compliance, pipeline development |
 | `CLI_DEVELOPMENT_WORKFLOW.md`         | CLI tool           | Click command structure, profile support, constants pattern, error handling, JSON output, testing                                      |
 | `WEB_DEVELOPMENT_WORKFLOW.md`         | React frontend     | Service-layer pattern, Cloudscape imports, HashRouter, Synonyms, lazy loading, Context + useReducer, theme system, viewer plugins      |
+| `WEB_FRONTEND.md`                     | React frontend     | Front-end steering mirroring `web/CLAUDE.md`: directory structure, mandatory rules, viewer plugin system, testing (Jest), conventions  |
 | `DOCUMENTATION_WORKFLOW.md`           | Documentation site | Docusaurus conventions, admonition syntax, sidebar updates, writing style, cross-references, build commands                            |
 
 ## How Steering Documents Guide Development
@@ -140,14 +144,10 @@ These commands encode the cross-component patterns from the steering documents i
 
 ## Keeping Steering Documents in Sync
 
-:::warning[Synchronization Requirement]
-The `.kiro/steering/` and `.clinerules/workflows/` directories must contain identical content. When updating a workflow document, apply the same change to both locations.
-:::
-
 The synchronization rules are as follows:
 
--   **`.kiro/steering/` and `.clinerules/workflows/`**: These directories are committed to version control and shared across all developers. Changes to workflow documents must be applied to both locations simultaneously.
--   **`CLAUDE.md` files**: These files are gitignored and maintained locally by each developer. They are not committed to the repository. Each developer may customize these files for their environment, but the canonical content is defined by project convention.
+-   **`.kiro/steering/`**: This directory is committed to version control and shared across all developers. The `WEB_FRONTEND.md` file mirrors `web/CLAUDE.md`; when front-end standards change, update both locations.
+-   **`CLAUDE.md` files**: These files provide the canonical component-level steering. When a component-level standard changes, update the relevant `CLAUDE.md` and any mirrored Kiro steering file.
 -   **System-wide standard changes**: When a cross-cutting standard changes (such as a new security pattern or a new required step in the API endpoint workflow), all affected steering files must be updated. The root `CLAUDE.md` Rule 11 ("Keep CLAUDE.md Files Updated") provides a mapping of change types to the files that must be updated.
 
 ## Adding New Steering Documents
@@ -169,9 +169,6 @@ Follow the established pattern for new steering documents:
 
 ### File Placement
 
-Create the workflow document in both locations:
+Create the workflow document in `.kiro/steering/\{WORKFLOW_NAME\}.md`.
 
--   `.kiro/steering/\{WORKFLOW_NAME\}.md`
--   `.clinerules/workflows/\{WORKFLOW_NAME\}.md`
-
-For component-level steering, create a `CLAUDE.md` file in the component's root directory. Reference the root `CLAUDE.md` for the standard sections and conventions to include.
+For component-level steering, create a `CLAUDE.md` file in the component's root directory. Reference the root `CLAUDE.md` for the standard sections and conventions to include. If the component warrants a mirrored Kiro front-end-style steering file, copy the `CLAUDE.md` content into `.kiro/steering/` and keep the two in sync.
