@@ -66,8 +66,6 @@ All notable changes to this project will be documented in this file. See [standa
 -   Fixed NVIDIA IsaacLabs pipeline to now properly lookup asset input locations to allow relative pathing in the submitted configuration files
 -   Fixed NVIDIA IsaacLabs pipeline to have a unique SFN name per deployment configuration to avoid same-region multi-vams instance deployments
 -   Programatically stripping NVIDIA Cosmos, Gr00t, and IsaacLab CRLF line endings on entrypoint files to account for different deployment machine OSs (Windows vs Linux/Mac) that could cause pipeline failures
--   Fixed a Casbin authz implementation bug that could allow injecting additional policies through field values that would be regex evaluated. Low impact as Casbin policies are only able to be set by admins by default. Added additional backend tests for this case.
--   Fixed latent defect of backend test framework not being updated with changes from v2.5, causing some test failures.
 -   **Web** Pipeline create/update and other components using ListPages now approrpriately displays API errors to the user
 -   Fixed bug in various backend handlers with how it handles reserved S3 prefix names (preview, temp-upload, etc) and `*.previewFile.*` patterns where it overly excluded or didn't exclude certain files from indexing. This caused files that started with reserved names to be skipped or some previewFiles to be added for indexing and various sync processes.
 -   Fixed bug in the OpenSearch reindexer (`crReindexer`) where files that did not yet have `assetid`/`databaseid` S3 object metadata (e.g. files never processed by the `sqsBucketSync` bucket-sync flow) were silently skipped during file reindexing, this includes syncing new buckets added to VAMS. Files whose key does not resolve to a valid, active asset location for the bucket are ignored.
@@ -100,6 +98,14 @@ All notable changes to this project will be documented in this file. See [standa
 -   For assets with hundreds to thousands of files or very large files (TB-size), some API operations may time out after 29 seconds while the Lambda continues processing (up to 15 minutes). OpenSearch re-indexing with hundreds of thousands to millions of files may not complete within the 15-minute Lambda timeout and may require local or containerized re-indexing. Asynchronous methods and optional containerized processing are being evaluated.
 
 ### Troubleshooting
+
+## [2.5.2] (2026-06-19)
+
+### Bug Fixes
+
+-   Fixed a Casbin authz implementation bug that could allow injecting additional policies through field values that would be regex evaluated. Low impact as Casbin policies are only able to be set by admins by default. Added additional backend tests for this case.
+-   Fixed a createAsset API bug that allowed specifying an optional S3 bucket key location without proper checks that it belonged to the provided database IDs default S3 bucket and prefix path, that an asset didn't already exist with that S3 key path, and had weak validation checks on the path provided.
+-   Fixed latent defect of backend test framework not being updated with changes from v2.5, causing some test failures.
 
 ## [2.5.1] (2026-04-23)
 
