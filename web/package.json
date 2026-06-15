@@ -28,8 +28,8 @@
         "aws-amplify": "^6.0.0",
         "axios": "^1.6.0",
         "buffer": "^6.0.3",
-        "dompurify": "^3.2.4",
-        "fast-xml-parser": "^4.2.5",
+        "dompurify": "^3.4.10",
+        "fast-xml-parser": "^5.9.0",
         "fcs": "^0.1.2",
         "file-system-access": "1.0.4",
         "geojson": "^0.5.0",
@@ -64,14 +64,15 @@
     "overrides": {
         "d3-color": "^3.1.0",
         "nth-check": "^2.0.1",
-        "fast-xml-parser": "^4.2.5",
+        "fast-xml-parser": "^5.9.0",
         "semver": "^7.5.2",
         "tough-cookie": "^4.1.3",
         "postcss": "^8.4.31",
         "axios": "^1.6.0",
         "follow-redirects": "^1.15.4",
         "@types/react": "^17.0.2",
-        "react-router": "^6.30.3"
+        "react-router": "^6.30.3",
+        "dompurify": "^3.4.10"
     },
     "engines": {
         "node": ">=22.0.0"
@@ -100,7 +101,7 @@
         "@types/react-dom": "^17.0.2",
         "@types/react-syntax-highlighter": "^15.5.0",
         "@types/sanitize-html": "^2.9.0",
-        "@vitejs/plugin-react": "^4.0.0",
+        "@vitejs/plugin-react": "^6.0.2",
         "assert": "^2.0.0",
         "babel-jest": "^29.5.0",
         "eslint-plugin-react-hooks": "^5.2.0",
@@ -111,7 +112,8 @@
         "sass": "^1.43.4",
         "simple-git": "^3.19.0",
         "ts-node": "^10.9.1",
-        "vite": "^6.0.0",
-        "vite-plugin-node-polyfills": "^0.23.0"
+        "vite": "^8.0.16",
+        "vite-plugin-node-polyfills": "^0.28.0",
+        "esbuild": "^0.28.1"
     }
 }
