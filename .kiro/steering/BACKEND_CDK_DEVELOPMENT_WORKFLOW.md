@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending VAMS backend APIs and CDK infrastructure. Follow these rules to ensure consistency, quality, and maintainability across all backend and infrastructure implementations.
 
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `backend/CLAUDE.md` and `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **File Structure Standards**
@@ -45,6 +47,31 @@ infra/
 │   └── helper/                # CDK helper utilities
 └── config/                   # Configuration files
 ```
+
+### **Handler Domains (`backend/backend/handlers/`)**
+
+One folder per domain. The current domains:
+
+-   `assets/` — Asset handlers (`assetService.py` is the GOLD STANDARD; `assetVersions.py` covers version CRUD + archive/unarchive + update)
+-   `auth/` — Auth handlers (authorizer, constraints, cognito, preTokenGen, apiKeyService)
+-   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
+-   `assetLinks/` — Asset relationship management
+-   `comments/` — Comment CRUD
+-   `config/` — System configuration
+-   `databases/` — Database CRUD
+-   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
+-   `metadata/` — Metadata CRUD
+-   `metadataschema/` — Metadata schema management
+-   `pipelines/` — Pipeline management (Pydantic models; Lambda/SQS/EventBridge execution types)
+-   `roles/` — Role CRUD
+-   `search/` — OpenSearch search handlers
+-   `sendEmail/` — Email notification Lambda
+-   `subscription/` — Asset subscription management
+-   `tags/` — Tag CRUD
+-   `tagTypes/` — Tag type management
+-   `userRoles/` — User-role assignment
+-   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation)
+-   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer)
 
 ## 📋 **Development Workflow Checklist**
 
@@ -732,6 +759,13 @@ When making API changes, update the appropriate documentation files:
 -   **Authorization changes** → Update Docusaurus permissions docs with new permission mappings
 -   **Architecture changes** → Update Docusaurus developer docs with component information
 -   **Major features** → Update main `README.md`
+
+#### **Comment & Documentation Style (Match Surrounding Code):**
+
+Comments and documentation must be commensurate with the surrounding material — match the level of detail, density, and tone of the file you are editing.
+
+-   **Code comments**: Match the comment density and style already present in the file (the CDK stacks use brief single-line `//` notes and short `/** ... */` section headers). Describe **what** a piece of code is, not the history of why it was added.
+-   **No changelog/process narration in code**: Never write comments that reference "upgrades", "new in vX", "added for", migrations, or the change request that prompted the edit. Changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in source comments.
 
 #### **VAMS_API.yaml Update Pattern:**
 

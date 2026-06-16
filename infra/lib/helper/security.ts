@@ -328,6 +328,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("LAMBDA").Principal,
             Service("STS").Principal,
             Service("CLOUDFORMATION").Principal,
+            Service("EVENTS").Principal,
         ],
         resources: ["*"],
     });

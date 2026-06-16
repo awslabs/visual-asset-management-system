@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS web frontend application. Follow these rules to ensure consistency, quality, and maintainability across all frontend implementations.
 
+> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `web/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **Technology Stack**
@@ -768,3 +770,4 @@ npm run prettier-fix
 10. **Using yarn** -- project uses npm
 11. **Creating .js files** -- all new files must be TypeScript
 12. **Hardcoding colors/spacing** -- use Cloudscape design tokens or theme.css
+13. **Over-documenting or narrating changes in comments** -- match surrounding comment density; describe what code is, not why it was added; never reference "upgrades", "new in vX", or the prompting change request in source comments (changelog narration belongs in `CHANGELOG.md` and the docs revision history)

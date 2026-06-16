@@ -262,9 +262,14 @@ The VAMS KMS key policy grants cryptographic operations to the following service
 -   AWS Lambda
 -   AWS STS
 -   AWS CloudFormation
+-   Amazon EventBridge
 -   Account root principal (for custom resource Lambda roles)
 -   Amazon CloudFront (conditional)
 -   Amazon OpenSearch Service / Amazon OpenSearch Serverless (conditional)
+
+### Imported KMS Keys
+
+VAMS applies this key policy to keys it creates. When an external key is supplied with `useKmsCmkEncryption.optionalExternalCmkArn`, VAMS references the key by ARN for encryption and leaves the key's policy unchanged. An imported key carries its own policy, which grants the same cryptographic operations to the service principals listed above so the encrypted VAMS resources — including the Amazon EventBridge orchestration bus and the Amazon CloudWatch log groups — can use the key.
 
 ### Encryption in Transit
 

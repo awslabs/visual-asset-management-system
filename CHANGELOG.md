@@ -46,6 +46,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   **Web** The page moved from the "Admin - Auth" navigation section to a new "User" section, which is hidden for users without access to the API Key Management web route.
     -   Default read-only role and the permission templates now grant self-service API key access and the API key management web route.
 -   **Deprecated** AI Steering Documents: Cline agent steering (`.clinerules/workflows/`) has been deprecated and removed. **Kiro** (`.kiro/steering/`) and **Claude Code** (`CLAUDE.md` files + `.claude/commands/`) are the two currently maintained AI-assisted development agents. A new `.kiro/steering/WEB_FRONTEND.md` front-end steering file mirrors `web/CLAUDE.md` for Kiro.
+-   New VAMS EventBridge orchestration bus — A top-level custom Amazon EventBridge event bus created as a foundation for future event-driven VAMS features (email/subscription events, pipeline registration and success/error events, audit event logging).
 
 ### Bug Fixes
 

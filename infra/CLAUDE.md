@@ -192,6 +192,11 @@ interface storageResources {
         assetIndexerSnsTopic: sns.Topic;
         databaseIndexerSnsTopic: sns.Topic;
     };
+    eventBridge: {
+        orchestrationBus: events.EventBus; // Top-level VAMS orchestration event bus
+        orchestrationBusAuditLogGroup: logs.LogGroup; // Starter audit rule target
+        eventSourcePrefix: string; // Deployment-unique source prefix, e.g. "vams.prod-us-east-1"
+    };
     cloudWatchAuditLogGroups: {
         authentication;
         authorization;

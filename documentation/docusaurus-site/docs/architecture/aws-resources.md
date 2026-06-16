@@ -186,6 +186,15 @@ All Amazon SNS topics enforce SSL and use optional AWS KMS encryption.
 
 All Amazon SQS queues enforce SSL and use optional AWS KMS encryption.
 
+## Amazon EventBridge
+
+| Resource                         | Purpose                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------- |
+| **Orchestration Bus**            | Top-level custom event bus for event-driven VAMS features                 |
+| **Orchestration Bus Audit Rule** | Routes all events from the deployment's sources to a CloudWatch log group |
+
+The bus name and event source prefix are deployment-unique, so multiple VAMS deployments can coexist in one AWS Region. The bus uses optional AWS KMS encryption.
+
 ## Amazon CloudWatch
 
 ### Audit Log Groups (10-Year Retention)

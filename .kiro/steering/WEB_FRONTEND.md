@@ -1141,6 +1141,10 @@ import Synonyms from "../../synonyms";
 <p>Select a {Synonyms.Database}</p>
 ```
 
+### 13.8 Do NOT Over-Document or Narrate Changes in Comments
+
+Match the comment density and style already present in the file. Describe **what** a piece of code is, not why it was added. Never write comments that reference "upgrades", "new in vX", "added for", or the change request that prompted the edit — a comment should read as if the code had always been there. Changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in source comments.
+
 ---
 
 ## 14. Key Dependencies

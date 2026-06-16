@@ -11,6 +11,8 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3not from "aws-cdk-lib/aws-s3-notifications";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
@@ -67,6 +69,11 @@ export interface storageResources {
         authChanges: logs.LogGroup;
         actions: logs.LogGroup;
         errors: logs.LogGroup;
+    };
+    eventBridge: {
+        orchestrationBus: events.EventBus;
+        orchestrationBusAuditLogGroup: logs.LogGroup;
+        eventSourcePrefix: string;
     };
     dynamo: {
         appFeatureEnabledStorageTable: dynamodb.Table;
@@ -613,6 +620,55 @@ export function storageResourcesBuilder(
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
     };
+
+    /**
+     * Create EventBridge Orchestration Bus
+     */
+
+    // Deployment-unique bus name and event source prefix so multiple deployments can coexist in a region
+    const orchestrationBusName = `${config.name}-${config.app.baseStackName}-orchestration`;
+    const eventSourcePrefix = `${config.name}.${config.app.baseStackName}`;
+
+    const orchestrationBus = new events.EventBus(scope, "OrchestrationBus", {
+        eventBusName: orchestrationBusName,
+    });
+
+    // KMS encryption is only settable on the underlying CfnEventBus
+    if (config.app.useKmsCmkEncryption.enabled && kmsEncryptionKey) {
+        const cfnBus = orchestrationBus.node.defaultChild as events.CfnEventBus;
+        cfnBus.kmsKeyIdentifier = kmsEncryptionKey.keyArn;
+    }
+
+    // Audit log group for the orchestration bus
+    const orchestrationBusAuditLogGroup = new logs.LogGroup(
+        scope,
+        "OrchestrationBusAuditLogGroup",
+        {
+            logGroupName:
+                "/aws/vendedlogs/VAMSOrchestrationBusAudit-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSOrchestrationBusAudit",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }
+    );
+
+    // Audit rule: route all events from this deployment's sources to the audit log group
+    const orchestrationBusAuditRule = new events.Rule(scope, "OrchestrationBusAuditRule", {
+        eventBus: orchestrationBus,
+        eventPattern: {
+            source: events.Match.prefix(eventSourcePrefix),
+        },
+    });
+
+    orchestrationBusAuditRule.addTarget(
+        new targets.CloudWatchLogGroup(orchestrationBusAuditLogGroup)
+    );
 
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
@@ -1464,6 +1520,11 @@ export function storageResourcesBuilder(
             databaseIndexerSnsTopic: DatabaseIndexerSnsTopic,
         },
         cloudWatchAuditLogGroups: auditLogGroups,
+        eventBridge: {
+            orchestrationBus: orchestrationBus,
+            orchestrationBusAuditLogGroup: orchestrationBusAuditLogGroup,
+            eventSourcePrefix: eventSourcePrefix,
+        },
         dynamo: {
             appFeatureEnabledStorageTable: appFeatureEnabledStorageTable,
             assetLinksStorageTableV2: assetLinksStorageTableV2,

@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS CDK infrastructure. Follow these rules to ensure consistency, quality, and maintainability across all CDK implementations.
 
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `infra/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **CDK Project Structure Standards**
@@ -36,6 +38,115 @@ infra/
 │   └── artefacts/            # Build artifacts and templates
 ├── test/                     # CDK unit and integration tests
 └── gen/                      # Generated code and endpoints
+```
+
+### **Nested Stack Dependency Chain**
+
+```
+CoreVAMSStack (root)
+  |
+  +-- VPCBuilder (conditional: useGlobalVpc.enabled)
+  +-- LambdaLayers
+  +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, KMS, CloudWatch)
+  |     |
+  |     +-- AuthBuilder (depends on Storage)
+  |     |     |
+  |     |     +-- ApiGatewayV2Amplify (API Gateway + authorizer)
+  |     |     |     |
+  |     |     |     +-- ApiBuilder (primary API route Lambda wiring; includes pipeline + workflow)
+  |     |     |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types; depends on ApiBuilder)
+  |     |     |     +-- StaticWeb (CloudFront or ALB hosting)
+  |     |     |     +-- SearchBuilder (OpenSearch)
+  |     |     |     +-- PipelineBuilder (all use-case pipelines)
+  |     |     |     +-- AddonBuilder (Garnet, Physna Sync)
+  |     |
+  +-- LocationService (conditional: useLocationService.enabled)
+  +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
+```
+
+### **Cross-Stack Shared Interfaces**
+
+**`storageResources`** (defined in `storageBuilder-nestedStack.ts`):
+
+```typescript
+interface storageResources {
+    encryption: { kmsKey?: kms.IKey };
+    s3: {
+        assetAuxiliaryBucket: s3.Bucket;
+        artefactsBucket: s3.Bucket;
+        accessLogsBucket: s3.Bucket;
+    };
+    sqs: { workflowAutoExecuteQueue: sqs.Queue };
+    sns: {
+        eventEmailSubscriptionTopic: sns.Topic;
+        fileIndexerSnsTopic: sns.Topic;
+        assetIndexerSnsTopic: sns.Topic;
+        databaseIndexerSnsTopic: sns.Topic;
+    };
+    eventBridge: {
+        orchestrationBus: events.EventBus; // Top-level VAMS orchestration event bus
+        orchestrationBusAuditLogGroup: logs.LogGroup; // Starter audit rule target
+        eventSourcePrefix: string; // Deployment-unique source prefix, e.g. "vams.prod-us-east-1"
+    };
+    cloudWatchAuditLogGroups: {
+        authentication;
+        authorization;
+        fileUpload;
+        fileDownload;
+        fileDownloadStreamed;
+        authOther;
+        authChanges;
+        actions;
+        errors: logs.LogGroup;
+    };
+    dynamo: {
+        // 20+ DynamoDB tables -- see storageBuilder-nestedStack.ts lines 72-98
+        appFeatureEnabledStorageTable;
+        assetLinksStorageTableV2;
+        assetLinksMetadataStorageTable;
+        assetStorageTable;
+        assetUploadsStorageTable;
+        assetVersionsStorageTable;
+        assetFileVersionsStorageTable;
+        assetFileVersionHistoryStorageTable;
+        assetFileMetadataVersionsStorageTable;
+        authEntitiesStorageTable;
+        commentStorageTable;
+        constraintsStorageTable;
+        databaseStorageTable;
+        metadataSchemaStorageTableV2;
+        databaseMetadataStorageTable;
+        assetFileMetadataStorageTable;
+        fileAttributeStorageTable;
+        pipelineStorageTable;
+        rolesStorageTable;
+        s3AssetBucketsStorageTable;
+        subscriptionsStorageTable;
+        tagStorageTable;
+        tagTypeStorageTable;
+        userRolesStorageTable;
+        userStorageTable;
+        workflowExecutionsStorageTable;
+        apiKeyStorageTable: dynamodb.Table; // GSIs: apiKeyHashIndex (PK: apiKeyHash), userIdIndex (PK: userId)
+        workflowStorageTable: dynamodb.Table;
+        // assetVersionsStorageTable has GSI: databaseIdAssetIdIndex (PK: databaseId:assetId, SK: assetVersionId)
+    };
+}
+```
+
+**`authResources`** (defined in `authBuilder-nestedStack.ts`):
+
+```typescript
+interface authResources {
+    roles: { unAuthenticatedRole: iam.Role };
+    cognito: {
+        userPool: cognito.UserPool;
+        webClientUserPool: cognito.UserPoolClient;
+        userPoolId: string;
+        identityPoolId: string;
+        webClientId: string;
+    };
+}
 ```
 
 ## 📋 **Development Workflow Checklist**
@@ -2138,6 +2249,7 @@ dependentStack.addDependency(newFeatureStack);
 8. **Always** use service helper for cross-stack resource access
 9. **Always** write comprehensive tests
 10. **Always** update documentation
+11. **Always** match the surrounding comment density and style — describe **what** code is, not why it was added; never reference "upgrades", "new in vX", or the prompting change request in source comments (changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in code)
 
 ## 🛠️ **Development Commands**
 

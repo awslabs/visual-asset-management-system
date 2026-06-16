@@ -63,6 +63,7 @@ Follow AWS documentation standards:
 11. **Curly braces**: Escape `{variable}` as `\{variable\}` outside code blocks (MDX parses them as JSX)
 12. **Never reference other AWS solutions** by name — VAMS documentation is standalone
 13. **Never hardcode version numbers** — reference source of truth (`config.ts`)
+14. **Match the surrounding page's level of detail and form** — when adding to an existing page, mirror its density and structure. If the section uses descriptive prose, describe how the behavior works rather than introducing "requirement"/"must" line-item checklists. Reserve upgrade/migration framing for the upgrade and revision-history pages; do not narrate "upgrades" on conceptual or architecture pages.
 
 ---
 

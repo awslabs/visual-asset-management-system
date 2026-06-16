@@ -396,6 +396,17 @@ When you make structural changes to the codebase, **you must update the relevant
 
 **What to update:** Update the directory structure tree, key files tables, and any affected rules or patterns. Keep descriptions concise. You can also run `/refresh-steering-docs` for a comprehensive update.
 
+**Keep Kiro steering in sync (bidirectional).** The `.kiro/steering/` documents mirror the `CLAUDE.md` guidance for the Kiro agent. Whenever you change a `CLAUDE.md` file's rules, patterns, or conventions, you **must** make the equivalent change in the corresponding Kiro steering document(s) in the same change — and vice versa (a change to a Kiro steering document must be reflected back into the matching `CLAUDE.md`). Keep the two sets of documents saying the same thing. Use this mapping:
+
+| CLAUDE.md file            | Corresponding Kiro steering document(s)                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `CLAUDE.md` (root)        | The relevant workflow doc(s) for the changed area (see rows below); cross-cutting rules go in all affected docs |
+| `infra/CLAUDE.md`         | `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`              |
+| `backend/CLAUDE.md`       | `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                                                            |
+| `web/CLAUDE.md`           | `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/WEB_FRONTEND.md`                                  |
+| `tools/VamsCLI/CLAUDE.md` | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`                                                                    |
+| `documentation/CLAUDE.md` | `.kiro/steering/DOCUMENTATION_WORKFLOW.md`                                                                      |
+
 ---
 
 ## 🧰 **Development Commands**
@@ -699,6 +710,14 @@ return {
 }
 ```
 
+### **Comment & Documentation Style (Match Surrounding Code)**
+
+When implementing any VAMS change, comments and documentation must be **commensurate with the surrounding material** — match the level of detail, density, and tone of the file you are editing. Do not over-document relative to neighboring code.
+
+-   **Code comments**: Match the comment density and style already present in the file. The CDK stacks, for example, use brief single-line `//` notes above a block and short `/** ... */` section headers. Describe **what** a piece of code is, not the history of why it was added.
+-   **No changelog/process narration in code**: Never write comments that reference "upgrades", "new in vX", "added for", migrations, or the change request that prompted the edit. A comment should read as if the code had always been there. Changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in source comments.
+-   **Documentation prose**: Match the concise, descriptive AWS-doc style of the page being edited (see `documentation/CLAUDE.md`). Describe how the system behaves. Do not introduce "requirement"/"must" line-item checklists where the surrounding page uses descriptive prose, and do not reference "upgrades" unless the page is specifically an upgrade/migration guide.
+
 ---
 
 ## 🚫 **Anti-Patterns to Avoid**
@@ -713,3 +732,4 @@ return {
 8. **Deploying features without feature switches** -- breaks conditional deployment
 9. **Using `HttpUserPoolAuthorizer`** -- must use custom Lambda authorizer
 10. **Skipping config validation in `getConfig()`** -- leads to silent deployment failures
+11. **Over-documenting or narrating changes in comments** -- match surrounding comment density; never reference "upgrades", "new in vX", or the prompting change request in source comments (see Comment & Documentation Style)
