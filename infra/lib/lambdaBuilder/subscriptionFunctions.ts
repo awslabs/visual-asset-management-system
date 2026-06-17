@@ -19,6 +19,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import * as Service from "../../lib/helper/service-helper";
@@ -82,6 +83,7 @@ export function buildSubscriptionService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -122,6 +124,7 @@ export function buildCheckSubscriptionFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -179,5 +182,6 @@ export function buildUnSubscribeFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }

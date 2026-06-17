@@ -68,6 +68,68 @@ sys.modules['common.constants'].STANDARD_JSON_RESPONSE = {
     },
     "body": ""
 }
+# s3MetadataKeys is pure constants (no AWS deps), so load the REAL module by path
+# rather than a MagicMock. A bare MagicMock for `common` cannot resolve the
+# `from common.s3MetadataKeys import ...` submodule import at collection time.
+import importlib.util as _s3mk_importlib_util
+_s3mk_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.s3MetadataKeys',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 's3MetadataKeys.py')
+)
+_s3mk_module = _s3mk_importlib_util.module_from_spec(_s3mk_spec)
+_s3mk_spec.loader.exec_module(_s3mk_module)
+sys.modules['common.s3MetadataKeys'] = _s3mk_module
+# s3PathPatterns is pure constants (no AWS deps), so load the REAL module by path
+# rather than a MagicMock (same approach as s3MetadataKeys above).
+_s3pp_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.s3PathPatterns',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 's3PathPatterns.py')
+)
+_s3pp_module = _s3mk_importlib_util.module_from_spec(_s3pp_spec)
+_s3pp_spec.loader.exec_module(_s3pp_module)
+sys.modules['common.s3PathPatterns'] = _s3pp_module
+# dynamoDbMetadataKeys is pure constants (no AWS deps), so load the REAL module
+# by path rather than a MagicMock (same approach as s3MetadataKeys above).
+_ddbmk_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.dynamoDbMetadataKeys',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'dynamoDbMetadataKeys.py')
+)
+_ddbmk_module = _s3mk_importlib_util.module_from_spec(_ddbmk_spec)
+_ddbmk_spec.loader.exec_module(_ddbmk_module)
+sys.modules['common.dynamoDbMetadataKeys'] = _ddbmk_module
+# apiRoutes is pure constants (no AWS deps), so load the REAL module by path
+# rather than a MagicMock (same approach as s3MetadataKeys above).
+_apir_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.apiRoutes',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'apiRoutes.py')
+)
+_apir_module = _s3mk_importlib_util.module_from_spec(_apir_spec)
+_apir_spec.loader.exec_module(_apir_module)
+sys.modules['common.apiRoutes'] = _apir_module
+# s3 is a simple validation module with no AWS side effects at import, but it is not
+# in the root conftest mock layer. Load the mock s3 module by path so tests that import
+# handlers which depend on common.s3 can collect cleanly.
+_s3_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.s3',
+    os.path.join(os.path.dirname(__file__), 'mocks', 'common', 's3.py')
+)
+_s3_module = _s3mk_importlib_util.module_from_spec(_s3_spec)
+_s3_spec.loader.exec_module(_s3_module)
+sys.modules['common.s3'] = _s3_module
+# handlers.assets.assetVersions is imported by assetFiles and metadataService at module load.
+# Create a minimal mock package hierarchy: handlers → handlers.assets → handlers.assets.assetVersions
+if 'handlers' not in sys.modules:
+    sys.modules['handlers'] = MagicMock()
+if 'handlers.assets' not in sys.modules:
+    _h_assets = MagicMock()
+    _h_assets.__name__ = 'handlers.assets'
+    _h_assets.__package__ = 'handlers.assets'
+    sys.modules['handlers.assets'] = _h_assets
+_h_assetVersions = MagicMock()
+_h_assetVersions.validate_asset_version_exists = MagicMock()
+_h_assetVersions.get_all_asset_versions = MagicMock()
+_h_assetVersions.get_asset_metadata_version = MagicMock()
+sys.modules['handlers.assets.assetVersions'] = _h_assetVersions
 # Load the real mock customLogging package (tests/mocks/customLogging) instead of a bare
 # MagicMock. A bare MagicMock has no real submodules, so any handler that does
 # `from customLogging.auditLogging import ...` at import time fails collection with

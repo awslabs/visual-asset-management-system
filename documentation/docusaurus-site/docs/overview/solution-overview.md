@@ -31,7 +31,7 @@ Associated data such as textures, materials, bills of materials, quality analysi
 As an **open-source project** (Apache 2.0), VAMS is designed for extensibility. Organizations can integrate new viewer plugins, upstream data sources, downstream consumers, and custom workflow pipelines — adapting the platform to their specific requirements without vendor lock-in. Several ISVs have built commercial products on top of VAMS, and enterprise customers across defense, energy, manufacturing, and construction have adopted and contributed to the solution.
 
 :::info[Current Version]
-VAMS supports Python 3.12 Lambda runtime, Node.js 20.x, React 17 with Vite build tooling, and AWS CDK v2 infrastructure. See `infra/config/config.ts` for the current version.
+VAMS supports Python 3.12 Lambda runtime, Node.js 22.x, React 17 with Vite build tooling, and AWS CDK v2 infrastructure. See `infra/config/config.ts` for the current version.
 :::
 
 ---
@@ -161,21 +161,22 @@ VAMS integrates with a range of AWS partner solutions and open-source projects f
 
 ### Open-Source Integrations
 
-| Integration                                                                                                                                                 | Category          | Description                                                                  |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------- |
-| [Online 3D Viewer](https://3dviewer.net/)                                                                                                                   | Viewer            | Generalized 3D model viewing for Rhinoceros, AMF, BIM, OFF, and VRML formats |
-| [Potree](https://potree.github.io/)                                                                                                                         | Viewer + Pipeline | Point cloud viewing and processing for E57, LAS, and LAZ files               |
-| [BabylonJS](https://www.babylonjs.com/)                                                                                                                     | Viewer            | Gaussian splat visualization with WebXR support                              |
-| [PlayCanvas](https://playcanvas.com/)                                                                                                                       | Viewer            | Gaussian splat visualization with orbit camera and sorting                   |
-| [CesiumJS](https://cesium.com/platform/cesiumjs/)                                                                                                           | Viewer            | 3D Tileset viewing with geospatial capabilities                              |
-| [Needle Engine](https://needle.tools/)                                                                                                                      | Viewer            | USD (Universal Scene Description) viewing with WebAssembly support           |
-| [Three.js](https://threejs.org/)                                                                                                                            | Viewer            | Primary viewer for GLTF, GLB, OBJ, FBX, STL, STEP, IGES, and more            |
-| [Trimesh](https://trimesh.org/)                                                                                                                             | Pipeline          | 3D mesh conversion and metadata extraction                                   |
-| [CADQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Pipeline          | Open-standard CAD conversion and metadata extraction                         |
-| [Blender](https://www.blender.org/)                                                                                                                         | Pipeline          | Preview file generation and metadata extraction                              |
-| [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                   |
-| [Garnet Framework](https://garnet-framework.dev/)                                                                                                           | Addon             | Data synchronization to external NGSI-LD knowledge graphs                    |
-| [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                               |
+| Integration                                                                                                                                                 | Category          | Description                                                                           |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------- |
+| [Online 3D Viewer](https://3dviewer.net/)                                                                                                                   | Viewer            | Generalized 3D model viewing for Rhinoceros, AMF, BIM, OFF, and VRML formats          |
+| [Potree](https://potree.github.io/)                                                                                                                         | Viewer + Pipeline | Point cloud viewing and processing for E57, LAS, and LAZ files                        |
+| [BabylonJS](https://www.babylonjs.com/)                                                                                                                     | Viewer            | Gaussian splat visualization with WebXR support                                       |
+| [PlayCanvas](https://playcanvas.com/)                                                                                                                       | Viewer            | Gaussian splat visualization with orbit camera and sorting                            |
+| [CesiumJS](https://cesium.com/platform/cesiumjs/)                                                                                                           | Viewer            | 3D Tileset viewing with geospatial capabilities                                       |
+| [Needle Engine](https://needle.tools/)                                                                                                                      | Viewer            | USD (Universal Scene Description) viewing with WebAssembly support                    |
+| [Three.js](https://threejs.org/)                                                                                                                            | Viewer            | Primary viewer for GLTF, GLB, OBJ, FBX, STL, STEP, IGES, and more                     |
+| [Trimesh](https://trimesh.org/)                                                                                                                             | Pipeline          | 3D mesh conversion and metadata extraction                                            |
+| [CADQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Pipeline          | Open-standard CAD conversion and metadata extraction                                  |
+| [Blender](https://www.blender.org/)                                                                                                                         | Pipeline          | Preview file generation and metadata extraction                                       |
+| [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                            |
+| [Garnet Framework](https://garnet-framework.dev/)                                                                                                           | Addon             | Data synchronization to external NGSI-LD knowledge graphs                             |
+| [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search |
+| [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                        |
 
 ### Licensed Integrations
 
@@ -204,5 +205,5 @@ VAMS is designed for extensibility. You can add custom viewer plugins, processin
 
 ### AWS Blog posts
 
--   [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/spatial/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) — Learn how VAMS integrates with NVIDIA Isaac Lab for reinforcement learning training and evaluation on AWS GPU instances.
--   [Building Production-Ready 3D Pipelines with AWS VAMS and 4D Pipeline](https://aws.amazon.com/blogs/spatial/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/) — Explore how to build scalable 3D processing pipelines using VAMS with partner integrations.
+-   [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) — Learn how VAMS integrates with NVIDIA Isaac Lab for reinforcement learning training and evaluation on AWS GPU instances.
+-   [Building Production-Ready 3D Pipelines with AWS VAMS and 4D Pipeline](https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/) — Explore how to build scalable 3D processing pipelines using VAMS with partner integrations.

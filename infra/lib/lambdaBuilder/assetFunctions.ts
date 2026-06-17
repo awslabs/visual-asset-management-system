@@ -29,6 +29,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
@@ -81,6 +82,7 @@ export function buildCreateAssetFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -176,6 +178,7 @@ export function buildAssetService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -217,6 +220,8 @@ export function buildAssetFiles(
                 storageResources.dynamo.assetVersionsStorageTable.tableName,
             ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+            ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
             FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
                 storageResources.dynamo.fileAttributeStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
@@ -230,6 +235,7 @@ export function buildAssetFiles(
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     sendEmailFunction.grantInvoke(fun);
 
@@ -237,6 +243,7 @@ export function buildAssetFiles(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -294,6 +301,7 @@ export function buildUploadFileFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
@@ -336,6 +344,7 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
@@ -387,6 +396,7 @@ export function buildDownloadAssetFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -452,6 +462,7 @@ export function buildAssetVersionsFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -504,6 +515,7 @@ export function buildStreamAssetFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
@@ -548,6 +560,7 @@ export function buildSqsUploadFileLargeFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
@@ -601,6 +614,7 @@ export function buildIngestAssetFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -675,6 +689,7 @@ export function buildAssetExportService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

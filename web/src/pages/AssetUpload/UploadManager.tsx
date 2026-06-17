@@ -30,6 +30,7 @@ import { useMultiSequenceUpload } from "./hooks/useMultiSequenceUpload";
 import { useFilePartsUpload } from "./hooks/useFilePartsUpload";
 import { useAssetOperations } from "./hooks/useAssetOperations";
 import { formatRetryMessage } from "./uploadRetry";
+import { PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
 import Synonyms from "../../synonyms";
 
 interface UploadManagerProps {
@@ -56,6 +57,10 @@ interface UploadState {
     finalCompletionTriggered: boolean;
     largeFileAsynchronousHandling: boolean;
     has503Warnings: boolean;
+    // Sequence IDs that failed initialization and are awaiting user retry/skip
+    failedInitSequenceIds: number[];
+    // Sequence IDs that failed completion and are awaiting user retry/skip
+    failedCompletionSequenceIds: number[];
 }
 
 export default function UploadManager({
@@ -88,6 +93,8 @@ export default function UploadManager({
         finalCompletionTriggered: false,
         largeFileAsynchronousHandling: false,
         has503Warnings: false,
+        failedInitSequenceIds: [],
+        failedCompletionSequenceIds: [],
     });
 
     const [fileUploadItems, setFileUploadItems] = useState<FileUploadTableItem[]>(fileItems);
@@ -95,6 +102,7 @@ export default function UploadManager({
     const [totalSequences, setTotalSequences] = useState(0);
     const [completedInitSequences, setCompletedInitSequences] = useState(0);
     const [completedCompleteSequences, setCompletedCompleteSequences] = useState(0);
+    const [skippedCompleteSequences, setSkippedCompleteSequences] = useState(0);
     const [retryMessage, setRetryMessage] = useState<string | null>(null);
     const [isRateLimitRetry, setIsRateLimitRetry] = useState(false);
     const [uploadSequences, setUploadSequences] = useState<any[]>([]);
@@ -155,11 +163,15 @@ export default function UploadManager({
                 );
 
                 if (regularSequences.length > 0) {
-                    const allRegularSequencesCompleted = regularSequences.every(
-                        (s) => sequenceCompleteStatuses.get(s.sequenceId) === "completed"
-                    );
+                    // Proceed once every regular sequence has finished (success or failure).
+                    // Treating "failed" as done prevents preview-sequence retry loops when
+                    // the user has skipped a failed regular sequence.
+                    const allRegularSequencesSettled = regularSequences.every((s) => {
+                        const status = sequenceCompleteStatuses.get(s.sequenceId);
+                        return status === "completed" || status === "failed";
+                    });
 
-                    if (!allRegularSequencesCompleted) {
+                    if (!allRegularSequencesSettled) {
                         console.log(
                             `Preview sequence ${sequenceId} waiting for regular sequences to complete first`
                         );
@@ -234,8 +246,20 @@ export default function UploadManager({
             } catch (error: any) {
                 console.error(`Failed to complete sequence ${sequenceId}:`, error);
                 setRetryMessage(null);
+                // Remove from in-flight set so the user can retry this sequence
+                setCompletingSequences((prev) => {
+                    const next = new Set(prev);
+                    next.delete(sequenceId);
+                    return next;
+                });
                 setUploadState((prev) => ({
                     ...prev,
+                    completionStatus: "failed",
+                    failedCompletionSequenceIds: prev.failedCompletionSequenceIds.includes(
+                        sequenceId
+                    )
+                        ? prev.failedCompletionSequenceIds
+                        : [...prev.failedCompletionSequenceIds, sequenceId],
                     errors: [
                         ...prev.errors,
                         {
@@ -344,7 +368,7 @@ export default function UploadManager({
                         size: item.size,
                         relativePath: item.relativePath,
                         handle: item.handle,
-                        isPreviewFile: item.relativePath.includes(".previewFile."),
+                        isPreviewFile: item.relativePath.includes(PREVIEW_FILE_PATTERN),
                         isAssetPreview: item.index === 99999, // Mark asset preview files
                     }));
 
@@ -364,6 +388,7 @@ export default function UploadManager({
                     setUploadState((prev) => ({ ...prev, uploadInitStatus: "in-progress" }));
                     const initResults = [];
 
+                    let initFailed = false;
                     for (const sequence of sequences) {
                         try {
                             const result = await initializeSequence(
@@ -395,6 +420,11 @@ export default function UploadManager({
                             setUploadState((prev) => ({
                                 ...prev,
                                 uploadInitStatus: "failed",
+                                failedInitSequenceIds: prev.failedInitSequenceIds.includes(
+                                    sequence.sequenceId
+                                )
+                                    ? prev.failedInitSequenceIds
+                                    : [...prev.failedInitSequenceIds, sequence.sequenceId],
                                 errors: [
                                     ...prev.errors,
                                     {
@@ -403,8 +433,14 @@ export default function UploadManager({
                                     },
                                 ],
                             }));
-                            throw error;
+                            initFailed = true;
+                            break;
                         }
+                    }
+
+                    if (initFailed) {
+                        // Stop here; user will choose Retry or Skip from the UI
+                        return;
                     }
 
                     // Store init results in state
@@ -551,18 +587,69 @@ export default function UploadManager({
         performUpload();
     }, []); // Run once on mount - handleSequenceCompletion is stable via useCallback
 
-    // Monitor for all sequences completed
+    // Sync completionStatus and failedCompletionSequenceIds from sequenceCompleteStatuses.
+    // This is a safety net: `sequenceCompleteStatuses` (managed by useMultiSequenceUpload)
+    // is the source of truth for per-sequence completion outcomes. If any sequence is in
+    // "failed" state but the UI still shows "in-progress", force it to "failed" and surface
+    // the Retry/Skip UI. Covers cases where the direct catch-block state update raced with
+    // another setUploadState or was otherwise missed.
     useEffect(() => {
+        if (uploadState.finalCompletionTriggered) return;
+
+        const failedIds: number[] = [];
+        sequenceCompleteStatuses.forEach((status, sequenceId) => {
+            if (status === "failed") {
+                failedIds.push(sequenceId);
+            }
+        });
+
+        if (failedIds.length === 0) return;
+
+        setUploadState((prev) => {
+            // Skip if already reflecting these failures
+            const sameCount = prev.failedCompletionSequenceIds.length === failedIds.length;
+            const sameIds =
+                sameCount && failedIds.every((id) => prev.failedCompletionSequenceIds.includes(id));
+            if (prev.completionStatus === "failed" && sameIds) {
+                return prev;
+            }
+            return {
+                ...prev,
+                completionStatus: "failed",
+                failedCompletionSequenceIds: failedIds,
+            };
+        });
+    }, [sequenceCompleteStatuses, uploadState.finalCompletionTriggered]);
+
+    // Monitor for all sequences completed (or skipped after failure)
+    useEffect(() => {
+        const accountedSequences = completedCompleteSequences + skippedCompleteSequences;
         if (
             uploadSequences.length > 0 &&
-            completedCompleteSequences === uploadSequences.length &&
+            accountedSequences === uploadSequences.length &&
             !uploadState.finalCompletionTriggered
         ) {
-            console.log("All sequences completed, triggering final completion");
+            console.log(
+                `All sequences accounted for (${completedCompleteSequences} completed, ${skippedCompleteSequences} skipped), triggering final completion`
+            );
+
+            const hasSkipped = skippedCompleteSequences > 0;
+            // Build fileResults for any files that were skipped/failed so the summary UI can list them
+            const failedFileResults = fileUploadItems
+                .filter((item) => item.status === "Failed" || (item.status as any) === "Cancelled")
+                .map((item) => ({
+                    relativeKey: item.relativePath,
+                    uploadIdS3: "",
+                    success: false,
+                    error:
+                        (item.status as any) === "Cancelled"
+                            ? "Upload cancelled"
+                            : item.error || "Upload failed",
+                }));
 
             setUploadState((prev) => ({
                 ...prev,
-                completionStatus: "completed",
+                completionStatus: hasSkipped ? "partial" : "completed",
                 finalCompletionTriggered: true,
             }));
 
@@ -570,18 +657,19 @@ export default function UploadManager({
             const finalResponse: CompleteUploadResponse = {
                 assetId: uploadState.createdAssetId || assetDetail.assetId || "",
                 message:
-                    cancelledFiles.size > 0
-                        ? `Upload completed with ${cancelledFiles.size} file(s) cancelled`
+                    hasSkipped || cancelledFiles.size > 0
+                        ? `Upload completed with ${failedFileResults.length} file(s) failed/cancelled`
                         : "Upload completed successfully",
                 uploadId: firstUploadId || "no-upload-required",
-                fileResults: [],
-                overallSuccess: true,
+                fileResults: failedFileResults,
+                overallSuccess: !hasSkipped && failedFileResults.length === 0,
                 largeFileAsynchronousHandling: uploadState.largeFileAsynchronousHandling,
             };
             onUploadComplete(finalResponse);
         }
     }, [
         completedCompleteSequences,
+        skippedCompleteSequences,
         uploadSequences.length,
         uploadState.finalCompletionTriggered,
         uploadState.createdAssetId,
@@ -589,6 +677,7 @@ export default function UploadManager({
         assetDetail.assetId,
         sequenceUploadIds,
         cancelledFiles.size,
+        fileUploadItems,
         onUploadComplete,
     ]);
 
@@ -872,7 +961,7 @@ export default function UploadManager({
                 size: item.size,
                 relativePath: item.relativePath,
                 handle: item.handle,
-                isPreviewFile: item.relativePath.includes(".previewFile."),
+                isPreviewFile: item.relativePath.includes(PREVIEW_FILE_PATTERN),
                 isAssetPreview: item.index === 99999,
             }));
 
@@ -892,6 +981,7 @@ export default function UploadManager({
             setUploadState((prev) => ({ ...prev, uploadInitStatus: "in-progress" }));
             const initResults = [];
 
+            let initFailed = false;
             for (const sequence of sequences) {
                 try {
                     const result = await initializeSequence(
@@ -919,6 +1009,11 @@ export default function UploadManager({
                     setUploadState((prev) => ({
                         ...prev,
                         uploadInitStatus: "failed",
+                        failedInitSequenceIds: prev.failedInitSequenceIds.includes(
+                            sequence.sequenceId
+                        )
+                            ? prev.failedInitSequenceIds
+                            : [...prev.failedInitSequenceIds, sequence.sequenceId],
                         errors: [
                             ...prev.errors,
                             {
@@ -927,8 +1022,13 @@ export default function UploadManager({
                             },
                         ],
                     }));
-                    throw error;
+                    initFailed = true;
+                    break;
                 }
+            }
+
+            if (initFailed) {
+                return;
             }
 
             setSequenceInitResults(initResults);
@@ -1242,6 +1342,128 @@ export default function UploadManager({
         sequenceCompleteStatuses,
     ]);
 
+    // Retry handler for failed upload initialization
+    const handleRetryInit = useCallback(() => {
+        // Reset init-related state and re-run the initialize + upload pipeline
+        setUploadState((prev) => ({
+            ...prev,
+            uploadInitStatus: "in-progress",
+            failedInitSequenceIds: [],
+            errors: prev.errors.filter((e) => e.step !== "Upload Initialization"),
+        }));
+        setCompletedInitSequences(0);
+        setUploadSequences([]);
+        setSequenceInitResults([]);
+        // continueToFileUpload rebuilds sequences from fileItems, re-initializes,
+        // and re-drives the upload. It's safe to call because init had failed, so
+        // nothing downstream has meaningful state yet.
+        continueToFileUpload();
+    }, [continueToFileUpload]);
+
+    // Skip handler for failed upload initialization - marks all files as Failed and finalizes
+    const handleSkipInit = useCallback(() => {
+        console.log("Skipping failed upload initialization");
+
+        // Mark every file that hasn't already completed as Failed
+        setFileUploadItems((prev) =>
+            prev.map((item) =>
+                item.status === "Completed"
+                    ? item
+                    : {
+                          ...item,
+                          status: "Failed",
+                          error: item.error || "Upload initialization failed",
+                      }
+            )
+        );
+
+        // Clear init failure state and mark the whole upload chain as skipped/failed
+        setUploadState((prev) => ({
+            ...prev,
+            uploadInitStatus: "skipped",
+            uploadStatus: "skipped",
+            completionStatus: "skipped",
+            failedInitSequenceIds: [],
+            finalCompletionTriggered: true,
+        }));
+
+        // Finalize with overallSuccess=false so AssetUploadWorkflow shows the failure summary
+        const failedFileResults = fileItems.map((item) => ({
+            relativeKey: item.relativePath,
+            uploadIdS3: "",
+            success: false,
+            error: "Upload initialization failed",
+        }));
+
+        onUploadComplete({
+            assetId: uploadState.createdAssetId || assetDetail.assetId || "",
+            message: "Upload initialization failed; file uploads were skipped.",
+            uploadId: "no-upload-required",
+            fileResults: failedFileResults,
+            overallSuccess: false,
+        });
+    }, [fileItems, uploadState.createdAssetId, assetDetail.assetId, onUploadComplete]);
+
+    // Retry handler for failed sequence completions
+    const handleRetryCompletion = useCallback(() => {
+        const idsToRetry = uploadState.failedCompletionSequenceIds;
+        if (idsToRetry.length === 0) return;
+
+        // Reset failure state and re-trigger completion for each failed sequence
+        setUploadState((prev) => ({
+            ...prev,
+            completionStatus: "in-progress",
+            failedCompletionSequenceIds: [],
+            errors: prev.errors.filter(
+                (e) => !idsToRetry.some((id) => e.step === `Sequence ${id} Completion`)
+            ),
+        }));
+
+        idsToRetry.forEach((sequenceId) => {
+            if (handleSequenceCompletionRef.current) {
+                handleSequenceCompletionRef.current(sequenceId);
+            }
+        });
+    }, [uploadState.failedCompletionSequenceIds]);
+
+    // Skip handler for failed sequence completions - marks files as Failed and finalizes
+    const handleSkipCompletion = useCallback(() => {
+        const idsToSkip = uploadState.failedCompletionSequenceIds;
+        if (idsToSkip.length === 0) return;
+
+        console.log(`Skipping failed completions for sequences: ${idsToSkip.join(", ")}`);
+
+        // Mark every file in the skipped sequences as Failed in the UI
+        const fileIndicesToFail = new Set<number>();
+        uploadSequences
+            .filter((s) => idsToSkip.includes(s.sequenceId))
+            .forEach((s) => {
+                s.files.forEach((f: any) => fileIndicesToFail.add(f.index));
+            });
+
+        setFileUploadItems((prev) =>
+            prev.map((item) =>
+                fileIndicesToFail.has(item.index)
+                    ? {
+                          ...item,
+                          status: "Failed",
+                          error: item.error || "Upload completion failed",
+                      }
+                    : item
+            )
+        );
+
+        // Advance the finalization gate by counting each skipped sequence
+        setSkippedCompleteSequences((prev) => prev + idsToSkip.length);
+
+        // Clear failed state so UI no longer shows Retry/Skip buttons
+        setUploadState((prev) => ({
+            ...prev,
+            completionStatus: "in-progress",
+            failedCompletionSequenceIds: [],
+        }));
+    }, [uploadState.failedCompletionSequenceIds, uploadSequences]);
+
     // Count failed files
     const failedFilesCount = fileUploadItems.filter((item) => item.status === "Failed").length;
 
@@ -1366,14 +1588,24 @@ export default function UploadManager({
                     <Box>
                         <SpaceBetween direction="vertical" size="xs">
                             <Box variant="awsui-key-label">Upload Initialization</Box>
-                            <StatusIndicator
-                                type={getStatusIndicatorType(uploadState.uploadInitStatus)}
-                            >
-                                {getStatusText(uploadState.uploadInitStatus)}
-                                {isMultiSequence &&
-                                    uploadState.uploadInitStatus === "in-progress" &&
-                                    ` (${completedInitSequences}/${totalSequences} sequences)`}
-                            </StatusIndicator>
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <StatusIndicator
+                                    type={getStatusIndicatorType(uploadState.uploadInitStatus)}
+                                >
+                                    {getStatusText(uploadState.uploadInitStatus)}
+                                    {isMultiSequence &&
+                                        uploadState.uploadInitStatus === "in-progress" &&
+                                        ` (${completedInitSequences}/${totalSequences} sequences)`}
+                                </StatusIndicator>
+                                {uploadState.uploadInitStatus === "failed" && (
+                                    <>
+                                        <Button onClick={handleRetryInit} variant="primary">
+                                            Retry Initialization
+                                        </Button>
+                                        <Button onClick={handleSkipInit}>Skip and Continue</Button>
+                                    </>
+                                )}
+                            </SpaceBetween>
                         </SpaceBetween>
                     </Box>
 
@@ -1392,14 +1624,26 @@ export default function UploadManager({
                     <Box>
                         <SpaceBetween direction="vertical" size="xs">
                             <Box variant="awsui-key-label">Upload Completion</Box>
-                            <StatusIndicator
-                                type={getStatusIndicatorType(uploadState.completionStatus)}
-                            >
-                                {getStatusText(uploadState.completionStatus)}
-                                {isMultiSequence &&
-                                    uploadState.completionStatus === "in-progress" &&
-                                    ` (${completedCompleteSequences}/${totalSequences} sequences)`}
-                            </StatusIndicator>
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <StatusIndicator
+                                    type={getStatusIndicatorType(uploadState.completionStatus)}
+                                >
+                                    {getStatusText(uploadState.completionStatus)}
+                                    {isMultiSequence &&
+                                        uploadState.completionStatus === "in-progress" &&
+                                        ` (${completedCompleteSequences}/${totalSequences} sequences)`}
+                                </StatusIndicator>
+                                {uploadState.completionStatus === "failed" && (
+                                    <>
+                                        <Button onClick={handleRetryCompletion} variant="primary">
+                                            Retry Failed Completion
+                                        </Button>
+                                        <Button onClick={handleSkipCompletion}>
+                                            Skip and Continue
+                                        </Button>
+                                    </>
+                                )}
+                            </SpaceBetween>
                         </SpaceBetween>
                     </Box>
                 </SpaceBetween>
@@ -1464,6 +1708,8 @@ function getStatusText(status: string): string {
             return "Completed with Errors";
         case "failed":
             return "Failed";
+        case "skipped":
+            return "Skipped";
         default:
             return "Unknown";
     }

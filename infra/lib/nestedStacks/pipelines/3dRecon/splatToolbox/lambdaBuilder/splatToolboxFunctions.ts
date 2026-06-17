@@ -20,6 +20,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
 } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
@@ -76,6 +77,7 @@ export function buildSqsExecuteSplatToolboxPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -122,6 +124,7 @@ export function buildVamsExecuteSplatToolboxPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -174,6 +177,15 @@ export function buildOpenPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    const stateTaskPolicy = new iam.PolicyStatement({
+        actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+        resources: [
+            `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${config.env.account}:*`,
+        ],
+    });
+    fun.addToRolePolicy(stateTaskPolicy);
+
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -220,6 +232,7 @@ export function buildConstructPipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -279,5 +292,6 @@ export function buildPipelineEndFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

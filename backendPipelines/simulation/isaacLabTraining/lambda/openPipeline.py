@@ -89,33 +89,36 @@ def load_config_from_s3(s3_uri: str) -> dict:
         return {}
 
 
-def discover_policy_file(s3_uri: str) -> str:
-    """Discover .pt policy file in the same S3 directory as the input file.
-    
+def discover_policy_file(bucket: str, asset_location_key: str) -> str:
+    """Discover .pt policy file anywhere under the asset root in S3.
+
+    Searches under bucketAsset + inputAssetLocationKey (the authoritative asset
+    root), not under the input file's parent directory. The asset root is the
+    only reliable starting point — input files may live at arbitrary depths
+    beneath it, and deriving the root from the input file path is unsafe.
+
     Args:
-        s3_uri: S3 URI of the input config file
-        
+        bucket: The asset S3 bucket name (bucketAsset).
+        asset_location_key: The asset root prefix within the bucket (inputAssetLocationKey).
+
     Returns:
-        S3 URI of the discovered .pt file, or empty string if not found
+        S3 URI of the discovered .pt file, or empty string if not found.
     """
-    if not s3_uri:
+    if not bucket or not asset_location_key:
         return ""
-    
+
     try:
-        parsed = urlparse(s3_uri)
-        bucket = parsed.netloc
-        key = parsed.path.lstrip("/")
-        
-        # Get parent directory prefix
-        parent_prefix = "/".join(key.split("/")[:-1]) + "/"
-        
-        logger.info(f"Searching for .pt files in s3://{bucket}/{parent_prefix}")
-        
-        response = s3_client.list_objects_v2(Bucket=bucket, Prefix=parent_prefix)
-        
-        pt_files = [obj["Key"] for obj in response.get("Contents", []) 
-                    if obj["Key"].endswith(".pt")]
-        
+        prefix = asset_location_key if asset_location_key.endswith("/") else asset_location_key + "/"
+
+        logger.info(f"Searching for .pt files under asset root s3://{bucket}/{prefix}")
+
+        pt_files = []
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                if obj["Key"].endswith(".pt"):
+                    pt_files.append(obj["Key"])
+
         if pt_files:
             # Sort descending to get latest model (e.g., model_1500.pt > model_1000.pt)
             pt_files.sort(reverse=True)
@@ -123,8 +126,8 @@ def discover_policy_file(s3_uri: str) -> str:
             policy_uri = f"s3://{bucket}/{policy_key}"
             logger.info(f"Discovered policy file: {policy_uri}")
             return policy_uri
-        
-        logger.info("No .pt files found in input directory")
+
+        logger.info("No .pt files found under asset root")
         return ""
     except Exception as e:
         logger.warning(f"Failed to discover policy file: {e}")
@@ -140,56 +143,57 @@ def merge_configs(base: dict, override: dict) -> dict:
     return result
 
 
-def resolve_relative_path(input_s3_path: str, relative_path: str) -> str:
+def resolve_relative_path(bucket: str, asset_location_key: str, relative_path: str) -> str:
     """Resolve a relative path to a full S3 URI based on the asset root.
-    
+
+    Uses bucketAsset + inputAssetLocationKey as the authoritative asset root.
+    Do not derive the asset root from inputS3AssetFilePath — the input file may
+    be nested arbitrarily deep under the asset root, so path-segment math on it
+    cannot correctly locate the asset root.
+
     Args:
-        input_s3_path: S3 URI of the input config file
-        relative_path: Relative path within the asset (e.g., "environments/my_env.tar.gz")
-        
+        bucket: The asset S3 bucket name (bucketAsset).
+        asset_location_key: The asset root prefix within the bucket (inputAssetLocationKey).
+        relative_path: Relative path within the asset (e.g., "environments/my_env.tar.gz").
+
     Returns:
-        Full S3 URI to the file
+        Full S3 URI to the file.
     """
-    parsed = urlparse(input_s3_path)
-    bucket = parsed.netloc
-    key = parsed.path.lstrip("/")
-    
-    # Get asset root directory (go up from config file location)
-    # e.g., "assetId/training/config.json" -> "assetId/"
-    path_parts = key.split("/")
-    if len(path_parts) >= 2:
-        asset_root = "/".join(path_parts[:-2]) + "/" if len(path_parts) > 2 else ""
-    else:
-        asset_root = ""
-    
-    return f"s3://{bucket}/{asset_root}{relative_path.lstrip('/')}"
+    prefix = asset_location_key if asset_location_key.endswith("/") else asset_location_key + "/"
+    return f"s3://{bucket}/{prefix}{relative_path.lstrip('/')}"
 
 
 def resolve_custom_environment_path(event, training_config) -> str:
     """Resolve custom environment path - supports relative or absolute S3 paths.
-    
+
     Priority order:
     1. customEnvironmentPath - relative path within asset (e.g., "environments/my_env.tar.gz")
     2. customEnvironmentS3Uri - explicit full S3 URI
-    
+
     Returns:
         Full S3 URI to the custom environment package, or empty string if not specified
     """
-    input_s3_path = event.get("inputS3AssetFilePath", "")
-    
+    bucket = event.get("bucketAsset", "")
+    asset_location_key = event.get("inputAssetLocationKey", "")
+
     # 1. Check for relative customEnvironmentPath (preferred)
     custom_env_path = training_config.get("customEnvironmentPath")
     if custom_env_path:
-        resolved = resolve_relative_path(input_s3_path, custom_env_path)
+        if not bucket or not asset_location_key:
+            raise ValueError(
+                "Cannot resolve customEnvironmentPath: pipeline is missing bucketAsset "
+                "or inputAssetLocationKey. Ensure vamsExecute passes these through from the workflow."
+            )
+        resolved = resolve_relative_path(bucket, asset_location_key, custom_env_path)
         logger.info(f"Using customEnvironmentPath: {resolved}")
         return resolved
-    
+
     # 2. Check for explicit customEnvironmentS3Uri
     custom_env_uri = training_config.get("customEnvironmentS3Uri")
     if custom_env_uri:
         logger.info(f"Using customEnvironmentS3Uri: {custom_env_uri}")
         return custom_env_uri
-    
+
     return ""
 
 
@@ -243,23 +247,29 @@ def build_evaluation_config(event, training_config, task, rl_library):
     
     # Policy discovery with priority: checkpointPath > policyS3Uri > auto-discover
     policy_s3_uri = None
-    input_s3_path = event.get("inputS3AssetFilePath", "")
-    
+    bucket = event.get("bucketAsset", "")
+    asset_location_key = event.get("inputAssetLocationKey", "")
+
     # 1. Check for relative checkpointPath (preferred method)
     checkpoint_path = training_config.get("checkpointPath")
     if checkpoint_path:
-        policy_s3_uri = resolve_relative_path(input_s3_path, checkpoint_path)
+        if not bucket or not asset_location_key:
+            raise ValueError(
+                "Cannot resolve checkpointPath: pipeline is missing bucketAsset or "
+                "inputAssetLocationKey. Ensure vamsExecute passes these through from the workflow."
+            )
+        policy_s3_uri = resolve_relative_path(bucket, asset_location_key, checkpoint_path)
         logger.info(f"Using checkpointPath: {policy_s3_uri}")
-    
+
     # 2. Check for explicit policyS3Uri
     if not policy_s3_uri:
         policy_s3_uri = training_config.get("policyS3Uri") or training_config.get("policyPath")
         if policy_s3_uri:
             logger.info(f"Using policyS3Uri: {policy_s3_uri}")
-    
-    # 3. Fall back to auto-discovery
+
+    # 3. Fall back to auto-discovery across the entire asset root
     if not policy_s3_uri:
-        policy_s3_uri = discover_policy_file(input_s3_path)
+        policy_s3_uri = discover_policy_file(bucket, asset_location_key)
         if policy_s3_uri:
             logger.info(f"Auto-discovered policy: {policy_s3_uri}")
     

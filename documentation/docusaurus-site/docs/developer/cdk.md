@@ -8,7 +8,7 @@ This guide covers development patterns for the VAMS AWS CDK infrastructure, incl
 | --------------------- | --------------------------------------- |
 | Framework             | AWS CDK v2 (TypeScript), `aws-cdk-lib`  |
 | VAMS Version          | Defined in `config.ts` (`VAMS_VERSION`) |
-| Node Lambda Runtime   | NODEJS_20_X                             |
+| Node Lambda Runtime   | NODEJS_22_X                             |
 | Python Lambda Runtime | PYTHON_3_12                             |
 | Lambda Memory         | 5308 MB (all functions)                 |
 | Lambda Timeout        | 15 minutes (all functions)              |
@@ -49,19 +49,21 @@ graph TD
 
 ### Key Nested Stacks
 
-| Stack                   | File                                                         | Purpose                                                            |
-| ----------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ |
-| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                 | VPC, subnets, VPC endpoints                                        |
-| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`         | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, AWS KMS |
-| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`               | Amazon Cognito, SAML, external OAuth                               |
-| ApiGatewayV2Amplify     | `nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack.ts` | Amazon API Gateway V2, Lambda authorizer                           |
-| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`           | All API routes and Lambda wiring                                   |
-| StaticWebBuilder        | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`  | Amazon S3 + Amazon CloudFront or ALB hosting                       |
-| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`      | Processing pipeline orchestrator                                   |
+| Stack                   | File                                                         | Purpose                                                                                |
+| ----------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                 | VPC, subnets, VPC endpoints                                                            |
+| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`         | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS |
+| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`               | Amazon Cognito, SAML, external OAuth                                                   |
+| ApiGatewayV2Amplify     | `nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack.ts` | Amazon API Gateway V2, Lambda authorizer                                               |
+| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`           | All API routes and Lambda wiring                                                       |
+| StaticWebBuilder        | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`  | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
+| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`      | Processing pipeline orchestrator                                                       |
 
 ### Cross-Stack Shared Interfaces
 
 The `storageResources` interface (defined in `storageBuilder-nestedStack.ts`) is the primary shared interface. It exposes 20+ Amazon DynamoDB tables, Amazon S3 buckets, Amazon SNS topics, Amazon SQS queues, AWS KMS keys, and Amazon CloudWatch audit log groups to all downstream stacks.
+
+A top-level Amazon EventBridge orchestration bus is also exposed through `storageResources.eventBridge`. Downstream stacks reference `eventBridge.orchestrationBus` to publish events and `eventBridge.eventSourcePrefix` for the deployment-unique source prefix to put on those events. The bus is the central hub for event-driven VAMS features; a starter rule routes all events from the deployment's sources to a dedicated Amazon CloudWatch log group (`eventBridge.orchestrationBusAuditLogGroup`).
 
 ## Lambda Builder Pattern
 
@@ -205,7 +207,7 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 | ----------------------- | ----------------------------------------- |
 | `VAMS_VERSION`          | Current release version (see `config.ts`) |
 | `LAMBDA_PYTHON_RUNTIME` | `Runtime.PYTHON_3_12`                     |
-| `LAMBDA_NODE_RUNTIME`   | `Runtime.NODEJS_20_X`                     |
+| `LAMBDA_NODE_RUNTIME`   | `Runtime.NODEJS_22_X`                     |
 | `LAMBDA_MEMORY_SIZE`    | `5308`                                    |
 
 ### Adding a New Configuration Property

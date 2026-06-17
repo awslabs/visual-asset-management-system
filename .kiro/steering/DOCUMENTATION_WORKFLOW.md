@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for creating, updating, and maintaining VAMS documentation. Follow these rules to ensure consistency, accuracy, and quality across all documentation pages.
 
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `documentation/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `documentation/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **Documentation Framework**
@@ -232,6 +234,7 @@ VAMS requires Python 3.12.
 5. **Code blocks**: Always include language tags
 6. **Tables**: Use for comparisons, feature lists, field references
 7. **Never reference other AWS solutions** by name
+8. **Match the surrounding page's level of detail and form**: When adding to an existing page, mirror its density and structure. If the section uses descriptive prose, describe how the behavior works rather than introducing "requirement"/"must" line-item checklists. Reserve upgrade/migration framing for the upgrade and revision-history pages; do not narrate "upgrades" on conceptual or architecture pages.
 
 ### **Rule 7: Include Language Tags in All Code Blocks**
 
@@ -333,11 +336,10 @@ Use standard Markdown or Docusaurus components instead of raw HTML.
 
 ### **Rule 12: Update Steering Files When Documentation Standards Change**
 
-When documentation standards, patterns, or structure change, update all three locations:
+When documentation standards, patterns, or structure change, update both locations:
 
 1. `documentation/CLAUDE.md` -- documentation steering document
 2. `.kiro/steering/DOCUMENTATION_WORKFLOW.md` -- this file
-3. `.clinerules/workflows/DOCUMENTATION_WORKFLOW.md` -- identical copy
 
 ---
 

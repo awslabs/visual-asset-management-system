@@ -28,6 +28,9 @@ backend/
       dynamodb.py                    # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
       validators.py                  # Input validation regex patterns and validate() dispatcher
       s3.py                          # S3 file validation (extension + MIME type checks)
+      s3MetadataKeys.py              # Canonical S3 object user-metadata keys (assetid, vams-*)
+      s3PathPatterns.py              # Reserved S3 prefixes, preview file pattern, preview extensions
+      dynamoDbMetadataKeys.py        # Special DynamoDB metadata keys and internal field prefixes
     customLogging/
       auditLogging.py                # CloudWatch audit logging (9 event types)
       logger.py                      # safeLogger wrapper with sensitive data redaction
@@ -428,6 +431,67 @@ from common.validators import (
     relative_file_path_pattern,  # r'^\/.*$'
 )
 ```
+
+## Shared Constants
+
+System-owned key names, path prefixes, and file-name patterns are defined once in dedicated modules under `backend/backend/common/`. Always import these constants instead of redefining the literal values at call sites, so all usages can be found and changed in one place.
+
+| Module                    | Defines                                                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `s3MetadataKeys.py`       | S3 object user-metadata keys (`assetid`, `databaseid`, `vams-*` status and change-provenance keys)    |
+| `s3PathPatterns.py`       | Reserved S3 prefix folders, the `.previewFile.` marker, allowed preview extensions, write prefixes    |
+| `dynamoDbMetadataKeys.py` | Special DynamoDB metadata keys (`REINDEX_METADATA_RECORD`) and internal field prefixes (`VAMS_`, `_`) |
+
+### S3 Path Patterns
+
+`common/s3PathPatterns.py` is the single source of truth for the reserved S3 folder names and the file-level preview file pattern. The indexers, bucket sync, workflow auto-trigger, and add-on syncs (Garnet, Physna) all consume these values when deciding which S3 keys to skip.
+
+```python
+from common.s3PathPatterns import (
+    RESERVED_S3_PREFIX_FOLDERS,       # frozenset: pipeline(s), preview(s), temp-upload(s), workspace(s)
+    EXCLUDED_FILE_PATH_PATTERNS,      # patterns excluded from generic file processing
+    PREVIEW_FILE_PATTERN,             # '.previewFile.' marker substring
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif')
+    TEMPORARY_UPLOAD_PREFIX,          # 'temp-uploads/'
+    PREVIEW_PREFIX,                   # 'previews/' (asset bucket)
+    PIPELINES_PREFIX,                 # 'pipelines/' (workflow pipeline outputs)
+    AUXILIARY_PREVIEW_PREFIX,         # 'preview/' (auxiliary bucket, singular)
+)
+```
+
+Pipeline staging paths follow the structure `pipelines/{pipelineName}/{jobName}/output/{executionId}/{outputType}/`. The path segments within this structure are also defined as constants:
+
+```python
+from common.s3PathPatterns import (
+    PIPELINE_OUTPUT_PREFIX,           # '/output/' (required by the ASSET_PATH_PIPELINE validator)
+    PIPELINE_INPUT_PREFIX,            # '/input/' (reserved for a future feature)
+    PIPELINE_OUTPUT_FILES_PREFIX,     # '/files/' (file-level outputs, outputS3AssetFilesPath)
+    PIPELINE_OUTPUT_PREVIEWS_PREFIX,  # '/previews/' (asset-level previews, outputS3AssetPreviewPath)
+    PIPELINE_OUTPUT_METADATA_PREFIX,  # '/metadata/' (metadata files, outputS3AssetMetadataPath)
+    PIPELINE_OUTPUT_RESULTS_PREFIX,   # '/results/' (reserved for a future feature)
+)
+```
+
+:::note[Frontend Mirror]
+The preview file pattern and allowed preview extensions are mirrored in the frontend at `web/src/common/constants/fileFormats.ts` (`PREVIEW_FILE_PATTERN`, `previewFileFormats`). Keep the two in sync when changing them.
+:::
+
+### DynamoDB Metadata Keys
+
+`common/dynamoDbMetadataKeys.py` defines the special key names VAMS reserves inside its metadata storage tables. The reindexer writes a `REINDEX_METADATA_RECORD` marker item to trigger stream processing, and every consumer that reads metadata items must skip the system record keys.
+
+```python
+from common.dynamoDbMetadataKeys import (
+    REINDEX_METADATA_RECORD_KEY,    # reindexer touch marker (writer side)
+    EXCLUDED_METADATA_RECORD_KEYS,  # frozenset of all system record keys to skip
+    VAMS_INTERNAL_FIELD_PREFIX,     # 'VAMS_' prefix on internal asset-metadata fields
+    HIDDEN_FIELD_PREFIX,            # '_' prefix; excluded from search and export output
+    is_excluded_metadata_record,    # helper: is this key a system record to skip?
+    is_internal_metadata_field,     # helper: is this field VAMS-internal?
+)
+```
+
+When reading metadata items, check `is_excluded_metadata_record(key)` rather than comparing against individual key constants. Future system keys added to `EXCLUDED_METADATA_RECORD_KEYS` are then picked up by every call site automatically. Writers of a specific marker record (such as the reindexer) still reference the individual key constant.
 
 ## Logging
 

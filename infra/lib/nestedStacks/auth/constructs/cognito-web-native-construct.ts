@@ -21,6 +21,7 @@ import * as Config from "../../../../config/config";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
 } from "../../../helper/security";
 
 export interface SamlSettings {
@@ -78,6 +79,7 @@ export class CognitoWebNativeConstructStack extends Construct {
         props.storageResources.dynamo.rolesStorageTable.grantReadData(fun);
         kmsKeyLambdaPermissionAddToResourcePolicy(fun, props.storageResources.encryption.kmsKey);
         globalLambdaEnvironmentsAndPermissions(fun, props.config);
+        suppressCdkNagLambda(fun);
 
         const messageVerification =
             "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is: {####}";

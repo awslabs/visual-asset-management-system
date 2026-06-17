@@ -4,7 +4,7 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 ## Amazon DynamoDB Tables
 
-VAMS deploys 28 Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
+VAMS deploys 29 Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
 ### Core Data Tables
 
@@ -24,6 +24,7 @@ VAMS deploys 28 Amazon DynamoDB tables for persistent data storage. All tables u
 | AssetVersionsStorageTable (V2)        | `databaseId:assetId`                | `assetVersionId`            | --                                                                                                    | Asset version records                  |
 | AssetFileVersionsStorageTable (V2)    | `databaseId:assetId:assetVersionId` | `fileKey`                   | `databaseIdAssetIdIndex` (PK: databaseId:assetId)                                                     | File version records per asset version |
 | AssetFileMetadataVersionsStorageTable | `databaseId:assetId:assetVersionId` | `type:filePath:metadataKey` | `databaseIdAssetIdIndex` (PK: databaseId:assetId)                                                     | Metadata snapshot per asset version    |
+| AssetFileVersionHistoryStorageTable   | `databaseId:assetId:filePath`       | `versionId`                 | `DatabaseIdAssetIdIndex` (PK: databaseId:assetId, SK: versionId)                                      | Per-version file change provenance     |
 | AssetUploadsStorageTable              | `uploadId`                          | `assetId`                   | `AssetIdGSI` (PK: assetId), `DatabaseIdGSI` (PK: databaseId), `UserIdGSI` (PK: UserId, SK: createdAt) | In-progress upload tracking            |
 
 ### Metadata and Attribute Tables
@@ -114,7 +115,7 @@ VAMS deploys approximately 50 Lambda functions across 17 builder files. All func
 | ----------------------------------- | ---------------------------------------------- |
 | Amplify Config Lambda               | Serves `/api/amplify-config` (unauthenticated) |
 | VAMS Version Lambda                 | Serves `/api/version` (unauthenticated)        |
-| Schema Deploy Lambda (Node.js 20.x) | Custom resource for OpenSearch index creation  |
+| Schema Deploy Lambda (Node.js 22.x) | Custom resource for OpenSearch index creation  |
 | Populate S3 Asset Buckets Lambda    | Custom resource for bucket table population    |
 
 ## Amazon API Gateway
@@ -137,13 +138,17 @@ VAMS creates Step Functions state machines dynamically for each workflow definit
 
 | Configuration     | Serverless                                         | Provisioned                         |
 | ----------------- | -------------------------------------------------- | ----------------------------------- |
-| **Deployment**    | OpenSearch Serverless collection                   | OpenSearch Service domain (v2.7)    |
+| **Deployment**    | OpenSearch Serverless collection                   | OpenSearch Service domain (v3.5)    |
 | **Indexes**       | Asset index + File index (dual-index architecture) | Asset index + File index            |
 | **Access**        | IAM-based access policies                          | VPC-based access (3 AZ)             |
 | **Configuration** | `openSearch.useServerless.enabled`                 | `openSearch.useProvisioned.enabled` |
 
 :::info[No OpenSearch Mode]
 Both OpenSearch modes can be disabled. When neither is enabled, the `NOOPENSEARCH` feature flag is set and search functionality is unavailable in the UI.
+:::
+
+:::warning[Provisioned is for advanced deployments only]
+OpenSearch Serverless is the recommended option for most VAMS deployments. The provisioned option requires a 3-AZ VPC, performs blue/green updates on domain configuration changes (instance type, EBS size, engine version) that can exceed the AWS CloudFormation custom-resource timeout, and may need a deploy-disabled-then-re-enabled recovery during major engine-version upgrades (for example, 2.7 to 3.5 in v2.6). Use it only when dedicated capacity, custom instance sizing, or features unsupported by Serverless are required. See the [OpenSearch configuration reference](../deployment/configuration-reference.md#amazon-opensearch-service-appopensearch) for the full caveat list.
 :::
 
 ## Amazon Cognito
@@ -180,6 +185,15 @@ All Amazon SNS topics enforce SSL and use optional AWS KMS encryption.
 | **File/Asset/Database Indexer Queues** | Buffer indexing events between Amazon SNS and indexer Lambdas |
 
 All Amazon SQS queues enforce SSL and use optional AWS KMS encryption.
+
+## Amazon EventBridge
+
+| Resource                         | Purpose                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------- |
+| **Orchestration Bus**            | Top-level custom event bus for event-driven VAMS features                 |
+| **Orchestration Bus Audit Rule** | Routes all events from the deployment's sources to a CloudWatch log group |
+
+The bus name and event source prefix are deployment-unique, so multiple VAMS deployments can coexist in one AWS Region. The bus uses optional AWS KMS encryption.
 
 ## Amazon CloudWatch
 

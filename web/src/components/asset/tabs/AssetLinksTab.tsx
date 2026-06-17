@@ -87,7 +87,20 @@ function ViewModeAssetLinksTab(props: AssetLinksTabProps) {
 
             console.log("Raw API response:", JSON.stringify(response));
 
-            if (response && typeof response === "object") {
+            // API errors are returned as a [false, message] tuple -- surface
+            // them instead of rendering an empty relationship tree.
+            if (Array.isArray(response) && response[0] === false) {
+                console.error("Error fetching asset links:", response[1]);
+                dispatch({
+                    type: "SET_ERROR",
+                    payload: response[1] || `Failed to load ${Synonyms.asset} relationships`,
+                });
+            } else if (response === false) {
+                dispatch({
+                    type: "SET_ERROR",
+                    payload: `Failed to load ${Synonyms.asset} relationships`,
+                });
+            } else if (response && typeof response === "object") {
                 // Check if the response has the expected structure
                 console.log("Response keys:", Object.keys(response));
                 console.log("Response related type:", typeof response.related);

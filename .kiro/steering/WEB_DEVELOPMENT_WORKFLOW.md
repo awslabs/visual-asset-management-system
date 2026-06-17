@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS web frontend application. Follow these rules to ensure consistency, quality, and maintainability across all frontend implementations.
 
+> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `web/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **Technology Stack**
@@ -336,8 +338,8 @@ When frontend changes affect user-facing functionality, update the relevant Docu
 When system-wide frontend standards change (new rules, new patterns, new conventions), update all three locations:
 
 1. `web/CLAUDE.md` -- frontend steering document
-2. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
-3. `.clinerules/workflows/WEB_DEVELOPMENT_WORKFLOW.md` -- identical copy
+2. `.kiro/steering/WEB_FRONTEND.md` -- Kiro mirror of `web/CLAUDE.md`
+3. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
 
 ---
 
@@ -671,7 +673,8 @@ cd web
 npm install           # Install dependencies + runs postinstall (viewer installs)
 npm run start         # Dev server (port 3001)
 npm run build         # Production build (output: web/dist/)
-npm test              # Run tests (Vitest + @testing-library/react)
+npm test              # Run tests with coverage (Jest 30 + @testing-library/react)
+npx jest              # Run tests without coverage (faster)
 ```
 
 **Lint and format (from project root):**
@@ -767,3 +770,4 @@ npm run prettier-fix
 10. **Using yarn** -- project uses npm
 11. **Creating .js files** -- all new files must be TypeScript
 12. **Hardcoding colors/spacing** -- use Cloudscape design tokens or theme.css
+13. **Over-documenting or narrating changes in comments** -- match surrounding comment density; describe what code is, not why it was added; never reference "upgrades", "new in vX", or the prompting change request in source comments (changelog narration belongs in `CHANGELOG.md` and the docs revision history)

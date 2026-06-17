@@ -18,6 +18,7 @@ import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
 } from "../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../helper/security";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../config/config";
 import * as Config from "../../../../../config/config";
@@ -99,6 +100,7 @@ export function buildGarnetDataIndexDatabaseFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -185,6 +187,7 @@ export function buildGarnetDataIndexAssetFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -266,6 +269,7 @@ export function buildGarnetDataIndexFileFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 

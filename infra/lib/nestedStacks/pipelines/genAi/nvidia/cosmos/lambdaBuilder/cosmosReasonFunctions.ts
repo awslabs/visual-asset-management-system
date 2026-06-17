@@ -18,6 +18,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
 } from "../../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../../helper/security";
@@ -73,6 +74,7 @@ export function buildVamsExecuteCosmosReasonPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -115,6 +117,7 @@ export function buildConstructReasonPipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -172,6 +175,7 @@ export function buildOpenReasonPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -227,5 +231,6 @@ export function buildReasonPipelineEndFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

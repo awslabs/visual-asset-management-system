@@ -124,7 +124,7 @@ The following table shows which VPC resources are created based on enabled featu
 | RapidPipeline EKS (`useRapidPipeline.useEks`)        | Yes                        | Yes            | 2       | EKS cluster                     |
 | ModelOps (`useModelOps`)                             | Yes                        | Yes            | 1       | Batch compute                   |
 | Gaussian Splatting (`useSplatToolbox`)               | Yes                        | Yes            | 1       | Batch compute                   |
-| Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 1       | Batch compute                   |
+| Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 1       | Batch compute + CodeBuild       |
 | NVIDIA Cosmos (`useNvidiaCosmos`)                    | Yes                        | Yes            | 1       | Batch compute + EFS + CodeBuild |
 | OpenSearch Provisioned (`openSearch.useProvisioned`) | No                         | No             | 3       | Requires 3 AZs for cluster      |
 | All other features                                   | Isolated only              | No             | 1       | Lambda VPC endpoints            |
@@ -181,6 +181,17 @@ You cannot enable both OpenSearch Serverless and OpenSearch Provisioned simultan
 
 :::tip[OpenSearch Provisioned first deployment]
 OpenSearch Provisioned creates service-linked roles that may not propagate immediately. If you encounter the error _"Before you can proceed, you must enable a service-linked role"_, wait 5 minutes and redeploy. See [Common deployment errors](deploy-the-solution.md#common-deployment-errors) for additional troubleshooting.
+:::
+
+:::warning[OpenSearch Provisioned is for advanced deployments]
+Amazon OpenSearch Serverless is the recommended option for most VAMS deployments. The provisioned option is intended for advanced deployments that require dedicated capacity, custom instance sizing, or features unsupported by Serverless, and it introduces several operational considerations that can disrupt AWS CloudFormation stack deployments:
+
+-   **VPC requirement** -- A VPC with at least 3 Availability Zones must already exist or be created by the same deploy.
+-   **Fragile AWS CloudFormation updates** -- Domain configuration changes (instance type, EBS size, engine version) trigger blue/green updates that can take 30+ minutes and occasionally exceed the AWS CloudFormation custom-resource timeout. Major engine-version upgrades (for example 2.7 to 3.5 in v2.6) sometimes fail in place and require redeploying with OpenSearch disabled, then re-enabling, before the upgrade succeeds.
+-   **Service-linked role propagation** -- First-time deploys may fail with a service-linked-role error and require waiting 5 minutes before retrying.
+-   **Reindex required after index-name or schema bumps** -- Provisioned domains do not auto-populate new indexes; you must run the version-specific data migration script to repopulate them. See [Update the solution](update-the-solution.md) and the migration READMEs under `infra/deploymentDataMigration/`.
+
+If you do not have a specific requirement that mandates Provisioned, prefer `app.openSearch.useServerless.enabled = true`.
 :::
 
 ## Amazon Location Service (`app.useLocationService`)
@@ -412,12 +423,13 @@ Third-party 3D model optimization by VNTANA. **Requires VPC and an [AWS Marketpl
 
 NVIDIA Isaac Lab reinforcement learning training pipeline on GPU instances. **Requires VPC.**
 
-| Field                                                    | Type    | Default | Description                                                                                                                                                                                                                                                  |
-| -------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `app.pipelines.useIsaacLabTraining.enabled`              | boolean | `false` | Enables the Isaac Lab training pipeline.                                                                                                                                                                                                                     |
-| `app.pipelines.useIsaacLabTraining.acceptNvidiaEula`     | boolean | `false` | **Required when enabled.** Confirms acceptance of the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Deployment fails if not set to `true` when the pipeline is enabled. |
-| `app.pipelines.useIsaacLabTraining.autoRegisterWithVAMS` | boolean | `true`  | Automatically registers training and evaluation workflows during deployment.                                                                                                                                                                                 |
-| `app.pipelines.useIsaacLabTraining.keepWarmInstance`     | boolean | `false` | Keeps a warm AWS Batch compute instance running to reduce cold start times. **Warning:** Incurs continuous compute costs even when no jobs are running.                                                                                                      |
+| Field                                                    | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useIsaacLabTraining.enabled`              | boolean | `false` | Enables the Isaac Lab training pipeline.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `app.pipelines.useIsaacLabTraining.acceptNvidiaEula`     | boolean | `false` | **Required when enabled.** Confirms acceptance of the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Deployment fails if not set to `true` when the pipeline is enabled.                                                                                                                                                                                                                                                                                   |
+| `app.pipelines.useIsaacLabTraining.useCodeBuild`         | boolean | `false` | When true, the Isaac Lab container is built using AWS CodeBuild in the cloud and pushed to ECR. When false (default), the container is built locally during CDK deployment using DockerImageAsset. CodeBuild runs in the same private VPC subnets as the pipeline Batch compute environments, with NAT Gateway egress for internet access, and forwards the `acceptNvidiaEula` flag as the `ACCEPT_EULA` Docker build argument. CodeBuild builds run asynchronously — if a build fails, check the CodeBuild project name in CDK stack outputs. |
+| `app.pipelines.useIsaacLabTraining.autoRegisterWithVAMS` | boolean | `true`  | Automatically registers training and evaluation workflows during deployment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `app.pipelines.useIsaacLabTraining.keepWarmInstance`     | boolean | `false` | Keeps a warm AWS Batch compute instance running to reduce cold start times. **Warning:** Incurs continuous compute costs even when no jobs are running.                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ### NVIDIA Cosmos Predict (`app.pipelines.useNvidiaCosmos`)
 
@@ -506,6 +518,22 @@ Integration with the Garnet Framework external knowledge graph for NGSI-LD data 
 | `app.addons.useGarnetFramework.garnetApiEndpoint`          | string  | _(required when enabled)_ | Garnet Framework API endpoint URL (for example, `https://XXX.execute-api.us-east-1.amazonaws.com`). Must be a valid URL. |
 | `app.addons.useGarnetFramework.garnetApiToken`             | string  | _(required when enabled)_ | API authentication token for the Garnet Framework.                                                                       |
 | `app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl` | string  | _(required when enabled)_ | Amazon SQS queue URL for Garnet Framework data ingestion. Format: `https://sqs.REGION.amazonaws.com/ACCOUNT/QUEUE_NAME`. |
+
+### Physna Sync (`app.addons.usePhysnaSync`)
+
+One-way synchronization of supported VAMS files and metadata to a Physna tenant for geometric and semantic 3D search.
+
+| Field                                        | Type    | Default                                                            | Description                                                           |
+| -------------------------------------------- | ------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `app.addons.usePhysnaSync.enabled`           | boolean | `false`                                                            | Enables the Physna Sync add-on.                                       |
+| `app.addons.usePhysnaSync.tenantId`          | string  | _(required when enabled)_                                          | Physna tenant UUID.                                                   |
+| `app.addons.usePhysnaSync.apiBaseEndpoint`   | string  | `https://app-api.physna.com/v3/`                                   | Physna REST API base URL. Must end with `/`.                          |
+| `app.addons.usePhysnaSync.authTokenEndpoint` | string  | `https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token` | OAuth2 token endpoint for Physna's Cognito user pool.                 |
+| `app.addons.usePhysnaSync.authType`          | string  | `cognito`                                                          | Authentication mode. Only `cognito` is supported in phase 1.          |
+| `app.addons.usePhysnaSync.clientId`          | string  | _(required when enabled)_                                          | Cognito client ID. Written to AWS Secrets Manager at deploy time.     |
+| `app.addons.usePhysnaSync.clientSecret`      | string  | _(required when enabled)_                                          | Cognito client secret. Written to AWS Secrets Manager at deploy time. |
+
+Enabling the Physna Sync add-on also enables the in-app Physna add-on frontend features (currently the Physna Viewer plugin; more Physna-powered UI surfaces are planned). The backend emits a `PHYSNA_ADDON` feature flag in `/api/secure-config` whenever `app.addons.usePhysnaSync.enabled` is `true`, and the frontend consumes that flag to decide whether to surface Physna add-on features for supported file types. No separate configuration is required.
 
 ## Example configurations
 

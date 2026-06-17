@@ -262,9 +262,14 @@ The VAMS KMS key policy grants cryptographic operations to the following service
 -   AWS Lambda
 -   AWS STS
 -   AWS CloudFormation
+-   Amazon EventBridge
 -   Account root principal (for custom resource Lambda roles)
 -   Amazon CloudFront (conditional)
 -   Amazon OpenSearch Service / Amazon OpenSearch Serverless (conditional)
+
+### Imported KMS Keys
+
+VAMS applies this key policy to keys it creates. When an external key is supplied with `useKmsCmkEncryption.optionalExternalCmkArn`, VAMS references the key by ARN for encryption and leaves the key's policy unchanged. An imported key carries its own policy, which grants the same cryptographic operations to the service principals listed above so the encrypted VAMS resources — including the Amazon EventBridge orchestration bus and the Amazon CloudWatch log groups — can use the key.
 
 ### Encryption in Transit
 
@@ -300,16 +305,21 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | ----------------- | --------------------------------------------------------------- |
 | `base-uri`        | `'none'`                                                        |
 | `default-src`     | `'none'`                                                        |
-| `script-src`      | `'self'`, `'unsafe-hashes'`, SHA-256 hashes for inline scripts  |
+| `script-src`      | `'self'`, `'unsafe-hashes'`, `'unsafe-inline'`                  |
 | `style-src`       | `'self'`, `'unsafe-inline'`                                     |
 | `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, Amazon S3 endpoint |
 | `worker-src`      | `'self'`, `blob:`, `data:`                                      |
 | `img-src`         | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                  |
 | `media-src`       | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                  |
 | `object-src`      | `'none'`                                                        |
-| `frame-ancestors` | `'none'`                                                        |
+| `frame-src`       | `'self'`, `blob:`                                               |
+| `frame-ancestors` | `'self'`                                                        |
 | `font-src`        | `'self'`                                                        |
 | `manifest-src`    | `'self'`                                                        |
+
+:::note[Framing directives]
+`frame-src` controls which documents VAMS may load into an `<iframe>`; `'self'` plus `blob:` covers same-origin iframe viewers (such as the SuperSplat editor served under `/viewers/supersplat/`) and Blob-URL iframes used by add-on viewers (such as the Physna Viewer). `frame-ancestors 'self'` controls who may embed VAMS pages in a frame — same-origin only, so external sites cannot frame VAMS (clickjacking protection is preserved) while VAMS-hosted iframe viewers still work. The CloudFront distribution sets a matching `X-Frame-Options: SAMEORIGIN` response header as the legacy equivalent of `frame-ancestors`.
+:::
 
 ### Conditional CSP Sources
 
@@ -320,10 +330,11 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | External OAuth IDP               | IDP auth provider URL in `connect-src`                                   |
 | `allowUnsafeEvalFeatures = true` | `'unsafe-eval'` in `script-src` (required for certain 3D viewer plugins) |
 | Amazon Location Service enabled  | Maps endpoint in `connect-src`                                           |
+| Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`                    |
 
 ### Extensible CSP
 
-Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConfig.json`. This JSON file supports adding entries to `connectSrc`, `scriptSrc`, `workerSrc`, `imgSrc`, `mediaSrc`, `fontSrc`, and `styleSrc` arrays.
+Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConfig.json`. This JSON file supports adding entries to `connectSrc`, `scriptSrc`, `workerSrc`, `imgSrc`, `mediaSrc`, `fontSrc`, `styleSrc`, and `frameSrc` arrays.
 
 ## IP Range Restrictions
 
@@ -365,7 +376,7 @@ Every CDK Nag suppression must include a detailed justification explaining why t
 | ------------------- | --------------------------------------------------------------------------------------------------- |
 | `AwsSolutions-IAM5` | Amazon S3 `grantReadWrite` generates wildcard actions; scoped to VAMS buckets                       |
 | `AwsSolutions-IAM4` | Managed policies (`AWSLambdaBasicExecutionRole`, `AWSLambdaVPCAccessExecutionRole`) used for Lambda |
-| `AwsSolutions-L1`   | Lambda runtimes are explicitly managed (Python 3.12, Node.js 20.x)                                  |
+| `AwsSolutions-L1`   | Lambda runtimes are explicitly managed (Python 3.12, Node.js 22.x)                                  |
 | `AwsSolutions-COG3` | Amazon Cognito AdvancedSecurityMode not available in AWS GovCloud                                   |
 | `AwsSolutions-S1`   | Access logs bucket cannot log to itself                                                             |
 | `AwsSolutions-SQS3` | Dead-letter queues not used for bucket sync queues (files easily re-driven)                         |

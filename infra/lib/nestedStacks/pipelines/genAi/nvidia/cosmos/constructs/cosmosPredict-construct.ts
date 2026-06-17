@@ -103,16 +103,16 @@ export class CosmosPredictConstruct extends Construct {
         const cosmosEfs = props.efsFileSystem;
         const nfsSecurityGroup = props.efsSecurityGroup;
 
-        /**
-         * Docker Container Image from ECR (v1)
-         */
-        const containerImage = new DockerImageAsset(this, "CosmosContainerImage", {
-            directory: path.join(
-                __dirname,
-                "../../../../../../../../backendPipelines/genAi/nvidia/cosmos/predict/containerv1"
-            ),
-            platform: Platform.LINUX_AMD64,
-        });
+        // /**
+        //  * Docker Container Image from ECR (v1)
+        //  */
+        // const containerImage = new DockerImageAsset(this, "CosmosContainerImage", {
+        //     directory: path.join(
+        //         __dirname,
+        //         "../../../../../../../../backendPipelines/genAi/nvidia/cosmos/predict/containerv1"
+        //     ),
+        //     platform: Platform.LINUX_AMD64,
+        // });
 
         /**
          * Docker Container Image from ECR (v2.5)
@@ -510,19 +510,22 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             });
         }
 
-        /**
-         * Container image reference for job definitions (v1)
-         */
-        const tempTaskDef = new ecs.TaskDefinition(this, "TempTaskDef", {
-            compatibility: ecs.Compatibility.EC2,
-        });
-        const container = tempTaskDef.addContainer("Container", {
-            image: ecs.ContainerImage.fromDockerImageAsset(containerImage),
-            memoryLimitMiB: 1024,
-            logging: ecs.LogDrivers.awsLogs({
-                streamPrefix: "batch-temp",
-            }),
-        });
+        // v1 TempTaskDef / Container removed — v1 is disabled, and the ref
+        // to `containerImage` here was the last thing forcing CDK to build
+        // the v1 DockerImageAsset locally.
+        // /**
+        //  * Container image reference for job definitions (v1)
+        //  */
+        // const tempTaskDef = new ecs.TaskDefinition(this, "TempTaskDef", {
+        //     compatibility: ecs.Compatibility.EC2,
+        // });
+        // const container = tempTaskDef.addContainer("Container", {
+        //     image: ecs.ContainerImage.fromDockerImageAsset(containerImage),
+        //     memoryLimitMiB: 1024,
+        //     logging: ecs.LogDrivers.awsLogs({
+        //         streamPrefix: "batch-temp",
+        //     }),
+        // });
 
         /**
          * Container image reference for job definitions (v2.5)

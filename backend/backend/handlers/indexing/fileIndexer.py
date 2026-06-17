@@ -19,12 +19,21 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    SEARCHABLE_VAMS_METADATA_KEYS,
+    is_system_metadata_key,
+)
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse
+from common.indexing.geoLocation import build_geo_location
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -35,8 +44,8 @@ retry_config = Config(
 )
 
 #Excluded patterns or prefixes from file paths to exclude
-excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
-excluded_patterns = [] # '.previewFile.' not included here as the fileIndexer processes these in a special way
+excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
+excluded_patterns = [] # PREVIEW_FILE_PATTERN not included here as the fileIndexer processes these in a special way
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 s3_client = boto3.client('s3', config=retry_config)
@@ -437,66 +446,95 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> tuple[
     """
     Get file-specific metadata AND attributes from new schema tables as flat single-level JSON objects.
     Returns separate dictionaries for metadata and attributes without any type prefixes.
-    
+
+    The metadata table records use ``metadataKey``/``metadataValue``/``metadataValueType``.
+    The attribute table records may use ``attributeKey``/``attributeValue``/``attributeValueType``
+    OR fall back to the legacy ``metadataKey``/``metadataValue``/``metadataValueType`` field
+    names (mirroring the read path in handlers.metadata.metadataService).
+
+    The metadata and attribute reads are isolated so a failure in one branch does
+    not wipe the other
+
     Returns:
         Tuple of (metadata_dict, attributes_dict) where:
         - Keys are just the field names (no MD_/AB_ or type prefixes)
         - Values are normalized (strings, numbers, booleans, dates)
     """
+    composite_key = f"{database_id}:{asset_id}:{file_path}"
+    metadata: Dict[str, Any] = {}
+    attributes: Dict[str, Any] = {}
+
+    # --- Metadata table ---
     try:
-        # Build composite key for new schema
-        composite_key = f"{database_id}:{asset_id}:{file_path}"
-        
-        metadata = {}
-        attributes = {}
-        
-        # Query assetFileMetadataStorageTable for metadata fields
         response = asset_file_metadata_table.query(
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
+        items = response.get('Items', [])
+        for item in items:
             metadata_key = item.get('metadataKey')
             metadata_value = item.get('metadataValue')
             metadata_value_type = item.get('metadataValueType')
-            
+
             # Skip system metadata records that conflict with OpenSearch field mappings
-            if metadata_key == 'REINDEX_METADATA_RECORD':
+            if is_excluded_metadata_record(metadata_key):
                 logger.debug(f"Skipping system metadata: {metadata_key}")
-                continue  # Skip this metadata, but continue processing others
-            
-            if metadata_key and metadata_value:
-                # Normalize the value with type hint
-                normalized_value = normalize_metadata_value(metadata_value, metadata_value_type)
-                
-                # Store as flat single-level JSON: just field name -> value
-                # No type prefixes (str_, num_, etc.) - flat object handles all types as strings
-                metadata[metadata_key] = normalized_value
-        
-        # Query fileAttributeStorageTable for attribute fields
+                continue
+
+            # Accept any non-None value (including "", 0, False after normalization).
+            # Drop only records that have no key at all.
+            if metadata_key and metadata_value is not None:
+                metadata[metadata_key] = normalize_metadata_value(
+                    metadata_value, metadata_value_type
+                )
+
+        logger.info(
+            f"Loaded {len(metadata)} metadata fields (from {len(items)} records) "
+            f"for {composite_key}"
+        )
+    except Exception as e:
+        logger.exception(
+            f"Error reading file metadata for {composite_key} from "
+            f"{asset_file_metadata_table_name}: {e}"
+        )
+
+    # --- Attribute table ---
+    try:
         response = file_attribute_table.query(
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
-            attribute_key = item.get('attributeKey')
-            attribute_value = item.get('attributeValue')
-            attribute_value_type = item.get('attributeValueType')
-            
-            if attribute_key and attribute_value:
-                # Normalize the value with type hint
-                normalized_value = normalize_metadata_value(attribute_value, attribute_value_type)
-                
-                # Store as flat single-level JSON: just field name -> value
-                # No type prefixes (str_, num_, etc.) - flat object handles all types as strings
-                attributes[attribute_key] = normalized_value
-        
-        return metadata, attributes
+        items = response.get('Items', [])
+        for item in items:
+            # Field-name fallback matches handlers.metadata.metadataService — records
+            # in the attribute table may have been written with either the
+            # attribute* or metadata* attribute names depending on writer version.
+            attribute_key = item.get('attributeKey') or item.get('metadataKey')
+            attribute_value = (
+                item.get('attributeValue')
+                if item.get('attributeValue') is not None
+                else item.get('metadataValue')
+            )
+            attribute_value_type = (
+                item.get('attributeValueType') or item.get('metadataValueType')
+            )
+
+            if attribute_key and attribute_value is not None:
+                attributes[attribute_key] = normalize_metadata_value(
+                    attribute_value, attribute_value_type
+                )
+
+        logger.info(
+            f"Loaded {len(attributes)} attribute fields (from {len(items)} records) "
+            f"for {composite_key}"
+        )
     except Exception as e:
-        logger.exception(f"Error getting file metadata for {database_id}/{asset_id}/{file_path}: {e}")
-        return {}, {}
+        logger.exception(
+            f"Error reading file attributes for {composite_key} from "
+            f"{file_attribute_table_name}: {e}"
+        )
+
+    return metadata, attributes
 
 def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, Any]], bool]:
     """Get S3 file information and archive status"""
@@ -516,9 +554,9 @@ def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, 
             # Extract additional metadata from S3 object metadata
             s3_metadata = response.get('Metadata', {})
             for key, value in s3_metadata.items():
-                if not key.startswith('vams-') and key not in ['assetid', 'databaseid', 'uploadid']:
+                if not is_system_metadata_key(key):
                     file_info[f"s3_{key}"] = value
-                if key in ['vams-primarytype']: #We do want to add this vams metadata key to search. 
+                if key in SEARCHABLE_VAMS_METADATA_KEYS:  # We do want to add this vams metadata key to search.
                     file_info[f"s3_{key}"] = value
             
             return file_info, False  # Not archived
@@ -584,7 +622,7 @@ def find_preview_file_key(bucket_name: str, s3_key: str) -> str:
         The S3 key of the preview file if found, or empty string if not.
     """
     try:
-        prefix = s3_key + '.previewFile.'
+        prefix = s3_key + PREVIEW_FILE_PATTERN
         response = s3_client.list_objects_v2(
             Bucket=bucket_name,
             Prefix=prefix,
@@ -657,44 +695,101 @@ def build_file_document(request: FileIndexRequest, asset_details: Dict[str, Any]
     
     # Add S3 metadata if present
     if s3_file_info:
-        s3_metadata = {k: v for k, v in s3_file_info.items() 
+        s3_metadata = {k: v for k, v in s3_file_info.items()
                       if k.startswith('s3_') and k != 's3_'}
         if s3_metadata:
             doc.add_metadata_fields(s3_metadata)
-    
+
+    # Derive geo_MD_location from metadata (location key takes priority over lat/lon/alt).
+    # File metadata wins over file attributes when both contain location data.
+    geo_shape = build_geo_location(file_metadata) or build_geo_location(file_attributes)
+    if geo_shape is not None:
+        doc.geo_MD_location = geo_shape
+
     return doc
 
 #######################
 # OpenSearch Operations
 #######################
 
+def _is_invalid_geo_shape_error(error: Exception) -> bool:
+    """Detect OpenSearch's mapper_parsing_exception for an invalid geo_shape.
+
+    A degenerate polygon (self-intersecting, zero-area, coincident edges) drawn
+    in the metadata map editor surfaces as a 400 mapper_parsing_exception. We
+    don't want one bad geometry to block the rest of the document from being
+    indexed, so callers retry without the geo field.
+    """
+    msg = str(error)
+    return (
+        "mapper_parsing_exception" in msg
+        and ("invalid_shape_exception" in msg or "geo_shape" in msg)
+    )
+
+
 def index_file_document(document: FileDocumentModel) -> bool:
-    """Index a file document in OpenSearch with retry logic for 429 errors"""
+    """Index a file document in OpenSearch with retry logic for 429 errors.
+
+    If OpenSearch rejects the document because of a malformed geo_MD_location
+    shape (e.g. a self-intersecting polygon authored in the metadata map
+    editor), we retry once without the geo field so the rest of the document --
+    including MD_ / AB_ metadata -- still lands in the index. The bad geometry
+    is logged so it can be cleaned up.
+    """
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
-        
+
         client = opensearch_manager.get_client()
-        
+
         # Create document ID from key components
         doc_id = f"{document.str_databaseid}#{document.str_assetid}#{document.str_key}"
-        
+
         # Convert document to dict for indexing
         doc_dict = document.dict(exclude_unset=True)
-        
-        # Index the document with retry logic
-        response = opensearch_operation_with_retry(
-            lambda: client.index(
-                index=opensearch_file_index,
-                id=doc_id,
-                body=doc_dict
-            ),
-            operation_name=f"index file {doc_id}"
+
+        # Diagnostic: log the top-level keys actually being sent to OpenSearch so we can
+        # confirm MD_ / AB_ / geo_MD_location are present on the indexed body.
+        md_count = len(doc_dict.get('MD_', {})) if isinstance(doc_dict.get('MD_'), dict) else 0
+        ab_count = len(doc_dict.get('AB_', {})) if isinstance(doc_dict.get('AB_'), dict) else 0
+        logger.info(
+            f"Indexing file doc {doc_id}: keys={sorted(doc_dict.keys())}, "
+            f"MD_ fields={md_count}, AB_ fields={ab_count}, "
+            f"geo_MD_location={'present' if doc_dict.get('geo_MD_location') else 'absent'}"
         )
-        
+
+        try:
+            response = opensearch_operation_with_retry(
+                lambda: client.index(
+                    index=opensearch_file_index,
+                    id=doc_id,
+                    body=doc_dict,
+                ),
+                operation_name=f"index file {doc_id}",
+            )
+        except Exception as e:
+            # Drop the geo field and retry so a single malformed shape doesn't
+            # also wipe out the rest of the document's metadata fields.
+            if _is_invalid_geo_shape_error(e) and "geo_MD_location" in doc_dict:
+                bad_geo = doc_dict.pop("geo_MD_location", None)
+                logger.warning(
+                    f"OpenSearch rejected geo_MD_location for {doc_id}: {e}. "
+                    f"Retrying without the geo field. Bad shape: {bad_geo}"
+                )
+                response = opensearch_operation_with_retry(
+                    lambda: client.index(
+                        index=opensearch_file_index,
+                        id=doc_id,
+                        body=doc_dict,
+                    ),
+                    operation_name=f"index file {doc_id} (geo dropped)",
+                )
+            else:
+                raise
+
         logger.info(f"Indexed file document: {doc_id}")
         return response.get('result') in ['created', 'updated']
-        
+
     except Exception as e:
         logger.exception(f"Error indexing file document: {e}")
         return False
@@ -898,11 +993,10 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 operation="skip"
             )
 
-        # Check if s3_key starts with any excluded prefixes (after any bucket prefix)
-        # We need to check the path components, not just the raw key
+        # Check if any path component is a reserved excluded folder (after any bucket prefix).
         path_parts = s3_key.split('/')
         for part in path_parts:
-            if any(part.startswith(prefix) for prefix in excluded_prefixes):
+            if part in excluded_prefixes:
                 logger.info(f"Ignoring excluded patterns or prefixes (pipeline, preview, temp-upload file, etc.) from indexing: {s3_key}")
                 return IndexOperationResponse(
                     success=True,
@@ -917,8 +1011,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
         # Placed after excluded_prefixes check so preview files under excluded
         # prefixes (e.g. pipelines/) are still ignored.
         is_preview_rewrite = False
-        if '.previewFile.' in s3_key:
-            base_file_key = s3_key.split('.previewFile.')[0]
+        if PREVIEW_FILE_PATTERN in s3_key:
+            base_file_key = s3_key.split(PREVIEW_FILE_PATTERN)[0]
             logger.info(f"Preview file event detected: {s3_key}, checking base file: {base_file_key}")
 
             # Check if the base file exists in S3
@@ -993,8 +1087,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                 VersionId=latest_version['VersionId']
                             )
                             s3_metadata = version_response.get('Metadata', {})
-                            asset_id = s3_metadata.get('assetid')
-                            database_id = s3_metadata.get('databaseid')
+                            asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+                            database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
                             
                             if asset_id and database_id:
                                 # File is archived - need to index with archived flag
@@ -1186,9 +1280,9 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
                 s3_metadata = s3_response.get('Metadata', {})
                 
-                asset_id = s3_metadata.get('assetid')
-                database_id = s3_metadata.get('databaseid')
-                
+                asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+                database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
+
                 if not asset_id or not database_id:
                     logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
                     return IndexOperationResponse(
@@ -1311,7 +1405,7 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 )
             
             database_id, asset_id, file_path = parts
-            
+
             # Skip if it's asset-level (file_path is just "/")
             if file_path == '/':
                 logger.info("Asset-level metadata REMOVE, skipping for file index")
@@ -1321,7 +1415,20 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                     indexName=opensearch_file_index,
                     operation="skip"
                 )
-            
+
+            # Skip preview files (.previewFile.*). Unlike the S3-event path, the
+            # metadata stream does not rewrite a preview file to its base file, so
+            # indexing one here would create a standalone document. The base file's
+            # str_previewfilekey is kept in sync by the S3-event path instead.
+            if PREVIEW_FILE_PATTERN in file_path:
+                logger.info(f"Preview file metadata REMOVE, skipping for file index: {file_path}")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Preview file, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
+
             # Skip folder paths
             if is_folder_path(file_path):
                 logger.info(f"Folder path metadata REMOVE, skipping: {file_path}")
@@ -1417,7 +1524,7 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
             )
         
         database_id, asset_id, file_path = parts
-        
+
         # Skip if it's asset-level (file_path is just "/")
         if file_path == '/':
             logger.info("Asset-level metadata, skipping for file index")
@@ -1427,7 +1534,20 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 indexName=opensearch_file_index,
                 operation="skip"
             )
-        
+
+        # Skip preview files (.previewFile.*). Unlike the S3-event path, the
+        # metadata stream does not rewrite a preview file to its base file, so
+        # indexing one here would create a standalone document. The base file's
+        # str_previewfilekey is kept in sync by the S3-event path instead.
+        if PREVIEW_FILE_PATTERN in file_path:
+            logger.info(f"Preview file metadata, skipping for file index: {file_path}")
+            return IndexOperationResponse(
+                success=True,
+                message="Preview file, skipping",
+                indexName=opensearch_file_index,
+                operation="skip"
+            )
+
         # Skip folder paths
         if is_folder_path(file_path):
             logger.info(f"Folder path metadata, skipping: {file_path}")

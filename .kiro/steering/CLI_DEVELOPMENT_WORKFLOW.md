@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending VamsCLI. Follow these rules to ensure consistency, quality, and maintainability across all implementations.
 
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `tools/VamsCLI/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `tools/VamsCLI/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **File Structure Standards**
@@ -30,6 +32,22 @@ tools/VamsCLI/
 ├── pyproject.toml          # Modern Python packaging
 └── README.md               # User documentation
 ```
+
+### **Command Groups (18 top-level)**
+
+All registered in `main.py` via `cli.add_command()`:
+
+```
+setup, auth, assets, asset-version, asset-links, file, profile, database,
+tag, tag-type, metadata, metadata-schema, features, search, workflow,
+industry, user, role
+```
+
+Industry has nested sub-command groups:
+
+-   `industry engineering bom <command>`
+-   `industry engineering plm <command>`
+-   `industry spatial glb <command>`
 
 ## 📋 **Development Workflow Checklist**
 
@@ -930,9 +948,9 @@ This workflow document itself MUST be updated whenever system-wide standards, im
 
 When updating this workflow document, also update the corresponding files:
 
-1. Update **both** `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` and `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md` (they must stay in sync)
+1. Update `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`
 2. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, DOCUMENTATION_WORKFLOW.md)
+3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, WEB_FRONTEND.md, DOCUMENTATION_WORKFLOW.md)
 
 #### **Workflow Maintenance Responsibility:**
 
@@ -1035,7 +1053,7 @@ Available constants are in `infra/common/vamsAppFeatures.ts`
 
 #### **Feature Switch Development Workflow Location:**
 
-This workflow document is located at `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md` and should be referenced for all VamsCLI development tasks.
+This workflow document is located at `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` and should be referenced for all VamsCLI development tasks.
 
 ### **Rule 13: CLI Integration Testing MUST Use Main CLI Entry Point**
 
@@ -2028,6 +2046,7 @@ if not required_param:
 10. **Always** provide clear error messages
 11. **Always** follow the new exception handling architecture
 12. **Always** let global exceptions bubble up to main.py
+13. **Always** match the surrounding comment density and style — describe **what** code is, not why it was added; never reference "upgrades", "new in vX", or the prompting change request in source comments (changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in code)
 
 ## 🛠️ **Development Commands**
 

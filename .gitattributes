@@ -3,3 +3,9 @@
 
 # Declare files that will always have CRLF line endings on checkout.
 *.patch text eol=crlf
+
+# Shell scripts must always have LF endings — they are executed on Linux
+# (container entrypoints, Lambda helpers, CI scripts). CRLF endings cause
+# the kernel to interpret the shebang as `/bin/bash\r`, which fails with
+# "no such file or directory" at exec time.
+*.sh text eol=lf

@@ -13,12 +13,41 @@ export interface LocationData {
 }
 
 /**
- * Extract location data from a search result item
- * Returns either a point (lat/lon) or GeoJSON data
+ * Extract location data from a search result item.
+ * Priority order:
+ *   1. geo_MD_location (GeoJSON shape derived by the backend indexer)
+ *   2. MD_.location field (legacy)
+ *   3. MD_.latitude / MD_.longitude (legacy)
  */
 export const extractLocationData = (item: any): LocationData | null => {
     try {
-        // Check if MD_ exists as an object (new format)
+        // Priority 1: geo_MD_location is a server-side GeoJSON geometry produced by
+        // the indexer. It always wins over legacy metadata-derived sources.
+        const geoLoc = item?.geo_MD_location;
+        if (geoLoc && typeof geoLoc === "object") {
+            if (geoLoc.type === "Point" && Array.isArray(geoLoc.coordinates)) {
+                const [lon, lat] = geoLoc.coordinates;
+                if (
+                    typeof lat === "number" &&
+                    typeof lon === "number" &&
+                    !isNaN(lat) &&
+                    !isNaN(lon)
+                ) {
+                    return { type: "point", latitude: lat, longitude: lon };
+                }
+            }
+            if (geoLoc.type) {
+                return {
+                    type: "geojson",
+                    geoJson:
+                        geoLoc.type === "Feature"
+                            ? geoLoc
+                            : { type: "Feature", geometry: geoLoc, properties: {} },
+                };
+            }
+        }
+
+        // Check if MD_ exists as an object (legacy format)
         if (item.MD_ && typeof item.MD_ === "object" && !Array.isArray(item.MD_)) {
             const md = item.MD_;
 

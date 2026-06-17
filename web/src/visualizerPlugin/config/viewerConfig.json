@@ -213,6 +213,24 @@
             "enabled": true
         },
         {
+            "id": "supersplat-viewer",
+            "name": "SuperSplat Editor (PlayCanvas)",
+            "description": "View and edit 3D Gaussian Splats (.lcc, .ply, .sog, .splat) with the full PlayCanvas SuperSplat editor UI.",
+            "componentPath": "./viewers/SuperSplatViewerPlugin/SuperSplatViewerComponent",
+            "supportedExtensions": [".lcc", ".ply", ".sog", ".splat"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 1,
+            "dependencies": ["supersplat"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"],
+            "customParameters": {
+                "basePath": "/viewers/supersplat/index.html"
+            },
+            "enabled": true
+        },
+        {
             "id": "gaussian-splat-viewer-playcanvas",
             "name": "Gaussian Splat Viewer (PlayCanvas)",
             "description": "View Gaussian Splat files (.ply, .sog) with 3D visualization using PlayCanvas",
@@ -224,7 +242,7 @@
             "supportedExtensions": [".ply", ".sog"],
             "supportsMultiFile": false,
             "canFullscreen": true,
-            "priority": 2,
+            "priority": 5,
             "dependencies": ["playcanvas"],
             "loadStrategy": "lazy",
             "category": "3d",
@@ -273,6 +291,42 @@
             "enabled": false
         },
         {
+            "id": "physna-viewer",
+            "name": "Physna Viewer",
+            "description": "View 3D/CAD files via the Physna platform. Requires the file to be synced and finished indexing in Physna.",
+            "componentPath": "./viewers/PhysnaViewerPlugin/PhysnaViewerComponent",
+            "supportedExtensions": [
+                ".3ds",
+                ".asm",
+                ".catpart",
+                ".catproduct",
+                ".glb",
+                ".iam",
+                ".iges",
+                ".igs",
+                ".ipt",
+                ".jt",
+                ".obj",
+                ".par",
+                ".prt",
+                ".sldasm",
+                ".sldprt",
+                ".stl",
+                ".step",
+                ".stp",
+                ".x_b",
+                ".x_t"
+            ],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 5,
+            "dependencies": [],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "featuresEnabledRestriction": ["PHYSNA_ADDON"],
+            "enabled": true
+        },
+        {
             "id": "needletools-usd-viewer",
             "name": "Needle USD Viewer (Experimental)",
             "description": "View USD files using Needle's USD Web (experimental) Viewer with WebAssembly. Supports USD format files with dependency loading and advanced 3D rendering capabilities.",
@@ -319,6 +373,29 @@
             "canFullscreen": true,
             "priority": 1,
             "dependencies": ["three"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "enabled": true
+        },
+        {
+            "id": "thatopenwebifc-viewer",
+            "name": "ThatOpen IFC BIM Viewer",
+            "description": "View IFC (Industry Foundation Classes) Building Information Models using the That Open Engine (web-ifc). Features a spatial model tree, element property inspection, hide/isolate, section planes, measurements, and floor plans.",
+            "componentPath": "./viewers/ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent",
+            "dependencyManager": "./viewers/ThatOpenWebIfcViewerPlugin/dependencies",
+            "dependencyManagerClass": "ThatOpenWebIfcDependencyManager",
+            "dependencyManagerMethod": "loadThatOpenWebIfc",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".ifc", ".ifczip"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 1,
+            "dependencies": [
+                "@thatopen/components",
+                "@thatopen/components-front",
+                "@thatopen/fragments",
+                "web-ifc"
+            ],
             "loadStrategy": "lazy",
             "category": "3d",
             "enabled": true

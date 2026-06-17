@@ -124,6 +124,6 @@ VAMS is designed as an open, extensible platform that development teams can cust
 -   Plugin-based viewer architecture for adding custom visualization capabilities
 -   Pipeline and workflow system for integrating custom processing logic
 -   REST API layer for building custom applications and integrations
--   Addon framework (e.g., Garnet Framework) for connecting VAMS to external systems
+-   Addon framework (e.g., Garnet Framework, Physna Sync) for connecting VAMS to external systems
 -   CDK-based infrastructure for customizing deployment topology and AWS service configuration
 -   Configurable metadata schemas for adapting data models to domain-specific requirements

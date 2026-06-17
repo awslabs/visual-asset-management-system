@@ -37,50 +37,46 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
 
     return (
         <Box padding={{ vertical: "m", horizontal: "l" }}>
-            <SpaceBetween direction="vertical" size="m">
-                {/* Header with actions */}
-                <Header
-                    variant="h1"
-                    description={description}
-                    actions={
-                        hasActiveFilters && (
+            {/* Header with inline search input + Search and Clear All Filters buttons in the actions slot */}
+            <Header
+                variant="h1"
+                description={description}
+                actions={
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <div style={{ width: "320px" }}>
+                            <Input
+                                placeholder="Search by keywords (wildcard)..."
+                                type="search"
+                                value={query}
+                                onChange={(e) => onQueryChange(e.detail.value)}
+                                onKeyDown={handleKeyDown}
+                                disabled={loading}
+                                clearAriaLabel="Clear search"
+                            />
+                        </div>
+                        <Button
+                            variant="primary"
+                            onClick={onSearch}
+                            loading={loading}
+                            iconName="search"
+                        >
+                            Search
+                        </Button>
+                        {hasActiveFilters && (
                             <Button onClick={onClearAll} disabled={loading}>
                                 Clear All Filters
                             </Button>
-                        )
-                    }
-                    info={
-                        resultCount !== undefined && (
-                            <Badge color="blue">{resultCount.toLocaleString()} results</Badge>
-                        )
-                    }
-                >
-                    {title}
-                </Header>
-
-                {/* Search input */}
-                <div style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
-                    <div style={{ flex: 1 }}>
-                        <Input
-                            placeholder="Search by keywords (wildcard)..."
-                            type="search"
-                            value={query}
-                            onChange={(e) => onQueryChange(e.detail.value)}
-                            onKeyDown={handleKeyDown}
-                            disabled={loading}
-                            clearAriaLabel="Clear search"
-                        />
-                    </div>
-                    <Button
-                        variant="primary"
-                        onClick={onSearch}
-                        loading={loading}
-                        iconName="search"
-                    >
-                        Search
-                    </Button>
-                </div>
-            </SpaceBetween>
+                        )}
+                    </SpaceBetween>
+                }
+                info={
+                    resultCount !== undefined && (
+                        <Badge color="blue">{resultCount.toLocaleString()} results</Badge>
+                    )
+                }
+            >
+                {title}
+            </Header>
         </Box>
     );
 };

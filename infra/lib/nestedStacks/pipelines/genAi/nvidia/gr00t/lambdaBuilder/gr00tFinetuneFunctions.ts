@@ -18,6 +18,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
 } from "../../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../../helper/security";
@@ -71,6 +72,7 @@ export function buildVamsExecuteGr00tFinetunePipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -126,6 +128,7 @@ export function buildGr00tFinetuneOpenPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -168,6 +171,7 @@ export function buildGr00tFinetuneConstructPipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -223,5 +227,6 @@ export function buildGr00tFinetunePipelineEndFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

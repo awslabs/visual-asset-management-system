@@ -18,7 +18,7 @@ VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application b
 -   React Context API + useReducer for shared state
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
--   Plugin-based 3D viewer architecture (17 viewer plugins)
+-   Plugin-based 3D viewer architecture (18 viewer plugins)
 -   React.lazy + Suspense for route-level code splitting
 
 ---
@@ -37,6 +37,7 @@ web/
     online3dviewer/
     playcanvas/
     potree/
+    thatopenwebifc/           # That Open Engine (web-ifc) IFC/BIM viewer bundle
     threejs/
     utility/
     veerum/
@@ -129,7 +130,7 @@ web/
       index.ts              # Public API
       README.md             # Plugin development docs
       config/
-        viewerConfig.json   # Plugin configuration (17 viewers)
+        viewerConfig.json   # Plugin configuration (18 viewers)
       core/
         PluginRegistry.ts   # Singleton registry (manages all viewers)
         StylesheetManager.ts
@@ -150,6 +151,7 @@ web/
         PlayCanvasGaussianSplatViewerPlugin/
         PotreeViewerPlugin/
         TextViewerPlugin/
+        ThatOpenWebIfcViewerPlugin/  # IFC/BIM viewer (That Open Engine, web-ifc)
         ThreeJSViewerPlugin/
         VeerumViewerPlugin/
         VideoViewerPlugin/
@@ -656,31 +658,36 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`src/visualizerPlugin/core/PluginRegistry.ts`) -- Singleton that manages all viewer plugins
--   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for all 17 plugins
+-   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for all plugins
 -   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports
 -   **StylesheetManager** -- Per-plugin CSS lifecycle management
 
-### 8.2 Current Viewers (17 plugins)
+### 8.2 Current Viewers (plugins)
 
-| ID                                 | Name                      | Category | Extensions                                                                       | Status                             |
-| ---------------------------------- | ------------------------- | -------- | -------------------------------------------------------------------------------- | ---------------------------------- |
-| `online3d-viewer`                  | Online 3D Viewer          | 3d       | .3dm, .amf, .bim, .off, .wrl                                                     | enabled                            |
-| `potree-viewer`                    | Potree Viewer             | 3d       | .e57, .las, .laz, .ply                                                           | enabled                            |
-| `image-viewer`                     | Image Viewer              | media    | .png, .jpg, .jpeg, .svg, .gif                                                    | enabled                            |
-| `html-viewer`                      | HTML Viewer               | document | .html                                                                            | enabled                            |
-| `video-viewer`                     | Video Player              | media    | .mp4, .webm, .mov, .avi, .mkv, .flv, .wmv, .m4v                                  | enabled                            |
-| `audio-viewer`                     | Audio Player              | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                              | enabled                            |
-| `columnar-viewer`                  | Columnar Data Viewer      | data     | .rds, .fcs, .csv                                                                 | enabled                            |
-| `pdf-viewer`                       | PDF Viewer                | document | .pdf                                                                             | enabled                            |
-| `cesium-viewer`                    | Cesium 3D Tileset         | 3d       | .json                                                                            | enabled (requires ALLOWUNSAFEEVAL) |
-| `text-viewer`                      | Text Viewer               | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, etc.                               | enabled                            |
-| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat  | 3d       | .ply, .spz                                                                       | enabled                            |
-| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat | 3d       | .ply, .sog                                                                       | enabled                            |
-| `vntana-viewer`                    | VNTANA 3D Viewer          | 3d       | .glb                                                                             | **disabled** (licensed)            |
-| `veerum-viewer`                    | VEERUM 3D Viewer          | 3d       | .e57, .las, .laz, .ply, .json                                                    | **disabled** (licensed)            |
-| `needletools-usd-viewer`           | Needle USD Viewer         | 3d       | .usd, .usda, .usdc, .usdz                                                        | enabled                            |
-| `threejs-viewer`                   | Three.js Viewer           | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep | enabled                            |
-| `preview-viewer`                   | Preview Viewer            | preview  | \* (wildcard)                                                                    | enabled                            |
+| ID                                 | Name                           | Category | Extensions                                                                                                                               | Status                                              |
+| ---------------------------------- | ------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `online3d-viewer`                  | Online 3D Viewer               | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
+| `potree-viewer`                    | Potree Viewer                  | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
+| `image-viewer`                     | Image Viewer                   | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
+| `html-viewer`                      | HTML Viewer                    | document | .html                                                                                                                                    | enabled                                             |
+| `video-viewer`                     | Video Player                   | media    | .mp4, .webm, .mov, .avi, .mkv, .flv, .wmv, .m4v                                                                                          | enabled                                             |
+| `audio-viewer`                     | Audio Player                   | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
+| `columnar-viewer`                  | Columnar Data Viewer           | data     | .rds, .fcs, .csv                                                                                                                         | enabled                                             |
+| `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
+| `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .parquet (plaintext only), etc.                                                            | enabled                                             |
+| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
+| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
+| `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed)                             |
+| `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed)                             |
+| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled                                             |
+| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep                                                         | enabled                                             |
+| `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
+| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled                                             |
+| `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
+
+> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter.
 
 ### 8.3 Adding a New Viewer Plugin
 
@@ -914,10 +921,11 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 
 ### 11.1 Test Setup
 
--   **Framework:** Vitest, `@testing-library/react`
+-   **Framework:** Jest 30 (`jsdom` environment via `jest-environment-jsdom`), `@testing-library/react`
+-   **Config:** `web/jest.config.js`; jest-dom matchers registered via `setupFilesAfterEnv` -> `src/setupTests.ts`
 -   **Cloudscape preset:** `@cloudscape-design/jest-preset` (transforms Cloudscape CSS/JS)
--   **Coverage thresholds:** Very low (branches: 6%, functions: 11%, lines: 11%, statements: 10%)
--   **Run tests:** `npm test`
+-   **Coverage thresholds:** Very low (~1%, set in `jest.config.js`) — raise as coverage grows
+-   **Run tests:** `npm test` (with coverage) or `npx jest` for a faster run
 
 ### 11.2 Test File Conventions
 
@@ -978,8 +986,9 @@ describe("MyComponent", () => {
 ### 11.4 Jest Configuration Notes
 
 -   Axios requires special mapping: `"^axios$": "axios/dist/axios.js"`
--   Cloudscape components need custom transformers (configured in `package.json`)
--   Some `transformIgnorePatterns` are required for d3, axios, Cloudscape
+-   Cloudscape components need custom transformers (configured in `jest.config.js`)
+-   `transformIgnorePatterns` must stay a SINGLE pattern: a file matching ANY ignore pattern is excluded from transformation, so every ESM package that needs transforming (Cloudscape, d3-\*, internmap, react-leaflet, axios) must be exempted in one combined negative lookahead
+-   Jest 30 removed deprecated matcher aliases (`toBeCalled`, `toBeCalledWith`, ...) — use the `toHaveBeenCalled*` forms
 
 ---
 

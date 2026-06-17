@@ -40,7 +40,8 @@ export const useSearchAPI = () => {
                         key === "_rectype" ||
                         key === "bool_archived" ||
                         key === "date_lastmodified_filter" ||
-                        key === "num_filesize_filter"
+                        key === "num_filesize_filter" ||
+                        key === "geo_filter"
                     )
                         return;
 
@@ -282,6 +283,7 @@ export const useSearchAPI = () => {
                     includeHighlights: true,
                     explainResults: searchQuery.filters.showResultExplanation || false,
                     includeArchived: includeArchived, // Include archived items if bool_archived filter is set
+                    geoSearch: searchQuery.filters.geo_filter || undefined,
                 };
 
                 console.log("Search API request body:", body);

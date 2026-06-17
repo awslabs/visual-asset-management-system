@@ -22,6 +22,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from customLogging.logger import safeLogger
 from common.validators import validate
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
 
 # Helper function to convert Decimal to int/float for JSON serialization
@@ -705,7 +706,7 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
             metadata_value_type = item.get('metadataValueType', 'string')
             
             # Skip system metadata records that conflict with OpenSearch field mappings
-            if metadata_key == 'REINDEX_METADATA_RECORD':
+            if is_excluded_metadata_record(metadata_key):
                 logger.debug(f"Skipping system metadata: {metadata_key}")
                 continue  # Skip this metadata, but continue processing others
             

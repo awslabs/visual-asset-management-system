@@ -8,6 +8,7 @@ import { downloadAsset } from "../../../services/APIService";
 import { PlayCanvasGaussianSplatDependencyManager } from "./dependencies";
 import { PlayCanvasGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import PlayCanvasPanel from "./PlayCanvasPanel";
 
 // Simplified camera controls using direct mouse/touch handling
 // Accepts an optional initial distance; if not provided, defaults to 10
@@ -185,9 +186,34 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const initializationRef = useRef(false);
-    const cameraControlsRef = useRef<{ destroy: () => void } | null>(null);
+    const cameraControlsRef = useRef<{
+        destroy: () => void;
+        setTarget: (x: number, y: number, z: number, distance: number) => void;
+    } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
+
+    // Viewer instance refs (populated as the PlayCanvas application and
+    // splat entity become available). These power the floating control
+    // panel and live HUD.
+    const viewerInstanceRef = useRef<{
+        app: any;
+        camera: any;
+        splatEntity: any;
+    } | null>(null);
+
+    // Initial camera framing captured right after auto-fit, used by the
+    // panel's "Reset View" / "Reset Scene" actions to restore the view
+    // the user first saw.
+    const initialCameraStateRef = useRef<{
+        target: { x: number; y: number; z: number };
+        distance: number;
+    } | null>(null);
+
+    // sceneReady flips true once the splat entity has rendered and the
+    // panel has a complete view of the world.
+    const [sceneReady, setSceneReady] = useState(false);
+    const [showPanel, setShowPanel] = useState(true);
 
     useEffect(() => {
         if (!assetKey || initializationRef.current) return;
@@ -314,6 +340,14 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                 app.start();
                 console.log("PlayCanvas Gaussian Splat Viewer: Application started");
 
+                // Stash refs early so the panel can show partial state if
+                // splat loading is slow (it'll just show empty stats).
+                viewerInstanceRef.current = {
+                    app,
+                    camera,
+                    splatEntity: null,
+                };
+
                 // Download and load asset
                 console.log("PlayCanvas Gaussian Splat Viewer: Downloading asset");
                 setLoadingMessage("Downloading asset...");
@@ -352,9 +386,19 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                 // Create entity with Gaussian Splat component
                                 const entity = new pc.Entity("GaussianSplat");
 
-                                // Add GSplat component
+                                // Add GSplat component.
+                                // unified:false is required for PlayCanvas >= 2.19.0. As of
+                                // 2.19.0 GSplatComponent#unified defaults to true, which renders
+                                // the splat via an internal _placement and leaves
+                                // entity.gsplat.instance (and .material) null. This viewer's
+                                // control panels (splat scale, splat count/bounds) read
+                                // entity.gsplat.instance.*, so the legacy non-unified path is
+                                // needed to keep them working. NOTE: unified=false is deprecated
+                                // upstream and slated for removal; when it goes, migrate the
+                                // panels to the unified API (_placement / asset.resource) instead.
                                 entity.addComponent("gsplat", {
                                     asset: asset,
+                                    unified: false,
                                 });
 
                                 // Add to scene
@@ -369,10 +413,18 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                     entity.gsplat.instance.sorter.on("updated", () => {});
                                 }
 
+                                // Make the entity available to the panel.
+                                if (viewerInstanceRef.current) {
+                                    viewerInstanceRef.current.splatEntity = entity;
+                                }
+
                                 // Auto-fit camera to the actual splat bounding box.
                                 // We wait one frame so the gsplat AABB is populated.
                                 app.once("update", () => {
-                                    const aabb = entity.gsplat?.meshInstance?.aabb;
+                                    // The AABB lives on the GSplatInstance's meshInstance, not
+                                    // on the gsplat component itself (the component has no
+                                    // meshInstance getter in any PlayCanvas version).
+                                    const aabb = entity.gsplat?.instance?.meshInstance?.aabb;
                                     if (aabb) {
                                         const center = aabb.center;
                                         const radius = aabb.halfExtents.length();
@@ -382,7 +434,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                             { center, radius, fitDistance }
                                         );
                                         if (cameraControlsRef.current) {
-                                            (cameraControlsRef.current as any).setTarget(
+                                            cameraControlsRef.current.setTarget(
                                                 center.x,
                                                 center.y,
                                                 center.z,
@@ -392,11 +444,27 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                         // Adjust far clip to scene scale
                                         camera.camera.farClip = Math.max(radius * 20, 1000);
                                         camera.camera.nearClip = Math.min(radius * 0.001, 0.01);
+
+                                        // Capture the resolved framing for the panel's
+                                        // "Reset View" action.
+                                        initialCameraStateRef.current = {
+                                            target: {
+                                                x: center.x,
+                                                y: center.y,
+                                                z: center.z,
+                                            },
+                                            distance: fitDistance,
+                                        };
                                     } else {
                                         // Fallback: position at a reasonable default
                                         camera.setPosition(0, 0, 5);
                                         camera.lookAt(0, 0, 0);
+                                        initialCameraStateRef.current = {
+                                            target: { x: 0, y: 0, z: 0 },
+                                            distance: 5,
+                                        };
                                     }
+                                    setSceneReady(true);
                                     setIsLoading(false);
                                 });
                             } catch (error) {
@@ -448,6 +516,45 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
         };
     }, [assetKey, assetId, databaseId, versionId, assetVersionId]);
 
+    // Reset camera back to the framing computed at load time. Wired into
+    // the panel's "Reset Scene" action and the F shortcut.
+    const resetView = () => {
+        const initial = initialCameraStateRef.current;
+        if (!initial || !cameraControlsRef.current) return;
+        cameraControlsRef.current.setTarget(
+            initial.target.x,
+            initial.target.y,
+            initial.target.z,
+            initial.distance
+        );
+        console.log("PlayCanvas Splat: View reset to initial framing");
+    };
+
+    // Keyboard shortcuts: Esc hides the panel, F resets the view. Mirrors
+    // the ThreeJS / BabylonJS viewers.
+    useEffect(() => {
+        const handleKeyPress = (event: KeyboardEvent) => {
+            if (
+                event.target instanceof HTMLInputElement ||
+                event.target instanceof HTMLTextAreaElement
+            ) {
+                return;
+            }
+            const key = event.key.toLowerCase();
+            if (key === "escape" && showPanel) {
+                setShowPanel(false);
+            } else if (key === "f") {
+                resetView();
+            }
+        };
+        window.addEventListener("keydown", handleKeyPress);
+        return () => window.removeEventListener("keydown", handleKeyPress);
+    }, [showPanel]);
+
+    // File name shown in the panel header. Strip path segments to display
+    // only the leaf filename.
+    const fileName = assetKey ? assetKey.split("/").pop() || assetKey : undefined;
+
     return (
         <div
             ref={containerRef}
@@ -465,24 +572,76 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
             {/* Loading overlay */}
             {isLoading && <LoadingSpinner message={loadingMessage} />}
 
-            {/* Info Panel */}
-            <div
-                style={{
-                    position: "absolute",
-                    top: "10px",
-                    right: "10px",
-                    color: "white",
-                    fontSize: "12px",
-                    backgroundColor: "rgba(0,0,0,0.7)",
-                    padding: "8px",
-                    borderRadius: "4px",
-                    zIndex: 1000,
-                }}
-            >
-                PlayCanvas Gaussian Splat Viewer
-                <br />
-                Mouse: Rotate | Wheel: Zoom | Right-click: Pan
-            </div>
+            {/* Floating control panel — visible after the splat loads */}
+            {sceneReady && viewerInstanceRef.current && showPanel && (
+                <PlayCanvasPanel
+                    app={viewerInstanceRef.current.app}
+                    camera={viewerInstanceRef.current.camera}
+                    splatEntity={viewerInstanceRef.current.splatEntity}
+                    cameraControls={cameraControlsRef.current}
+                    fileName={fileName}
+                    onClose={() => setShowPanel(false)}
+                    onResetView={resetView}
+                />
+            )}
+
+            {/* Show-panel button — only shown when the panel is hidden */}
+            {sceneReady && !showPanel && (
+                <button
+                    onClick={() => setShowPanel(true)}
+                    style={{
+                        position: "absolute",
+                        top: "20px",
+                        left: "10px",
+                        backgroundColor: "rgba(0, 0, 0, 0.7)",
+                        color: "white",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        padding: "8px 12px",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontSize: "0.8em",
+                        zIndex: 1000,
+                    }}
+                    title="Show controls panel"
+                >
+                    ⚙️ Panel
+                </button>
+            )}
+
+            {/* Compact HUD — viewer name, mouse hint and active filename */}
+            {sceneReady && viewerInstanceRef.current && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: "10px",
+                        right: "10px",
+                        color: "white",
+                        fontSize: "12px",
+                        backgroundColor: "rgba(0,0,0,0.7)",
+                        padding: "8px",
+                        borderRadius: "4px",
+                        zIndex: 1000,
+                    }}
+                >
+                    <div style={{ fontWeight: "bold", marginBottom: "4px" }}>
+                        PlayCanvas Gaussian Splat
+                    </div>
+                    <div style={{ fontSize: "0.9em", opacity: 0.9 }}>
+                        Mouse: Rotate | Wheel: Zoom | Right-click: Pan
+                    </div>
+                    {fileName && (
+                        <div
+                            style={{
+                                fontSize: "0.85em",
+                                marginTop: "6px",
+                                color: "#4CAF50",
+                            }}
+                        >
+                            📁 {fileName}
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 };

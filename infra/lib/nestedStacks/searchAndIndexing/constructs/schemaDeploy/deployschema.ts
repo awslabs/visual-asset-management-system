@@ -109,6 +109,11 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
                 MD_: {
                     type: "flat_object",
                 },
+                // Geo shape derived from metadata (location key, or lat/lon/altitude fields).
+                // Populated by indexers; supports Point and Polygon/MultiPolygon GeoJSON.
+                geo_MD_location: {
+                    type: "geo_shape",
+                },
             } as any,
         },
         settings: {

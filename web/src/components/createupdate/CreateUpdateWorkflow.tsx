@@ -24,7 +24,6 @@ import { useNavigate } from "react-router";
 import { useParams } from "react-router";
 import CreatePipeline from "./CreatePipeline";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
-//import AssetSelector from "../selectors/AssetSelector";
 import { appCache } from "../../services/appCache";
 import { fetchDatabaseWorkflows, saveWorkflow, runWorkflow } from "../../services/APIService";
 import { WorkflowContext } from "../../context/WorkflowContext";

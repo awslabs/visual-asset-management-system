@@ -14,7 +14,7 @@ API keys grant the same level of access as the associated user. Treat API keys w
 
 ### How API keys work
 
-1. An administrator creates an API key and associates it with an existing VAMS user ID.
+1. An administrator creates an API key and associates it with an existing VAMS user ID, or a user creates a self-service key tied to their own user.
 2. The system generates a unique key value prefixed with `vams_`. This value is displayed **only once** at creation time.
 3. The API key is stored as a SHA-256 hash in Amazon DynamoDB. The plaintext key cannot be retrieved after creation.
 4. When the key is used in an API request, the system hashes the provided key, looks up the matching record, and resolves the associated user ID to determine permissions.
@@ -23,11 +23,20 @@ API keys grant the same level of access as the associated user. Treat API keys w
 The user ID specified during API key creation must already have at least one VAMS role assigned. You cannot create an API key for a user with no roles.
 :::
 
+### Admin and self-service modes
+
+The API Key Management page operates in two modes, depending on which API routes your roles grant access to:
+
+-   **All Keys (Admin)** -- View and manage API keys across all users. Keys may be created for any user, and an expiration date is optional.
+-   **My Keys (self-service)** -- View and manage only your own API keys. Created keys are always tied to your user, an **expiration date is required**, and the expiration may be at most **365 days** from the key's creation. Later edits cannot extend the expiration beyond that window -- create a new key to rotate after it elapses.
+
+Users with access to both modes see a toggle at the top of the page.
+
 ---
 
 ## Creating an API key
 
-1. Navigate to **Admin - Auth** > **API Key Management** in the left sidebar.
+1. Navigate to **User** > **API Key Management** in the left sidebar. The page offers an **All Keys (Admin)** mode for administrators and a **My Keys** self-service mode for managing your own keys; users with access to both see a mode toggle.
 2. Choose **Create API Key**.
 3. Complete the form fields:
 

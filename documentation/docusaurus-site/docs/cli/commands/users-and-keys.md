@@ -146,6 +146,65 @@ Permanently delete an API key. Immediately revokes access.
 vamscli api-key delete --api-key-id UUID [--json-output]
 ```
 
+### Self-service API keys (api-key user)
+
+The `api-key user` sub-commands manage your own API keys without requiring administrative access. Keys are always tied to your authenticated user, require an expiration date, and the expiration may be at most **365 days** from the key's creation. After the window elapses, create a new key to rotate.
+
+#### api-key user list
+
+List your own API keys.
+
+```bash
+vamscli api-key user list [--json-output]
+```
+
+#### api-key user create
+
+Create a new API key tied to your user. The expiration date is required.
+
+```bash
+vamscli api-key user create [OPTIONS]
+```
+
+| Option          | Type | Required | Description                                                  |
+| --------------- | ---- | -------- | ------------------------------------------------------------ |
+| `--name`        | TEXT | Yes      | Name for the API key (immutable after creation)              |
+| `--description` | TEXT | Yes      | Description                                                  |
+| `--expires-at`  | TEXT | Yes      | Expiration date in ISO 8601 format (max 365 days from today) |
+| `--json-output` | Flag | No       | Raw JSON response                                            |
+
+```bash
+vamscli api-key user create --name "My Script" --description "Automation" --expires-at 2026-12-31T23:59:59Z
+```
+
+#### api-key user update
+
+Update one of your own API keys. The expiration cannot be cleared and cannot be set beyond 365 days from the key's original creation date.
+
+```bash
+vamscli api-key user update --api-key-id <UUID> [OPTIONS]
+```
+
+| Option          | Type   | Description                                                |
+| --------------- | ------ | ---------------------------------------------------------- |
+| `--api-key-id`  | TEXT   | API key ID (required, must be your own key)                |
+| `--description` | TEXT   | New description                                            |
+| `--expires-at`  | TEXT   | New expiration (within 365 days of creation; cannot clear) |
+| `--is-active`   | CHOICE | `true` or `false`                                          |
+
+```bash
+vamscli api-key user update --api-key-id UUID --expires-at 2026-11-30T23:59:59Z
+vamscli api-key user update --api-key-id UUID --is-active false
+```
+
+#### api-key user delete
+
+Delete one of your own API keys.
+
+```bash
+vamscli api-key user delete --api-key-id UUID [--json-output]
+```
+
 ### Using API keys
 
 Pass the API key in the `Authorization` header of API calls:

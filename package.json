@@ -2,6 +2,9 @@
     "name": "project-root",
     "version": "2.1.0",
     "license": "Apache-2.0",
+    "engines": {
+        "node": ">=22.0.0"
+    },
     "scripts": {
         "buildanddeploy.dev": "npm run build && npm run deploy.dev",
         "build": "cd web && yarn install && npm run build",

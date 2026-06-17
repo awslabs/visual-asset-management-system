@@ -6,7 +6,7 @@ This is the root-level Claude Code steering document for VAMS. It is auto-loaded
 
 VAMS is an AWS-native Visual Asset Management System for managing, visualizing, and processing 3D assets, point clouds, CAD files, and other visual content. It deploys as a CloudFormation/CDK stack with:
 
--   **React frontend** (`web/`) -- Cloudscape UI, 17 viewer plugins for 3D/media
+-   **React frontend** (`web/`) -- Cloudscape UI, many viewer plugins for 3D/media
 -   **Python Lambda backend** (`backend/`) -- Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) -- 10 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) -- Click framework, profile-based config
@@ -48,7 +48,7 @@ root/
 │   │   └── metadata3dLabeling/
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
-├── .clinerules/workflows/     # Detailed workflow docs (supplementary)
+├── .kiro/steering/            # Detailed workflow docs (Kiro steering, supplementary)
 ├── .claude/commands/          # Claude Code skills (slash commands)
 └── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.4_to_v2.5)
 ```
@@ -175,16 +175,17 @@ These are the critical patterns that span multiple directories. **Every develope
 
 Adding a new API endpoint requires coordinated changes across multiple components:
 
-| Step                | File                                                         | What to do                                          |
-| ------------------- | ------------------------------------------------------------ | --------------------------------------------------- |
-| 1. Backend handler  | `backend/backend/handlers/{domain}/{handler}.py`             | Implement Lambda handler with Casbin enforcement    |
-| 2. Pydantic model   | `backend/backend/models/{domain}.py`                         | Define request/response models (Pydantic **v1**)    |
-| 3. Lambda builder   | `infra/lib/lambdaBuilder/{domain}Functions.ts`               | Build Lambda with env vars, permissions, VPC config |
-| 4. API route        | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Attach Lambda to API Gateway route                  |
-| 5. Frontend service | `web/src/services/APIService.ts`                             | Add API call method                                 |
-| 6. CLI command      | `tools/VamsCLI/vamscli/commands/{group}.py`                  | Add CLI command (if applicable)                     |
+| Step                      | File                                                         | What to do                                                                          |
+| ------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| 1. Master route (backend) | `backend/backend/common/apiRoutes.py`                        | Define the `ApiRoute` constant AND add it to the appropriate category group array   |
+| 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`             | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()` |
+| 3. Pydantic model         | `backend/backend/models/{domain}.py`                         | Define request/response models (Pydantic **v1**)                                    |
+| 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`               | Build Lambda with env vars, permissions, VPC config                                 |
+| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Attach Lambda to API Gateway route                                                  |
+| 6. Frontend service       | `web/src/services/APIService.ts`                             | Add API call method                                                                 |
+| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                  | Add CLI command (if applicable)                                                     |
 
-**Never** add an endpoint without updating all required files. A handler without a route is dead code. A route without a handler will 500.
+**Never** add an endpoint without updating all required files. A handler without a route is dead code. A route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a route missing there is invisible to constraint authoring and the CLI.
 
 ### **Pattern 2: Two-Tier Authorization**
 
@@ -395,6 +396,17 @@ When you make structural changes to the codebase, **you must update the relevant
 
 **What to update:** Update the directory structure tree, key files tables, and any affected rules or patterns. Keep descriptions concise. You can also run `/refresh-steering-docs` for a comprehensive update.
 
+**Keep Kiro steering in sync (bidirectional).** The `.kiro/steering/` documents mirror the `CLAUDE.md` guidance for the Kiro agent. Whenever you change a `CLAUDE.md` file's rules, patterns, or conventions, you **must** make the equivalent change in the corresponding Kiro steering document(s) in the same change — and vice versa (a change to a Kiro steering document must be reflected back into the matching `CLAUDE.md`). Keep the two sets of documents saying the same thing. Use this mapping:
+
+| CLAUDE.md file            | Corresponding Kiro steering document(s)                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `CLAUDE.md` (root)        | The relevant workflow doc(s) for the changed area (see rows below); cross-cutting rules go in all affected docs |
+| `infra/CLAUDE.md`         | `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`              |
+| `backend/CLAUDE.md`       | `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                                                            |
+| `web/CLAUDE.md`           | `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/WEB_FRONTEND.md`                                  |
+| `tools/VamsCLI/CLAUDE.md` | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`                                                                    |
+| `documentation/CLAUDE.md` | `.kiro/steering/DOCUMENTATION_WORKFLOW.md`                                                                      |
+
 ---
 
 ## 🧰 **Development Commands**
@@ -488,13 +500,13 @@ When implementing new features, follow the patterns in these files:
 
 ## 📚 **Supplementary Documentation**
 
-For deep-dive workflows, see the detailed guides in `.clinerules/workflows/`:
+For deep-dive workflows, see the detailed guides in `.kiro/steering/`:
 
-| Document                                                    | Covers                                                                                  |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `.clinerules/workflows/CDK_DEVELOPMENT_WORKFLOW.md`         | CDK nested stacks, constructs, lambda builders, security patterns, pipeline development |
-| `.clinerules/workflows/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` | End-to-end API endpoint development across backend + CDK                                |
-| `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md`         | CLI commands, decorators, testing, profile support, JSON output                         |
+| Document                                             | Covers                                                                                  |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`         | CDK nested stacks, constructs, lambda builders, security patterns, pipeline development |
+| `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` | End-to-end API endpoint development across backend + CDK                                |
+| `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`         | CLI commands, decorators, testing, profile support, JSON output                         |
 
 For user-facing documentation:
 
@@ -511,15 +523,15 @@ For user-facing documentation:
 
 ### **Frontend (`web/`)**
 
-| Technology               | Usage                                                            |
-| ------------------------ | ---------------------------------------------------------------- |
-| React 17.0.2             | UI framework                                                     |
-| Cloudscape Design System | AWS UI component library                                         |
-| AWS Amplify v6           | Auth integration                                                 |
-| Custom apiClient         | Fetch-based API client with auto auth headers                    |
-| HashRouter               | Client-side routing                                              |
-| TypeScript               | All source `.tsx`/`.ts` (only `__mocks__/*.js` remain as JS)     |
-| Viewer plugins (17)      | Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, etc. |
+| Technology               | Usage                                                                     |
+| ------------------------ | ------------------------------------------------------------------------- |
+| React 17.0.2             | UI framework                                                              |
+| Cloudscape Design System | AWS UI component library                                                  |
+| AWS Amplify v6           | Auth integration                                                          |
+| Custom apiClient         | Fetch-based API client with auto auth headers                             |
+| HashRouter               | Client-side routing                                                       |
+| TypeScript               | All source `.tsx`/`.ts` (only `__mocks__/*.js` remain as JS)              |
+| Viewer plugins           | Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, IFC/BIM, etc. |
 
 ### **Backend (`backend/`)**
 
@@ -698,6 +710,14 @@ return {
 }
 ```
 
+### **Comment & Documentation Style (Match Surrounding Code)**
+
+When implementing any VAMS change, comments and documentation must be **commensurate with the surrounding material** — match the level of detail, density, and tone of the file you are editing. Do not over-document relative to neighboring code.
+
+-   **Code comments**: Match the comment density and style already present in the file. The CDK stacks, for example, use brief single-line `//` notes above a block and short `/** ... */` section headers. Describe **what** a piece of code is, not the history of why it was added.
+-   **No changelog/process narration in code**: Never write comments that reference "upgrades", "new in vX", "added for", migrations, or the change request that prompted the edit. A comment should read as if the code had always been there. Changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in source comments.
+-   **Documentation prose**: Match the concise, descriptive AWS-doc style of the page being edited (see `documentation/CLAUDE.md`). Describe how the system behaves. Do not introduce "requirement"/"must" line-item checklists where the surrounding page uses descriptive prose, and do not reference "upgrades" unless the page is specifically an upgrade/migration guide.
+
 ---
 
 ## 🚫 **Anti-Patterns to Avoid**
@@ -712,3 +732,4 @@ return {
 8. **Deploying features without feature switches** -- breaks conditional deployment
 9. **Using `HttpUserPoolAuthorizer`** -- must use custom Lambda authorizer
 10. **Skipping config validation in `getConfig()`** -- leads to silent deployment failures
+11. **Over-documenting or narrating changes in comments** -- match surrounding comment density; never reference "upgrades", "new in vX", or the prompting change request in source comments (see Comment & Documentation Style)

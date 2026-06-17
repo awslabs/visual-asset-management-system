@@ -7,6 +7,7 @@ import { Construct } from "constructs";
 import * as cdk from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
+import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as batch from "aws-cdk-lib/aws-batch";
 import * as efs from "aws-cdk-lib/aws-efs";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -33,6 +34,10 @@ export interface IsaacLabTrainingConstructProps {
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
     importGlobalPipelineWorkflowFunctionName: string;
+    // Optional: CodeBuild-built image in ECR (bypasses local Docker build). Passing the
+    // repository (rather than a URI string) lets the Batch container definition auto-grant the
+    // execution role ECR pull + ecr:GetAuthorizationToken permissions.
+    codeBuildRepository?: ecr.IRepository;
 }
 
 export class IsaacLabTrainingConstruct extends Construct {
@@ -51,21 +56,35 @@ export class IsaacLabTrainingConstruct extends Construct {
         // 2. Keeping warm instances (minvCpus > 0)
         // 3. Using larger EBS volumes with Docker layer caching
 
-        // Build and push container to ECR using CDK DockerImageAsset
+        // Container image resolution.
+        // If a CodeBuild-built ECR repository is provided, use that directly,
+        // which avoids slow local Docker builds of the large Isaac Lab GPU image.
+        // Otherwise, fall back to building and pushing the container to ECR using CDK DockerImageAsset.
         // ACCEPT_EULA must be set to true in config.json to accept the NVIDIA Software License Agreement
         // See: https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license
-        const containerImage = new DockerImageAsset(this, "IsaacLabTrainingImage", {
-            directory: path.join(
-                __dirname,
-                "../../../../../../../backendPipelines/simulation/isaacLabTraining/container"
-            ),
-            platform: Platform.LINUX_AMD64,
-            buildArgs: {
-                ACCEPT_EULA: props.config.app.pipelines.useIsaacLabTraining.acceptNvidiaEula
-                    ? "Y"
-                    : "N",
-            },
-        });
+        let containerImageRef: ecs.ContainerImage;
+        if (props.codeBuildRepository) {
+            // Use CodeBuild-built image from ECR. fromEcrRepository grants the Batch execution
+            // role ECR pull + ecr:GetAuthorizationToken permissions (fromRegistry does not).
+            containerImageRef = ecs.ContainerImage.fromEcrRepository(
+                props.codeBuildRepository,
+                "latest"
+            );
+        } else {
+            const containerImage = new DockerImageAsset(this, "IsaacLabTrainingImage", {
+                directory: path.join(
+                    __dirname,
+                    "../../../../../../../backendPipelines/simulation/isaacLabTraining/container"
+                ),
+                platform: Platform.LINUX_AMD64,
+                buildArgs: {
+                    ACCEPT_EULA: props.config.app.pipelines.useIsaacLabTraining.acceptNvidiaEula
+                        ? "Y"
+                        : "N",
+                },
+            });
+            containerImageRef = ecs.ContainerImage.fromDockerImageAsset(containerImage);
+        }
 
         // EFS for training checkpoints - use isolated subnets (no internet access needed for EFS)
         const trainingEfs = new efs.FileSystem(this, "TrainingEfs", {
@@ -245,7 +264,7 @@ export class IsaacLabTrainingConstruct extends Construct {
         // Batch job definition using CDK-managed container image
         const jobDefinition = new batch.EcsJobDefinition(this, "IsaacLabJobDef", {
             container: new batch.EcsEc2ContainerDefinition(this, "Container", {
-                image: ecs.ContainerImage.fromDockerImageAsset(containerImage),
+                image: containerImageRef,
                 cpu: 8,
                 memory: cdk.Size.gibibytes(32),
                 gpu: 1,
@@ -357,7 +376,6 @@ export class IsaacLabTrainingConstruct extends Construct {
             .next(closePipelineState);
 
         const stateMachine = new sfn.StateMachine(this, "IsaacLabStateMachine", {
-            stateMachineName: "isaaclab-pipeline-internal",
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
             timeout: cdk.Duration.hours(8),
         });

@@ -4060,9 +4060,72 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list constraints: {e}")
-                
+
         except Exception as e:
             raise APIError(f"Failed to list constraints: {e}")
+
+    def list_api_routes(self) -> Dict[str, Any]:
+        """
+        List all available VAMS API routes using the /auth/routes/api GET endpoint.
+
+        Returns:
+            API response data with the full API route list (routes: [{path, methods, category}])
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_ROUTES_API
+
+        try:
+            response = self.get(API_AUTH_ROUTES_API, include_auth=True)
+            result = response.json()
+
+            # Backend wraps response in "message" field for backward compatibility
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list API routes: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list API routes: {e}")
+
+    def list_allowed_api_routes(self) -> Dict[str, Any]:
+        """
+        List the VAMS API routes and methods the current user is authorized to
+        call, using the /auth/routes/api/allowed GET endpoint.
+
+        Returns:
+            API response data with the allowed API routes (routes: [{path, methods, category}], userId)
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_ROUTES_API_ALLOWED
+
+        try:
+            response = self.get(API_AUTH_ROUTES_API_ALLOWED, include_auth=True)
+            result = response.json()
+
+            # Backend wraps response in "message" field for backward compatibility
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list allowed API routes: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list allowed API routes: {e}")
 
     def get_constraint(self, constraint_id: str) -> Dict[str, Any]:
         """
@@ -4611,3 +4674,162 @@ class APIClient:
 
         except Exception as e:
             raise APIError(f"Failed to delete API key: {e}")
+
+    def list_user_api_keys(self) -> Dict[str, Any]:
+        """
+        List the current user's own API keys using the /auth/user/api-keys GET endpoint.
+
+        Returns:
+            API response data with the user's API keys list
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_USER_API_KEYS
+
+        try:
+            response = self.get(API_AUTH_USER_API_KEYS, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list user API keys: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list user API keys: {e}")
+
+    def create_user_api_key(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a self-service API key for the current user using the
+        /auth/user/api-keys POST endpoint. The key is always tied to the
+        authenticated user and requires an expiration date no more than 365
+        days from creation.
+
+        Args:
+            data: API key creation data:
+                - apiKeyName: Name for the key (required)
+                - description: Description (required)
+                - expiresAt: Expiration date in ISO 8601 format (required, max 365 days out)
+
+        Returns:
+            API response data including the generated API key (shown only once)
+
+        Raises:
+            ApiKeyCreationError: When API key creation fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_USER_API_KEYS
+        from .exceptions import ApiKeyCreationError
+
+        try:
+            response = self.post(API_AUTH_USER_API_KEYS, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyCreationError(f"API key creation failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key creation failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to create user API key: {e}")
+
+    def update_user_api_key(self, api_key_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update one of the current user's own API keys using the
+        /auth/user/api-keys/{apiKeyId} PUT endpoint. The expiration cannot be
+        cleared and cannot exceed 365 days from the key's original creation.
+
+        Args:
+            api_key_id: ID of the API key to update (must be owned by the current user)
+            data: Update data:
+                - description: Optional new description
+                - expiresAt: Optional new expiration date (within the 365-day window)
+                - isActive: Optional 'true'/'false'
+
+        Returns:
+            API response data with updated API key details
+
+        Raises:
+            ApiKeyNotFoundError: When the API key is not found or not owned by the user
+            ApiKeyUpdateError: When API key update fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_USER_API_KEY
+        from .exceptions import ApiKeyNotFoundError, ApiKeyUpdateError
+
+        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.put(endpoint, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyUpdateError(f"API key update failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key update failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to update user API key: {e}")
+
+    def delete_user_api_key(self, api_key_id: str) -> Dict[str, Any]:
+        """
+        Delete one of the current user's own API keys using the
+        /auth/user/api-keys/{apiKeyId} DELETE endpoint.
+
+        Args:
+            api_key_id: ID of the API key to delete (must be owned by the current user)
+
+        Returns:
+            API response data with deletion result
+
+        Raises:
+            ApiKeyNotFoundError: When the API key is not found or not owned by the user
+            ApiKeyDeletionError: When API key deletion fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_USER_API_KEY
+        from .exceptions import ApiKeyNotFoundError, ApiKeyDeletionError
+
+        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.delete(endpoint, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyDeletionError(f"API key deletion failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key deletion failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to delete user API key: {e}")

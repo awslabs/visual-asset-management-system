@@ -3,7 +3,7 @@
 The NVIDIA Isaac Lab pipeline enables reinforcement learning (RL) policy training and evaluation using [NVIDIA Isaac Lab](https://developer.nvidia.com/isaac/lab) on GPU-accelerated Amazon EC2 instances managed by AWS Batch. It supports two operational modes -- training new RL policies from scratch and evaluating pre-trained policies -- both orchestrated by AWS Step Functions with asynchronous task token callbacks.
 
 :::tip[Learn more]
-Read the AWS blog post [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/spatial/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) for a detailed walkthrough of the pipeline architecture, setup, and usage with example training scenarios.
+Read the AWS blog post [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) for a detailed walkthrough of the pipeline architecture, setup, and usage with example training scenarios.
 :::
 
 ## Overview
@@ -63,6 +63,7 @@ Add the following to your `config.json` under `app.pipelines`:
             "useIsaacLabTraining": {
                 "enabled": true,
                 "acceptNvidiaEula": true,
+                "useCodeBuild": true,
                 "autoRegisterWithVAMS": true,
                 "keepWarmInstance": false
             }
@@ -75,12 +76,53 @@ Add the following to your `config.json` under `app.pipelines`:
 | ---------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`              | `false` | Enable or disable the pipeline deployment.                                                                                                                                                                                                                                    |
 | `acceptNvidiaEula`     | `false` | **Required when enabled.** You must accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license) by setting this to `true`. Deployment fails if this is `false` when the pipeline is enabled. |
+| `useCodeBuild`         | `false` | Build the container image via AWS CodeBuild + ECR instead of local Docker. Recommended for the large Isaac Lab GPU image.                                                                                                                                                     |
 | `autoRegisterWithVAMS` | `true`  | Automatically register both the `isaaclab-training` and `isaaclab-evaluation` pipelines and workflows with VAMS at deploy time.                                                                                                                                               |
 | `keepWarmInstance`     | `false` | When `true`, maintains one warm GPU instance (8 vCPUs for g6.2xlarge) in the AWS Batch compute environment. Reduces cold-start latency at the cost of continuous GPU instance charges.                                                                                        |
 
 :::warning[NVIDIA EULA acceptance required]
 The Isaac Lab container is built from the NVIDIA NGC base image. You must review and accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license) before enabling this pipeline. The CDK deployment will fail with a validation error if `acceptNvidiaEula` is not set to `true`.
 :::
+
+## Container Build Options
+
+VAMS supports two methods for building the Isaac Lab container:
+
+### CodeBuild (Recommended)
+
+When `useCodeBuild: true`, the container is built in the cloud using AWS CodeBuild:
+
+-   Container source code is uploaded to S3 during CDK deployment
+-   CodeBuild builds the Docker image and pushes to ECR
+-   The Batch job definition references the ECR image
+-   Automatic rebuilds when container source code changes
+-   Runs in the same private VPC subnets as the pipeline Batch compute, with NAT Gateway egress for internet access
+-   The `acceptNvidiaEula` flag is forwarded to the build as the `ACCEPT_EULA` Docker build argument
+
+**Advantages:**
+
+-   No local Docker build required (avoids building the large Isaac Lab GPU image on developer machines)
+-   Faster iteration with high-bandwidth cloud builds
+-   Automatic rebuilds on source changes
+
+**Troubleshooting CodeBuild failures:** CodeBuild runs asynchronously after CDK deployment completes. If a container build fails, the CDK deployment itself will succeed but the Batch pipeline will fail with a container image pull error. To check build status:
+
+```bash
+# Get the CodeBuild project name from stack outputs
+aws cloudformation describe-stacks --stack-name <your-stack-name> --query "Stacks[0].Outputs[?contains(OutputKey,'IsaacLabTrainingCodeBuildProject')].OutputValue" --output text
+
+# Check build status
+aws codebuild list-builds-for-project --project-name <project-name>
+aws codebuild batch-get-builds --ids <build-id>
+```
+
+:::warning[CodeBuild Internet Access]
+CodeBuild runs in the same private VPC subnets used by the Isaac Lab pipeline Batch compute environments. These private subnets require a NAT Gateway for internet egress, which is automatically provisioned when the Isaac Lab pipeline is enabled.
+:::
+
+### DockerImageAsset (Legacy)
+
+When `useCodeBuild: false`, the container is built locally during CDK deployment using Docker and pushed to a CDK-managed ECR repository. This requires significant local resources and bandwidth.
 
 ## Prerequisites
 
@@ -204,4 +246,4 @@ Training progress can be monitored through Amazon CloudWatch Logs for the AWS Ba
 -   [Pipeline overview](overview.md)
 -   [Custom pipelines](custom-pipelines.md)
 -   [Deployment configuration](../deployment/configuration-reference.md)
--   [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/spatial/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) (AWS Blog)
+-   [GPU-Accelerated Robotic Simulation Training with NVIDIA Isaac Lab in VAMS](https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/) (AWS Blog)

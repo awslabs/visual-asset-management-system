@@ -6,7 +6,7 @@
 import React, { useEffect } from "react";
 import { useState } from "react";
 import { SideNavigation, Spinner } from "@cloudscape-design/components";
-import { webRoutes } from "../services/APIService";
+import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
 
@@ -163,8 +163,12 @@ export function Navigation({
                           },
                       ]
                     : []),
-                { type: "link", text: "API Key Management", href: "#/auth/api-keys/" },
             ],
+        },
+        {
+            type: "section",
+            text: "User",
+            items: [{ type: "link", text: "API Key Management", href: "#/auth/api-keys/" }],
         },
     ];
 
@@ -175,13 +179,9 @@ export function Navigation({
         const allRoutes = collectRoutes(filteredNavItems);
 
         try {
-            webRoutes({ routes: allRoutes })
-                .then((value) => {
-                    if (value[0] === false) {
-                        throw new Error("webRoutes - " + value[1]);
-                    }
-
-                    const allowedRoutes = value.allowedRoutes.map((r) => "#" + r.route__path);
+            checkWebRoutesAllowed(allRoutes)
+                .then((allowed) => {
+                    const allowedRoutes = allowed.map((r) => "#" + r.route__path);
 
                     const filtered = filterNavItems(filteredNavItems, allowedRoutes);
                     setNavigationItems(filtered);

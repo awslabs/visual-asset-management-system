@@ -15,6 +15,7 @@ import * as Config from "../../../../../../config/config";
 import * as path from "path";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 
 export interface IsaacLabTrainingFunctionsProps {
     config: Config.Config;
@@ -135,5 +136,12 @@ export class IsaacLabTrainingFunctions extends Construct {
             code: lambda.Code.fromAsset(lambdaPath),
             // STATE_MACHINE_ARN will be added by the construct after SFN creation
         });
+
+        // Apply standard per-Lambda CDK Nag suppressions (IAM4 execution roles, KMS wildcard)
+        suppressCdkNagLambda(this.openPipelineFunction);
+        suppressCdkNagLambda(this.executeBatchJobFunction);
+        suppressCdkNagLambda(this.closePipelineFunction);
+        suppressCdkNagLambda(this.handleErrorFunction);
+        suppressCdkNagLambda(this.vamsExecuteFunction);
     }
 }

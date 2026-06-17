@@ -11,6 +11,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.apiRoutes import API_COGNITO_USER_RESET_PASSWORD
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -527,7 +528,7 @@ def handle_post_request(event):
     
     try:
         # Check if this is a password reset request
-        if 'resetPassword' in path:
+        if API_COGNITO_USER_RESET_PASSWORD.matches(path):
             # Password reset request
             user_id = path_parameters.get('userId')
             if not user_id:

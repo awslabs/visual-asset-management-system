@@ -69,7 +69,10 @@ RUN ln -sf /usr/local/cuda-12.8/compat/libcuda.so.1 /usr/local/cuda-12.8/compat/
 # Create code directory and copy VAMS container code
 RUN mkdir -p /opt/ml/code
 COPY __main__.py model_manager.py inference.py entrypoint.sh /opt/ml/code/
-RUN chmod +x /opt/ml/code/entrypoint.sh
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled
+# from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
+# and the kernel returns ENOENT ("no such file or directory") on exec.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
 
 # Add the venv bin to PATH so python/cosmos-reason2-inference are available without activation
 ENV PATH="/opt/cosmos-reason2/.venv/bin:$PATH"

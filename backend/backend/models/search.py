@@ -12,6 +12,51 @@ from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="SearchModels")
 
+######################## Geo Search Models ##########################
+
+class GeoPointModel(BaseModel, extra='ignore'):
+    """Single geographic point with optional radius for proximity queries"""
+    lat: float = Field(..., ge=-90.0, le=90.0, description="Latitude in decimal degrees")
+    lon: float = Field(..., ge=-180.0, le=180.0, description="Longitude in decimal degrees")
+    radiusMeters: Optional[float] = Field(None, gt=0, description="Optional radius in meters for proximity search")
+
+
+class GeoBoundingBoxModel(BaseModel, extra='ignore'):
+    """Axis-aligned geographic bounding box"""
+    topLeft: GeoPointModel = Field(..., description="Northwest corner of the bounding box")
+    bottomRight: GeoPointModel = Field(..., description="Southeast corner of the bounding box")
+
+
+class GeoSearchModel(BaseModel, extra='ignore'):
+    """
+    Geospatial filter against the geo_MD_location field.
+
+    Provide exactly one of: point (with optional radiusMeters), bbox, or geoJson.
+    The relation controls how the input shape is matched against indexed shapes:
+      - intersects (default): any spatial overlap
+      - within: indexed shape lies entirely within the input shape
+      - contains: indexed shape contains the input shape
+      - disjoint: indexed shape has no spatial overlap with the input shape
+    """
+    relation: Optional[Literal["intersects", "within", "contains", "disjoint"]] = "intersects"
+    point: Optional[GeoPointModel] = None
+    bbox: Optional[GeoBoundingBoxModel] = None
+    geoJson: Optional[Dict[str, Any]] = Field(None, description="Arbitrary GeoJSON geometry, Feature, or FeatureCollection")
+
+    @root_validator
+    def validate_geo_search(cls, values):
+        provided = [name for name, val in (
+            ("point", values.get("point")),
+            ("bbox", values.get("bbox")),
+            ("geoJson", values.get("geoJson")),
+        ) if val is not None]
+        if len(provided) == 0:
+            raise ValueError("geoSearch requires one of: point, bbox, geoJson")
+        if len(provided) > 1:
+            raise ValueError(f"geoSearch accepts only one of point, bbox, geoJson (got: {', '.join(provided)})")
+        return values
+
+
 ######################## Search Request Models ##########################
 
 class SimpleSearchRequestModel(BaseModel, extra='ignore'):
@@ -42,7 +87,10 @@ class SimpleSearchRequestModel(BaseModel, extra='ignore'):
     
     # Options
     includeArchived: Optional[bool] = Field(False, description="Include archived items")
-    
+
+    # Geospatial filter against the geo_MD_location field
+    geoSearch: Optional[GeoSearchModel] = Field(None, description="Geospatial filter applied to results")
+
     # Pagination
     from_: Optional[int] = Field(None, alias="from", ge=0, le=10000, description="Starting offset")
     size: Optional[int] = Field(None, ge=1, le=2000, description="Number of results to return")
@@ -165,7 +213,10 @@ class SearchRequestModel(BaseModel, extra='ignore'):
     # NEW: Result explanation controls
     explainResults: Optional[bool] = False  # Include match explanations
     includeHighlights: Optional[bool] = True  # Enhanced highlighting
-    
+
+    # Geospatial filter against the geo_MD_location field
+    geoSearch: Optional[GeoSearchModel] = None
+
     # Pagination (using from/size for compatibility)
     from_: Optional[int] = Field(None, alias="from", ge=0, le=10000)
     size: Optional[int] = Field(None, ge=1, le=2000)

@@ -14,6 +14,7 @@ import { Construct } from "constructs";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
 import * as s3AssetBuckets from "../../../helper/s3AssetBuckets";
 import * as ServiceHelper from "../../../../lib/helper/service-helper";
+import { suppressCdkNagLambda } from "../../../helper/security";
 
 /**
  * Creates a custom resource that populates the S3AssetBucketsStorageTable with bucket information
@@ -155,6 +156,8 @@ def lambda_handler(event, context):
             effect: iam.Effect.ALLOW,
         })
     );
+
+    suppressCdkNagLambda(populateS3AssetBucketsTableLambda);
 
     // Prepare bucket data for the custom resource
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();

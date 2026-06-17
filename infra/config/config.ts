@@ -5,6 +5,7 @@
  */
 import { RemovalPolicy } from "aws-cdk-lib";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
+import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import { readFileSync } from "fs";
 import { join } from "path";
 import * as dotenv from "dotenv";
@@ -15,12 +16,13 @@ import { region_info } from "aws-cdk-lib";
 dotenv.config();
 
 //Top level configurations
-export const VAMS_VERSION = "2.5.1";
+export const VAMS_VERSION = "2.6.0";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
-export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
+export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
 export const LAMBDA_MEMORY_SIZE = 5308;
-export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
+export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_3_5;
+export const CODEBUILD_BUILD_IMAGE = codebuild.LinuxBuildImage.STANDARD_7_0;
 
 export const STACK_WAF_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-WAF) (version:" +
@@ -117,8 +119,8 @@ export function getConfig(app: cdk.App): Config {
     );
 
     //OpenSearch Variables - Dual Index Configuration
-    config.openSearchAssetIndexName = "vams-assets-v2";
-    config.openSearchFileIndexName = "vams-files-v2";
+    config.openSearchAssetIndexName = "vams-assets-v3";
+    config.openSearchFileIndexName = "vams-files-v3";
     config.openSearchAssetIndexNameSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "aos", "assetIndexName"].join("/");
     config.openSearchFileIndexNameSSMParam =
@@ -176,6 +178,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useIsaacLabTraining = {
             enabled: false,
             acceptNvidiaEula: false,
+            useCodeBuild: false,
             autoRegisterWithVAMS: true,
             keepWarmInstance: false,
         };
@@ -183,6 +186,10 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.pipelines.useIsaacLabTraining.enabled == undefined) {
         config.app.pipelines.useIsaacLabTraining.enabled = false;
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining.useCodeBuild == undefined) {
+        config.app.pipelines.useIsaacLabTraining.useCodeBuild = false;
     }
 
     if (config.app.pipelines.useIsaacLabTraining.keepWarmInstance == undefined) {
@@ -304,6 +311,10 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.addons.useGarnetFramework.enabled == undefined) {
         config.app.addons.useGarnetFramework.enabled = false;
+    }
+
+    if (config.app.addons.usePhysnaSync.enabled == undefined) {
+        config.app.addons.usePhysnaSync.enabled = false;
     }
 
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
@@ -985,6 +996,79 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // Physna Sync Configuration Validation
+    if (config.app.addons.usePhysnaSync.enabled) {
+        const physna = config.app.addons.usePhysnaSync;
+
+        // tenantId must be a UUID
+        const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!physna.tenantId || !uuidPattern.test(physna.tenantId)) {
+            throw new Error(
+                `Configuration Error: Physna Sync requires tenantId to be a valid UUID when enabled. Got: ${physna.tenantId}`
+            );
+        }
+
+        // apiBaseEndpoint required, must be a valid URL ending with /
+        if (
+            !physna.apiBaseEndpoint ||
+            physna.apiBaseEndpoint === "UNDEFINED" ||
+            physna.apiBaseEndpoint === ""
+        ) {
+            throw new Error(
+                "Configuration Error: Physna Sync requires apiBaseEndpoint when enabled"
+            );
+        }
+        try {
+            new URL(physna.apiBaseEndpoint);
+        } catch (e) {
+            throw new Error(
+                `Configuration Error: Physna Sync apiBaseEndpoint must be a valid URL. Got: ${physna.apiBaseEndpoint}`
+            );
+        }
+        if (!physna.apiBaseEndpoint.endsWith("/")) {
+            throw new Error(
+                `Configuration Error: Physna Sync apiBaseEndpoint must end with a trailing slash '/'. Got: ${physna.apiBaseEndpoint}`
+            );
+        }
+
+        // authTokenEndpoint required, must be a valid URL
+        if (
+            !physna.authTokenEndpoint ||
+            physna.authTokenEndpoint === "UNDEFINED" ||
+            physna.authTokenEndpoint === ""
+        ) {
+            throw new Error(
+                "Configuration Error: Physna Sync requires authTokenEndpoint when enabled"
+            );
+        }
+        try {
+            new URL(physna.authTokenEndpoint);
+        } catch (e) {
+            throw new Error(
+                `Configuration Error: Physna Sync authTokenEndpoint must be a valid URL. Got: ${physna.authTokenEndpoint}`
+            );
+        }
+
+        // authType must be "cognito" (only supported mode phase 1)
+        if (physna.authType !== "cognito") {
+            throw new Error(
+                `Configuration Error: Physna Sync authType must be "cognito" (only supported value in phase 1). Got: ${physna.authType}`
+            );
+        }
+
+        // clientId and clientSecret must be non-empty
+        if (!physna.clientId || physna.clientId === "UNDEFINED" || physna.clientId === "") {
+            throw new Error("Configuration Error: Physna Sync requires clientId when enabled");
+        }
+        if (
+            !physna.clientSecret ||
+            physna.clientSecret === "UNDEFINED" ||
+            physna.clientSecret === ""
+        ) {
+            throw new Error("Configuration Error: Physna Sync requires clientSecret when enabled");
+        }
+    }
+
     return config;
 }
 
@@ -1129,6 +1213,7 @@ export interface ConfigPublic {
             useIsaacLabTraining: {
                 enabled: boolean;
                 acceptNvidiaEula: boolean;
+                useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
                 keepWarmInstance: boolean;
             };
@@ -1219,6 +1304,15 @@ export interface ConfigPublic {
                 garnetApiEndpoint: string;
                 garnetApiToken: string;
                 garnetIngestionQueueSqsUrl: string;
+            };
+            usePhysnaSync: {
+                enabled: boolean;
+                tenantId: string;
+                apiBaseEndpoint: string;
+                authTokenEndpoint: string;
+                authType: string;
+                clientId: string;
+                clientSecret: string;
             };
         };
         authProvider: {

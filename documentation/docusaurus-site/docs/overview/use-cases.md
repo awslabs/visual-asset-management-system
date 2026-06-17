@@ -121,6 +121,7 @@ VAMS serves as the central asset repository for digital twin 3D models, with the
 **Key features used:**
 
 -   Garnet Framework addon for NGSI-LD digital twin knowledge graph synchronization
+-   Physna Sync addon for VAMS->Physna data sync to support 3D/CAD AI geometric 3D searching in Physna
 -   Asset versioning with alias naming for tracking as-built model revisions
 -   Cross-database asset linking for connecting related twin representations
 -   Multiple viewer plugins for visualizing different aspects of the digital twin
@@ -141,7 +142,7 @@ VAMS provides a unified library for all visual and media assets with dedicated v
 
 **Key features used:**
 
--   17 viewer plugins covering 3D, video, audio, image, document, and data formats
+-   18+ viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
 -   3D Preview Thumbnail pipeline for generating animated GIF previews of 3D assets
 -   Comment system with rich text for collaborative asset review
 -   Permission templates for external collaborator access (database-readonly, database-user)

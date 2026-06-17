@@ -58,6 +58,10 @@ Amazon OpenSearch Service provides full-text search, filtering, and map-view fun
 You cannot enable both OpenSearch Serverless and OpenSearch Provisioned at the same time.
 :::
 
+:::warning[Provisioned is for advanced deployments only]
+Amazon OpenSearch Serverless is the recommended option for most deployments. Provisioned is intended for advanced use cases that require dedicated capacity, custom instance sizing, or features unsupported by Serverless. It can complicate stack deployments — domain configuration changes trigger blue/green updates that may exceed the AWS CloudFormation custom-resource timeout, and major-version engine upgrades can fail in place and require redeploying with OpenSearch disabled before re-enabling. See the [OpenSearch configuration reference](configuration-reference.md#amazon-opensearch-service-appopensearch) for the full caveat list.
+:::
+
 ### VPC configuration
 
 | Option                  | Configuration                                             | Notes                                                                                                                                                                                                      |

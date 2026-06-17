@@ -255,6 +255,16 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Category**: 3d
 -   **Note**: ⚠️ **Requires CloudFront deployment** - This viewer uses WebAssembly (WASM) and requires headers to be set by either CloudFront or the implemented COI web service worker script. Local debugging is supported.
 
+### 17. ThatOpenWebIfcViewerPlugin
+
+-   **Extensions**: `.ifc`, `.ifczip`
+-   **Features**: IFC (Industry Foundation Classes) Building Information Model viewing via the open-source That Open Engine (web-ifc, WebAssembly). Spatial model tree (by building storey / category), element property inspection on selection, hide/isolate, clipping/section planes, and length/area measurements. `.ifczip` archives are unzipped client-side.
+-   **Multi-file**: No
+-   **Dependencies**: `@thatopen/components`, `@thatopen/components-front`, `@thatopen/fragments`, `web-ifc` (all vendored in a self-contained `customInstalls/thatopenwebifc` UMD bundle; nothing added to the core `web` dependencies)
+-   **Priority**: 1
+-   **Category**: 3d
+-   **Note**: Uses the multithreaded `web-ifc-mt.wasm` when cross-origin isolation is available (COI service worker) and falls back to single-thread otherwise. Does **not** require `ALLOWUNSAFEEVAL`.
+
 ## 🚀 Usage
 
 ### Basic Integration

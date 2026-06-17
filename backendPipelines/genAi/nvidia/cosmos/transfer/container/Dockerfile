@@ -36,7 +36,11 @@ RUN git clone https://github.com/nvidia-cosmos/cosmos-transfer2.5.git /opt/cosmo
 
 # Install Python dependencies using uv
 WORKDIR /opt/cosmos-transfer2.5
-RUN uv sync --locked --extra=cu128
+# Pin Python 3.10 because flash-attn==2.7.3+cu128.torch27 only ships a cp310 wheel.
+# Upstream cosmos-transfer2.5 previously provided a .python-version pin; if that pin
+# is absent uv will default to the newest CPython (3.13+) and the flash-attn install fails.
+RUN uv python pin 3.10
+RUN uv sync --locked --extra=cu128 --python 3.10
 
 # Upgrade NCCL to a CUDA 12.8 compatible version.
 # The uv sync installs NCCL 2.26.2+cuda12.2 which is incompatible with CUDA 12.8 compat driver.
@@ -57,7 +61,10 @@ RUN ln -sf /usr/local/cuda-12.8/compat/libcuda.so.1 /usr/local/cuda-12.8/compat/
 # Create code directory and copy VAMS container code
 RUN mkdir -p /opt/ml/code
 COPY __main__.py model_manager.py inference.py entrypoint.sh /opt/ml/code/
-RUN chmod +x /opt/ml/code/entrypoint.sh
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled
+# from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
+# and the kernel returns ENOENT ("no such file or directory") on exec.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
 
 # Add the venv bin to PATH so python/torchrun are available without activation
 ENV PATH="/opt/cosmos-transfer2.5/.venv/bin:$PATH"

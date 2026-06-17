@@ -82,6 +82,42 @@ export const webRoutes = async (body) => {
 };
 
 /**
+ * Fetch the full list of VAMS API routes (paths, methods, categories).
+ * Not cached -- used by the constraints editor to offer valid route values.
+ * @returns {Promise<[boolean, any]>}
+ */
+export const fetchApiRoutes = async () => {
+    try {
+        const response: any = await apiClient.get(`auth/routes/api`, {});
+        if (response.message) {
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
+ * Fetch the API routes (and methods) the current user is authorized to call.
+ * Cached by the auth flow (see FedAuth/Auth.tsx) and periodically renewed.
+ * @returns {Promise<[boolean, any]>}
+ */
+export const fetchAllowedApiRoutes = async () => {
+    try {
+        const response: any = await apiClient.get(`auth/routes/api/allowed`, {});
+        if (response.message) {
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
  * Returns array of boolean and response/error message for the element that the current user is downloading, or false if error.
  * @param {Object} params - Parameters object
  * @param {string} params.databaseId - Database ID
@@ -482,16 +518,11 @@ export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = fal
             ) {
                 return response.message;
             }
-            // If the response is just a string message
+            // If the response is just a string message, treat it as an error
+            // (success responses always carry the related/parents/children structure)
             else if (response && typeof response === "string") {
                 console.error("Received string response:", response);
-                return {
-                    related: [],
-                    parents: [],
-                    children: [],
-                    unauthorizedCounts: { related: 0, parents: 0, children: 0 },
-                    message: response,
-                };
+                return [false, response];
             }
             // Return the response as is, let the component handle validation
             return response;
@@ -499,29 +530,26 @@ export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = fal
             return false;
         }
     } catch (error) {
+        // Return the standard [false, message] error tuple so callers can
+        // surface the failure instead of rendering an empty (success-shaped)
+        // relationship tree.
         console.log("Error fetching asset links:", error);
-        return {
-            related: [],
-            parents: [],
-            children: [],
-            unauthorizedCounts: { related: 0, parents: 0, children: 0 },
-            message: error?.message || "An error occurred",
-        };
+        return [false, error?.message || "An error occurred"];
     }
 };
 
 export const deleteAssetLink = async ({ relationId }) => {
     try {
-        let response;
-        if (relationId) {
-            response = await apiClient.del(`asset-links/${relationId}`, {});
-            if (response.message) return response.message;
-        } else {
-            return response.message.status;
+        if (!relationId) {
+            return [false, "relationId is required"];
         }
+        const response = await apiClient.del(`asset-links/${relationId}`, {});
+        return [true, response?.message ?? response];
     } catch (error) {
+        // [false, message, status] so callers can distinguish authorization
+        // failures (403) from other errors.
         console.log(error);
-        return error;
+        return [false, error?.message || "Failed to delete asset link", error?.status];
     }
 };
 
@@ -2602,6 +2630,98 @@ export const deleteApiKey = async ({ apiKeyId }) => {
     }
 };
 
+// ===== Auth: User (self-service) API Keys =====
+// These call the /auth/user/api-keys routes: scoped server-side to the
+// requesting user's own keys, with mandatory expiration.
+
+export const fetchUserApiKeys = async () => {
+    try {
+        const response = await apiClient.get("auth/user/api-keys");
+        if (response !== false && response !== undefined) {
+            if (
+                response.message &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                return [false, response.message];
+            }
+            return response;
+        }
+        return [false, "Failed to fetch API keys"];
+    } catch (error) {
+        console.log(error);
+        const errorMsg =
+            error?.response?.data?.message || error?.message || "Failed to fetch API keys";
+        return [false, errorMsg];
+    }
+};
+
+export const createUserApiKey = async (body) => {
+    try {
+        const response = await apiClient.post("auth/user/api-keys", { body });
+        if (response !== false && response !== undefined) {
+            if (
+                response.message &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                return [false, response.message];
+            }
+            return [true, response];
+        }
+        return [false, "Failed to create API key"];
+    } catch (error) {
+        console.log(error);
+        const errorMsg =
+            error?.response?.data?.message || error?.message || "Failed to create API key";
+        return [false, errorMsg];
+    }
+};
+
+export const updateUserApiKey = async ({ apiKeyId, ...body }) => {
+    try {
+        const response = await apiClient.put(`auth/user/api-keys/${apiKeyId}`, { body });
+        if (response !== false && response !== undefined) {
+            if (
+                response.message &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                return [false, response.message];
+            }
+            return [true, response];
+        }
+        return [false, "Failed to update API key"];
+    } catch (error) {
+        console.log(error);
+        const errorMsg =
+            error?.response?.data?.message || error?.message || "Failed to update API key";
+        return [false, errorMsg];
+    }
+};
+
+export const deleteUserApiKey = async ({ apiKeyId }) => {
+    try {
+        const response = await apiClient.del(`auth/user/api-keys/${apiKeyId}`);
+        if (response !== false && response !== undefined) {
+            if (
+                response.message &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                return [false, response.message];
+            }
+            return [true, response];
+        }
+        return [false, "Failed to delete API key"];
+    } catch (error) {
+        console.log(error);
+        const errorMsg =
+            error?.response?.data?.message || error?.message || "Failed to delete API key";
+        return [false, errorMsg];
+    }
+};
+
 // ===== Auth: Constraints =====
 
 export const deleteConstraint = async ({ constraintId }) => {
@@ -3059,6 +3179,78 @@ export const fetchLoginProfile = async ({ username }) => {
     } catch (error) {
         console.log(error);
         return [false, error?.message];
+    }
+};
+
+/**
+ * Response envelope returned by `GET /addon/physna/viewer`.
+ *
+ * The backend now returns JSON describing what the frontend should show
+ * instead of pre-rendering an iframe HTML payload. The frontend switches
+ * on `status` and, for `"ready"`, uses the viewer-token bundle to build
+ * a direct Physna iframe src.
+ */
+export interface PhysnaViewerMetadataResponse {
+    status:
+        | "ready"
+        | "indexing"
+        | "failed"
+        | "not_synced"
+        | "not_found"
+        | "unsupported"
+        | "forbidden"
+        | "upstream_unavailable"
+        | "invalid_request"
+        | "method_not_allowed"
+        | "request_failed"
+        | "internal_error";
+    message: string;
+    /** Populated only when `status === "ready"`. */
+    tenantId?: string;
+    physnaAssetId?: string;
+    viewerToken?: string;
+    physnaApiBase?: string;
+    /** Populated on `indexing` and `failed` — raw upstream state for display. */
+    physnaState?: string;
+}
+
+/**
+ * Fetch Physna viewer metadata (authz + lookup + viewer-token mint) from the
+ * VAMS backend. The frontend uses the returned envelope to decide whether to
+ * render a direct-to-Physna iframe, show a "still indexing" placeholder, or
+ * surface an error.
+ *
+ * Uses `apiClient` because the endpoint now returns JSON (previously it
+ * returned HTML for an iframe, which required a direct `fetch`).
+ */
+export const fetchPhysnaViewerMetadata = async ({
+    databaseId,
+    assetId,
+    relativePath,
+}: {
+    databaseId: string;
+    assetId: string;
+    relativePath: string;
+}): Promise<[boolean, PhysnaViewerMetadataResponse | string]> => {
+    try {
+        const response = await apiClient.get("addon/physna/viewer", {
+            queryStringParameters: {
+                databaseId,
+                assetId,
+                relativePath,
+            },
+        });
+        if (response && typeof response === "object" && "status" in response) {
+            return [true, response as PhysnaViewerMetadataResponse];
+        }
+        if (response?.message) {
+            console.log(response.message);
+            return [false, response.message];
+        }
+        return [false, "Unexpected response shape from viewer endpoint"];
+    } catch (error: any) {
+        console.log(error);
+        return [false, error?.message || "Failed to load Physna viewer"];
     }
 };
 

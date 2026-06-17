@@ -18,6 +18,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.authz import CasbinEnforcer
@@ -454,15 +455,20 @@ class FieldClassifier:
     
     @staticmethod
     def get_searchable_core_fields(index_type: str = "asset") -> List[str]:
-        """Get list of core fields that should be included in general text search"""
+        """Get list of core fields that should be included in general text search.
+        """
         if index_type == "asset":
             return [
                 "str_assetname", "str_description", "str_assettype",
-                "list_tags", "str_asset_version_comment"
+                "list_tags", "str_asset_version_comment",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix"
             ]
         elif index_type == "file":
             return [
-                "str_key", "str_assetname", "str_fileext", "str_etag", "list_tags"
+                "str_key", "str_assetname", "str_fileext", "str_etag", "list_tags",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix"
             ]
         return []
     
@@ -489,6 +495,92 @@ class FieldClassifier:
         for char in special_chars:
             escaped = escaped.replace(char, f'\\{char}')
         return escaped
+
+#######################
+# Geo Filter Helper
+#######################
+
+GEO_LOCATION_FIELD = "geo_MD_location"
+
+
+def build_geo_filter_clause(geo_search: Any) -> Optional[Dict[str, Any]]:
+    """
+    Translate a GeoSearchModel (or equivalent dict) into an OpenSearch
+    geo_shape filter clause against the geo_MD_location field.
+
+    Returns None if geo_search is empty or invalid.
+    """
+    if geo_search is None:
+        return None
+
+    geo_dict = geo_search.dict() if hasattr(geo_search, 'dict') else dict(geo_search)
+    relation = geo_dict.get("relation") or "intersects"
+    point = geo_dict.get("point")
+    bbox = geo_dict.get("bbox")
+    geo_json = geo_dict.get("geoJson")
+
+    shape: Optional[Dict[str, Any]] = None
+
+    if point:
+        lat = point.get("lat")
+        lon = point.get("lon")
+        radius = point.get("radiusMeters")
+        if lat is None or lon is None:
+            return None
+        if radius and radius > 0:
+            # Circle is supported by OpenSearch geo_shape via the "circle" type.
+            shape = {
+                "type": "circle",
+                "coordinates": [lon, lat],
+                "radius": f"{radius}m",
+            }
+        else:
+            shape = {"type": "point", "coordinates": [lon, lat]}
+    elif bbox:
+        top_left = bbox.get("topLeft") or {}
+        bottom_right = bbox.get("bottomRight") or {}
+        if not top_left or not bottom_right:
+            return None
+        shape = {
+            "type": "envelope",
+            "coordinates": [
+                [top_left.get("lon"), top_left.get("lat")],
+                [bottom_right.get("lon"), bottom_right.get("lat")],
+            ],
+        }
+    elif geo_json:
+        # Accept Geometry, Feature, or FeatureCollection; unwrap to a Geometry.
+        shape = _unwrap_geojson_geometry(geo_json)
+
+    if shape is None:
+        return None
+
+    return {
+        "geo_shape": {
+            GEO_LOCATION_FIELD: {
+                "shape": shape,
+                "relation": relation,
+            }
+        }
+    }
+
+
+def _unwrap_geojson_geometry(value: Any) -> Optional[Dict[str, Any]]:
+    """Reduce a GeoJSON value to a single Geometry dict suitable for geo_shape."""
+    if not isinstance(value, dict):
+        return None
+    geo_type = value.get("type")
+    if geo_type == "Feature":
+        return _unwrap_geojson_geometry(value.get("geometry"))
+    if geo_type == "FeatureCollection":
+        features = value.get("features") or []
+        if not features:
+            return None
+        return _unwrap_geojson_geometry(features[0])
+    if geo_type and value.get("coordinates") is not None:
+        return {"type": geo_type, "coordinates": value["coordinates"]}
+    return None
+
 
 #######################
 # Simple Search Query Building
@@ -649,10 +741,15 @@ class SimpleSearchQueryBuilder:
         # Add archive exclusions (unless explicitly included)
         if not request.includeArchived:
             must_not_clauses.append({"term": {"bool_archived": True}})
-        
+
+        # Apply geospatial filter on geo_MD_location if provided
+        geo_filter = build_geo_filter_clause(getattr(request, 'geoSearch', None))
+        if geo_filter:
+            filter_clauses.append(geo_filter)
+
         # Build search queries based on parameters
         search_queries = []
-        
+
         # General keyword search with hyphen support (ALWAYS uses wildcards for discovery)
         if request.query:
             escaped_query = self.field_classifier.escape_opensearch_query_string(request.query)
@@ -886,16 +983,23 @@ class SimpleSearchQueryBuilder:
         }
     
     def _get_simple_searchable_fields(self, index_type: str) -> List[str]:
-        """Get searchable fields for simple search - includes flat object _value fields"""
+        """Get searchable fields for simple search - includes flat object _value fields.
+        """
         if index_type == "asset":
             return [
                 "str_assetname", "str_description", "str_assettype",
-                "list_tags", "str_asset_version_comment", "MD_._value"
+                "list_tags", "str_asset_version_comment",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix",
+                "MD_._value"
             ]
         elif index_type == "file":
             return [
-                "str_key", "str_assetname", "str_fileext", "str_etag", 
-                "list_tags", "MD_._value", "AB_._value"
+                "str_key", "str_assetname", "str_fileext", "str_etag",
+                "list_tags",
+                "str_assetid", "str_databaseid",
+                "str_bucketid", "str_bucketname", "str_bucketprefix",
+                "MD_._value", "AB_._value"
             ]
         return []
 
@@ -1057,7 +1161,12 @@ class DualIndexQueryBuilder:
         # Add archive exclusions (unless explicitly included)
         if not request.includeArchived:
             must_not_clauses.append({"term": {"bool_archived": True}})
-        
+
+        # Apply geospatial filter on geo_MD_location if provided
+        geo_filter = build_geo_filter_clause(getattr(request, 'geoSearch', None))
+        if geo_filter:
+            filter_clauses.append(geo_filter)
+
         # Build final bool query
         bool_query = {}
         if must_clauses:
@@ -1068,9 +1177,9 @@ class DualIndexQueryBuilder:
             bool_query["should"] = should_clauses
         if filter_clauses:
             bool_query["filter"] = filter_clauses
-        
+
         return {"bool": bool_query} if bool_query else {"match_all": {}}
-    
+
     def _build_general_search_query(self, query: str, include_metadata: bool, index_type: str) -> Dict[str, Any]:
         """Build general text search query for specific index with hyphen support"""
         if not query:
@@ -1955,27 +2064,27 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         database_access_manager = DatabaseAccessManager()
         response_processor = DualIndexResponseProcessor(database_access_manager)
         
-        # Route based on path and method
+        # Route based on the master API route definitions
         if method == 'GET':
             # GET requests are only supported on the main /search endpoint for mappings
-            if path == '/search':
+            if API_SEARCH.matches(path):
                 return handle_get_request(event, search_manager)
             else:
                 return validation_error(body={'message': "GET method only supported on /search endpoint"}, event=event)
-        
+
         elif method == 'POST':
-            if path == '/search':
+            if API_SEARCH.matches(path):
                 # Regular complex search
                 query_builder = DualIndexQueryBuilder(database_access_manager)
                 return handle_post_request(event, search_manager, query_builder, response_processor, claims_and_roles)
-            
-            elif path == '/search/simple':
+
+            elif API_SEARCH_SIMPLE.matches(path):
                 # Simple search
                 simple_query_builder = SimpleSearchQueryBuilder(database_access_manager)
                 return handle_simple_post_request(event, search_manager, simple_query_builder, response_processor, claims_and_roles)
-            
+
             else:
-                return validation_error(body={'message': f"POST method not supported on path: {path}"}, event=event)
+                return validation_error(body={'message': "POST method not supported on this path"}, event=event)
         
         else:
             return validation_error(body={'message': f"Method {method} not allowed"}, event=event)

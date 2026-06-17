@@ -513,12 +513,25 @@ export default function TableList(props) {
                 }}
             />
 
-            {UpdateSelectedElement && collectionProps.selectedItems.length === 1 && (
+            {UpdateSelectedElement && collectionProps.selectedItems?.length === 1 && (
                 <UpdateSelectedElement
                     open={editOpen}
                     setOpen={setEditOpen}
                     setReload={setReload}
-                    initState={collectionProps.selectedItems[0]}
+                    initState={
+                        // Resolve the selected item from the freshest allItems by its
+                        // tracked id. useCollection retains the originally selected
+                        // object reference across data reloads (selection is tracked
+                        // by id, not by content), which would otherwise hand the edit
+                        // modal stale pre-reload data.
+                        allItems.find(
+                            (item: any) =>
+                                item[listDefinition.elementId] ===
+                                (collectionProps.selectedItems?.[0] as any)?.[
+                                    listDefinition.elementId
+                                ]
+                        ) ?? collectionProps.selectedItems?.[0]
+                    }
                     reloadChild={onReload}
                 />
             )}

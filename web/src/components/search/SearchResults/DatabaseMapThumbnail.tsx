@@ -88,6 +88,8 @@ const DatabaseMapThumbnail: React.FC<DatabaseMapThumbnailProps> = ({
             mapStyleUrl={mapStyleUrl}
             width={width}
             height={height}
+            expandHeader={`Database: ${databaseId}`}
+            colorKey={databaseId}
         />
     );
 };

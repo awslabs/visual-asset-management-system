@@ -145,26 +145,26 @@ def run_inference(
     logger.info(f"  Output dir: {output_dir}")
 
     try:
-        # Run inference
+        # Run inference — don't capture output so the child process writes
+        # directly to stdout/stderr (visible in CloudWatch). Capturing with
+        # capture_output=True fills the OS pipe buffer (~64KB) during the
+        # multi-gigabyte HuggingFace download and torch init logs, which
+        # deadlocks the child on write() while the parent sits in wait().
         result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
             cmd,
             env=env,
             check=True,
-            capture_output=True,
             text=True,
-            cwd=COSMOS_REPO_DIR
-        ) # nosemgrep: dangerous-subprocess-use-audit
+            cwd=COSMOS_REPO_DIR,
+        )  # nosemgrep: dangerous-subprocess-use-audit
 
         logger.info("Inference completed successfully")
-        logger.info(f"stdout: {result.stdout}")
 
         return output_dir
 
     except subprocess.CalledProcessError as e:
-        logger.error(f"Inference failed with exit code {e.returncode}")
-        logger.error(f"stdout: {e.stdout}")
-        logger.error(f"stderr: {e.stderr}")
-        raise RuntimeError(f"Inference failed: {e.stderr}")
+        logger.error(f"Inference failed with exit code {e.returncode}. Check CloudWatch logs for full error output.")
+        raise RuntimeError(f"Inference failed with exit code {e.returncode}. Check CloudWatch logs for full error output.")
 
 
 def generate_preview_gif(video_path: str, output_path: str, duration: int = 2, fps: int = 10, width: int = 320) -> str:

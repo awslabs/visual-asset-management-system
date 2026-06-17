@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 from typing import Dict, List, Optional, Any, Union
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
+from common.dynamoDbMetadataKeys import is_internal_metadata_field
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="DualIndexingModels")
@@ -68,7 +69,7 @@ def _determine_field_name_and_type(field_name: str, field_value: Any) -> tuple[s
         Tuple of (opensearch_field_name, processed_value) or (None, None) if excluded
     """
     # Exclude VAMS_* and _* prefixed fields (internal VAMS fields)
-    if field_name.startswith('VAMS_') or field_name.startswith('_'):
+    if is_internal_metadata_field(field_name):
         return None, None
     
     # Sanitize the field name for OpenSearch compatibility
@@ -147,10 +148,13 @@ class FileDocumentModel(BaseModel, extra='allow'):
     
     # Asset tags inherited from parent asset
     list_tags: Optional[List[str]] = Field(None, description="Asset tags inherited from parent asset")
-    
+
+    # Geo shape derived from metadata (set by indexer; GeoJSON Point or Polygon)
+    geo_MD_location: Optional[Dict[str, Any]] = Field(None, description="GeoJSON shape derived from metadata")
+
     # Record type identifier
     _rectype: str = Field("file", description="Record type identifier")
-    
+
     def add_metadata_fields(self, metadata: Dict[str, Any]) -> None:
         """
         Add metadata as a single flat object field.
@@ -255,7 +259,10 @@ class AssetDocumentModel(BaseModel, extra='allow'):
     
     # Archive status
     bool_archived: bool = Field(False, description="Archive status (#deleted marker)")
-    
+
+    # Geo shape derived from metadata (set by indexer; GeoJSON Point or Polygon)
+    geo_MD_location: Optional[Dict[str, Any]] = Field(None, description="GeoJSON shape derived from metadata")
+
     # Record type identifier
     _rectype: str = Field("asset", description="Record type identifier")
     
@@ -400,7 +407,10 @@ class FileIndexMapping(BaseModel, extra='ignore'):
                     "AB_date_*": {"type": "date"},
                     "AB_list_*": {"type": "keyword"},
                     "AB_gp_*": {"type": "geo_point"},
-                    "AB_gs_*": {"type": "text"}
+                    "AB_gs_*": {"type": "text"},
+
+                    # Geo shape derived from metadata (location key or lat/lon/altitude)
+                    "geo_MD_location": {"type": "geo_shape"}
                 }
             },
             "settings": {
@@ -473,7 +483,10 @@ class AssetIndexMapping(BaseModel, extra='ignore'):
                     "AB_date_*": {"type": "date"},
                     "AB_list_*": {"type": "keyword"},
                     "AB_gp_*": {"type": "geo_point"},
-                    "AB_gs_*": {"type": "text"}
+                    "AB_gs_*": {"type": "text"},
+
+                    # Geo shape derived from metadata (location key or lat/lon/altitude)
+                    "geo_MD_location": {"type": "geo_shape"}
                 }
             },
             "settings": {

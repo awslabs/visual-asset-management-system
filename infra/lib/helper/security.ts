@@ -28,6 +28,7 @@ interface CSPAdditionalConfig {
     mediaSrc?: string[];
     fontSrc?: string[];
     styleSrc?: string[];
+    frameSrc?: string[];
 }
 
 /**
@@ -327,6 +328,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("LAMBDA").Principal,
             Service("STS").Principal,
             Service("CLOUDFORMATION").Principal,
+            Service("EVENTS").Principal,
         ],
         resources: ["*"],
     });
@@ -383,12 +385,16 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3").Endpoint}/`,
     ];
 
-    let scriptSrc = [
-        "'self'",
-        "'unsafe-hashes'",
-        "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
-        "'sha256-zALIqLOBMfzjoNUL1W5BfmSMZYfNkxV6aRuqPjSB8Mo='", // script in index.html
-    ];
+    // `'unsafe-inline'` is used intentionally here instead of per-script SHA
+    // hashes or a nonce. External viewer plugins (Physna's hosted viewer,
+    // etc.) embed inline `<script>` blocks whose contents we do not control
+    // and which rev frequently. Maintaining a rolling SHA allowlist for
+    // those blocks is unsustainable, and a CSP nonce requires propagating a
+    // new value on every page render (which the viewers cannot cooperate
+    // with). Note that modern browsers ignore `'unsafe-inline'` whenever a
+    // hash or nonce source is present, so this directive only takes effect
+    // when neither is used.
+    let scriptSrc = ["'self'", "'unsafe-hashes'", "'unsafe-inline'"];
 
     let workerSrc = ["'self'", "blob:", "data:"];
 
@@ -398,6 +404,13 @@ export function generateContentSecurityPolicy(
 
     let fontSrc = ["'self'"];
     let styleSrc = ["'self'", "'unsafe-inline'"];
+
+    // frame-src controls what URLs can be loaded into <iframe>s. Without an
+    // explicit directive the browser falls back to default-src ('none'),
+    // which blocks blob:-URL iframes used by add-on viewers (e.g., the
+    // Physna Viewer wraps the Physna-hosted HTML in a sandboxed Blob URL).
+    // 'self' plus blob: covers both same-origin iframes and blob-URL iframes.
+    let frameSrc = ["'self'", "blob:"];
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
@@ -420,6 +433,28 @@ export function generateContentSecurityPolicy(
         connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
     }
 
+    // When the Physna add-on is enabled the viewer plugin embeds Physna's
+    // hosted viewer URL directly in an `<iframe src>`. Allow that origin
+    // in `frame-src` so the iframe isn't blocked by CSP, and in
+    // `connect-src` so any auxiliary fetches the VAMS frontend makes
+    // against Physna also pass. We add only the origin portion (not the
+    // full config URL, which may include a path) because CSP source
+    // expressions match on scheme + host + port.
+    if (
+        config.app.addons?.usePhysnaSync?.enabled &&
+        config.app.addons.usePhysnaSync.apiBaseEndpoint
+    ) {
+        try {
+            const physnaUrl = new URL(config.app.addons.usePhysnaSync.apiBaseEndpoint);
+            const origin = `${physnaUrl.protocol}//${physnaUrl.host}`;
+            connectSrc.push(origin);
+            frameSrc.push(origin);
+        } catch {
+            // Config validation in getConfig() already rejects invalid URLs,
+            // so this is defensive — never raise during CSP generation.
+        }
+    }
+
     // Merge additional CSP sources if configuration is loaded
     if (additionalCSPConfig) {
         connectSrc = mergeCSPSources(connectSrc, additionalCSPConfig.connectSrc);
@@ -429,6 +464,7 @@ export function generateContentSecurityPolicy(
         mediaSrc = mergeCSPSources(mediaSrc, additionalCSPConfig.mediaSrc);
         fontSrc = mergeCSPSources(fontSrc, additionalCSPConfig.fontSrc);
         styleSrc = mergeCSPSources(styleSrc, additionalCSPConfig.styleSrc);
+        frameSrc = mergeCSPSources(frameSrc, additionalCSPConfig.frameSrc);
     }
 
     const csp =
@@ -439,11 +475,155 @@ export function generateContentSecurityPolicy(
         `worker-src ${workerSrc.join(" ")}; ` +
         `img-src ${imgSrc.join(" ")}; ` +
         `media-src ${mediaSrc.join(" ")}; ` +
+        `frame-src ${frameSrc.join(" ")}; ` +
         `object-src 'none'; ` +
-        `frame-ancestors 'none'; font-src ${fontSrc.join(" ")}; ` +
+        // frame-ancestors controls who may embed VAMS pages in a frame. 'self'
+        // permits same-origin framing only, which is required by iframe-embedded
+        // viewers that load a VAMS-hosted document (e.g. the SuperSplat editor under
+        // /viewers/supersplat/). External sites still cannot frame VAMS, so this does
+        // not reintroduce clickjacking exposure. Keep in sync with the X-Frame-Options
+        // SAMEORIGIN setting on the CloudFront ResponseHeadersPolicy.
+        `frame-ancestors 'self'; font-src ${fontSrc.join(" ")}; ` +
         `manifest-src 'self'`;
 
     return csp;
+}
+
+/**
+ * Applies the standard CDK Nag suppressions required by every VAMS Lambda function,
+ * scoped to the individual function (and its execution role) rather than the whole stack.
+ *
+ * Previously these three suppressions were applied once at the CoreVAMSStack level with
+ * `applyToChildren=true`. Because cdk-nag recurses across nested-stack boundaries, that
+ * stamped the suppression metadata onto every resource in every nested stack (S3 buckets,
+ * DynamoDB tables, API routes, etc.), bloating the synthesized CloudFormation templates as
+ * resources were added. Scoping the suppressions to each Lambda keeps the metadata on only
+ * the resources that actually need it, which is the recommended cdk-nag practice.
+ *
+ * Suppresses:
+ * - AwsSolutions-IAM5: wildcard KMS actions (kms:*) for VAMS-generated keys
+ * - AwsSolutions-IAM4: AWSLambdaVPCAccessExecutionRole managed policy
+ * - AwsSolutions-IAM4: AWSLambdaBasicExecutionRole managed policy
+ *
+ * @param lambdaFunction The Lambda function to suppress findings for
+ */
+export function suppressCdkNagLambda(lambdaFunction: lambda.IFunction) {
+    NagSuppressions.addResourceSuppressions(
+        lambdaFunction,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Allow permissions for KMS unencryption/re-encryption for keys generated within VAMS. Policy statements additions on imported keys are No-Op statements and must be set externally to the deployment.",
+                appliesTo: [
+                    {
+                        regex: "/^Action::kms:(.*)\\*$/g",
+                    },
+                ],
+            },
+            {
+                id: "AwsSolutions-IAM4",
+                reason: "Intend to use AWSLambdaVPCAccessExecutionRole as is at this stage of this project.",
+                appliesTo: [
+                    {
+                        regex: "/.*AWSLambdaVPCAccessExecutionRole$/g",
+                    },
+                ],
+            },
+            {
+                id: "AwsSolutions-IAM4",
+                reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
+                appliesTo: [
+                    {
+                        regex: "/.*AWSLambdaBasicExecutionRole$/g",
+                    },
+                ],
+            },
+        ],
+        true
+    );
+}
+
+/**
+ * Applies the standard Lambda IAM4/IAM5 suppressions to IAM roles and policies that are
+ * generated by CDK framework constructs (custom-resource providers, bucket deployments, bucket
+ * notification handlers, AwsCustomResource) or by VAMS custom-resource roles that intentionally
+ * use AWS managed execution policies.
+ *
+ * These resources are not created by the VAMS Lambda builders, so suppressCdkNagLambda() cannot
+ * reach them. Previously they were covered by the stack-wide applyToChildren suppression in
+ * CoreVAMSStack. To keep the metadata footprint small, this walks the construct tree and applies
+ * the suppressions only to the IAM CfnRole/CfnPolicy resources that match well-known framework
+ * markers — never to non-IAM resources, and never to the authored-function roles already handled
+ * by suppressCdkNagLambda() (which live under a Function construct, not these markers).
+ *
+ * @param scope The stack (or construct) whose tree should be walked. findAll() recurses into
+ *              nested stacks, so calling this once on the core stack covers every nested stack.
+ */
+export function suppressCdkNagLambdaFrameworkResources(scope: Construct) {
+    // Stable path fragments for CDK-generated framework constructs and VAMS custom-resource roles
+    // whose execution roles use AWS managed policies (AWSLambdaBasicExecutionRole /
+    // AWSLambdaVPCAccessExecutionRole) and/or wildcard KMS actions for VAMS-owned keys.
+    const frameworkMarkers = [
+        "framework-onEvent",
+        "BucketNotificationsHandler",
+        "CDKBucketDeployment",
+        "AWS679f53fac002430cb0da5b7982bd2287", // CDK AwsCustomResource provider singleton
+        "CustomResourcePolicy",
+        "lambdaPipelineRole",
+        "MetadataSchemaDefaultCustomResourceRole",
+        "AuthDefaultCustomResourceRole",
+        "CRAuthKmsPolicy",
+        "OpensearchProvisionedDeploySchema",
+    ];
+
+    scope.node.findAll().forEach((node) => {
+        const isRoleOrPolicy =
+            node instanceof iam.CfnRole ||
+            node instanceof iam.CfnPolicy ||
+            node instanceof iam.Role ||
+            node instanceof iam.Policy;
+        if (!isRoleOrPolicy) {
+            return;
+        }
+
+        if (!frameworkMarkers.some((marker) => node.node.path.includes(marker))) {
+            return;
+        }
+
+        NagSuppressions.addResourceSuppressions(
+            node,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Allow permissions for KMS unencryption/re-encryption for keys generated within VAMS. Policy statements additions on imported keys are No-Op statements and must be set externally to the deployment.",
+                    appliesTo: [
+                        {
+                            regex: "/^Action::kms:(.*)\\*$/g",
+                        },
+                    ],
+                },
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "Intend to use AWSLambdaVPCAccessExecutionRole as is at this stage of this project.",
+                    appliesTo: [
+                        {
+                            regex: "/.*AWSLambdaVPCAccessExecutionRole$/g",
+                        },
+                    ],
+                },
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
+                    appliesTo: [
+                        {
+                            regex: "/.*AWSLambdaBasicExecutionRole$/g",
+                        },
+                    ],
+                },
+            ],
+            true
+        );
+    });
 }
 
 export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {

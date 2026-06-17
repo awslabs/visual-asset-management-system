@@ -86,7 +86,7 @@ export class CosmosCodeBuildConstruct extends Construct {
             const project = new codebuild.Project(this, `CodeBuild-${pipelineKey}`, {
                 description: `Build Cosmos ${pipelineKey} container image and push to ECR`,
                 environment: {
-                    buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+                    buildImage: Config.CODEBUILD_BUILD_IMAGE,
                     computeType: codebuild.ComputeType.LARGE,
                     privileged: true,
                     environmentVariables: {
@@ -135,7 +135,7 @@ export class CosmosCodeBuildConstruct extends Construct {
                 this,
                 `BuildTrigger-${pipelineKey}`,
                 {
-                    runtime: cdk.aws_lambda.Runtime.PYTHON_3_12,
+                    runtime: Config.LAMBDA_PYTHON_RUNTIME,
                     handler: "index.handler",
                     timeout: Duration.minutes(1),
                     code: cdk.aws_lambda.Code.fromInline(`

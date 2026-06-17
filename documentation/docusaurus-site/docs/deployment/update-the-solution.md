@@ -288,18 +288,88 @@ If Lambda functions behind a VPC were broken in v2.2, this version restores VPC 
 The migration requires `dynamodb:Scan` on source tables, `dynamodb:BatchWriteItem` on V2 destination tables, and `dynamodb:UpdateItem` on the metadata versions table. See the [v2.4 to v2.5 migration README](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/deploymentDataMigration/v2.4_to_v2.5/upgrade/v2.4_to_v2.5_migration_README.md) for the full IAM policy.
 :::
 
+### v2.5 to v2.6
+
+**Breaking changes:**
+
+-   New OpenSearch index names: `vams-assets-v3` and `vams-files-v3`. The new mapping adds a `geo_MD_location` field of type `geo_shape` that powers the new geospatial search filter and map view. The previous v2 indexes are abandoned and remain in OpenSearch until you delete them manually.
+-   Provisioned OpenSearch domains are upgraded from engine version 2.7 to 3.5. Serverless collections are unaffected.
+
+**Required migration steps:**
+
+1.  Deploy the v2.6 CDK stack. The schema-deploy custom resource creates the empty v3 indexes; the v2 indexes are left in place but unreferenced.
+
+2.  Navigate to the migration scripts directory:
+
+    ```bash
+    cd infra/deploymentDataMigration/v2.5_to_v2.6/upgrade
+    ```
+
+3.  Copy and configure the migration configuration file:
+
+    ```bash
+    cp v2.5_to_v2.6_migration_config.json my_migration_config.json
+    ```
+
+4.  Set `reindexer_function_name` in the config to the value of the CloudFormation output `ReindexerFunctionNameOutput` from your stack:
+
+    ```bash
+    aws cloudformation describe-stacks --stack-name your-vams-stack \
+      --query 'Stacks[0].Outputs[?OutputKey==`ReindexerFunctionNameOutput`].OutputValue' \
+      --output text
+    ```
+
+5.  Run the migration:
+
+    === "Linux / macOS"
+
+        ```bash
+        chmod +x run_migration.sh
+        ./run_migration.sh my_migration_config.json
+        ```
+
+    === "Windows"
+
+        ```powershell
+        .\run_migration.ps1 -ConfigFile my_migration_config.json
+        ```
+
+6.  The migration invokes the deployed reindexer Lambda, which:
+    -   Re-publishes every asset record from the asset storage DynamoDB table so the asset indexer writes the asset document (including the new `geo_MD_location` field) into `vams-assets-v3`.
+    -   Lists every asset bucket and re-publishes file events so the file indexer writes file documents into `vams-files-v3`.
+    -   Returns aggregate success/failure counts.
+
+:::note[`--clear-indexes` defaults to false]
+The v3 indexes are empty after the v2.6 CDK deploy, so the first migration run never needs to clear them. Pass `--clear-indexes` only if a previous run partially populated v3 and you want to start clean.
+:::
+
+:::warning[Provisioned OpenSearch 3.5 upgrade]
+The v2.6 CDK switches `OPENSEARCH_VERSION` to `OPENSEARCH_3_5`. This applies only to provisioned deployments (`app.openSearch.useProvisioned.enabled = true`); serverless collections are unaffected. Amazon OpenSearch Service supports in-place version upgrades, but a major-version jump on a long-running domain can occasionally fail or exceed the CloudFormation custom-resource timeout.
+
+If `cdk deploy` fails on the OpenSearch domain version upgrade, recover by deploying first with OpenSearch disabled and then re-enabling it:
+
+1. Set `app.openSearch.useProvisioned.enabled = false` (and `useServerless.enabled = false`) in `infra/config/config.json`.
+2. Run `cdk deploy --all --require-approval never` to delete the existing 2.7 domain.
+3. Restore the original `useProvisioned` configuration in `config.json`.
+4. Run `cdk deploy --all --require-approval never` to create a fresh 3.5 domain with the empty v3 indexes.
+5. Run this migration to repopulate the v3 indexes from source data.
+
+This recovery path discards only the OpenSearch indexes; all source data lives in DynamoDB and S3, and the reindex restores the full search corpus. For details and other troubleshooting steps, see the [v2.5 to v2.6 migration README](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/deploymentDataMigration/v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_README.md).
+:::
+
 ## Breaking changes checklist
 
 Use this checklist to determine if additional actions are needed after updating.
 
-| Change type                       | Versions affected          | Action required                                                                     |
-| --------------------------------- | -------------------------- | ----------------------------------------------------------------------------------- |
-| DynamoDB table schema change      | v2.3 to v2.4, v2.4 to v2.5 | Run version-specific migration scripts.                                             |
-| Amazon OpenSearch Service reindex | v2.2 to v2.3, v2.3 to v2.4 | Run reindex script or set `reindexOnCdkDeploy: true`.                               |
-| Permission constraint migration   | v2.3 to v2.4, v2.4 to v2.5 | Run constraint migration script if custom constraints exist.                        |
-| API Gateway authorizer change     | v2.2 to v2.3               | Reset authorizer cache after deployment.                                            |
-| Pipeline CDK construct rename     | v2.2 to v2.3               | Deploy without pipelines, then redeploy with pipelines enabled.                     |
-| Website framework change          | v2.4 to v2.5               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`. |
+| Change type                       | Versions affected                          | Action required                                                                     |
+| --------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------- |
+| DynamoDB table schema change      | v2.3 to v2.4, v2.4 to v2.5                 | Run version-specific migration scripts.                                             |
+| Amazon OpenSearch Service reindex | v2.2 to v2.3, v2.3 to v2.4, v2.5 to v2.6   | Run reindex script or set `reindexOnCdkDeploy: true`.                               |
+| OpenSearch engine version upgrade | v2.5 to v2.6 (provisioned only, 2.7 → 3.5) | Redeploy with OpenSearch disabled then re-enabled if the in-place upgrade fails.    |
+| Permission constraint migration   | v2.3 to v2.4, v2.4 to v2.5                 | Run constraint migration script if custom constraints exist.                        |
+| API Gateway authorizer change     | v2.2 to v2.3                               | Reset authorizer cache after deployment.                                            |
+| Pipeline CDK construct rename     | v2.2 to v2.3                               | Deploy without pipelines, then redeploy with pipelines enabled.                     |
+| Website framework change          | v2.4 to v2.5                               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`. |
 
 ## Rollback guidance
 

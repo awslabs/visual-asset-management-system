@@ -95,7 +95,7 @@ const sidebars: SidebarsConfig = {
                     type: "category",
                     label: "Addons",
                     collapsed: true,
-                    items: ["developer/garnet-framework"],
+                    items: ["developer/garnet-framework", "developer/physna-integration"],
                 },
                 {
                     type: "category",
@@ -167,6 +167,7 @@ const sidebars: SidebarsConfig = {
                         "api/tags",
                         "api/subscriptions",
                         "api/auth",
+                        "api/addon",
                     ],
                 },
                 {

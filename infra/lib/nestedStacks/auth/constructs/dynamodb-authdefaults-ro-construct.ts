@@ -303,6 +303,22 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `8_${roleNameIDClean}_web_paths`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/auth/api-keys", //API key management page (user self-service mode)
+                                },
+                            },
+                        },
                     ],
                 },
                 description: {
@@ -391,7 +407,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "starts_with",
                                 },
                                 value: {
-                                    S: "/auth/routes", //Technically not needed as no authorization but including anyway
+                                    S: "/auth/routes", //Prefix also authorizes GET /auth/routes/api and /auth/routes/api/allowed (API route listing; these DO enforce authorization)
                                 },
                             },
                         },
@@ -691,7 +707,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "starts_with",
                                 },
                                 value: {
-                                    S: "/auth/routes", //Technically not needed as no authorization but including anyway
+                                    S: "/auth/routes", //Prefix also authorizes GET /auth/routes/api and /auth/routes/api/allowed (API route listing; these DO enforce authorization)
                                 },
                             },
                         },
@@ -1177,6 +1193,114 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                 },
                 objectType: {
                     S: "tagType",
+                },
+            },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: `initial_${roleNameIDClean}_allow_user_api_keys`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_allow_user_api_keys`,
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}_user_api_keys_path`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/auth/user/api-keys", //User self-service API key management (restricted server-side to the user's own keys)
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow self-service API key management (own keys only) for basic read only user",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-user-api-keys-get`,
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-user-api-keys-post`,
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-user-api-keys-put`,
+                                },
+                                permission: {
+                                    S: "PUT",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-user-api-keys-delete`,
+                                },
+                                permission: {
+                                    S: "DELETE",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-allow-user-api-keys`,
+                },
+                objectType: {
+                    S: "api",
                 },
             },
         ];

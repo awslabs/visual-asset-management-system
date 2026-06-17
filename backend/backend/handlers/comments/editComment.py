@@ -186,7 +186,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
                 return response
             
             #Get user ID of person making request
-            userId = claims_and_roles.get("tokens", ["system"])[0]
+            userId = claims_and_roles.get("tokens", ["SYSTEM"])[0]
 
             # call the edit_comment function if everything is valid
             returned = edit_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)

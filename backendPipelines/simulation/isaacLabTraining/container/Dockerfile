@@ -28,8 +28,10 @@ RUN mkdir -p /app /mnt/efs/checkpoints /tmp/assets
 WORKDIR /app
 COPY . /app/
 
-# Make entrypoint executable
-RUN chmod +x /app/entrypoint.sh
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled
+# from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
+# and the kernel returns ENOENT ("no such file or directory") on exec.
+RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Set entrypoint
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -8,6 +8,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 | Version       | Date       | Key Changes                                                                                                                                                                                                                                                                                      |
 | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [2.6.0](#260) | 2026-05-08 | Physna Sync add-on (Phase 1): one-way synchronization of supported VAMS files and metadata to a Physna tenant; geospatial search and map view across assets and files (new `geo_MD_location` field); OpenSearch index v3 + provisioned engine upgrade to 3.5                                     |
 | [2.5.1](#251) | 2026-04-29 | Bug fixes: upload subfolder paths, file version history cleanup on delete, S3 version pagination, authorization error handling, image viewer version switching, CLI download pagination, CLI upload progress display                                                                             |
 | [2.5.0](#250) | 2026-04-21 | Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates |
 | [2.4.1](#241) | 2026-01-30 | GovCloud deployment fixes, CloudFront KMS fix, metadata schema navigation fix, file manager UX improvements                                                                                                                                                                                      |
@@ -20,6 +21,26 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 ---
 
 ## Version Details
+
+### 2.6.0
+
+**Release date:** 2026-05-08
+
+**Added:**
+
+-   **Physna Sync add-on (Phase 1)** — Optional one-way synchronization of supported VAMS files, file metadata, file attributes, and asset metadata to a Physna tenant for geometric and semantic 3D search. Enable via `app.addons.usePhysnaSync` in `infra/config/config.json`. See [Physna Integration](../developer/physna-integration.md).
+-   **Physna Viewer plugin** — New viewer plugin that embeds the Physna-hosted 3D/CAD viewer directly inside VAMS asset pages. Enabled automatically whenever the Physna Sync add-on is deployed; uses a new VAMS-authorized proxy endpoint (`GET /addon/physna/viewer`) so Physna credentials never reach the browser. See [Physna Integration](../developer/physna-integration.md#physna-viewer).
+-   **Geospatial search and map view across assets and files.** Asset and file OpenSearch documents now include a derived `geo_MD_location` field of type `geo_shape`, populated by the indexers from a `location` metadata key (GeoJSON or `{latitude, longitude, altitude}`) or from individual `latitude`/`longitude`/`altitude` metadata fields. The `POST /search` and `POST /search/simple` API endpoints, the `vamscli search` commands, and a new sidebar panel in the web UI accept point + radius, bounding box, and arbitrary GeoJSON filters with `intersects`/`within`/`contains`/`disjoint` relations. Map view (including mini-map thumbnails) now works for both assets and files, and renders polygon/multi-polygon shapes as well as points.
+-   **EventBridge orchestration bus** — A top-level custom Amazon EventBridge event bus is now created as a foundation for future event-driven VAMS features (email/subscription events, pipeline registration and success/error events, audit event logging). Bus and event-source names are deployment-unique so multiple VAMS deployments can coexist in one AWS Region, and a starter audit rule routes all VAMS deployment events to a dedicated Amazon CloudWatch log group.
+
+**Breaking changes:**
+
+-   OpenSearch index names rolled forward to `vams-assets-v3` and `vams-files-v3`. The schema-deploy custom resource creates the empty v3 indexes; the previous v2 indexes are abandoned and left in place until you delete them manually. A reindex is required to populate v3.
+-   `OPENSEARCH_VERSION` switched from `OPENSEARCH_2_7` to `OPENSEARCH_3_5`. Provisioned OpenSearch domains will perform a major-version engine upgrade. Serverless collections are unaffected.
+
+:::warning[Upgrade Path]
+Run the reindex migration at `infra/deploymentDataMigration/v2.5_to_v2.6/upgrade` after deploying the v2.6 stack to repopulate `vams-assets-v3` and `vams-files-v3` from source data. For provisioned deployments, if the OpenSearch 2.7 → 3.5 in-place engine upgrade fails during `cdk deploy`, deploy first with OpenSearch disabled in `config.json` to delete the existing domain, then re-enable and redeploy to create a fresh 3.5 domain before running the migration. See the [v2.5 to v2.6 update guide](../deployment/update-the-solution.md#v25-to-v26).
+:::
 
 ### 2.5.1
 

@@ -9,6 +9,7 @@ from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_DATABASE
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -96,7 +97,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         path = event['requestContext']['http']['path']
         
         # Check if this is the correct API route for database creation
-        if http_method == 'POST' and path.endswith('/database'):
+        if http_method == 'POST' and API_DATABASE.matches(path):
 
             # Parse request body with enhanced error handling
             body = event.get('body')

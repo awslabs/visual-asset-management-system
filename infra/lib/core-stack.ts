@@ -8,6 +8,7 @@ import * as cdk from "aws-cdk-lib";
 import * as cloudTrail from "aws-cdk-lib/aws-cloudtrail";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { ApiBuilderNestedStack } from "./nestedStacks/apiLambda/apiBuilder-nestedStack";
+import { ApiBuilder2NestedStack } from "./nestedStacks/apiLambda/apiBuilder2-nestedStack";
 import { StorageResourcesBuilderNestedStack } from "./nestedStacks/storage/storageBuilder-nestedStack";
 import { AuthBuilderNestedStack } from "./nestedStacks/auth/authBuilder-nestedStack";
 import { ApiGatewayV2AmplifyNestedStack } from "./nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack";
@@ -28,7 +29,7 @@ import { LogRetentionAspect } from "./aspects/log-retention.aspect";
 import * as s3AssetBuckets from "./helper/s3AssetBuckets";
 import { Aspects } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
-import { generateUniqueNameHash } from "./helper/security";
+import { generateUniqueNameHash, suppressCdkNagLambdaFrameworkResources } from "./helper/security";
 import { CfnStack } from "aws-cdk-lib";
 
 export interface EnvProps {
@@ -263,6 +264,20 @@ export class CoreVAMSStack extends cdk.Stack {
             );
             apiBuilderNestedStack.addDependency(storageResourcesNestedStack);
 
+            //Deploy Backend API framework - secondary stack (nested stack).
+            //Holds API domains) moved out of ApiBuilder to keep
+            //it under the CloudFormation per-stack resource limit. Add new API endpoints here.
+            const apiBuilder2NestedStack = new ApiBuilder2NestedStack(this, "ApiBuilder2", {
+                config: props.config,
+                api: apiNestedStack.apiGatewayV2,
+                storageResources: storageResourcesNestedStack.storageResources,
+                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                vpc: this.vpc,
+                subnets: this.subnetsIsolated,
+            });
+            apiBuilder2NestedStack.addDependency(storageResourcesNestedStack);
+            apiBuilder2NestedStack.addDependency(apiBuilderNestedStack);
+
             //Deploy OpenSearch Serverless (nested stack)
             const searchBuilderNestedStack = new SearchBuilderNestedStack(
                 this,
@@ -312,8 +327,16 @@ export class CoreVAMSStack extends cdk.Stack {
                 vpc: this.vpc,
                 isolatedSubnets: this.subnetsIsolated,
                 privateSubnets: this.subnetsPrivate,
+                api: apiNestedStack.apiGatewayV2,
             });
             addonBuilderNestedStack.addDependency(storageResourcesNestedStack);
+
+            // The Physna add-on frontend features (viewer today, more planned)
+            // are gated by a single feature flag so the web UI only surfaces
+            // them when the add-on is deployed.
+            if (props.config.app.addons.usePhysnaSync.enabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
+            }
 
             //Write final output configurations (pulling forward from nested stacks)
             const gatewayURLParamsOutput = new cdk.CfnOutput(this, "APIGatewayEndpointOutput", {
@@ -330,6 +353,18 @@ export class CoreVAMSStack extends cdk.Stack {
                         "Lambda function name for importing global pipelines and workflows from IaC deployments",
                 }
             );
+
+            if (searchBuilderNestedStack.reindexerFunctionName) {
+                const reindexerFunctionNameOutput = new cdk.CfnOutput(
+                    this,
+                    "OpenSearchReindexerFunctionNameOutput",
+                    {
+                        value: searchBuilderNestedStack.reindexerFunctionName,
+                        description:
+                            "Lambda function name for the OpenSearch reindexer (used by data-migration scripts)",
+                    }
+                );
+            }
 
             let useCasefunctionNumber = 1;
             for (const pipelineVamsExecuteLambdaFunction of pipelineBuilderNestedStack.pipelineVamsLambdaFunctionNames) {
@@ -497,52 +532,15 @@ export class CoreVAMSStack extends cdk.Stack {
             return;
         });
 
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Allow permissions for KMS unencryption/re-encryption for keys generated within VAMS. Policy statements additions on imported keys are No-Op statements and must be set externally to the deployment.",
-                    appliesTo: [
-                        {
-                            regex: "/^Action::kms:(.*)\\*$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "Intend to use AWSLambdaVPCAccessExecutionRole as is at this stage of this project.",
-                    appliesTo: [
-                        {
-                            regex: "/.*AWSLambdaVPCAccessExecutionRole$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
-                    appliesTo: [
-                        {
-                            regex: "/.*AWSLambdaBasicExecutionRole$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
+        // NOTE: The Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole,
+        // AWSLambdaVPCAccessExecutionRole, and wildcard KMS actions) were previously applied
+        // here at the stack level with applyToChildren=true. That stamped suppression metadata
+        // onto every resource in every nested stack and bloated the synthesized templates.
+        // Authored Lambda functions are now suppressed per-function via suppressCdkNagLambda()
+        // in the lambda builders. The call below covers only the IAM roles/policies generated by
+        // CDK framework constructs (custom-resource providers, bucket deployments, etc.) and VAMS
+        // custom-resource roles, which the per-function helper cannot reach — keeping the
+        // suppression metadata scoped to the few resources that actually need it.
+        suppressCdkNagLambdaFrameworkResources(this);
     }
 }
