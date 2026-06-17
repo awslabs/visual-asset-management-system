@@ -28,7 +28,7 @@
         "aws-amplify": "^6.0.0",
         "axios": "^1.6.0",
         "buffer": "^6.0.3",
-        "dompurify": "^3.2.4",
+        "dompurify": "^3.4.9",
         "fast-xml-parser": "^4.2.5",
         "fcs": "^0.1.2",
         "file-system-access": "1.0.4",
