@@ -3,7 +3,7 @@
 
 import json
 from customLogging.logger import safeLogger
-from common.validators import validate, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern
+from common.validators import validate, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern, bucket_existing_key_pattern
 from typing import Dict, List, Optional, Literal, Union, Any
 from typing_extensions import Annotated
 from pydantic import Json, EmailStr, PositiveInt, Field
@@ -56,20 +56,28 @@ class CreateAssetRequestModel(BaseModel, extra='ignore'):
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     isDistributable: bool
     tags: Optional[list[str]] = []
-    bucketExistingKey: Optional[str] = None  # Optional existing key in the database default S3 bucket
+    # Optional existing key in the database default S3 bucket. 
+    bucketExistingKey: Optional[str] = Field(None, min_length=1, max_length=1024, strip_whitespace=True, regex=bucket_existing_key_pattern)
 
     @root_validator
     def validate_fields(cls, values):
         #Validate fields that require more scrutiny past the basic data type (str, bool, etc.) or custom validation logic
         logger.info("Validating custom parameters")
-        
+
         # Validate assetId doesn't contain forward slashes
         asset_id = values.get('assetId', None)
         if asset_id and '/' in asset_id:
             message = "Asset identifier cannot contain forward slashes"
             logger.error(message)
             raise ValueError(message)
-        
+
+        # Reject path traversal sequences in bucketExistingKey (defense-in-depth)
+        bucket_existing_key = values.get('bucketExistingKey', None)
+        if bucket_existing_key and '..' in bucket_existing_key:
+            message = "bucketExistingKey cannot contain path traversal sequences"
+            logger.error(message)
+            raise ValueError(message)
+
         # Validate tags
         (valid, message) = validate({
             'tags': {

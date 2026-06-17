@@ -1,6 +1,6 @@
 # Web Interface Overview
 
-This page provides a comprehensive tour of the VAMS web interface, covering each major page and its capabilities. For first-time setup, see [Getting Started](getting-started.md).
+This page provides a comprehensive tour of the VAMS web interface, covering each major page and its capabilities. For first-time setup, see [Getting Started](getting-started.mdx).
 
 ---
 

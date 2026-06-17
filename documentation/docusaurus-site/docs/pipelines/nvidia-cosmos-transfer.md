@@ -431,7 +431,7 @@ For commercial use, review the NVIDIA Open Model License terms to ensure complia
 
 ## Related pages
 
--   [NVIDIA Cosmos Predict](nvidia-cosmos.md)
+-   [NVIDIA Cosmos Predict](nvidia-cosmos-predict.md)
 -   [NVIDIA Cosmos Reason](nvidia-cosmos-reason.md)
 -   [Pipeline overview](overview.md)
 -   [Custom pipelines](custom-pipelines.md)

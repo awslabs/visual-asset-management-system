@@ -74,6 +74,14 @@ A constraint is a policy rule that defines what a role can do. Each constraint s
 
 Constraints use `criteriaAnd` (all conditions must match) and `criteriaOr` (at least one condition must match) to build complex matching rules.
 
+:::warning[Constraint management is an administrative operation]
+The ability to create, modify, or delete constraints is itself a privileged capability. Constraint management routes (`/auth/constraints`, `/auth/constraints/\{constraintId\}`, and `/auth/constraintsTemplateImport`) are gated at Tier 1 by the `api` object type and, in the default deployment, are granted only to the `admin` role.
+
+A role that can manage constraints can grant itself or others access to any resource in VAMS — for example, by creating an `allow` constraint with a broad `databaseId contains .*` rule. This is equivalent to granting AWS Identity and Access Management (IAM) policy-editing permissions: the holder effectively controls all authorization decisions. Constraints are configuration objects and do not have their own per-object (Tier 2) restrictions.
+
+Only grant access to the constraint management routes to fully trusted administrators. Do not delegate `api` access to `/auth/constraints` (or the constraint web route `/auth/constraints`) to roles intended for general or untrusted users. Treat any change to who can manage constraints as a privileged administrative change and review it accordingly.
+:::
+
 ## Casbin policy model
 
 VAMS stores its authorization policy in Amazon DynamoDB and uses the Casbin engine to make enforcement decisions at runtime. The policy model defines four components:

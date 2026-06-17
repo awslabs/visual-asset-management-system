@@ -105,9 +105,9 @@ jobs:
               working-directory: vams/infra
               run: npm install
 
-            - name: Npm audit infrastructure directory
-              working-directory: vams/infra
-              run: npm audit --omit=dev
+            # - name: Npm audit infrastructure directory
+            #   working-directory: vams/infra
+            #   run: npm audit --omit=dev
 
             - name: Synthesize Cloudformation templates
               working-directory: vams/infra

@@ -116,7 +116,7 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 | [Core Concepts](./documentation/docusaurus-site/docs/concepts/overview.md)               | Databases, Assets, Files, Pipelines, Metadata, Permissions |
 | [Architecture](./documentation/docusaurus-site/docs/architecture/overview.md)            | Architecture diagrams, AWS resources, security, networking |
 | [Deployment Guide](./documentation/docusaurus-site/docs/deployment/prerequisites.md)     | Prerequisites, configuration, deploy, update, uninstall    |
-| [User Guide](./documentation/docusaurus-site/docs/user-guide/getting-started.md)         | Web interface, asset management, search, metadata          |
+| [User Guide](./documentation/docusaurus-site/docs/user-guide/getting-started.mdx)        | Web interface, asset management, search, metadata          |
 | [CLI Reference](./documentation/docusaurus-site/docs/cli/getting-started.md)             | Installation, command reference, automation                |
 | [Pipelines](./documentation/docusaurus-site/docs/pipelines/overview.md)                  | Built-in pipelines and custom pipeline development         |
 | [Developer Guide](./documentation/docusaurus-site/docs/developer/setup.md)               | Backend, frontend, CDK, and viewer plugin development      |
