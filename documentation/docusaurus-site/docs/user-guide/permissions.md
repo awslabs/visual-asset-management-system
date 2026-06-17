@@ -97,6 +97,10 @@ The authorization engine evaluates all constraints for a user. If any constraint
 
 ![Constraint editor showing object type, criteria, and group permissions](/img/access_constraints_20260323_v2.5.png)
 
+:::warning[Limit who can manage constraints]
+The ability to create and edit constraints lets a role define the authorization policy itself, so it can grant access to any resource. Only assign constraint management (the Constraints page and its `api` route `/auth/constraints`) to fully trusted administrators. By default, only the **Admin** role can manage constraints. Avoid adding this access to roles meant for general users. See [Permissions Model](../concepts/permissions-model.md#constraints) for details.
+:::
+
 ## Assigning roles to users
 
 1. Navigate to **User Roles** from the left navigation menu.

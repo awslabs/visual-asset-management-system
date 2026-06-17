@@ -15,6 +15,7 @@ file_type_pattern = '^[\\.]([a-zA-Z0-9]){1,7}$'
 filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
 
 relative_file_path_pattern = r'^\/.*$'
+bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
 asset_path_pattern = r'^.+\/.+$'
 asset_folder_path_pattern = r'^.+\/.+\/$'
 asset_auxiliarypreview_path_pattern = r'^.+\/preview\/.+$'

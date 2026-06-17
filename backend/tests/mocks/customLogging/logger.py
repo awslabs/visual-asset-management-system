@@ -52,9 +52,28 @@ class safeLogger:
     def exception(self, message):
         """
         Log an exception message.
-        
+
         Args:
             message: The message to log
         """
         # In the mock implementation, we don't actually log anything
         pass
+
+    def debug(self, message):
+        """
+        Log a debug message.
+
+        Args:
+            message: The message to log
+        """
+        # In the mock implementation, we don't actually log anything
+        pass
+
+
+def mask_sensitive_data(data):
+    """Mock of mask_sensitive_data: returns the data unchanged.
+
+    The real implementation redacts sensitive keys; tests do not depend on
+    redaction, so the mock is a pass-through.
+    """
+    return data

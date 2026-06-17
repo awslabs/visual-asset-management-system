@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.5.2] (2026-06-19)
+
+### Bug Fixes
+
+-   Fixed a Casbin authz implementation bug that could allow injecting additional policies through field values that would be regex evaluated. Low impact as Casbin policies are only able to be set by admins by default. Added additional backend tests for this case.
+-   Fixed a createAsset API bug that allowed specifying an optional S3 bucket key location without proper checks that it belonged to the provided database IDs default S3 bucket and prefix path, that an asset didn't already exist with that S3 key path, and had weak validation checks on the path provided.
+-   Fixed latent defect of backend test framework not being updated with changes from v2.5, causing some test failures.
+
+### Chores
+
+-   Added default GitHub issue and PR request templates
+-   Updated documentation for authorization to account for bug fixes and clarifications
+-   Update several package dependency versions to fix new npm audit findings
+
 ## [2.5.1] (2026-04-23)
 
 ### Bug Fixes

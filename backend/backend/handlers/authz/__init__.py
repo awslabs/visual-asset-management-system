@@ -384,6 +384,26 @@ class CasbinEnforcerService:
 
         return items
 
+    @staticmethod
+    def _escape_rule_value(value):
+        """Escape a constraint value before it is interpolated into a Casbin obj_rule
+        expression that is evaluated via eval() in the matcher.
+
+        Every operator wraps the value inside a single-quoted string literal (either a
+        regex pattern argument to regexMatch(...) or the left side of an `in` test). The
+        value therefore must never be able to terminate that string literal and inject
+        additional expression syntax. Escaping the backslash first (so we do not
+        double-escape the escapes we add) and then the single quote keeps the value a
+        single inert string literal.
+
+        Note: this is defense-in-depth on top of the REGEX validator applied at constraint
+        write time (see models/roleConstraints.py). The regex operators legitimately treat
+        the value as a regular expression (e.g. ".*" is allowed), but it must remain
+        contained within the quoted regexMatch argument and cannot break out into the
+        surrounding expression.
+        """
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
     def _generate_criteria_object_rules(self, policyCriteria):
         obj_rule = []
         for criterion in policyCriteria:
@@ -391,34 +411,38 @@ class CasbinEnforcerService:
             if criterion['field'] not in PERMISSION_CONSTRAINT_FIELDS:
                 logger.info(f"Skipping deprecated/unknown constraint field: {criterion['field']}")
                 continue
-            
+
+            # Escape the value so it cannot break out of its string literal and inject
+            # arbitrary expression syntax into the eval()'d matcher (authz expression injection).
+            value = self._escape_rule_value(criterion['value'])
+
             if criterion["operator"] == "equals":
                 obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '^{criterion['value']}$')"""
+                    f"""regexMatch(r.obj.{criterion['field']}, '^{value}$')"""
                 )
             elif criterion["operator"] == "contains":
                 obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '.*{criterion['value']}.*')"""
+                    f"""regexMatch(r.obj.{criterion['field']}, '.*{value}.*')"""
                 )
             elif criterion["operator"] == "does_not_contain":
                 obj_rule.append(
-                    f"""!(regexMatch(r.obj.{criterion['field']}, '.*{criterion['value']}.*'))"""
+                    f"""!(regexMatch(r.obj.{criterion['field']}, '.*{value}.*'))"""
                 )
             elif criterion["operator"] == "starts_with":
                 obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '^{criterion['value']}.*')"""
+                    f"""regexMatch(r.obj.{criterion['field']}, '^{value}.*')"""
                 )
             elif criterion["operator"] == "ends_with":
                 obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '.*{criterion['value']}$')"""
+                    f"""regexMatch(r.obj.{criterion['field']}, '.*{value}$')"""
                 )
             elif criterion["operator"] == "is_one_of":
                 obj_rule.append(
-                    f"""'{criterion['value']}' in r.obj.{criterion['field']}"""
+                    f"""'{value}' in r.obj.{criterion['field']}"""
                 )
             elif criterion["operator"] == "is_not_one_of":
                 obj_rule.append(
-                    f"""!'{criterion['value']}' in r.obj.{criterion['field']}"""
+                    f"""!'{value}' in r.obj.{criterion['field']}"""
                 )
         return obj_rule
 

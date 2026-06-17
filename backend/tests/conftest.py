@@ -15,6 +15,15 @@ from unittest.mock import MagicMock, patch
 
 from moto import mock_aws
 
+# Set AWS region and core table env vars BEFORE any handler module is imported below.
+# Several handlers create boto3 clients at module load time; without a region this
+# fails collection with botocore.exceptions.NoRegionError. The fuller env var set is
+# (re)applied further down, but it must exist before the handler imports at the bottom
+# of this file run.
+os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+os.environ.setdefault("REGION", "us-east-1")
+
 # Mock the customLogging.logger.safeLogger function
 class MockSafeLogger:
     def __init__(self, service=None, service_name=None):
@@ -59,9 +68,38 @@ sys.modules['common.constants'].STANDARD_JSON_RESPONSE = {
     },
     "body": ""
 }
-sys.modules['customLogging'] = MagicMock()
-sys.modules['customLogging.logger'] = MagicMock()
-sys.modules['customLogging.logger'].safeLogger = mock_safe_logger
+# Load the real mock customLogging package (tests/mocks/customLogging) instead of a bare
+# MagicMock. A bare MagicMock has no real submodules, so any handler that does
+# `from customLogging.auditLogging import ...` at import time fails collection with
+# "No module named 'customLogging.auditLogging'; 'customLogging' is not a package".
+# The mock package provides logger.safeLogger, logger.mask_sensitive_data, and
+# auditLogging no-ops. Loaded by file path so it is independent of sys.path ordering.
+import importlib.util as _importlib_util
+
+
+def _load_mock_module(_module_name, _file_path, _is_package=False):
+    _search = [os.path.dirname(_file_path)] if _is_package else None
+    _spec = _importlib_util.spec_from_file_location(
+        _module_name, _file_path, submodule_search_locations=_search
+    )
+    _module = _importlib_util.module_from_spec(_spec)
+    sys.modules[_module_name] = _module
+    _spec.loader.exec_module(_module)
+    return _module
+
+
+_mocks_customlogging = os.path.join(os.path.dirname(__file__), 'mocks', 'customLogging')
+if os.path.isdir(_mocks_customlogging):
+    _load_mock_module('customLogging', os.path.join(_mocks_customlogging, '__init__.py'), _is_package=True)
+    _load_mock_module('customLogging.logger', os.path.join(_mocks_customlogging, 'logger.py'))
+    _load_mock_module('customLogging.auditLogging', os.path.join(_mocks_customlogging, 'auditLogging.py'))
+    # Keep the previously-used override so existing tests relying on this exact callable still work.
+    sys.modules['customLogging.logger'].safeLogger = mock_safe_logger
+else:
+    # Fallback to the previous behavior if the mock package is missing.
+    sys.modules['customLogging'] = MagicMock()
+    sys.modules['customLogging.logger'] = MagicMock()
+    sys.modules['customLogging.logger'].safeLogger = mock_safe_logger
 sys.modules['customConfigCommon'] = MagicMock()
 sys.modules['customConfigCommon.customAuthClaimsCheck'] = MagicMock()
 sys.modules['customConfigCommon.customAuthClaimsCheck'].customAuthClaimsCheckOverride = lambda claims_and_roles, request: claims_and_roles
@@ -132,6 +170,16 @@ os.environ["AUTH_TABLE_NAME"] = "authTable"
 os.environ['CONSTRAINTS_TABLE_NAME'] = 'constraintTable'
 os.environ["USER_ROLES_TABLE_NAME"] = "userRolesTable"
 os.environ["ROLES_TABLE_NAME"] = "rolesTable"
+
+# Tag / tag type tables (tags + tagTypes handlers read these at module load)
+os.environ["TAGS_STORAGE_TABLE_NAME"] = "tagsTable"
+os.environ["TAG_TYPES_STORAGE_TABLE_NAME"] = "tagTypesTable"
+
+# Metadata service tables (metadataService reads these at module load)
+os.environ["DATABASE_METADATA_STORAGE_TABLE_NAME"] = "databaseMetadataTable"
+os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"] = "assetFileMetadataTable"
+os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"] = "fileAttributeTable"
+os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"] = "metadataSchemaTableV2"
 
 
 @pytest.fixture(scope="function")
