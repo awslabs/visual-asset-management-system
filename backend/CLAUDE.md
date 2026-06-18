@@ -43,6 +43,7 @@ backend/
 │   │   ├── s3PathPatterns.py            # Reserved S3 prefix folders, .previewFile. pattern,
 │   │   │                                #   allowed preview extensions (mirrored in
 │   │   │                                #   web/src/common/constants/fileFormats.ts)
+│   │   ├── executionRecords.py          # Pure helpers for execution storage records (keys, prefixes, builders)
 │   │   ├── dynamoDbMetadataKeys.py      # Special DynamoDB metadata keys (REINDEX_METADATA_RECORD)
 │   │   │                                #   and internal field prefixes (VAMS_, _)
 │   │   ├── apiRoutes.py                 # MASTER list of all API endpoint routes (ApiRoute constants,
@@ -91,6 +92,7 @@ backend/
 │       │                                #   USER_API_KEY_MAX_EXPIRATION_DAYS = 365)
 │       ├── pipelines.py                 # Pipeline models (PipelineExecutionType enum, SQS/EventBridge fields)
 │       ├── workflows.py                 # Workflow models (Step Functions ASL generation)
+│       ├── executions.py                # Workflow/pipeline execution storage models (Stage 1 data model)
 │       ├── common.py                    # Response helpers, error functions, APIGatewayProxyResponseV2
 │       └── [domain].py                  # Domain-specific models
 ├── lambdaLayers/                        # Lambda layer definitions

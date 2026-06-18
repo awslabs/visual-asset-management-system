@@ -77,7 +77,8 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { authResources } from "../auth/authBuilder-nestedStack";
 import { DynamoDbMetadataSchemaDefaultsConstruct } from "./constructs/dynamodb-metadataschema-defaults-construct";
 import * as iam from "aws-cdk-lib/aws-iam";
-import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
+import { kmsKeyPolicyStatementGenerator, generateUniqueNameHash } from "../../helper/security";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { Service } from "../../../lib/helper/service-helper";
 
 interface apiGatewayLambdaConfiguration {
@@ -959,10 +960,30 @@ export class ApiBuilderNestedStack extends NestedStack {
             api: api,
         });
 
+        // Single shared CloudWatch log group for all workflow Step Functions executions.
+        // Every workflow state machine logs here (with includeExecutionData enabled), so
+        // per-execution logs are isolated by the execution ARN/name within this one group
+        // -- there is no per-workflow log group. Created once and shared by the list,
+        // process-output, create, and execute workflow lambdas (rather than baked into
+        // each workflow's ASL definition).
+        const workflowsLogGroup = new logs.LogGroup(this, "vamsPipelineWorkflows", {
+            logGroupName:
+                "/aws/vendedlogs/vamsPipelineWorkflows" + //important to have 'vams' in the name as resource access looks for this
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "vamsPipelineWorkflows",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
         const listWorkflowExecutionsFunction = buildListWorkflowExecutionsFunction(
             this,
             lambdaCommonBaseLayer,
             storageResources,
+            workflowsLogGroup,
             config,
             vpc,
             subnets
@@ -985,6 +1006,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             storageResources,
             uploadFileFunction,
             metadataService,
+            workflowsLogGroup,
             config,
             vpc,
             subnets
@@ -995,6 +1017,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             lambdaCommonBaseLayer,
             storageResources,
             processWorkflowExecutionOutputFunction,
+            workflowsLogGroup,
             config.env.coreStackName,
             config,
             vpc,
@@ -1011,6 +1034,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             lambdaCommonBaseLayer,
             storageResources,
             metadataService,
+            workflowsLogGroup,
             config,
             vpc,
             subnets

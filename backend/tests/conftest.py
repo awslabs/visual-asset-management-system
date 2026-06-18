@@ -52,8 +52,11 @@ sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test
 sys.modules['handlers.authz'] = MagicMock()
 sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()
-sys.modules['common.validators'] = MagicMock()
-sys.modules['common.validators'].validate = lambda params: (True, "")
+# common.validators is registered as the REAL module further below (after
+# common.s3PathPatterns, which it imports). A bare MagicMock here would resolve
+# its pattern constants (e.g. bucket_existing_key_pattern) to MagicMocks, which
+# pydantic v1 then passes to re.compile(regex=...) at model-class-definition time,
+# crashing collection of any test that imports models.assetsV3.
 sys.modules['common.dynamodb'] = MagicMock()
 sys.modules['common.dynamodb'].get_asset_object_from_id = lambda asset_id: {"assetId": asset_id}
 sys.modules['common.constants'] = MagicMock()
@@ -88,6 +91,23 @@ _s3pp_spec = _s3mk_importlib_util.spec_from_file_location(
 _s3pp_module = _s3mk_importlib_util.module_from_spec(_s3pp_spec)
 _s3pp_spec.loader.exec_module(_s3pp_module)
 sys.modules['common.s3PathPatterns'] = _s3pp_module
+# validators is pure (re + json + common.s3PathPatterns, registered above; no AWS
+# deps), so load the REAL module by path. Its regex pattern CONSTANTS must be real
+# strings: models (e.g. assetsV3) pass them to pydantic v1 Field(regex=...), which
+# re.compile()s them at class-definition time -- a MagicMock there crashes collection.
+# The validate() dispatcher is still overridden with the permissive test stub so
+# existing tests that rely on validation always passing are unaffected.
+_validators_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.validators',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'validators.py')
+)
+_validators_module = _s3mk_importlib_util.module_from_spec(_validators_spec)
+_validators_spec.loader.exec_module(_validators_module)
+_validators_module.validate = lambda params: (True, "")
+sys.modules['common.validators'] = _validators_module
+# `common` is a MagicMock package, so bind the real submodule as an attribute too so
+# `from common import validators` resolves the real module rather than a mock attribute.
+sys.modules['common'].validators = _validators_module
 # dynamoDbMetadataKeys is pure constants (no AWS deps), so load the REAL module
 # by path rather than a MagicMock (same approach as s3MetadataKeys above).
 _ddbmk_spec = _s3mk_importlib_util.spec_from_file_location(
@@ -106,6 +126,33 @@ _apir_spec = _s3mk_importlib_util.spec_from_file_location(
 _apir_module = _s3mk_importlib_util.module_from_spec(_apir_spec)
 _apir_spec.loader.exec_module(_apir_module)
 sys.modules['common.apiRoutes'] = _apir_module
+# executionRecords is pure helpers (no AWS deps), so load the REAL module by path
+# rather than a MagicMock (same approach as s3MetadataKeys above).
+_execrec_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.executionRecords',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'executionRecords.py')
+)
+_execrec_module = _s3mk_importlib_util.module_from_spec(_execrec_spec)
+_execrec_spec.loader.exec_module(_execrec_module)
+sys.modules['common.executionRecords'] = _execrec_module
+# `common` is a MagicMock package, so a bare `from common import executionRecords`
+# would resolve the attribute on the MagicMock instead of the submodule. Bind the
+# real module as an attribute so handlers importing it that way get the real code.
+sys.modules['common'].executionRecords = _execrec_module
+# stepfunctions_builder is a pure ASL builder (imports only json + typing, no AWS
+# side effects at import), so load the REAL module by path rather than a MagicMock.
+# This makes the per-test stubs in the workflow tests harmless no-ops and removes a
+# test-collection-order dependency.
+_sfb_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.stepfunctions_builder',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'stepfunctions_builder.py')
+)
+_sfb_module = _s3mk_importlib_util.module_from_spec(_sfb_spec)
+_sfb_spec.loader.exec_module(_sfb_module)
+sys.modules['common.stepfunctions_builder'] = _sfb_module
+# `common` is a MagicMock package, so bind the real submodule as an attribute too so
+# `from common import stepfunctions_builder` / `from common.stepfunctions_builder import X` resolve the real code.
+sys.modules['common'].stepfunctions_builder = _sfb_module
 # s3 is a simple validation module with no AWS side effects at import, but it is not
 # in the root conftest mock layer. Load the mock s3 module by path so tests that import
 # handlers which depend on common.s3 can collect cleanly.

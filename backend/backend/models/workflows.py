@@ -125,17 +125,91 @@ class GetWorkflowsResponseModel(BaseModel, extra='ignore'):
 
 ######################## Execute Workflow API Models ##########################
 class ExecuteWorkflowRequestModel(BaseModel, extra='ignore'):
-    """Request model for executing a workflow"""
-    workflowDatabaseId: str
-    fileKey: str
+    """Request body model for executing a workflow.
+
+    The execute endpoint also takes databaseId / assetId / workflowId as path
+    parameters (validated separately in the handler). This body model carries the
+    target workflow's database and an optional specific file key to run against.
+    `triggerSource` is an internal marker set by the auto-trigger (SQS) caller; it is
+    accepted but not a client-facing field.
+    """
+    # Declared Optional so a missing/empty value flows to the validate() dispatcher
+    # below, which emits the exact "workflowDatabaseId is a required field." message
+    # the prior handler returned (rather than Pydantic's "field required").
+    workflowDatabaseId: Optional[str] = None
+    fileKey: Optional[str] = None
+    triggerSource: Optional[str] = None
+
+    @root_validator
+    def validate_fields(cls, values):
+        # Mirror the original handler validation exactly so error messages are
+        # unchanged: workflowDatabaseId is a required ID (GLOBAL allowed); fileKey,
+        # when provided, is an optional ASSET_PATH (file, not folder).
+        (valid, message) = validate({
+            'workflowDatabaseId': {
+                'value': values.get('workflowDatabaseId', '') or '',
+                'validator': 'ID',
+                'allowGlobalKeyword': True
+            },
+            'assetKey': {
+                'value': values.get('fileKey', '') or '',
+                'validator': 'ASSET_PATH',
+                'isFolder': False,
+                'optional': True
+            },
+        })
+        if not valid:
+            raise ValueError(message)
+        return values
+
+
+class ExecuteWorkflowResponseModel(BaseModel, extra='ignore'):
+    """Response model for a launched workflow execution.
+
+    The execute endpoint returns the new execution id in the `message` field; this
+    model documents that body shape (`{"message": "<executionId>"}`)."""
+    message: str
+
+
+######################## List Executions API Models ##########################
+class ListExecutionsRequestModel(BaseModel, extra='ignore'):
+    """Request body model for listing an asset's workflow executions.
+
+    databaseId / assetId / (optional) workflowId arrive as path parameters and are
+    validated in the handler. The body optionally carries the workflow's database to
+    filter by a specific workflow.
+    """
+    workflowDatabaseId: Optional[str] = None
+
+    @root_validator
+    def validate_fields(cls, values):
+        (valid, message) = validate({
+            'workflowDatabaseId': {
+                'value': values.get('workflowDatabaseId', '') or '',
+                'validator': 'ID',
+                'allowGlobalKeyword': True,
+                'optional': True
+            }
+        })
+        if not valid:
+            raise ValueError(message)
+        return values
+
 
 class WorkflowExecutionResponseModel(BaseModel, extra='ignore'):
-    """Response model for a workflow execution"""
-    executionId: Optional[str] = None
+    """Response model for a single workflow execution item in the executions list.
+
+    Mirrors the exact wire fields the frontend (`WorkflowTab.tsx`,
+    `WorkflowExecutionListDefinition.tsx`) and CLI (`format_execution_output`) read.
+    """
+    workflowDatabaseId: Optional[str] = None
     workflowId: Optional[str] = None
-    databaseId: Optional[str] = None
-    assetId: Optional[str] = None
-    fileKey: Optional[str] = None
+    executionId: Optional[str] = None
     executionStatus: Optional[str] = None
     startDate: Optional[str] = None
     stopDate: Optional[str] = None
+    inputAssetFileKey: Optional[str] = None
+    databaseId: Optional[str] = None
+    assetId: Optional[str] = None
+    executionError: Optional[str] = None
+    executionLog: Optional[str] = None

@@ -25,14 +25,12 @@ import {
     suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
     kmsKeyPolicyStatementGenerator,
-    generateUniqueNameHash,
 } from "../helper/security";
 import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
 } from "../helper/security";
 import * as logs from "aws-cdk-lib/aws-logs";
-import * as cdk from "aws-cdk-lib";
 
 export function buildWorkflowService(
     scope: Construct,
@@ -88,6 +86,7 @@ export function buildListWorkflowExecutionsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    workflowsLogGroup: logs.LogGroup,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -112,10 +111,19 @@ export function buildListWorkflowExecutionsFunction(
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
                 storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
+            WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionInputsStorageTable.tableName,
+            // Shared workflow SFN log group; used to pull error logs for executions that
+            // ended in a non-success terminal status (e.g. a direct SFN abort).
+            WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
         },
     });
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun); //Needs write permission to update execution status after a SFN fetch
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun); // write for lazy status reconciliation
+    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -124,6 +132,14 @@ export function buildListWorkflowExecutionsFunction(
                 IAMArn("*" + config.name + "*").statemachine,
                 IAMArn("*" + config.name + "*").statemachineExecution,
             ],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
+            // Scoped to VAMS-named log groups (the workflow SFN log group contains 'vams').
+            resources: [IAMArn("*" + config.name + "*").loggroup],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -139,23 +155,13 @@ export function buildCreateWorkflowFunction(
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
     processWorkflowExecutionOutputFunction: lambda.Function,
+    workflowsLogGroup: logs.LogGroup,
     stackName: string,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const logGroupWorkflows = new logs.LogGroup(scope, "vamsPipelineWorkflows", {
-        logGroupName:
-            "/aws/vendedlogs/vamsPipelineWorkflows" + //important to have 'vams' in the name as resource access looks for this
-            generateUniqueNameHash(
-                config.env.coreStackName,
-                config.env.account,
-                "vamsPipelineWorkflows",
-                10
-            ),
-        retention: logs.RetentionDays.TEN_YEARS,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
+    const logGroupWorkflows = workflowsLogGroup;
 
     const role = buildWorkflowRole(
         scope,
@@ -220,6 +226,7 @@ export function buildExecuteWorkflowFunction(
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
     metadataServiceFunction: lambda.IFunction,
+    workflowsLogGroup: logs.LogGroup,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -250,6 +257,21 @@ export function buildExecuteWorkflowFunction(
                 storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
+            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
+            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
+            PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionInputFilesStorageTable.tableName,
+            PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.tableName,
+            PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.tableName,
+            WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionInputsStorageTable.tableName,
+            WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionConfigurationStorageTable.tableName,
+            WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
         },
     });
 
@@ -258,6 +280,13 @@ export function buildExecuteWorkflowFunction(
     storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionInputFilesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     metadataServiceFunction.grantInvoke(fun);
 
@@ -348,6 +377,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
     storageResources: storageResources,
     fileUploadLambdaFunction: lambda.Function,
     metadataServiceFunction: lambda.IFunction,
+    workflowsLogGroup: logs.LogGroup,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -378,6 +408,19 @@ export function buildProcessWorkflowExecutionOutputFunction(
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
+            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
+            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
+            PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.tableName,
+            PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.tableName,
+            PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.tableName,
+            PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionLogsStorageTable.tableName,
+            WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
         },
     });
 
@@ -389,6 +432,20 @@ export function buildProcessWorkflowExecutionOutputFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
+            // Scoped to VAMS-named log groups (state machine + lambda logs contain 'vams').
+            resources: [IAMArn("*" + config.name + "*").loggroup],
+        })
+    );
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

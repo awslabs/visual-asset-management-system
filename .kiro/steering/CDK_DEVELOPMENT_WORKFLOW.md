@@ -127,6 +127,17 @@ interface storageResources {
         userRolesStorageTable;
         userStorageTable;
         workflowExecutionsStorageTable;
+        workflowExecutionsStorageTableV2; // V2: PK executionId, SK workflowDatabaseId:workflowId; GSI WorkflowExecutionsByWorkflowGSI
+        pipelineExecutionsStorageTable; // PK pipelineExecutionId, SK workflowExecutionId; GSIs PipelineExecByWorkflowExecGSI / PipelineExecChainGSI / PipelineExecEndStateGSI
+        pipelineExecutionInputFilesStorageTable; // PK pipelineExecutionId; GSI InputFilesByAssetGSI
+        pipelineExecutionInputMetadataStorageTable;
+        pipelineExecutionInputConfigurationStorageTable;
+        pipelineExecutionOutputFilesStorageTable;
+        pipelineExecutionOutputMetadataStorageTable;
+        pipelineExecutionOutputResultsStorageTable;
+        pipelineExecutionLogsStorageTable;
+        workflowExecutionInputsStorageTable; // PK workflowExecutionId; GSI WorkflowExecInputsByAssetGSI (asset-scoped execution listing)
+        workflowExecutionConfigurationStorageTable;
         apiKeyStorageTable: dynamodb.Table; // GSIs: apiKeyHashIndex (PK: apiKeyHash), userIdIndex (PK: userId)
         workflowStorageTable: dynamodb.Table;
         // assetVersionsStorageTable has GSI: databaseIdAssetIdIndex (PK: databaseId:assetId, SK: assetVersionId)
@@ -148,6 +159,24 @@ interface authResources {
     };
 }
 ```
+
+### **Workflow Execution Storage (V2 data model)**
+
+Workflow executions use a workflow-keyed data model spread across 11 DynamoDB tables. The main execution row is keyed by a VAMS GUID (`executionId`), and asset/database linkage lives in the input tables rather than on the main row:
+
+-   `workflowExecutionsStorageTableV2` — PK `executionId`, SK `workflowDatabaseId:workflowId`; GSI `WorkflowExecutionsByWorkflowGSI` (PK `workflowDatabaseId:workflowId`, SK `executionStartDate`).
+-   `pipelineExecutionsStorageTable` — PK `pipelineExecutionId`, SK `workflowExecutionId`; GSIs `PipelineExecByWorkflowExecGSI`, `PipelineExecChainGSI`, `PipelineExecEndStateGSI`.
+-   `pipelineExecutionInputFilesStorageTable` — PK `pipelineExecutionId`, SK `databaseId:assetId:inputAssetFileKey`; GSI `InputFilesByAssetGSI`.
+-   `pipelineExecutionInputMetadataStorageTable` — PK `pipelineExecutionId`, SK `databaseId:assetId:filePath`.
+-   `pipelineExecutionInputConfigurationStorageTable` — PK `pipelineExecutionId`, SK `recordType`.
+-   `pipelineExecutionOutputFilesStorageTable` — PK `pipelineExecutionId`, SK `fileType:relativeFilePath`.
+-   `pipelineExecutionOutputMetadataStorageTable` — PK `pipelineExecutionId`, SK `targetFilePath:metadataKey`.
+-   `pipelineExecutionOutputResultsStorageTable` — PK `pipelineExecutionId`, SK `relativeFilePath`.
+-   `pipelineExecutionLogsStorageTable` — PK `pipelineExecutionId`, SK `logType`.
+-   `workflowExecutionInputsStorageTable` — PK `workflowExecutionId`, SK `databaseId:assetId:inputAssetFileKey`; GSI `WorkflowExecInputsByAssetGSI` (PK `databaseId:assetId`, SK `executionStartDate`) backs the asset-scoped execution listing.
+-   `workflowExecutionConfigurationStorageTable` — PK `workflowExecutionId`, SK `recordType`.
+
+The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration read source.
 
 ## 📋 **Development Workflow Checklist**
 

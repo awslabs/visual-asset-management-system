@@ -22,6 +22,7 @@ from customLogging.logger import safeLogger
 from models.common import success, validation_error, authorization_error, internal_error
 from common.s3 import validateS3AssetExtensionsAndContentType
 from models.assetsV3 import AssetUploadTableModel
+from common import executionRecords as er
 
 asset_Database = None
 db_Database = None
@@ -41,6 +42,16 @@ try:
     asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
     db_Database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
+    workflow_execution_database_v2 = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME"]
+    pipeline_executions_table = os.environ["PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME"]
+    pipeline_execution_output_files_table = os.environ["PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME"]
+    pipeline_execution_output_metadata_table = os.environ["PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME"]
+    pipeline_execution_output_results_table = os.environ["PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME"]
+    pipeline_execution_logs_table = os.environ["PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME"]
+    # Shared workflow SFN log group (same group for every workflow). Read from env, not
+    # the ASL event, so it applies to executions of workflows that were not redeployed
+    # with a newer ASL. Optional: empty string disables CloudWatch log retrieval.
+    workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
 
 except Exception as e:
     logger.exception("Failed loading environment variables")
@@ -49,6 +60,7 @@ except Exception as e:
 s3c = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 client = boto3.client('lambda')
+logs_client = boto3.client('logs')
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
 
@@ -431,6 +443,143 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
         logger.exception(f"Error processing {metadata_type} file {s3_key}: {e}")
 
 
+def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name):
+    """Build OutputFiles descriptors from an S3 listing relative to `prefix`."""
+    descriptors = []
+    for obj in objects_found.get('Contents', []):
+        key = obj['Key']
+        if key.endswith('/'):
+            continue
+        relative = key[len(prefix):] if key.startswith(prefix) else key
+        relative = relative.lstrip('/')
+        descriptors.append({
+            "fileType": file_type,
+            "relativeFilePath": relative,
+            "s3Key": key,
+            "fileSize": obj.get('Size', 0),
+            "contentType": "",
+            "s3VersionId": "",
+        })
+    return descriptors
+
+
+def _log_group_name_from_arn(log_group_arn):
+    """Extract the CloudWatch log group NAME from its ARN.
+    ARN shape: arn:partition:logs:region:acct:log-group:NAME(:*). Returns '' if unparseable.
+    (Log group names cannot contain ':' so trimming a trailing ':*' is safe.)"""
+    if not log_group_arn:
+        return ""
+    parts = log_group_arn.split(":log-group:")
+    if len(parts) < 2:
+        return ""
+    name = parts[1]
+    if name.endswith(":*"):
+        name = name[:-2]
+    return name
+
+
+def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
+    """Best-effort fetch of CloudWatch log events for ONE workflow execution.
+
+    Returns the full recent execution log (not just errors), captured for every
+    completed run. All workflow state machines log to a single shared group; Step
+    Functions STANDARD logging writes a per-execution log stream named for the execution
+    (its name == our executionId) and tags every event with execution_arn. We scope the
+    read to this execution by filtering on the execution id, so the shared group does not
+    leak other executions' logs into this record. Returns (text, stream_name); ('', '')
+    on any failure or when logging is not configured (logs are non-critical)."""
+    log_group_name = _log_group_name_from_arn(log_group_arn)
+    if not log_group_name or not execution_id:
+        return "", ""
+    try:
+        # filterPattern matches the execution id within events (it appears in the
+        # execution_arn / execution name that includeExecutionData emits), scoping the
+        # result to just this execution's events within the shared group.
+        resp = logs_client.filter_log_events(
+            logGroupName=log_group_name,
+            filterPattern=f'"{execution_id}"',
+            limit=limit_events,
+        )
+        events = resp.get('events', [])
+        text = "\n".join(e.get('message', '') for e in events)
+        stream = events[0].get('logStreamName', '') if events else ''
+        return text, stream
+    except Exception as e:
+        logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
+        return "", ""
+
+
+def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_execution_id,
+                             workflow_database_id, workflow_id, bucket_name,
+                             output_files, output_metadata, result_log, execution_log,
+                             log_group_arn, log_stream_name, execution_status):
+    """Write end-state pipeline output/metadata/log rows and set completion status
+    on the end-state PipelineExecutions row and the V2 main execution row.
+
+    The end-state lambda runs on normal workflow completion, so it captures the full
+    execution log (`execution_log`) onto the main row's executionLog field for every
+    completed run (success or failure), not just failures.
+
+    No-op when no execution context is present (non-workflow/direct invocations).
+    """
+    if not workflow_execution_id or not end_state_pipeline_execution_id:
+        logger.info("No workflow execution context; skipping execution-output recording")
+        return
+
+    stop_date = er.iso_now()
+
+    # Output files (file + preview)
+    if output_files:
+        of_table = dynamo.Table(pipeline_execution_output_files_table)
+        for f in output_files:
+            of_table.put_item(Item=er.build_output_file_record(
+                pipeline_execution_id=end_state_pipeline_execution_id,
+                file_type=f.get("fileType", "file"),
+                relative_file_path=f.get("relativeFilePath", ""),
+                s3_bucket=bucket_name, s3_key=f.get("s3Key", ""),
+                file_size=f.get("fileSize", 0), content_type=f.get("contentType", ""),
+                s3_version_id=f.get("s3VersionId", ""),
+            ))
+
+    # Output metadata
+    if output_metadata:
+        om_table = dynamo.Table(pipeline_execution_output_metadata_table)
+        for m in output_metadata:
+            om_table.put_item(Item=er.build_output_metadata_record(
+                pipeline_execution_id=end_state_pipeline_execution_id,
+                target_file_path=m.get("targetFilePath", "/"),
+                metadata_key=m.get("metadataKey", ""), metadata_value=m.get("metadataValue", ""),
+                source_metadata_file_relative_path=m.get("sourceMetadataFileRelativePath", ""),
+            ))
+
+    # Logs summary row (per-pipeline logs table)
+    logs_table = dynamo.Table(pipeline_execution_logs_table)
+    logs_table.put_item(Item=er.build_log_record(
+        pipeline_execution_id=end_state_pipeline_execution_id, log_type="summary",
+        result_log=result_log, error_log=execution_log,
+        log_group_arn=log_group_arn, log_stream_name=log_stream_name,
+    ))
+
+    # Completion status on end-state pipeline-execution row
+    pexec_table = dynamo.Table(pipeline_executions_table)
+    pexec_table.update_item(
+        Key={"pipelineExecutionId": end_state_pipeline_execution_id,
+             "workflowExecutionId": workflow_execution_id},
+        UpdateExpression="SET executionStopDate = :s, executionStatus = :st",
+        ExpressionAttributeValues={":s": stop_date, ":st": execution_status},
+    )
+
+    # Completion status + full execution log on the main V2 row. The log is captured on
+    # every completed run (success or failure) for later debugging by limited roles.
+    main_table = dynamo.Table(workflow_execution_database_v2)
+    main_table.update_item(
+        Key={"executionId": workflow_execution_id,
+             "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
+        UpdateExpression="SET executionStopDate = :s, executionStatus = :st, executionLog = :lg",
+        ExpressionAttributeValues={":s": stop_date, ":st": execution_status, ":lg": execution_log or ""},
+    )
+
+
 def lambda_handler(event, context):
     logger.info(event)
 
@@ -545,6 +694,10 @@ def lambda_handler(event, context):
             bucketDetails = get_default_bucket_details(asset['bucketId'])
             bucket_name = bucketDetails['bucketName']
 
+            # Accumulate output descriptors for execution-output recording (Stage 1).
+            collected_output_files = []
+            collected_output_metadata = []
+
             #Handle preview outputs
             if ('previewPathKey' in event):
                 previewPathKey = event['previewPathKey']
@@ -565,7 +718,11 @@ def lambda_handler(event, context):
                     
                     # Filter for image files
                     image_files = [f for f in files if f.endswith(ALLOWED_PREVIEW_FILE_EXTENSIONS)]
-                    
+
+                    collected_output_files.extend(
+                        _collect_output_descriptors(objectsFound, "preview", previewPathKey, bucket_name)
+                    )
+
                     if image_files:
                         # Only process the first image file
                         preview_file = image_files[0]
@@ -628,6 +785,10 @@ def lambda_handler(event, context):
                     files = [x['Key'] for x in objectsFound['Contents'] if '/' != x['Key'][-1]]
                     logger.info("Files present in pipeline output asset folder:")
                     logger.info(files)
+
+                    collected_output_files.extend(
+                        _collect_output_descriptors(objectsFound, "file", filesPathKey, bucket_name)
+                    )
                     
                     if files:
                         try:
@@ -744,6 +905,12 @@ def lambda_handler(event, context):
                             
                             if file_path:
                                 logger.info(f"Processing metadata for file: {file_path}")
+                                collected_output_metadata.append({
+                                    "targetFilePath": "/" + file_path.lstrip("/"),
+                                    "metadataKey": "",
+                                    "metadataValue": "",
+                                    "sourceMetadataFileRelativePath": file_obj['Key'],
+                                })
                                 process_metadata_file(
                                     bucket_name,
                                     file_obj['Key'],
@@ -785,6 +952,36 @@ def lambda_handler(event, context):
                         except Exception as e:
                             logger.exception(f"Error processing file attribute {file_obj['Key']}: {e}")
 
+
+            # Record end-state pipeline outputs + completion status (Stage 1 data model).
+            try:
+                # The workflow SFN log group is the same for every workflow; read it from
+                # env (not the ASL event) so this works even for workflows not redeployed
+                # with a newer ASL. Scope the log read to THIS execution within the group.
+                log_group_arn = workflow_execution_log_group_arn
+                workflow_execution_id = event.get('workflowExecutionId', '')
+                # Full execution log for this run, captured on completion regardless of
+                # success/failure (stored on the main row's executionLog field).
+                execution_log, stream_name = _fetch_execution_logs(
+                    log_group_arn, workflow_execution_id
+                )
+                record_execution_outputs(
+                    dynamo=dynamodb,
+                    workflow_execution_id=workflow_execution_id,
+                    end_state_pipeline_execution_id=event.get('endStatePipelineExecutionId', ''),
+                    workflow_database_id=event.get('workflowDatabaseId', ''),
+                    workflow_id=event.get('workflowId', ''),
+                    bucket_name=bucket_name,
+                    output_files=collected_output_files,
+                    output_metadata=collected_output_metadata,
+                    result_log="Workflow Execution Output Processing Complete",
+                    execution_log=execution_log,
+                    log_group_arn=log_group_arn, log_stream_name=stream_name,
+                    execution_status="SUCCEEDED",
+                )
+            except Exception as e:
+                # Output recording is non-critical to the upload pipeline; log and continue.
+                logger.exception(f"Error recording execution outputs (non-critical): {e}")
 
             return success(body={"message": "Workflow Execution Output Processing Complete"})
 

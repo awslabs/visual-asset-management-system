@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   **Workflows** Stage 1 of the workflow & execution system revamp — new workflow-keyed execution storage data model (11 DynamoDB tables), handler wiring to record workflow and first-pipeline inputs at launch and end-state pipeline outputs/logs at completion, and a v2.5→v2.6 data migration. No API/CLI/web/pipeline behavior changes.
 -   **Web** Geospatial search and map view across both assets and files. New map selectors for metadata geospatial types and search filtering.
     -   The web search sidebar exposes a Geospatial filter panel, and the map view (including mini-map thumbnails) now works for both assets and files and renders polygon/multi-polygon shapes in addition to points.
     -   The asset and file OpenSearch indexes now declare a derived `geo_MD_location` field of type `geo_shape`.

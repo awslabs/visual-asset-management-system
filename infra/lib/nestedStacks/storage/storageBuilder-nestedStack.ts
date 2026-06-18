@@ -102,6 +102,17 @@ export interface storageResources {
         userRolesStorageTable: dynamodb.Table;
         userStorageTable: dynamodb.Table;
         workflowExecutionsStorageTable: dynamodb.Table;
+        workflowExecutionsStorageTableV2: dynamodb.Table;
+        pipelineExecutionsStorageTable: dynamodb.Table;
+        pipelineExecutionInputFilesStorageTable: dynamodb.Table;
+        pipelineExecutionInputMetadataStorageTable: dynamodb.Table;
+        pipelineExecutionInputConfigurationStorageTable: dynamodb.Table;
+        pipelineExecutionOutputFilesStorageTable: dynamodb.Table;
+        pipelineExecutionOutputMetadataStorageTable: dynamodb.Table;
+        pipelineExecutionOutputResultsStorageTable: dynamodb.Table;
+        pipelineExecutionLogsStorageTable: dynamodb.Table;
+        workflowExecutionInputsStorageTable: dynamodb.Table;
+        workflowExecutionConfigurationStorageTable: dynamodb.Table;
         workflowStorageTable: dynamodb.Table;
         apiKeyStorageTable: dynamodb.Table;
     };
@@ -890,6 +901,180 @@ export function storageResourcesBuilder(
         },
     });
 
+    // ----------------------------------------------------------------------
+    // Workflow Execution Storage Overhaul (V2 data model).
+    // Executions are workflow-keyed; asset/database linkage lives in the
+    // workflow/pipeline input tables. The legacy WorkflowExecutionsStorageTable
+    // above is retained intact as the migration source.
+    // ----------------------------------------------------------------------
+
+    const workflowExecutionsStorageTableV2 = new dynamodb.Table(
+        scope,
+        "WorkflowExecutionsStorageTableV2",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "executionId", type: dynamodb.AttributeType.STRING },
+            sortKey: {
+                name: "workflowDatabaseId:workflowId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+    workflowExecutionsStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "WorkflowExecutionsByWorkflowGSI",
+        partitionKey: {
+            name: "workflowDatabaseId:workflowId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: { name: "executionStartDate", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const pipelineExecutionsStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineExecutionsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "pipelineExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        }
+    );
+    pipelineExecutionsStorageTable.addGlobalSecondaryIndex({
+        indexName: "PipelineExecByWorkflowExecGSI",
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "pipelineDatabaseId:pipelineId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    pipelineExecutionsStorageTable.addGlobalSecondaryIndex({
+        indexName: "PipelineExecChainGSI",
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "from_pipeline_execution_id", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    pipelineExecutionsStorageTable.addGlobalSecondaryIndex({
+        indexName: "PipelineExecEndStateGSI",
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "endStatePipeline", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const pipelineExecutionInputFilesStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineExecutionInputFilesStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "pipelineExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: {
+                name: "databaseId:assetId:inputAssetFileKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+    pipelineExecutionInputFilesStorageTable.addGlobalSecondaryIndex({
+        indexName: "InputFilesByAssetGSI",
+        partitionKey: { name: "databaseId:assetId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "pipelineExecutionId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const pipelineExecutionInputMetadataStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineExecutionInputMetadataStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "pipelineExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: {
+                name: "databaseId:assetId:filePath",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    const pipelineExecutionInputConfigurationStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineExecutionInputConfigurationStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "pipelineExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "recordType", type: dynamodb.AttributeType.STRING },
+        }
+    );
+
+    const pipelineExecutionOutputFilesStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineExecutionOutputFilesStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "pipelineExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: {
+                name: "fileType:relativeFilePath",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    const pipelineExecutionOutputMetadataStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineExecutionOutputMetadataStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "pipelineExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: {
+                name: "targetFilePath:metadataKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    const pipelineExecutionOutputResultsStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineExecutionOutputResultsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "pipelineExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "relativeFilePath", type: dynamodb.AttributeType.STRING },
+        }
+    );
+
+    const pipelineExecutionLogsStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineExecutionLogsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "pipelineExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "logType", type: dynamodb.AttributeType.STRING },
+        }
+    );
+
+    const workflowExecutionInputsStorageTable = new dynamodb.Table(
+        scope,
+        "WorkflowExecutionInputsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: {
+                name: "databaseId:assetId:inputAssetFileKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+    workflowExecutionInputsStorageTable.addGlobalSecondaryIndex({
+        indexName: "WorkflowExecInputsByAssetGSI",
+        partitionKey: { name: "databaseId:assetId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "executionStartDate", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const workflowExecutionConfigurationStorageTable = new dynamodb.Table(
+        scope,
+        "WorkflowExecutionConfigurationStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "recordType", type: dynamodb.AttributeType.STRING },
+        }
+    );
+
     //old
     new dynamodb.Table(scope, "MetadataStorageTable", {
         ...dynamodbDefaultProps,
@@ -1540,6 +1725,19 @@ export function storageResourcesBuilder(
             databaseStorageTable: databaseStorageTable,
             workflowStorageTable: workflowStorageTable,
             workflowExecutionsStorageTable: workflowExecutionsStorageTable,
+            workflowExecutionsStorageTableV2: workflowExecutionsStorageTableV2,
+            pipelineExecutionsStorageTable: pipelineExecutionsStorageTable,
+            pipelineExecutionInputFilesStorageTable: pipelineExecutionInputFilesStorageTable,
+            pipelineExecutionInputMetadataStorageTable: pipelineExecutionInputMetadataStorageTable,
+            pipelineExecutionInputConfigurationStorageTable:
+                pipelineExecutionInputConfigurationStorageTable,
+            pipelineExecutionOutputFilesStorageTable: pipelineExecutionOutputFilesStorageTable,
+            pipelineExecutionOutputMetadataStorageTable:
+                pipelineExecutionOutputMetadataStorageTable,
+            pipelineExecutionOutputResultsStorageTable: pipelineExecutionOutputResultsStorageTable,
+            pipelineExecutionLogsStorageTable: pipelineExecutionLogsStorageTable,
+            workflowExecutionInputsStorageTable: workflowExecutionInputsStorageTable,
+            workflowExecutionConfigurationStorageTable: workflowExecutionConfigurationStorageTable,
             metadataSchemaStorageTableV2: metadataSchemaStorageTableV2,
             databaseMetadataStorageTable: databaseMetadataStorageTable,
             assetFileMetadataStorageTable: assetFileMetadataStorageTable,

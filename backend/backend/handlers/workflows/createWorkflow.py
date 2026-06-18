@@ -51,6 +51,9 @@ os.environ["AWS_STS_REGIONAL_ENDPOINTS"] = 'regional'
 
 logger = safeLogger(service="CreateWorkflow")
 
+# Claims/roles for the current request (set per-invocation in lambda_handler).
+claims_and_roles = {}
+
 # Configure AWS clients with retry configuration
 retry_config = Config(
     retries={
@@ -297,6 +300,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
             "previewPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $$.Execution.Name)",
             "description": f'Output from {last_job_name}',
             "executionId.$": "$$.Execution.Name",
+            "workflowExecutionId.$": "$.workflowExecutionId",
+            "endStatePipelineExecutionId.$": "$.endStatePipelineExecutionId",
             "pipeline": last_pipeline['name'],
             "outputType": last_pipeline["outputType"],
             "executingUserName.$": "$.executingUserName",
@@ -530,12 +535,163 @@ def create_workflow(payload, claims_and_roles):
         raise VAMSGeneralErrorResponse("Error saving workflow")
 
 
+def parse_request_body(event):
+    """Parse the JSON request body. Returns (body_dict, error_response); the error
+    response is None on success, otherwise a 400 for a missing or malformed body."""
+    if not event.get('body'):
+        return None, validation_error(body={'message': 'Request body is required'}, event=event)
+
+    body = event['body']
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            return None, validation_error(body={'message': 'Invalid JSON in request body'}, event=event)
+
+    return body, None
+
+
+def validate_pipeline_required_fields(event, pipelines):
+    """Ensure each pipeline entry carries every required field. Returns an error
+    response for the first incomplete entry, or None when all entries are complete."""
+    pipeline_required_fields = ['name', 'databaseId', 'pipelineType', 'pipelineExecutionType',
+                                'outputType', 'waitForCallback', 'userProvidedResource']
+    for idx, pipeline in enumerate(pipelines):
+        missing_pipeline_fields = [f for f in pipeline_required_fields if f not in pipeline or not pipeline[f]]
+        if missing_pipeline_fields:
+            message = f"Pipeline entry {idx} is missing required field(s): {', '.join(missing_pipeline_fields)}"
+            return validation_error(body={'message': message}, event=event)
+    return None
+
+
+def authorize_pipelines(event, database_id, pipelines):
+    """Validate each pipeline's database scope and Tier-2 GET authorization. Returns
+    an error response on the first failure, or None when every pipeline is in scope
+    and accessible.
+
+    Annotates each pipeline dict in place (object__type / databaseId / pipelineId /
+    type fields); those mutated entries are persisted with the workflow record."""
+    for pipeline in pipelines:
+        logger.info("pipeline in workflow creation: ")
+        logger.info(pipeline)
+        # If global workflow, included pipeline should also be global
+        if database_id == "GLOBAL":
+            if pipeline['databaseId'] != "GLOBAL":
+                return validation_error(
+                    body={'message': 'Only global pipelines are allowed in global workflows.'},
+                    event=event
+                )
+        else:
+            if pipeline['databaseId'] != "GLOBAL" and database_id != pipeline['databaseId']:
+                return validation_error(
+                    body={'message': 'Only global or same database pipelines are allowed in a database specifc workflows.'},
+                    event=event
+                )
+        # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline (Tier 2):
+        pipeline_allowed = False
+        pipeline.update({
+            "object__type": "pipeline",
+            "databaseId": database_id,
+            "pipelineId": pipeline['name'],
+            "pipelineType": pipeline['pipelineType'],
+            "pipelineExecutionType": pipeline['pipelineExecutionType'],
+        })
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(pipeline, "GET"):
+                pipeline_allowed = True
+
+        if not pipeline_allowed:
+            return authorization_error(body={'message': 'Not Authorized to read the pipeline'})
+    return None
+
+
+def authorize_workflow(database_id, workflow_id):
+    """Tier-2 PUT authorization on the workflow object. Returns True if allowed."""
+    logger.info("Validating workflow authorization")
+    # Add Casbin Enforcer to check if the current user has permissions to PUT the workflow (Tier 2):
+    workflow = {
+        "object__type": "workflow",
+        'databaseId': database_id,
+        'workflowId': workflow_id,
+    }
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(workflow, "PUT"):
+            return True
+    return False
+
+
+def check_workflow_id_uniqueness(event, database_id, workflow_id):
+    """Reject a workflowId already owned by a different (non-deleted) database.
+    Returns an error response on conflict, or None when the id is available."""
+    conflicting_database_id = find_conflicting_database(database_id, workflow_id)
+    if conflicting_database_id:
+        logger.info(
+            f"workflowId '{workflow_id}' already in use by database '{conflicting_database_id}'"
+        )
+        return validation_error(
+            body={
+                'message': "Workflow ID is already in use by another database. Workflow IDs must be "
+                           "unique across all databases (including GLOBAL). Choose a different ID."
+            },
+            event=event
+        )
+    return None
+
+
+def handle_create_request(event):
+    """Parse + validate the body, authorize the pipelines and workflow, enforce
+    workflowId uniqueness, then create/update the workflow and its state machine."""
+    body, error = parse_request_body(event)
+    if error:
+        return error
+
+    # Validate required fields via Pydantic model
+    try:
+        parse(body, model=CreateWorkflowRequestModel)
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
+
+    pipelines = body['specifiedPipelines']['functions']
+
+    # Validate required fields in each pipeline entry before proceeding
+    error = validate_pipeline_required_fields(event, pipelines)
+    if error:
+        return error
+
+    # Pipeline database-scope + Tier-2 GET authorization
+    error = authorize_pipelines(event, body['databaseId'], pipelines)
+    if error:
+        return error
+
+    # Tier-2 PUT authorization on the workflow
+    if not authorize_workflow(body['databaseId'], body['workflowId']):
+        return authorization_error()
+
+    # Enforce cross-database uniqueness of the workflowId
+    error = check_workflow_id_uniqueness(event, body['databaseId'], body['workflowId'])
+    if error:
+        return error
+
+    result = create_workflow(body, claims_and_roles)
+    return success(body=json.loads(result))
+
+
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for the create/update-workflow API.
+
+    Reached two ways with identical behavior: PUT /workflows from API Gateway, and a
+    POST lambda-to-lambda invocation from importGlobalPipelineWorkflow. Both create or
+    update a workflow, so PUT and POST dispatch to the same create handler."""
+    global claims_and_roles
     logger.info(event)
+    claims_and_roles = request_to_claims(event)
 
     try:
-        # Get claims and roles
-        claims_and_roles = request_to_claims(event)
+        method = event['requestContext']['http']['method']
 
         # Check if method is allowed on API (Tier 1)
         method_allowed_on_api = False
@@ -547,99 +703,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
 
-        # Parse request body
-        if not event.get('body'):
-            return validation_error(body={'message': 'Request body is required'}, event=event)
-
-        body = event['body']
-        if isinstance(body, str):
-            try:
-                body = json.loads(body)
-            except json.JSONDecodeError as e:
-                logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': 'Invalid JSON in request body'}, event=event)
-
-        # Validate required fields via Pydantic model
-        try:
-            request_model = parse(body, model=CreateWorkflowRequestModel)
-        except ValidationError as v:
-            logger.exception(f"Validation error: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
-
-        # Validate required fields in each pipeline entry before proceeding
-        pipeline_required_fields = ['name', 'databaseId', 'pipelineType', 'pipelineExecutionType',
-                                    'outputType', 'waitForCallback', 'userProvidedResource']
-        for idx, pipeline in enumerate(body['specifiedPipelines']['functions']):
-            missing_pipeline_fields = [f for f in pipeline_required_fields if f not in pipeline or not pipeline[f]]
-            if missing_pipeline_fields:
-                message = f"Pipeline entry {idx} is missing required field(s): {', '.join(missing_pipeline_fields)}"
-                return validation_error(body={'message': message}, event=event)
-
-        for pipeline in body['specifiedPipelines']['functions']:
-            logger.info("pipeline in workflow creation: ")
-            logger.info(pipeline)
-            # If global workflow, included pipeline should also be global
-            if body['databaseId'] == "GLOBAL":
-                if pipeline['databaseId'] != "GLOBAL":
-                    return validation_error(
-                        body={'message': 'Only global pipelines are allowed in global workflows.'},
-                        event=event
-                    )
-            else:
-                if pipeline['databaseId'] != "GLOBAL" and body['databaseId'] != pipeline['databaseId']:
-                    return validation_error(
-                        body={'message': 'Only global or same database pipelines are allowed in a database specifc workflows.'},
-                        event=event
-                    )
-            # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline (Tier 2):
-            pipeline_allowed = False
-            pipeline.update({
-                "object__type": "pipeline",
-                "databaseId": body['databaseId'],
-                "pipelineId": pipeline['name'],
-                "pipelineType": pipeline['pipelineType'],
-                "pipelineExecutionType": pipeline['pipelineExecutionType'],
-            })
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if casbin_enforcer.enforce(pipeline, "GET"):
-                    pipeline_allowed = True
-
-            if not pipeline_allowed:
-                return authorization_error(body={'message': 'Not Authorized to read the pipeline'})
-
-        logger.info("Validating workflow authorization")
-        # Add Casbin Enforcer to check if the current user has permissions to PUT the workflow (Tier 2):
-        workflow = {
-            "object__type": "workflow",
-            'databaseId': body['databaseId'],
-            'workflowId': body['workflowId'],
-        }
-        workflow_allowed = False
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(workflow, "PUT"):
-                workflow_allowed = True
-
-        if not workflow_allowed:
-            return authorization_error()
-
-        # Enforce cross-database uniqueness of the workflowId
-        conflicting_database_id = find_conflicting_database(body['databaseId'], body['workflowId'])
-        if conflicting_database_id:
-            logger.info(
-                f"workflowId '{body['workflowId']}' already in use by database '{conflicting_database_id}'"
-            )
-            return validation_error(
-                body={
-                    'message': "Workflow ID is already in use by another database. Workflow IDs must be "
-                               "unique across all databases (including GLOBAL). Choose a different ID."
-                },
-                event=event
-            )
-
-        result = create_workflow(body, claims_and_roles)
-        return success(body=json.loads(result))
+        if method in ('PUT', 'POST'):
+            return handle_create_request(event)
+        else:
+            return validation_error(body={'message': "Method not allowed"}, event=event)
 
     except VAMSGeneralErrorResponse as v:
         logger.exception("VAMS error in workflow creation.")

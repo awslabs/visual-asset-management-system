@@ -91,6 +91,7 @@ const sidebars: SidebarsConfig = {
                 "developer/viewer-plugins",
                 "developer/audit-logging",
                 "developer/permissions",
+                "developer/workflow-execution-data-model-handoff",
                 {
                     type: "category",
                     label: "Addons",

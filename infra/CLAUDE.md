@@ -143,6 +143,7 @@ infra/
     infra.test.ts              # Single snapshot test (outdated, uses legacy @aws-cdk/assert)
   deploymentDataMigration/     # Data migration utilities
     v2.4_to_v2.5/upgrade/    # Backfills databaseId and databaseId:assetId on asset version records
+    v2.5_to_v2.6/upgrade/    # Reshapes workflow executions into the V2 workflow-keyed data model (11 tables)
 ```
 
 ---
@@ -236,6 +237,17 @@ interface storageResources {
         userRolesStorageTable;
         userStorageTable;
         workflowExecutionsStorageTable;
+        workflowExecutionsStorageTableV2; // V2: PK executionId, SK workflowDatabaseId:workflowId; GSI WorkflowExecutionsByWorkflowGSI
+        pipelineExecutionsStorageTable; // PK pipelineExecutionId, SK workflowExecutionId; GSIs PipelineExecByWorkflowExecGSI / PipelineExecChainGSI / PipelineExecEndStateGSI
+        pipelineExecutionInputFilesStorageTable; // PK pipelineExecutionId; GSI InputFilesByAssetGSI
+        pipelineExecutionInputMetadataStorageTable;
+        pipelineExecutionInputConfigurationStorageTable;
+        pipelineExecutionOutputFilesStorageTable;
+        pipelineExecutionOutputMetadataStorageTable;
+        pipelineExecutionOutputResultsStorageTable;
+        pipelineExecutionLogsStorageTable;
+        workflowExecutionInputsStorageTable; // PK workflowExecutionId; GSI WorkflowExecInputsByAssetGSI (asset-scoped execution listing)
+        workflowExecutionConfigurationStorageTable;
         apiKeyStorageTable: dynamodb.Table; // GSIs: apiKeyHashIndex (PK: apiKeyHash), userIdIndex (PK: userId)
         workflowStorageTable: dynamodb.Table;
         // assetVersionsStorageTable has GSI: databaseIdAssetIdIndex (PK: databaseId:assetId, SK: assetVersionId)

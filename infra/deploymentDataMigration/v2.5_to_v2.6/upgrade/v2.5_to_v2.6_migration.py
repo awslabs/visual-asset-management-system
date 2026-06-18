@@ -3,56 +3,84 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Data Migration Script for VAMS v2.5 to v2.6 - OpenSearch Reindex (v2 -> v3)
+Data Migration Script for VAMS v2.5 to v2.6.
 
+This is the single consolidated migration for the v2.6 release. It runs two
+independent steps (select with --steps; default runs both):
+
+  1. reindex            -- OpenSearch reindex (vams-*-v2 -> vams-*-v3)
+  2. workflowExecutions -- Workflow Executions storage overhaul (V1 -> V2 data model)
+
+------------------------------------------------------------------------------
+STEP 1: OpenSearch Reindex (vams-*-v2 -> vams-*-v3)
+------------------------------------------------------------------------------
 The v2.6 release introduces:
-  1. A new ``geo_MD_location`` field of OpenSearch type ``geo_shape`` on every
-     asset and file document. The asset and file indexers populate it from a
-     ``location`` metadata key (GeoJSON or {latitude, longitude, altitude})
-     or from individual latitude / longitude / altitude metadata fields.
-  2. New OpenSearch index names ``vams-assets-v3`` and ``vams-files-v3`` (the
-     prior v2 indexes are abandoned). The CDK custom resource that creates the
-     index mappings only runs on first creation, so the schema change is
-     introduced cleanly by switching index names.
-  3. (Provisioned deployments only) An OpenSearch engine upgrade from 2.7 to
-     3.5, which itself requires a reindex.
+  - A new ``geo_MD_location`` field of OpenSearch type ``geo_shape`` on every
+    asset and file document, derived by the indexers from location metadata.
+  - New OpenSearch index names ``vams-assets-v3`` and ``vams-files-v3`` (the
+    prior v2 indexes are abandoned).
+  - (Provisioned deployments only) An OpenSearch engine upgrade from 2.7 to 3.5.
 
-Because the v3 indexes are empty after the v2.6 CDK deploy, this migration
-delegates to the existing reindexer Lambda (``crReindexer``) to re-populate
-both indexes from the source DynamoDB and S3 records. ``--clear-indexes`` is
-**off by default** -- the v3 indexes start empty and do not need to be
-cleared. Pass ``--clear-indexes`` only if you are re-running the migration
-against an already-populated v3 index and want a clean slate.
+Because the v3 indexes are empty after the v2.6 CDK deploy, this step delegates
+to the deployed reindexer Lambda (``crReindexer``) to re-populate both indexes
+from the source DynamoDB and S3 records. ``--clear-indexes`` is off by default.
 
+------------------------------------------------------------------------------
+STEP 2: Workflow Executions Storage Overhaul (V1 -> V2 data model)
+------------------------------------------------------------------------------
+Reshapes the legacy WorkflowExecutionsStorageTable (PK databaseId:assetId,
+SK executionId; US-format dates) into the new workflow-keyed data model. The
+legacy composite-key attributes carried a spurious '$' prefix, so the new clean
+keys are rebuilt from the discrete databaseId/assetId/workflowId/workflowDatabaseId
+attributes (which were stored without the '$') rather than parsed from the old keys:
+
+  WorkflowExecutionsStorageTableV2:        PK executionId, SK workflowDatabaseId:workflowId
+  WorkflowExecutionInputsStorageTable:     PK workflowExecutionId, SK databaseId:assetId:inputAssetFileKey
+  PipelineExecutionsStorageTable:          PK pipelineExecutionId, SK workflowExecutionId
+  PipelineExecutionInputFilesStorageTable: PK pipelineExecutionId, SK databaseId:assetId:inputAssetFileKey
+
+Per legacy execution row:
+  1. V2 main row (clean keys, ISO dates, triggeredByUserId='system', triggerType='Manual',
+     execution_arn -> workflow_execution_arn).
+  2. WorkflowExecutionInputs row from legacy assetId/databaseId/inputAssetFileKey.
+  3. One PipelineExecutions stub per pipeline in the workflow's specifiedPipelines
+     (chained via from_pipeline_execution_id; endStatePipeline='true' on the last).
+     File inputs are attached to the FIRST pipeline only.
+  4. If the workflow or a pipeline no longer exists, the stub uses pipelineId='DELETED'
+     so the file linkage is preserved.
+
+GUIDs are derived deterministically (uuid5) from the legacy executionId so this
+step is idempotent (re-runs overwrite the same rows).
+
+------------------------------------------------------------------------------
 Usage:
-    # Dry run (recommended first step)
+    # Dry run, both steps (recommended first)
     python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --dry-run
 
-    # Production migration
+    # Production, both steps
     python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json
 
-    # Re-run with index clear (only if v3 is already populated)
-    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --clear-indexes
+    # Only the OpenSearch reindex step
+    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps reindex
 
-    # Test with limited items
-    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --limit 100 --dry-run
-
-    # Asynchronous invocation for very large datasets
-    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --async
+    # Only the workflow-executions step
+    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps workflowExecutions
 
 Requirements:
     - Python 3.6+
     - boto3
-    - AWS credentials with lambda:InvokeFunction permission
+    - AWS credentials with lambda:InvokeFunction (reindex) and DynamoDB
+      Scan/BatchWriteItem (workflowExecutions) permissions
 """
 
 import argparse
 import json
 import logging
-import os
 import sys
 import time
-from typing import Dict, Optional
+import uuid
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Tuple
 
 import boto3
 from botocore.exceptions import ClientError, ReadTimeoutError
@@ -84,6 +112,10 @@ def load_config_from_file(config_file: str) -> dict:
         logger.error(f"Error loading configuration from {config_file}: {e}")
         sys.exit(1)
 
+
+# =============================================================================
+# STEP 1: OpenSearch Reindex (vams-*-v2 -> vams-*-v3)
+# =============================================================================
 
 def invoke_reindexer_lambda(
     function_name: str,
@@ -249,62 +281,12 @@ def _log_results(results: Dict) -> None:
             logger.warning(f"  Errors: {len(f['errors'])} errors occurred")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3).',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Reindex both assets and files synchronously (recommended for small/medium deployments)
-  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json
-
-  # Dry run with a small subset
-  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --dry-run --limit 100
-
-  # Re-run after a partial failure (clears v3 first)
-  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --clear-indexes
-
-  # Asynchronous invocation for very large datasets
-  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --async
-
-Notes:
-  - The reindexer Lambda function name is exposed by the CDK stack output 'ReindexerFunctionNameOutput'.
-  - Synchronous invocation (default) waits for completion and prints a summary.
-  - For deployments with hundreds of thousands or millions of objects, use --async and monitor CloudWatch Logs.
-  - --clear-indexes defaults to FALSE because the v3 indexes are empty after the v2.6 deploy. Use it only when re-running.
-        """
-    )
-
-    parser.add_argument('--config', required=True,
-                        help='Path to the migration JSON configuration file')
-    parser.add_argument('--operation', choices=['assets', 'files', 'both'],
-                        help='Operation to perform (default: both, can also be set in config)')
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Test without making changes (also configurable in JSON)')
-    parser.add_argument('--limit', type=int,
-                        help='Maximum number of items per category to reindex (testing)')
-    parser.add_argument('--clear-indexes', action='store_true',
-                        help='Clear existing v3 OpenSearch documents before reindex (default: false). '
-                             'The v3 indexes start empty after the CDK deploy, so this is only needed when re-running.')
-    parser.add_argument('--profile',
-                        help='AWS profile name')
-    parser.add_argument('--region',
-                        help='AWS region')
-    parser.add_argument('--async', dest='async_invoke', action='store_true',
-                        help='Use asynchronous invocation (recommended for large datasets)')
-    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO',
-                        help='Logging level (default: INFO)')
-
-    args = parser.parse_args()
-
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
-
-    config = load_config_from_file(args.config)
-
+def run_reindex_step(config: dict, args) -> int:
+    """Run the OpenSearch reindex step. Returns a process-style exit code (0 = ok)."""
     function_name = config.get('reindexer_function_name')
     if not function_name:
-        logger.error("Configuration is missing required field 'reindexer_function_name'.")
-        sys.exit(1)
+        logger.error("Configuration is missing required field 'reindexer_function_name' (needed for the reindex step).")
+        return 1
 
     operation = args.operation or config.get('operation', 'both')
     dry_run = args.dry_run or bool(config.get('dry_run', False))
@@ -313,7 +295,6 @@ Notes:
     limit = args.limit if args.limit is not None else config.get('limit')
     profile = args.profile or config.get('aws_profile')
     region = args.region or config.get('aws_region')
-
     invocation_type = 'Event' if args.async_invoke else 'RequestResponse'
 
     result = invoke_reindexer_lambda(
@@ -332,11 +313,402 @@ Notes:
         logger.warning("Verify completion via CloudWatch Logs.")
         return 0
     if 'error' in result:
-        logger.error("Reindex migration failed.")
+        logger.error("Reindex step failed.")
         return 1
 
-    logger.info("Reindex migration completed.")
+    logger.info("Reindex step completed.")
     return 0
+
+
+# =============================================================================
+# STEP 2: Workflow Executions Storage Overhaul (V1 -> V2 data model)
+# =============================================================================
+
+# Stable namespace for deterministic GUID derivation (idempotent re-runs).
+_GUID_NAMESPACE = uuid.UUID("00000000-0000-0000-0000-00000000a6d6")
+
+# DynamoDB BatchWriteItem accepts at most 25 items per request.
+_BATCH_WRITE_MAX = 25
+
+
+def derive_guid(*parts) -> str:
+    """Deterministic 32-hex GUID from the given parts (idempotent)."""
+    return uuid.uuid5(_GUID_NAMESPACE, "|".join(str(p) for p in parts)).hex
+
+
+def normalize_file_key(file_key: str) -> str:
+    if not file_key:
+        return "/"
+    return "/" + file_key.lstrip("/")
+
+
+def to_iso(us_date: str) -> str:
+    """Convert legacy US date '%m/%d/%Y, %H:%M:%S' to ISO-8601 UTC; passthrough if empty/unparseable."""
+    if not us_date:
+        return ""
+    try:
+        dt = datetime.strptime(us_date, "%m/%d/%Y, %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError):
+        return us_date
+
+
+def scan_all_items(dynamodb_client, table_name: str, limit: int = None) -> List[Dict]:
+    logger.info(f"Scanning {table_name} for all records...")
+    records = []
+    scan_kwargs = {'TableName': table_name}
+    try:
+        response = dynamodb_client.scan(**scan_kwargs)
+        records.extend(response.get('Items', []))
+        while 'LastEvaluatedKey' in response and (not limit or len(records) < limit):
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+            response = dynamodb_client.scan(**scan_kwargs)
+            records.extend(response.get('Items', []))
+        if limit and len(records) > limit:
+            records = records[:limit]
+        logger.info(f"Found {len(records)} records in {table_name}")
+        return records
+    except ClientError as e:
+        logger.error(f"Error scanning table {table_name}: {e}")
+        raise
+
+
+def build_workflow_pipeline_cache(dynamodb_client, workflow_table_name: str) -> Dict[str, List[Dict]]:
+    """Map workflowId -> list of pipeline dicts (name, databaseId, pipelineExecutionType, ...)
+    from the workflow table's specifiedPipelines.functions. Keyed by workflowId only
+    (workflowIds are unique across databases in VAMS)."""
+    logger.info(f"Building workflow -> pipelines cache from {workflow_table_name}...")
+    cache: Dict[str, List[Dict]] = {}
+    for item in scan_all_items(dynamodb_client, workflow_table_name):
+        workflow_id = item.get('workflowId', {}).get('S', '')
+        if not workflow_id:
+            continue
+        specified = item.get('specifiedPipelines', {}).get('M', {})
+        functions = specified.get('functions', {}).get('L', [])
+        pipelines = []
+        for fn in functions:
+            m = fn.get('M', {})
+            pipelines.append({
+                'name': m.get('name', {}).get('S', ''),
+                'databaseId': m.get('databaseId', {}).get('S', ''),
+                'pipelineExecutionType': m.get('pipelineExecutionType', {}).get('S', 'Lambda'),
+                'waitForCallback': m.get('waitForCallback', {}).get('S', 'Disabled'),
+            })
+        cache[workflow_id] = pipelines
+    logger.info(f"Cached pipelines for {len(cache)} workflows")
+    return cache
+
+
+def flush_batch_write(dynamodb_client, table_name: str, batch: List[Dict], dry_run: bool = False) -> Tuple[int, int]:
+    if not batch:
+        return 0, 0
+    if dry_run:
+        return len(batch), 0
+    written, errors = 0, 0
+    # Slice into <=25-item requests; a single legacy row can append several
+    # pipeline-execution stubs at once, so the accumulated batch may exceed 25.
+    for start in range(0, len(batch), _BATCH_WRITE_MAX):
+        chunk = batch[start:start + _BATCH_WRITE_MAX]
+        write_requests = [{'PutRequest': {'Item': item}} for item in chunk]
+        try:
+            response = dynamodb_client.batch_write_item(RequestItems={table_name: write_requests})
+            written += len(write_requests)
+            unprocessed = response.get('UnprocessedItems', {}).get(table_name, [])
+            retry_count = 0
+            while unprocessed and retry_count < 3:
+                retry_count += 1
+                response = dynamodb_client.batch_write_item(RequestItems={table_name: unprocessed})
+                unprocessed = response.get('UnprocessedItems', {}).get(table_name, [])
+            if unprocessed:
+                errors += len(unprocessed)
+                written -= len(unprocessed)
+        except ClientError as e:
+            logger.error(f"Error in batch_write_item to {table_name}: {e}")
+            errors += len(chunk)
+    return written, errors
+
+
+def s(val):
+    """Wrap a python string as a DynamoDB wire-format String attribute."""
+    return {'S': val if val is not None else ''}
+
+
+def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int):
+    legacy_table = cfg['workflow_executions_storage_table_name_v1']
+    main_v2 = cfg['workflow_executions_storage_table_name_v2']
+    wf_inputs = cfg['workflow_execution_inputs_storage_table_name']
+    pexec = cfg['pipeline_executions_storage_table_name']
+    pin_files = cfg['pipeline_execution_input_files_storage_table_name']
+    workflow_table = cfg['workflow_storage_table_name']
+
+    pipeline_cache = build_workflow_pipeline_cache(dynamodb_client, workflow_table)
+    legacy_rows = scan_all_items(dynamodb_client, legacy_table, limit)
+
+    counts = {"main": 0, "inputs": 0, "pexec": 0, "pin_files": 0, "errors": 0}
+
+    main_batch, inputs_batch, pexec_batch, pin_files_batch = [], [], [], []
+
+    for idx, row in enumerate(legacy_rows, 1):
+        execution_id = row.get('executionId', {}).get('S', '')
+        if not execution_id:
+            counts["errors"] += 1
+            continue
+
+        database_id = row.get('databaseId', {}).get('S', '')
+        asset_id = row.get('assetId', {}).get('S', '')
+        workflow_id = row.get('workflowId', {}).get('S', '')
+        workflow_database_id = row.get('workflowDatabaseId', {}).get('S', '')
+        workflow_arn = row.get('workflow_arn', {}).get('S', '')
+        execution_arn = row.get('execution_arn', {}).get('S', '')
+        input_file_key = normalize_file_key(row.get('inputAssetFileKey', {}).get('S', ''))
+        start_date = to_iso(row.get('startDate', {}).get('S', ''))
+        stop_date = to_iso(row.get('stopDate', {}).get('S', ''))
+        status = row.get('executionStatus', {}).get('S', '')
+
+        # 1) V2 main row
+        main_batch.append({
+            'executionId': s(execution_id),
+            'workflowDatabaseId:workflowId': s(f"{workflow_database_id}:{workflow_id}"),
+            'workflowId': s(workflow_id),
+            'workflowDatabaseId': s(workflow_database_id),
+            'workflow_arn': s(workflow_arn),
+            'workflow_execution_arn': s(execution_arn),
+            'executionStartDate': s(start_date),
+            'executionStopDate': s(stop_date),
+            'executionStatus': s(status),
+            'triggeredByUserId': s('system'),
+            'triggerType': s('Manual'),
+            'executionLogGroupArn': s(''),
+            # New v2.6 sync/error/log fields. Historical rows already carry their final
+            # stop date (when present), so listExecutions will not re-poll them; leave
+            # the sync-check time, error message, and log fields empty.
+            'lastSfnSyncCheckDate': s(''),
+            'executionError': s(''),
+            'executionLog': s(''),
+        })
+
+        # 2) WorkflowExecutionInputs row
+        inputs_batch.append({
+            'workflowExecutionId': s(execution_id),
+            'databaseId:assetId:inputAssetFileKey': s(f"{database_id}:{asset_id}:{input_file_key}"),
+            'databaseId:assetId': s(f"{database_id}:{asset_id}"),
+            'assetId': s(asset_id),
+            'databaseId': s(database_id),
+            'inputAssetFileKey': s(input_file_key),
+            'executionStartDate': s(start_date),
+            'workflowId': s(workflow_id),
+            'workflowDatabaseId': s(workflow_database_id),
+        })
+
+        # 3) PipelineExecutions stubs (one per pipeline; DELETED fallback)
+        pipelines = pipeline_cache.get(workflow_id)
+        if not pipelines:
+            pipelines = [{'name': 'DELETED', 'databaseId': workflow_database_id,
+                          'pipelineExecutionType': 'Lambda', 'waitForCallback': 'Disabled'}]
+        prev_pexec_id = ""
+        for p_idx, pipeline in enumerate(pipelines):
+            pexec_id = derive_guid(execution_id, p_idx)
+            is_end = (p_idx == len(pipelines) - 1)
+            pipeline_name = pipeline.get('name') or 'DELETED'
+            pipeline_db = pipeline.get('databaseId', workflow_database_id)
+            pexec_batch.append({
+                'pipelineExecutionId': s(pexec_id),
+                'workflowExecutionId': s(execution_id),
+                'pipelineId': s(pipeline_name),
+                'pipelineDatabaseId': s(pipeline_db),
+                'pipelineDatabaseId:pipelineId': s(f"{pipeline_db}:{pipeline_name}"),
+                'endStatePipeline': s('true' if is_end else 'false'),
+                'executionStartDate': s(''),
+                'executionStopDate': s(''),
+                'executionStatus': s(''),
+                'pipelineExecutionType': s(pipeline.get('pipelineExecutionType', 'Lambda')),
+                'waitForCallback': s(pipeline.get('waitForCallback', 'Disabled')),
+                'pipelineResourceArn': s(''),
+                'credentialVendingState': s('notVended'),
+                'from_pipeline_execution_id': s(prev_pexec_id),
+                'pipeline_execution_sub_arn': s(''),
+                'pipeline_execution_sub_execution_arn': s(''),
+            })
+            # File inputs attached to the FIRST pipeline only
+            if p_idx == 0:
+                pin_files_batch.append({
+                    'pipelineExecutionId': s(pexec_id),
+                    'databaseId:assetId:inputAssetFileKey': s(f"{database_id}:{asset_id}:{input_file_key}"),
+                    'databaseId:assetId': s(f"{database_id}:{asset_id}"),
+                    'assetId': s(asset_id),
+                    'databaseId': s(database_id),
+                    'inputAssetFileKey': s(input_file_key),
+                    'workflowExecutionId': s(execution_id),
+                })
+            prev_pexec_id = pexec_id
+
+        # Flush batches at 25
+        for table, batch, key in (
+            (main_v2, main_batch, "main"), (wf_inputs, inputs_batch, "inputs"),
+            (pexec, pexec_batch, "pexec"), (pin_files, pin_files_batch, "pin_files"),
+        ):
+            if len(batch) >= 25:
+                w, e = flush_batch_write(dynamodb_client, table, batch, dry_run)
+                counts[key] += w
+                counts["errors"] += e
+                batch.clear()
+
+        if idx % 100 == 0:
+            logger.info(f"  Processed {idx}/{len(legacy_rows)} legacy executions...")
+
+    # Final flush
+    for table, batch, key in (
+        (main_v2, main_batch, "main"), (wf_inputs, inputs_batch, "inputs"),
+        (pexec, pexec_batch, "pexec"), (pin_files, pin_files_batch, "pin_files"),
+    ):
+        w, e = flush_batch_write(dynamodb_client, table, batch, dry_run)
+        counts[key] += w
+        counts["errors"] += e
+
+    return counts, len(legacy_rows)
+
+
+def run_workflow_executions_step(config: dict, args) -> int:
+    """Run the workflow-executions storage overhaul step. Returns 0 on success."""
+    required = [
+        'workflow_executions_storage_table_name_v1', 'workflow_executions_storage_table_name_v2',
+        'workflow_execution_inputs_storage_table_name', 'pipeline_executions_storage_table_name',
+        'pipeline_execution_input_files_storage_table_name', 'workflow_storage_table_name',
+    ]
+    missing = [k for k in required if not config.get(k)]
+    if missing:
+        logger.error(f"Configuration is missing required field(s) for the workflowExecutions step: {', '.join(missing)}")
+        return 1
+
+    dry_run = args.dry_run or bool(config.get('dry_run', False))
+    limit = args.limit if args.limit is not None else config.get('limit')
+    profile = args.profile or config.get('aws_profile')
+    region = args.region or config.get('aws_region')
+
+    session_kwargs = {}
+    if profile:
+        session_kwargs['profile_name'] = profile
+    if region:
+        session_kwargs['region_name'] = region
+    dynamodb_client = boto3.Session(**session_kwargs).client('dynamodb')
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.5 -> v2.6 WORKFLOW EXECUTIONS STORAGE OVERHAUL (V1 -> V2)")
+    logger.info(f"Dry Run: {dry_run}")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        counts, total = migrate_workflow_executions(dynamodb_client, config, dry_run, limit)
+    except Exception as e:
+        logger.error(f"Workflow-executions step failed: {e}")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    logger.info("=" * 80)
+    logger.info("WORKFLOW EXECUTIONS STEP SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    logger.info(f"  Legacy executions scanned: {total}")
+    logger.info(f"  V2 main rows written:      {counts['main']}")
+    logger.info(f"  Workflow input rows:       {counts['inputs']}")
+    logger.info(f"  Pipeline-exec stubs:       {counts['pexec']}")
+    logger.info(f"  First-pipeline input rows: {counts['pin_files']}")
+    logger.info(f"  Errors:                    {counts['errors']}")
+    logger.info("=" * 80)
+
+    return 0 if counts['errors'] == 0 else 1
+
+
+# =============================================================================
+# Entry point
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='VAMS v2.5 to v2.6 consolidated migration (OpenSearch reindex + workflow-executions overhaul).',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Both steps, synchronous (recommended for small/medium deployments)
+  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json
+
+  # Dry run, both steps, small subset
+  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --dry-run --limit 100
+
+  # Only the OpenSearch reindex step (re-run after a partial failure, clearing v3 first)
+  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps reindex --clear-indexes
+
+  # Only the workflow-executions step
+  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps workflowExecutions
+
+  # Reindex very large datasets asynchronously (monitor CloudWatch Logs)
+  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps reindex --async
+
+Notes:
+  - --steps selects which release migration step(s) to run (default: all).
+  - The reindexer Lambda function name is exposed by the CDK stack output 'ReindexerFunctionNameOutput'.
+  - The workflow-executions step is idempotent (deterministic GUIDs) and never modifies the legacy V1 table.
+  - --operation/--clear-indexes/--async apply only to the reindex step; they are ignored by workflowExecutions.
+        """
+    )
+
+    parser.add_argument('--config', required=True,
+                        help='Path to the migration JSON configuration file')
+    parser.add_argument('--steps', choices=['reindex', 'workflowExecutions', 'all'], default='all',
+                        help="Which release migration step(s) to run (default: all)")
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Test without making changes (also configurable in JSON). Applies to both steps.')
+    parser.add_argument('--limit', type=int,
+                        help='Maximum number of items to process (testing). Applies to both steps.')
+    parser.add_argument('--profile',
+                        help='AWS profile name')
+    parser.add_argument('--region',
+                        help='AWS region')
+    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO',
+                        help='Logging level (default: INFO)')
+    # --- reindex-step-only options ---
+    parser.add_argument('--operation', choices=['assets', 'files', 'both'],
+                        help='[reindex step] Reindex assets, files, or both (default: both, can also be set in config)')
+    parser.add_argument('--clear-indexes', action='store_true',
+                        help='[reindex step] Clear existing v3 OpenSearch documents before reindex (default: false). '
+                             'The v3 indexes start empty after the CDK deploy, so this is only needed when re-running.')
+    parser.add_argument('--async', dest='async_invoke', action='store_true',
+                        help='[reindex step] Use asynchronous Lambda invocation (recommended for large datasets)')
+
+    args = parser.parse_args()
+
+    logging.getLogger().setLevel(getattr(logging, args.log_level))
+
+    config = load_config_from_file(args.config)
+
+    run_reindex = args.steps in ('reindex', 'all')
+    run_workflow_executions = args.steps in ('workflowExecutions', 'all')
+
+    exit_code = 0
+
+    if run_reindex:
+        logger.info("")
+        logger.info("##### STEP: OpenSearch reindex #####")
+        rc = run_reindex_step(config, args)
+        if rc != 0:
+            exit_code = rc
+            if args.steps == 'all':
+                # Do not proceed to the second step if the first failed.
+                logger.error("Reindex step failed; skipping the workflow-executions step.")
+                return exit_code
+
+    if run_workflow_executions:
+        logger.info("")
+        logger.info("##### STEP: Workflow executions storage overhaul #####")
+        rc = run_workflow_executions_step(config, args)
+        if rc != 0:
+            exit_code = rc
+
+    if exit_code == 0:
+        logger.info("v2.5 -> v2.6 migration completed.")
+    else:
+        logger.error("v2.5 -> v2.6 migration completed with errors.")
+    return exit_code
 
 
 if __name__ == "__main__":
