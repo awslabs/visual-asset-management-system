@@ -6,17 +6,18 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 ## Revision History
 
-| Version       | Date       | Key Changes                                                                                                                                                                                                                                                                                      |
-| ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [2.6.0](#260) | 2026-05-08 | Physna Sync add-on (Phase 1): one-way synchronization of supported VAMS files and metadata to a Physna tenant; geospatial search and map view across assets and files (new `geo_MD_location` field); OpenSearch index v3 + provisioned engine upgrade to 3.5                                     |
-| [2.5.1](#251) | 2026-04-29 | Bug fixes: upload subfolder paths, file version history cleanup on delete, S3 version pagination, authorization error handling, image viewer version switching, CLI download pagination, CLI upload progress display                                                                             |
-| [2.5.0](#250) | 2026-04-21 | Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates |
-| [2.4.1](#241) | 2026-01-30 | GovCloud deployment fixes, CloudFront KMS fix, metadata schema navigation fix, file manager UX improvements                                                                                                                                                                                      |
-| [2.4.0](#240) | 2026-01-16 | Veerum viewer, NVIDIA Isaac Lab pipeline, Garnet Framework addon, metadata schema overhaul, metadata system overhaul, asset unarchiving, CloudFront custom domains, audit logging, EKS pipeline option                                                                                           |
-| [2.3.2](#232) | 2026-01-12 | CLI documentation fixes, NPM dependency updates                                                                                                                                                                                                                                                  |
-| [2.3.1](#231) | 2025-11-21 | CLI bug fixes, viewer install optimizations                                                                                                                                                                                                                                                      |
-| [2.3.0](#230) | 2025-11-13 | VamsCLI tool, overhauled search system, plugin-based viewer architecture, CesiumJS/BabylonJS/PlayCanvas viewers, CAD metadata pipeline, Gaussian Splat Toolbox, IP restrictions, asset link enhancements                                                                                         |
-| [2.2.0](#220) | 2025-09-31 | Asset/file separation, multi-file assets, S3 presigned uploads, external OAuth IDP, asset versioning, new pipelines, global workflows, VPC improvements                                                                                                                                          |
+| Version       | Date       | Key Changes                                                                                                                                                                                                                                                                                                               |
+| ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [2.6.0](#260) | 2026-05-08 | Physna Sync add-on (Phase 1): one-way synchronization of supported VAMS files and metadata to a Physna tenant; geospatial search and map view across assets and files (new `geo_MD_location` field); OpenSearch index v3 + provisioned engine upgrade to 3.5; advanced IAM role customization for restricted environments |
+| [2.5.2](#252) | 2026-06-19 | Security and validation fixes: Casbin policy injection hardening, createAsset S3 key validation, backend test framework update                                                                                                                                                                                            |
+| [2.5.1](#251) | 2026-04-29 | Bug fixes: upload subfolder paths, file version history cleanup on delete, S3 version pagination, authorization error handling, image viewer version switching, CLI download pagination, CLI upload progress display                                                                                                      |
+| [2.5.0](#250) | 2026-04-21 | Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates                          |
+| [2.4.1](#241) | 2026-01-30 | GovCloud deployment fixes, CloudFront KMS fix, metadata schema navigation fix, file manager UX improvements                                                                                                                                                                                                               |
+| [2.4.0](#240) | 2026-01-16 | Veerum viewer, NVIDIA Isaac Lab pipeline, Garnet Framework addon, metadata schema overhaul, metadata system overhaul, asset unarchiving, CloudFront custom domains, audit logging, EKS pipeline option                                                                                                                    |
+| [2.3.2](#232) | 2026-01-12 | CLI documentation fixes, NPM dependency updates                                                                                                                                                                                                                                                                           |
+| [2.3.1](#231) | 2025-11-21 | CLI bug fixes, viewer install optimizations                                                                                                                                                                                                                                                                               |
+| [2.3.0](#230) | 2025-11-13 | VamsCLI tool, overhauled search system, plugin-based viewer architecture, CesiumJS/BabylonJS/PlayCanvas viewers, CAD metadata pipeline, Gaussian Splat Toolbox, IP restrictions, asset link enhancements                                                                                                                  |
+| [2.2.0](#220) | 2025-09-31 | Asset/file separation, multi-file assets, S3 presigned uploads, external OAuth IDP, asset versioning, new pipelines, global workflows, VPC improvements                                                                                                                                                                   |
 
 ---
 
@@ -32,6 +33,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Physna Viewer plugin** — New viewer plugin that embeds the Physna-hosted 3D/CAD viewer directly inside VAMS asset pages. Enabled automatically whenever the Physna Sync add-on is deployed; uses a new VAMS-authorized proxy endpoint (`GET /addon/physna/viewer`) so Physna credentials never reach the browser. See [Physna Integration](../developer/physna-integration.md#physna-viewer).
 -   **Geospatial search and map view across assets and files.** Asset and file OpenSearch documents now include a derived `geo_MD_location` field of type `geo_shape`, populated by the indexers from a `location` metadata key (GeoJSON or `{latitude, longitude, altitude}`) or from individual `latitude`/`longitude`/`altitude` metadata fields. The `POST /search` and `POST /search/simple` API endpoints, the `vamscli search` commands, and a new sidebar panel in the web UI accept point + radius, bounding box, and arbitrary GeoJSON filters with `intersects`/`within`/`contains`/`disjoint` relations. Map view (including mini-map thumbnails) now works for both assets and files, and renders polygon/multi-polygon shapes as well as points.
 -   **EventBridge orchestration bus** — A top-level custom Amazon EventBridge event bus is now created as a foundation for future event-driven VAMS features (email/subscription events, pipeline registration and success/error events, audit event logging). Bus and event-source names are deployment-unique so multiple VAMS deployments can coexist in one AWS Region, and a starter audit rule routes all VAMS deployment events to a dedicated Amazon CloudWatch log group.
+-   **Advanced IAM role customization** — Two optional, opt-in mechanisms for environments that restrict or centrally manage IAM role creation, controlled by a new `app.iamRoleConfig` config section. `useCustomBootstrapRoles` replaces the CDK bootstrap roles (or removes them entirely via the CLI-credentials synthesizer), and `useCustomVamsStackRoles` applies `iam.Role.customizeRoles` to generate an IAM policy report and substitute pre-created application roles across the WAF stack, core stack, and all nested stacks. The role mappings live in a separate `infra/config/policy/iamRoleConfig.json` file. Both options default to disabled, so VAMS manages all IAM roles unless explicitly opted out. See [Configuration reference](../deployment/configuration-reference.md#advanced-iam-role-customization-appiamroleconfig).
 
 **Breaking changes:**
 
@@ -41,6 +43,22 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 :::warning[Upgrade Path]
 Run the reindex migration at `infra/deploymentDataMigration/v2.5_to_v2.6/upgrade` after deploying the v2.6 stack to repopulate `vams-assets-v3` and `vams-files-v3` from source data. For provisioned deployments, if the OpenSearch 2.7 → 3.5 in-place engine upgrade fails during `cdk deploy`, deploy first with OpenSearch disabled in `config.json` to delete the existing domain, then re-enable and redeploy to create a fresh 3.5 domain before running the migration. See the [v2.5 to v2.6 update guide](../deployment/update-the-solution.md#v25-to-v26).
 :::
+
+### 2.5.2
+
+**Release date:** 2026-06-19
+
+**Key fixes:**
+
+-   Hardened the Casbin authorization implementation against a policy-injection path where field values that are regex-evaluated could inject additional policies. Low impact, since Casbin policies can only be set by administrators by default. Added backend tests covering this case.
+-   Fixed a `createAsset` API defect that allowed specifying an optional Amazon S3 bucket key location without verifying it belonged to the provided database's default bucket and prefix path, that no asset already existed at that key, and with weak validation on the supplied path.
+-   Fixed a latent defect where the backend test framework had not been updated with v2.5 changes, causing some test failures.
+
+**Other changes:**
+
+-   Added default GitHub issue and pull request templates.
+-   Updated authorization documentation to reflect the bug fixes and clarifications.
+-   Updated several package dependency versions to address new npm audit findings.
 
 ### 2.5.1
 

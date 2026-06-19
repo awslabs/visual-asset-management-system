@@ -14,6 +14,10 @@
         },
         "adminUserId": "administrator",
         "adminEmailAddress": "adminEmail@example.com",
+        "iamRoleConfig": {
+            "useCustomBootstrapRoles": false,
+            "useCustomVamsStackRoles": false
+        },
         "useFips": false,
         "useWaf": true,
         "addStackCloudTrailLogs": true,

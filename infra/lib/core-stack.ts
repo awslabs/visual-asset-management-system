@@ -38,6 +38,7 @@ export interface EnvProps {
     ssmWafArn: string;
     config: Config.Config;
     description: string;
+    synthesizer?: cdk.IStackSynthesizer;
 }
 
 export class CoreVAMSStack extends cdk.Stack {

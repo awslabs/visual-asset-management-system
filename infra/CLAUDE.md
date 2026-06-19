@@ -35,7 +35,7 @@ infra/
     saml-config.ts              # SAML provider settings
     csp/                        # CSP additional config (cspAdditionalConfig.json)
     docker/                     # Docker build configurations
-    policy/                     # S3 additional bucket policy JSON
+    policy/                     # S3 additional bucket policy JSON; IAM role mappings (iamRoleConfig.json)
   gen/
     genEndpoints.ts             # Endpoint generation utility
   lib/
@@ -48,6 +48,7 @@ infra/
       wafv2-basic-construct.ts  # WAFv2 web ACL construct
     helper/
       const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso)
+      iamRoleCustomization.ts   # Bootstrap synthesizer + iam.Role.customizeRoles wiring (app.iamRoleConfig)
       lambda.ts                 # Layer bundling commands (poetry-based)
       s3AssetBuckets.ts         # Global asset bucket registry (shared across stacks)
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
@@ -299,11 +300,12 @@ The `ConfigPublic` interface (~200 lines in `config/config.ts`) defines all depl
 -   `app.authProvider`: useCognito (enabled, useSaml, useUserPasswordAuthFlow), useExternalOAuthIdp, authorizerOptions.allowedIpRanges
 -   `app.api`: globalRateLimit (default 50), globalBurstLimit (default 100)
 -   `app.govCloud`: enabled, il6Compliant
+-   `app.iamRoleConfig`: useCustomBootstrapRoles, useCustomVamsStackRoles (advanced; mappings live in `config/policy/iamRoleConfig.json`)
 -   `app.webUi`: optionalBannerHtmlMessage, allowUnsafeEvalFeatures
 
 ### Config extends ConfigPublic (Internal)
 
-Adds: `enableCdkNag`, `dockerDefaultPlatform`, `s3AdditionalBucketPolicyJSON`, `openSearchAssetIndexName`, `openSearchFileIndexName`, SSM parameter paths.
+Adds: `enableCdkNag`, `dockerDefaultPlatform`, `s3AdditionalBucketPolicyJSON`, `iamRoleCustomizationJSON`, `openSearchAssetIndexName`, `openSearchFileIndexName`, SSM parameter paths.
 
 ### Feature Flags (common/vamsAppFeatures.ts)
 
@@ -607,6 +609,16 @@ When `config.app.govCloud.il6Compliant = true`:
 3. Apply KMS encryption if `config.app.useKmsCmkEncryption.enabled`
 4. Add `RemovalPolicy.DESTROY` (current pattern -- all tables use DESTROY)
 5. Update lambda builders to reference the new table name env var and grant permissions
+6. Update the documentation (see Rule below): add the table to `architecture/aws-resources.md` and `architecture/data-model.md`
+
+### Documentation Rule: Storage Resources and Log Groups
+
+Whenever you **add or change** an Amazon S3 bucket, an Amazon DynamoDB table, or an Amazon CloudWatch log group, update `documentation/docusaurus-site/docs/architecture/aws-resources.md` and `documentation/docusaurus-site/docs/deployment/uninstall.md` (and the matching Kiro steering — see Rule 11 and the bidirectional-sync rule in the root `CLAUDE.md`). Document **two independent properties** for each such resource:
+
+1. **Removal on teardown** -- `RemovalPolicy.RETAIN` (survives `cdk destroy`; needs manual deletion) vs. `RemovalPolicy.DESTROY` (removed automatically; pair S3 buckets with `autoDeleteObjects: true`).
+2. **Custom name (redeploy-collision flag)** -- whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can collide by name on a redeploy into the same account with the same configuration name.
+
+These axes are independent. **Retained + auto-named** resources (the asset, auxiliary, artefacts, and access logs buckets; all DynamoDB tables) survive teardown but do **not** block a redeploy, so they do not need to be deleted unless you intend to remove the data. **Custom/fixed-named** resources (the ALB web app bucket and its access logs bucket, named for the domain host; every `/aws/vendedlogs/...` log group) **must** be flagged so operators delete any orphaned copy before redeploying.
 
 ### 5. Service Helper Usage
 

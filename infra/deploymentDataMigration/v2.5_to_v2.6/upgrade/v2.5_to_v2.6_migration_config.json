@@ -2,7 +2,7 @@
     "comments": "Configuration for VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3)",
 
     "_comment_function": "Lambda function name from CDK stack output 'ReindexerFunctionNameOutput'",
-    "reindexer_function_name": "vams-core-prod5-us-west-2-Se-crOsReindexer518D309B-leWYo1RTszB9",
+    "reindexer_function_name": "<REINDEXER_FUNCTION_NAME>",
 
     "_comment_operation": "What to reindex: 'assets', 'files', or 'both' (default: both)",
     "operation": "both",

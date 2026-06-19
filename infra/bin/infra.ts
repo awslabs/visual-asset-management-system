@@ -15,6 +15,10 @@ import { WAFScope } from "../lib/constructs/wafv2-basic-construct";
 import * as Config from "../config/config";
 import { STACK_WAF_DESCRIPTION, STACK_CORE_DESCRIPTION } from "../config/config";
 import * as Service from "../lib/helper/service-helper";
+import {
+    buildBootstrapSynthesizer,
+    applyVamsStackRoleCustomization,
+} from "../lib/helper/iamRoleCustomization";
 
 const app = new cdk.App();
 
@@ -23,6 +27,11 @@ const config = Config.getConfig(app);
 Service.SetConfig(config);
 
 console.log("DEPLOYMENT CONFIGURATION 👉", config);
+
+//Optional IAM role customization for restricted environments (advanced).
+//VAMS stack role customization is applied at the App level so the single
+//iam-policy-report covers the WAF stack, the core stack, and all nested stacks.
+applyVamsStackRoleCustomization(app, config);
 
 if (config.enableCdkNag) {
     Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }));
@@ -56,6 +65,7 @@ if (config.app.useWaf) {
         },
         wafScope: wafScope,
         description: STACK_WAF_DESCRIPTION,
+        synthesizer: buildBootstrapSynthesizer(config),
     });
 
     // ssmWafArn = cfWafStack.wafArn;
@@ -70,6 +80,7 @@ if (config.app.useWaf) {
         ssmWafArn: cfWafStack.wafArn,
         config: config,
         description: STACK_CORE_DESCRIPTION,
+        synthesizer: buildBootstrapSynthesizer(config),
     });
 
     coreVamsStack.addDependency(cfWafStack);
@@ -103,6 +114,7 @@ else {
         ssmWafArn: "",
         config: config,
         description: STACK_CORE_DESCRIPTION,
+        synthesizer: buildBootstrapSynthesizer(config),
     });
 
     //Stack level NAG supressions

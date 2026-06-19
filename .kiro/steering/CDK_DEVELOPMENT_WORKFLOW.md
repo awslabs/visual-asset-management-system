@@ -2022,8 +2022,20 @@ When making CDK infrastructure changes, update the corresponding documentation a
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
+-   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
+-   **New or changed CloudWatch log group** → Update the Amazon CloudWatch section in `architecture/aws-resources.md` and the log group cleanup in `deployment/uninstall.md`
 -   **New nested stack** → Update `architecture/details.md`
 -   **New feature switch** → Update `overview/features.md`
+-   **New external configuration/policy file** (e.g. `config/policy/iamRoleConfig.json`) → Add it to the "Additional configuration files" table in `deployment/configuration-reference.md`, document the `config.json` flag that enables it, and explain the file structure.
+
+:::note[Document two independent properties: removal policy and custom name]
+When adding or changing a storage resource (Amazon S3 bucket, Amazon DynamoDB table) or Amazon CloudWatch log group, document **both** of these properties in `architecture/aws-resources.md`, and reflect them in `deployment/uninstall.md`:
+
+1. **Removal on teardown** — `RemovalPolicy.RETAIN` (survives `cdk destroy`, needs manual deletion) vs. `RemovalPolicy.DESTROY` (removed automatically; pair S3 buckets with `autoDeleteObjects: true`).
+2. **Custom name (redeploy-collision flag)** — Whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can cause a **name collision on redeploy** with the same configuration name and account.
+
+These axes are independent. A resource that is **retained but auto-named** (for example, the VAMS asset, auxiliary, artefacts, and access logs buckets, and all DynamoDB tables) does **not** need to be deleted before redeploying with the same config — leave it unless you intend to remove the data. A resource with a **custom/fixed name** (for example, the ALB web app bucket and its access logs bucket, named for the domain host; and all `/aws/vendedlogs/...` log groups) **must** be flagged so operators delete any orphaned copy before redeploying.
+:::
 
 #### **Cross-Steering File Updates:**
 

@@ -94,6 +94,19 @@ kms:CreateGrant
 | `app.govCloud.enabled`      | boolean | `false` | Enables AWS GovCloud deployment mode. Enforces: VPC must be enabled, Amazon CloudFront must be disabled, Amazon Location Service must be disabled. |
 | `app.govCloud.il6Compliant` | boolean | `false` | Reserved for future use. Not yet fully implemented.                                                                                                |
 
+### IAM role customization (`app.iamRoleConfig`)
+
+These options support environments that restrict or centrally manage AWS Identity and Access Management (IAM) role creation. Both default to `false`, and when both are `false` VAMS manages all IAM roles itself (the recommended default). Each flag toggles whether VAMS reads its corresponding mappings from the separate `infra/config/policy/iamRoleConfig.json` file, keeping the long role ARNs and construct-path maps out of the main configuration.
+
+| Field                                       | Type    | Default | Description                                                                                                                                                                                  |
+| ------------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.iamRoleConfig.useCustomBootstrapRoles` | boolean | `false` | When `true`, VAMS configures the CDK stack synthesizer from the `bootstrap` section of `iamRoleConfig.json` to use pre-created CDK bootstrap roles (or no bootstrap roles at all).           |
+| `app.iamRoleConfig.useCustomVamsStackRoles` | boolean | `false` | When `true`, VAMS applies `iam.Role.customizeRoles` using the `vamsStacks` section of `iamRoleConfig.json` to generate an IAM policy report and/or substitute pre-created application roles. |
+
+:::warning[Advanced configuration]
+Letting VAMS manage IAM roles is the recommended default — grants stay automatically in sync with the resources they protect. Use these options only in environments where IAM role creation is centralized or restricted. See [Advanced IAM role customization](#advanced-iam-role-customization-appiamroleconfig) for the full workflow, the structure of `iamRoleConfig.json`, and how the settings apply across the VAMS WAF stack, core stack, and nested stacks.
+:::
+
 ## VPC (`app.useGlobalVpc`)
 
 | Field                                                | Type    | Default       | Description                                                                                                                                                                    |
@@ -585,6 +598,7 @@ Beyond `config.json`, VAMS supports several supplementary configuration files:
 | File                                                         | Purpose                                                                                                                                                                                             |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `infra/config/policy/s3AdditionalBucketPolicyConfig.json`    | Additional IAM policy statements applied to all Amazon S3 buckets. Controls presigned URL and STS credential access restrictions.                                                                   |
+| `infra/config/policy/iamRoleConfig.json`                     | Pre-created IAM role mappings for restricted environments. Read only when `app.iamRoleConfig.useCustomBootstrapRoles` or `app.iamRoleConfig.useCustomVamsStackRoles` is `true`.                     |
 | `infra/config/csp/cspAdditionalConfig.json`                  | Additional Content Security Policy (CSP) sources for external APIs, scripts, images, media, fonts, and styles.                                                                                      |
 | `infra/config/saml-config.ts`                                | SAML identity provider settings for Amazon Cognito federation. Required when `authProvider.useCognito.useSaml` is `true`. See [Security Architecture](../architecture/security.md#saml-federation). |
 | `infra/config/docker/Dockerfile-customDependencyBuildConfig` | Custom Docker build configuration for Lambda layer packaging. Useful for adding custom SSL certificates for HTTPS proxy environments.                                                               |
@@ -639,6 +653,105 @@ The total IAM role name character count limit is 64 characters. Long prefixes ma
     }
 }
 ```
+
+## Advanced IAM role customization (`app.iamRoleConfig`)
+
+Some organizations centrally provision IAM roles and do not allow deployment processes to create them. VAMS supports two independent, opt-in mechanisms for these environments. Both are disabled by default; when both are off, VAMS manages all IAM roles itself, which is the recommended approach because grants stay automatically in sync with the resources they protect.
+
+Each mechanism is toggled by a boolean in `config.json` under `app.iamRoleConfig`, while the actual mappings (role ARNs, construct-path-to-role-name maps) live in the separate `infra/config/policy/iamRoleConfig.json` file. This keeps the verbose values out of the main configuration and lets a central IAM team own that file.
+
+| `app.iamRoleConfig` flag  | Mappings source (section in `iamRoleConfig.json`) | Controls                                                                                                             |
+| ------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `useCustomBootstrapRoles` | `bootstrap`                                       | The CDK bootstrap roles assumed during deployment (deploy, CloudFormation execution, lookup, file/image publishing). |
+| `useCustomVamsStackRoles` | `vamsStacks`                                      | The application roles VAMS constructs create inside the stacks (Lambda execution roles, and so on).                  |
+
+:::info[How this relates to `environments.aws`]
+The `environments.aws` settings in `cdk.json` (role name prefix and permission boundary) constrain roles that VAMS **creates**. `app.iamRoleConfig` instead lets VAMS **avoid creating** bootstrap and/or application roles by pointing at pre-created ones. The two are complementary: use `environments.aws` when VAMS may create roles within guardrails, and `app.iamRoleConfig` when it may not create them at all.
+:::
+
+### Bootstrap role customization (`bootstrap`)
+
+By default, `cdk bootstrap` creates five roles per account and Region (for example, `cdk-hnb659fds-deploy-role-<account>-<region>`). When `useCustomBootstrapRoles` is `true`, VAMS configures its stack synthesizer from the `bootstrap` section. This applies to both the VAMS WAF stack and the VAMS core stack; nested stacks inherit the synthesizer from their parent automatically.
+
+| Field in `bootstrap`             | Description                                                                                                                                                                                                            |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useCliCredentialsSynthesizer`   | When `true`, no bootstrap IAM roles are used at all. Deployments run under the caller's own credentials and only require the staging bucket and ECR repo. Does not support cross-account deployments or CDK Pipelines. |
+| `qualifier`                      | Bootstrap qualifier, if you bootstrapped with a non-default qualifier. Leave empty for the CDK default (`hnb659fds`).                                                                                                  |
+| `deployRoleArn`                  | ARN of the pre-created deploy role assumed by the CDK CLI. Empty fields fall back to the CDK default name.                                                                                                             |
+| `cloudFormationExecutionRoleArn` | ARN of the pre-created role AWS CloudFormation uses to execute the deployment.                                                                                                                                         |
+| `lookupRoleArn`                  | ARN of the pre-created role used for environment context lookups.                                                                                                                                                      |
+| `fileAssetPublishingRoleArn`     | ARN of the pre-created role used to publish file assets to the staging bucket.                                                                                                                                         |
+| `imageAssetPublishingRoleArn`    | ARN of the pre-created role used to publish Docker image assets to the staging ECR repository.                                                                                                                         |
+| `fileAssetsBucketName`           | Staging bucket name, only if your customized bootstrap template renamed it.                                                                                                                                            |
+| `imageAssetsRepositoryName`      | Staging ECR repository name, only if your customized bootstrap template renamed it.                                                                                                                                    |
+
+Any field left empty keeps the corresponding CDK default. ARNs may use the `${AWS::Partition}`, `${AWS::AccountId}`, and `${AWS::Region}` placeholders, which resolve at deployment time. To discover the required permissions for each role, export the default bootstrap template with `cdk bootstrap --show-template > bootstrap-template.yaml` and copy the role policies into your role-provisioning process.
+
+:::tip[Simpler middle ground]
+If your only concern is that the CloudFormation execution role gets `AdministratorAccess` by default, you do not need this feature. Instead bootstrap with `cdk bootstrap --cloudformation-execution-policies <your-managed-policy-arns>` and/or `--custom-permissions-boundary <name>`.
+:::
+
+### VAMS stack role customization (`vamsStacks`)
+
+When `useCustomVamsStackRoles` is `true`, VAMS calls `iam.Role.customizeRoles` at the CDK app level. Because it is applied at the app level, a single IAM policy report covers the VAMS WAF stack, the core stack, and every nested stack.
+
+| Field in `vamsStacks` | Description                                                                                                                                                                                                                                                                 |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generateReportOnly`  | When `true` (discovery mode), VAMS still creates roles during synthesis but also writes `iam-policy-report.txt` and `iam-policy-report.json` to `cdk.out`. When `false`, role synthesis is prevented and any role not listed in `precreatedRoles` causes synthesis to fail. |
+| `precreatedRoles`     | JSON object mapping each role's construct path to a pre-created IAM role name (`"<construct path>": "<role name>"`). The construct paths come from the generated report. See [`iamRoleConfig.json` format](#iamroleconfigjson-format) below for a complete example.         |
+
+**Recommended workflow:**
+
+1. Set `useCustomVamsStackRoles` to `true` and `generateReportOnly` to `true` in the `vamsStacks` section.
+2. Run `cd infra && npx cdk synth`. VAMS writes `cdk.out/iam-policy-report.txt` (and `.json`) listing every role it would create, each with its trust policy and required permissions.
+3. Hand the report to whoever pre-creates IAM roles in your organization. They create the roles outside of VAMS.
+4. Populate `precreatedRoles` with a `"<construct path>": "<pre-created role name>"` entry for every role in the report, then set `generateReportOnly` to `false`.
+5. Synthesize and deploy. Once every role is mapped, the synthesized templates reference the existing roles and contain no `AWS::IAM::Role` resources.
+
+:::warning[Map every role]
+With `generateReportOnly` set to `false`, synthesis fails if any role the constructs need is not present in `precreatedRoles`. Re-run the report whenever you enable a new VAMS feature or pipeline, since new features introduce new roles.
+:::
+
+#### `iamRoleConfig.json` format
+
+The `precreatedRoles` field is a JSON object (a map), **not** an array. Each key is the **construct path** of a role exactly as it appears in the generated `iam-policy-report.txt` (the value shown in parentheses after `<missing role>`), and each value is the **name** of the IAM role you pre-created in your account. The key is a path string, not an ARN; the value is a plain role name, not an ARN.
+
+The report lists each role like this:
+
+```
+<missing role> (vams-core-prod-us-east-1/StorageResourcesBuilder/BucketNotificationsHandler050a0587b7544547bf325f094a3db834/Role)
+```
+
+You take the text in parentheses as the key and map it to your pre-created role name. A complete `infra/config/policy/iamRoleConfig.json` with mock values looks like this:
+
+```json
+{
+    "bootstrap": {
+        "useCliCredentialsSynthesizer": false,
+        "qualifier": "",
+        "deployRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-deploy-role",
+        "cloudFormationExecutionRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-cfn-exec-role",
+        "lookupRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-lookup-role",
+        "fileAssetPublishingRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-file-publishing-role",
+        "imageAssetPublishingRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-image-publishing-role",
+        "fileAssetsBucketName": "",
+        "imageAssetsRepositoryName": ""
+    },
+    "vamsStacks": {
+        "generateReportOnly": false,
+        "precreatedRoles": {
+            "vams-core-prod-us-east-1/StorageResourcesBuilder/BucketNotificationsHandler050a0587b7544547bf325f094a3db834/Role": "my-org-vams-storage-bucketnotify-role",
+            "vams-core-prod-us-east-1/ApiBuilder/VAMSWorkflowIAMRole/Resource": "my-org-vams-workflow-role",
+            "vams-core-prod-us-east-1/AuthBuilder/Cognito/.../ServiceRole": "my-org-vams-auth-service-role",
+            "vams-waf-prod-us-east-1/Wafv2CF/.../ServiceRole": "my-org-vams-waf-service-role"
+        }
+    }
+}
+```
+
+:::note[Keys are deployment-specific]
+The construct path keys begin with your full stack name (for example, `vams-core-prod-us-east-1`), which is derived from `name`, `app.baseStackName`, and the Region. If you change any of those values, the keys change and the report must be regenerated. Always copy the exact paths from your own `iam-policy-report.txt` rather than from this example. The values (`my-org-vams-*` above) are placeholders for whatever role names your IAM team assigns.
+:::
 
 ### Amazon S3 additional bucket policy (`infra/config/policy/s3AdditionalBucketPolicyConfig.json`)
 

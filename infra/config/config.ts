@@ -395,6 +395,20 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // Initialize IAM role customization configuration if undefined (backward compatibility)
+    if (config.app.iamRoleConfig == undefined) {
+        config.app.iamRoleConfig = {
+            useCustomBootstrapRoles: false,
+            useCustomVamsStackRoles: false,
+        };
+    }
+    if (config.app.iamRoleConfig.useCustomBootstrapRoles == undefined) {
+        config.app.iamRoleConfig.useCustomBootstrapRoles = false;
+    }
+    if (config.app.iamRoleConfig.useCustomVamsStackRoles == undefined) {
+        config.app.iamRoleConfig.useCustomVamsStackRoles = false;
+    }
+
     // Initialize metadataSchema configuration if undefined (backward compatibility)
     if (config.app.metadataSchema == undefined) {
         config.app.metadataSchema = {
@@ -418,6 +432,53 @@ export function getConfig(app: cdk.App): Config {
         config.s3AdditionalBucketPolicyJSON = JSON.parse(s3AdditionalBucketPolicyFile);
     } else {
         config.s3AdditionalBucketPolicyJSON = undefined;
+    }
+
+    //Load IAM role customization mappings JSON (only when a custom-roles flag is enabled)
+    config.iamRoleCustomizationJSON = undefined;
+    if (
+        config.app.iamRoleConfig.useCustomBootstrapRoles ||
+        config.app.iamRoleConfig.useCustomVamsStackRoles
+    ) {
+        const iamRoleConfigFile: string = readFileSync(
+            join(__dirname, "policy", "iamRoleConfig.json"),
+            {
+                encoding: "utf8",
+                flag: "r",
+            }
+        );
+
+        if (iamRoleConfigFile && iamRoleConfigFile.trim().length > 0) {
+            config.iamRoleCustomizationJSON = JSON.parse(iamRoleConfigFile);
+        }
+
+        if (!config.iamRoleCustomizationJSON) {
+            throw new Error(
+                "Configuration Error: app.iamRoleConfig enables custom IAM roles but " +
+                    "infra/config/policy/iamRoleConfig.json is empty. Define the bootstrap and/or " +
+                    "vamsStacks mappings in that file. See the configuration reference documentation."
+            );
+        }
+
+        if (
+            config.app.iamRoleConfig.useCustomBootstrapRoles &&
+            !config.iamRoleCustomizationJSON.bootstrap
+        ) {
+            throw new Error(
+                "Configuration Error: app.iamRoleConfig.useCustomBootstrapRoles is true but " +
+                    "infra/config/policy/iamRoleConfig.json has no 'bootstrap' section."
+            );
+        }
+
+        if (
+            config.app.iamRoleConfig.useCustomVamsStackRoles &&
+            !config.iamRoleCustomizationJSON.vamsStacks
+        ) {
+            throw new Error(
+                "Configuration Error: app.iamRoleConfig.useCustomVamsStackRoles is true but " +
+                    "infra/config/policy/iamRoleConfig.json has no 'vamsStacks' section."
+            );
+        }
     }
 
     //If we are govCloud, check for certain features that are required to be on or off.
@@ -1099,6 +1160,10 @@ export interface ConfigPublic {
         };
         adminUserId: string;
         adminEmailAddress: string;
+        iamRoleConfig: {
+            useCustomBootstrapRoles: boolean;
+            useCustomVamsStackRoles: boolean;
+        };
         useFips: boolean;
         useWaf: boolean;
         addStackCloudTrailLogs: boolean;
@@ -1362,6 +1427,7 @@ export interface Config extends ConfigPublic {
     enableCdkNag: boolean;
     dockerDefaultPlatform: string;
     s3AdditionalBucketPolicyJSON: any | undefined;
+    iamRoleCustomizationJSON: any | undefined; // Loaded from policy/iamRoleConfig.json
     openSearchAssetIndexName: string; // Asset index name
     openSearchFileIndexName: string; // File index name
     openSearchAssetIndexNameSSMParam: string;
