@@ -32,7 +32,7 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore'):
     triggerType: str = "Manual"
     executionLogGroupArn: Optional[str] = ""
     # ISO-8601 timestamp of the last Step Functions describe_execution poll (empty at
-    # launch). listExecutions only re-polls when the stop date is unset and this is
+    # launch). executionService only re-polls when the stop date is unset and this is
     # older than the min sync interval, reducing direct SFN calls.
     lastSfnSyncCheckDate: Optional[str] = ""
     # executionError: the specific failure message (SFN error/cause) for a non-SUCCEEDED

@@ -22,7 +22,7 @@ import {
     buildDatabaseService,
 } from "../../lambdaBuilder/databaseFunctions";
 import {
-    buildListWorkflowExecutionsFunction,
+    buildExecutionServiceFunction,
     buildWorkflowService,
     buildCreateWorkflowFunction,
     buildExecuteWorkflowFunction,
@@ -979,7 +979,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
-        const listWorkflowExecutionsFunction = buildListWorkflowExecutionsFunction(
+        const executionServiceFunction = buildExecutionServiceFunction(
             this,
             lambdaCommonBaseLayer,
             storageResources,
@@ -988,14 +988,36 @@ export class ApiBuilderNestedStack extends NestedStack {
             vpc,
             subnets
         );
-        attachFunctionToApi(this, listWorkflowExecutionsFunction, {
+        attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}",
             method: apigateway.HttpMethod.GET,
             api: api,
         });
 
-        attachFunctionToApi(this, listWorkflowExecutionsFunction, {
+        attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        // Abort a running workflow execution (execution-keyed; executions may span
+        // multiple assets, so this is not scoped under a single asset path).
+        attachFunctionToApi(this, executionServiceFunction, {
+            routePath: "/workflows/executions/{executionId}",
+            method: apigateway.HttpMethod.DELETE,
+            api: api,
+        });
+
+        // Execution detail/traceability view (cross-fetched names, inputs, outputs).
+        attachFunctionToApi(this, executionServiceFunction, {
+            routePath: "/workflows/executions/{executionId}/details",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        // Execution logs (truncated stored log, or full live CloudWatch search).
+        attachFunctionToApi(this, executionServiceFunction, {
+            routePath: "/workflows/executions/{executionId}/logs",
             method: apigateway.HttpMethod.GET,
             api: api,
         });

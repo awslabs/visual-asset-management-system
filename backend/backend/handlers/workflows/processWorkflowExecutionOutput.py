@@ -26,7 +26,6 @@ from common import executionRecords as er
 
 asset_Database = None
 db_Database = None
-workflow_execution_database = None
 asset_upload_table_name = None
 s3_asset_buckets_table = None
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
@@ -41,7 +40,6 @@ try:
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
     db_Database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
     workflow_execution_database_v2 = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME"]
     pipeline_executions_table = os.environ["PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME"]
     pipeline_execution_output_files_table = os.environ["PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME"]

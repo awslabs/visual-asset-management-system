@@ -6245,6 +6245,165 @@ paths:
               - $ref: '#/components/parameters/maxItemsParam'
               - $ref: '#/components/parameters/pageSizeParam'
               - $ref: '#/components/parameters/startingTokenParam'
+    /workflows/executions/{executionId}:
+        delete:
+            summary: "Abort a running workflow execution."
+            description: "Stops any still-running inner pipeline executions first, then the outer Step Functions execution, and marks the unfinished pipeline records and the overall execution as ABORTED. Requires GET on the execution's workflow and POST on every input-file asset tied to the execution."
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    type: string
+                description: Identifier of the execution to abort.
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid or missing executionId.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, workflow, or one of the input-file assets).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /workflows/executions/{executionId}/details:
+        get:
+            summary: "Get full detail and input/output traceability for an execution."
+            description: "Returns the underlying pipelines (with status and timing, plus names/descriptions cross-fetched from the pipeline definitions), input files, input metadata, input configurations, and a listing of all outputs (files, metadata, results). Works for running and completed executions; running executions may be partially populated. Internal details (ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted. Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    type: string
+                description: Identifier of the execution.
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid or missing executionId.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, workflow, or one of the input-file assets).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /workflows/executions/{executionId}/logs:
+        get:
+            summary: "Get execution logs (truncated stored text, or full live search)."
+            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. mode=full runs a live Amazon CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    type: string
+                description: Identifier of the execution.
+              - in: query
+                name: mode
+                required: false
+                schema:
+                    type: string
+                    enum: [truncated, full]
+                    default: truncated
+                description: Log retrieval mode.
+              - in: query
+                name: pipelineExecutionId
+                required: false
+                schema:
+                    type: string
+                description: Narrow the logs to a single pipeline execution of this execution.
+              - in: query
+                name: filterPattern
+                required: false
+                schema:
+                    type: string
+                description: "(full mode) Additional CloudWatch Logs filter pattern, AND-ed with the execution/pipeline scope."
+              - in: query
+                name: startTime
+                required: false
+                schema:
+                    type: integer
+                description: "(full mode) Start of the time range, epoch milliseconds."
+              - in: query
+                name: endTime
+                required: false
+                schema:
+                    type: integer
+                description: "(full mode) End of the time range, epoch milliseconds."
+              - in: query
+                name: limit
+                required: false
+                schema:
+                    type: integer
+                    default: 100
+                description: "(full mode) Maximum number of events to return."
+              - in: query
+                name: nextToken
+                required: false
+                schema:
+                    type: string
+                description: "(full mode) Pagination token from a previous response."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid or missing executionId, or invalid mode.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, workflow, or one of the input-file assets).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution (or specified pipeline execution) not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
     /search:
         get:
             summary: "Get OpenSearch index mappings."

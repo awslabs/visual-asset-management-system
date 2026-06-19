@@ -6,12 +6,24 @@ import pytest
 from datetime import datetime
 from unittest.mock import MagicMock
 
-os.environ.setdefault("WORKFLOW_EXECUTION_STORAGE_TABLE_NAME", "t-exec")
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "t-assets")
 os.environ.setdefault("WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME", "t-exec-v2")
 os.environ.setdefault("WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME", "t-wf-inputs")
+os.environ.setdefault("PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME", "t-pexec")
+os.environ.setdefault("WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME", "t-wf-cfg")
+os.environ.setdefault("PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE_NAME", "t-pin-files")
+os.environ.setdefault("PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE_NAME", "t-pin-md")
+os.environ.setdefault("PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME", "t-pin-cfg")
+# Output/log table names are shared with processWorkflowExecutionOutput's tests; use the
+# same values so the shared process-wide env stays consistent regardless of import order.
+os.environ.setdefault("PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME", "t-of")
+os.environ.setdefault("PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME", "t-om")
+os.environ.setdefault("PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME", "t-or")
+os.environ.setdefault("PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME", "t-logs")
+os.environ.setdefault("WORKFLOW_STORAGE_TABLE_NAME", "t-workflows")
+os.environ.setdefault("PIPELINE_STORAGE_TABLE_NAME", "t-pipelines")
 
-from backend.backend.handlers.workflows import listExecutions as le
+from backend.backend.handlers.workflows import executionService as le
 
 
 @pytest.mark.unit

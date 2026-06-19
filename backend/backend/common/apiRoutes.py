@@ -336,6 +336,19 @@ API_WORKFLOW_EXECUTIONS_BY_WORKFLOW = ApiRoute(
 API_EXECUTE_WORKFLOW = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}", (POST,), "workflows"
 )
+# Execution-keyed abort. Executions may span files across multiple assets, so the abort
+# is keyed on the execution id rather than scoped under a single asset path. DELETE is
+# the abort action on the execution resource.
+API_WORKFLOW_EXECUTION = ApiRoute(
+    "/workflows/executions/{executionId}", (DELETE,), "workflows"
+)
+# Execution-keyed detail + log reads (same execution-centric keying as abort).
+API_WORKFLOW_EXECUTION_DETAILS = ApiRoute(
+    "/workflows/executions/{executionId}/details", (GET,), "workflows"
+)
+API_WORKFLOW_EXECUTION_LOGS = ApiRoute(
+    "/workflows/executions/{executionId}/logs", (GET,), "workflows"
+)
 
 WORKFLOW_ROUTES: Tuple[ApiRoute, ...] = (
     API_WORKFLOWS,
@@ -344,6 +357,9 @@ WORKFLOW_ROUTES: Tuple[ApiRoute, ...] = (
     API_WORKFLOW_EXECUTIONS,
     API_WORKFLOW_EXECUTIONS_BY_WORKFLOW,
     API_EXECUTE_WORKFLOW,
+    API_WORKFLOW_EXECUTION,
+    API_WORKFLOW_EXECUTION_DETAILS,
+    API_WORKFLOW_EXECUTION_LOGS,
 )
 
 # ---------------------------------------------------------------------------

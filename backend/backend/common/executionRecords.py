@@ -135,7 +135,7 @@ def build_workflow_execution_record(
         "triggerType": trigger_type,
         "executionLogGroupArn": execution_log_group_arn or "",
         # Timestamp of the last Step Functions describe_execution poll for this
-        # execution. Empty at launch. listExecutions throttles SFN polling against
+        # execution. Empty at launch. executionService throttles SFN polling against
         # this (only re-polls when the stop date is unset AND this is older than the
         # min sync interval), reducing describe_execution calls.
         "lastSfnSyncCheckDate": last_sfn_sync_check_date or "",

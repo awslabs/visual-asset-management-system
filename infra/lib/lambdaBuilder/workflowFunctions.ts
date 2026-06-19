@@ -82,7 +82,7 @@ export function buildWorkflowService(
     return fun;
 }
 
-export function buildListWorkflowExecutionsFunction(
+export function buildExecutionServiceFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
@@ -91,7 +91,7 @@ export function buildListWorkflowExecutionsFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "listExecutions";
+    const name = "executionService";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.workflows.${name}.lambda_handler`,
@@ -108,26 +108,58 @@ export function buildListWorkflowExecutionsFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
                 storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
             WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.workflowExecutionInputsStorageTable.tableName,
+            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
+            // Detail-assembly tables (read-only): per-pipeline input/output records, logs,
+            // and the workflow/pipeline definition tables for name/description cross-fetch.
+            WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionConfigurationStorageTable.tableName,
+            PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionInputFilesStorageTable.tableName,
+            PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.tableName,
+            PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.tableName,
+            PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.tableName,
+            PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.tableName,
+            PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.tableName,
+            PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionLogsStorageTable.tableName,
+            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
+            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
             // Shared workflow SFN log group; used to pull error logs for executions that
-            // ended in a non-success terminal status (e.g. a direct SFN abort).
+            // ended in a non-success terminal status (e.g. a direct SFN abort) and for the
+            // full-search logs API.
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
         },
     });
-    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun); //Needs write permission to update execution status after a SFN fetch
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun); // write for lazy status reconciliation
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun); // write for lazy status reconciliation + abort
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun); // write to mark pipeline rows ABORTED
+    // Read-only sources for the details + logs APIs.
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionInputFilesStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: ["states:DescribeExecution"],
+            actions: ["states:DescribeExecution", "states:StopExecution"],
             resources: [
                 IAMArn("*" + config.name + "*").statemachine,
                 IAMArn("*" + config.name + "*").statemachineExecution,
@@ -253,8 +285,6 @@ export function buildExecuteWorkflowFunction(
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
             WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
@@ -279,7 +309,6 @@ export function buildExecuteWorkflowFunction(
     storageResources.dynamo.workflowStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionInputFilesStorageTable.grantReadWriteData(fun);
@@ -403,8 +432,6 @@ export function buildProcessWorkflowExecutionOutputFunction(
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
@@ -431,7 +458,6 @@ export function buildProcessWorkflowExecutionOutputFunction(
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);

@@ -41,7 +41,7 @@ The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration 
 -   **Throttled Step Functions status sync.** The main row carries `executionStopDate`
     plus `lastSfnSyncCheckDate`. The end-state `processWorkflowExecutionOutput` lambda
     writes the stop date + status directly when the final pipeline completes, so a
-    normal run is terminal in the table without any poll. `listExecutions` only calls
+    normal run is terminal in the table without any poll. `executionService` only calls
     Step Functions `describe_execution` when the row has **no** stop date **and** its
     `lastSfnSyncCheckDate` is older than the sync window (`SFN_SYNC_MIN_INTERVAL_SECONDS`,
     30s); each poll re-stamps `lastSfnSyncCheckDate`. This cuts direct SFN calls while
@@ -50,7 +50,7 @@ The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration 
 -   **`executionLog` vs `executionError`.** The main row captures the full CloudWatch
     execution log in `executionLog` on **every** terminal completion (success or failure)
     for debugging — the end-state `processWorkflowExecutionOutput` lambda writes it on the
-    normal success path, and a `listExecutions` poll writes it for any terminal status it
+    normal success path, and an `executionService` poll writes it for any terminal status it
     reconciles out-of-band. `executionError` holds only the specific failure message (SFN
     error/cause) and is set only for a non-`SUCCEEDED` terminal status. `executionError` is
     the broadly-visible message; `executionLog` is the fuller data intended for more

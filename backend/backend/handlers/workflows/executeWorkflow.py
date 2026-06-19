@@ -59,10 +59,6 @@ try:
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     pipeline_Database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
     workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
-    # Legacy V1 execution table name. The handler now reads/writes the V2 tables below;
-    # this is retained so a missing env var still fails fast at cold start (the CDK
-    # builder still injects it) and as a marker until the V1 table is fully retired.
-    workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
     bucket_name_assetAuxiliary = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
     metadata_service_function = os.environ['METADATA_SERVICE_LAMBDA_FUNCTION_NAME']
     workflow_execution_database_v2 = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME"]

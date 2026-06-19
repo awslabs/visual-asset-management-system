@@ -350,6 +350,211 @@ Only currently running executions (without a stop date) are returned. Completed 
 
 ---
 
+## Abort a workflow execution
+
+Aborts a running workflow execution. Any still-running inner pipeline executions are stopped first, then the outer Step Functions execution is stopped. The execution's individual pipeline records that had not yet finished are marked `ABORTED`, and the overall execution status is set to `ABORTED`.
+
+```
+DELETE /workflows/executions/{executionId}
+```
+
+The route is keyed on the execution identifier because an execution may span input files across multiple assets.
+
+### Path parameters
+
+| Parameter     | Type   | Required | Description                       |
+| ------------- | ------ | -------- | --------------------------------- |
+| `executionId` | string | Yes      | Identifier of the execution to abort |
+
+### Response
+
+```json
+{
+    "message": "Execution aborted"
+}
+```
+
+:::note[Authorization]
+Aborting an execution requires `GET` permission on the execution's workflow and `POST` permission on every input-file asset tied to the execution. Because the execution does not modify the workflow definition, only read access to the workflow is required; because it affects the processed assets, write (`POST`) access to those assets is required.
+:::
+
+### Error responses
+
+| Status | Description                                                       |
+| ------ | ----------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`                                  |
+| `403`  | Not authorized (API, workflow, or one of the input-file assets)   |
+| `404`  | Execution not found                                               |
+| `429`  | Throttling -- too many requests                                   |
+| `500`  | Internal server error                                             |
+
+---
+
+## Get execution details
+
+Returns the full detail and input/output traceability for a single execution, including the underlying pipelines (with status and timing), input files, input metadata, input configurations, and a listing of all outputs (files, metadata, and results). Pipeline names and descriptions are resolved from the pipeline definitions, and the workflow description from the workflow definition.
+
+```
+GET /workflows/executions/{executionId}/details
+```
+
+The route is keyed on the execution identifier because an execution may span input files across multiple assets.
+
+### Path parameters
+
+| Parameter     | Type   | Required | Description                  |
+| ------------- | ------ | -------- | ---------------------------- |
+| `executionId` | string | Yes      | Execution identifier         |
+
+### Response
+
+```json
+{
+    "message": {
+        "executionId": "a1b2c3d4e5f6",
+        "workflowId": "convert-and-preview",
+        "workflowDatabaseId": "GLOBAL",
+        "workflowDescription": "Convert 3D files and generate preview thumbnails",
+        "executionStatus": "SUCCEEDED",
+        "executionStartDate": "2026-06-16T00:00:00Z",
+        "executionStopDate": "2026-06-16T00:05:00Z",
+        "triggerType": "Manual",
+        "triggeredByUserId": "user@example.com",
+        "executionError": "",
+        "pipelines": [
+            {
+                "pipelineId": "3d-conversion-pipeline",
+                "pipelineDatabaseId": "GLOBAL",
+                "name": "3d-conversion-pipeline",
+                "description": "Converts 3D files to glTF",
+                "pipelineType": "standardFile",
+                "pipelineExecutionType": "Lambda",
+                "endStatePipeline": true,
+                "executionStatus": "SUCCEEDED",
+                "executionStartDate": "2026-06-16T00:00:05Z",
+                "executionStopDate": "2026-06-16T00:04:50Z"
+            }
+        ],
+        "inputFiles": [
+            { "databaseId": "my-database", "assetId": "a1b2c3", "inputAssetFileKey": "/models/building.fbx" }
+        ],
+        "inputMetadata": [
+            { "databaseId": "my-database", "assetId": "a1b2c3", "filePath": "/", "metadata": { "site": "north" } }
+        ],
+        "inputConfigurations": [
+            { "pipelineId": "3d-conversion-pipeline", "inputConfiguration": "", "inputConfigurationTruncated": false }
+        ],
+        "outputs": {
+            "files": [
+                { "relativeFilePath": "/models/building.gltf", "fileType": "file", "fileSize": 20480, "contentType": "model/gltf-binary" }
+            ],
+            "metadata": [],
+            "results": []
+        }
+    }
+}
+```
+
+:::note[Running executions]
+The details endpoint works for both running and completed executions. While an execution is still running, not all fields are populated yet — pipelines that have not started have empty status and timing, and outputs appear as each pipeline completes.
+:::
+
+:::note[Traceability, not internals]
+The response is scoped to input/output traceability. Internal details — Step Functions and resource ARNs, temporary and auxiliary S3 input/output locations, and credential-vending fields — are intentionally omitted. Output file size and content type are included when still available; a lifecycle policy may expire temporary output files, in which case only the relative path and type are returned.
+:::
+
+### Error responses
+
+| Status | Description                                                       |
+| ------ | ----------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`                                  |
+| `403`  | Not authorized (API, workflow, or one of the input-file assets)   |
+| `404`  | Execution not found                                               |
+| `500`  | Internal server error                                             |
+
+---
+
+## Get execution logs
+
+Returns logs for an execution in one of two modes. Logs are always scoped to the requested execution; supplying a `pipelineExecutionId` narrows the result to that single pipeline execution.
+
+```
+GET /workflows/executions/{executionId}/logs
+```
+
+### Path parameters
+
+| Parameter     | Type   | Required | Description          |
+| ------------- | ------ | -------- | -------------------- |
+| `executionId` | string | Yes      | Execution identifier |
+
+### Query parameters
+
+| Parameter             | Type   | Required | Default     | Description                                                                                       |
+| --------------------- | ------ | -------- | ----------- | ------------------------------------------------------------------------------------------------- |
+| `mode`                | string | No       | `truncated` | `truncated` returns the stored log text; `full` runs a live Amazon CloudWatch Logs search          |
+| `pipelineExecutionId` | string | No       | —           | Narrow the logs to a single pipeline execution of this execution                                  |
+| `filterPattern`       | string | No       | —           | (`full` mode) Additional CloudWatch Logs filter pattern, AND-ed with the execution/pipeline scope |
+| `startTime`           | number | No       | —           | (`full` mode) Start of the time range, epoch milliseconds                                          |
+| `endTime`             | number | No       | —           | (`full` mode) End of the time range, epoch milliseconds                                            |
+| `limit`               | number | No       | `100`       | (`full` mode) Maximum number of events to return                                                  |
+| `nextToken`           | string | No       | —           | (`full` mode) Pagination token from a previous response                                           |
+
+### Response (truncated mode)
+
+```json
+{
+    "message": {
+        "mode": "truncated",
+        "executionLog": "...stored execution log text...",
+        "executionError": ""
+    }
+}
+```
+
+When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipeline log is returned instead:
+
+```json
+{
+    "message": {
+        "mode": "truncated",
+        "pipelineExecutionId": "p1a2b3",
+        "resultLog": "...",
+        "errorLog": ""
+    }
+}
+```
+
+### Response (full mode)
+
+```json
+{
+    "message": {
+        "mode": "full",
+        "pipelineExecutionId": "",
+        "events": [
+            { "timestamp": 1718496000000, "message": "..." }
+        ],
+        "nextToken": null
+    }
+}
+```
+
+:::note[Scope]
+A full-mode search is always restricted to the requested execution within the shared workflow log group. When `pipelineExecutionId` is supplied, the search is further restricted to that single pipeline execution — logs from other pipelines or executions are never returned.
+:::
+
+### Error responses
+
+| Status | Description                                                       |
+| ------ | ----------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, or invalid `mode`               |
+| `403`  | Not authorized (API, workflow, or one of the input-file assets)   |
+| `404`  | Execution (or specified pipeline execution) not found             |
+| `500`  | Internal server error                                             |
+
+---
+
 ## Related resources
 
 -   [Pipelines API](pipelines.md) -- Define the individual pipeline steps used in workflows

@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from common.validators import validate, id_pattern
@@ -213,3 +213,85 @@ class WorkflowExecutionResponseModel(BaseModel, extra='ignore'):
     assetId: Optional[str] = None
     executionError: Optional[str] = None
     executionLog: Optional[str] = None
+
+
+######################## Abort Execution API Models ##########################
+class AbortExecutionResponseModel(BaseModel, extra='ignore'):
+    """Response model for an aborted workflow execution.
+
+    The abort endpoint (`DELETE /workflows/executions/{executionId}`) takes the
+    executionId as a path parameter (validated in the handler) and no request body.
+    On success it returns `{"message": "Execution aborted"}`."""
+    message: str
+
+
+######################## Execution Details API Models ##########################
+class ExecutionPipelineDetailModel(BaseModel, extra='ignore'):
+    """One pipeline within an execution's detail view. Name/description are cross-fetched
+    from the pipeline definition; only non-internal status/timing/type fields are exposed
+    (no ARNs or S3 locations)."""
+    pipelineId: Optional[str] = None
+    pipelineDatabaseId: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    pipelineType: Optional[str] = None
+    pipelineExecutionType: Optional[str] = None
+    endStatePipeline: Optional[bool] = False
+    executionStatus: Optional[str] = None
+    executionStartDate: Optional[str] = None
+    executionStopDate: Optional[str] = None
+
+
+class ExecutionInputFileDetailModel(BaseModel, extra='ignore'):
+    """Input-file traceability record (asset-relative locator; no S3 internals)."""
+    databaseId: Optional[str] = None
+    assetId: Optional[str] = None
+    inputAssetFileKey: Optional[str] = None
+
+
+class ExecutionOutputFileDetailModel(BaseModel, extra='ignore'):
+    """Output-file traceability record. fileSize / contentType / s3VersionId are present
+    only when still available (a lifecycle policy may have expired temporary outputs)."""
+    relativeFilePath: Optional[str] = None
+    fileType: Optional[str] = None
+    fileSize: Optional[int] = None
+    contentType: Optional[str] = None
+    s3VersionId: Optional[str] = None
+
+
+class ExecutionDetailsResponseModel(BaseModel, extra='ignore'):
+    """Response model for the execution details endpoint
+    (`GET /workflows/executions/{executionId}/details`). Documents the traceability
+    payload returned under `message`; the handler assembles dicts directly. All internal
+    fields (ARNs, S3 bucket/key/prefix locations, STS/vended-role fields) are excluded."""
+    executionId: str
+    workflowId: Optional[str] = None
+    workflowDatabaseId: Optional[str] = None
+    workflowDescription: Optional[str] = None
+    executionStatus: Optional[str] = None
+    executionStartDate: Optional[str] = None
+    executionStopDate: Optional[str] = None
+    triggerType: Optional[str] = None
+    triggeredByUserId: Optional[str] = None
+    executionError: Optional[str] = None
+    pipelines: Optional[List[ExecutionPipelineDetailModel]] = []
+    inputFiles: Optional[List[ExecutionInputFileDetailModel]] = []
+    inputMetadata: Optional[List[Dict[str, Any]]] = []
+    inputConfigurations: Optional[List[Dict[str, Any]]] = []
+    outputs: Optional[Dict[str, Any]] = {}
+
+
+######################## Execution Logs API Models ##########################
+class ExecutionLogsResponseModel(BaseModel, extra='ignore'):
+    """Response model for the execution logs endpoint
+    (`GET /workflows/executions/{executionId}/logs`). `mode` is `truncated` (stored
+    execution/pipeline log text) or `full` (live CloudWatch FilterLogEvents events,
+    scoped to the execution -- and to a single pipeline execution when requested)."""
+    mode: str
+    executionLog: Optional[str] = None
+    executionError: Optional[str] = None
+    pipelineExecutionId: Optional[str] = None
+    resultLog: Optional[str] = None
+    errorLog: Optional[str] = None
+    events: Optional[List[Dict[str, Any]]] = None
+    nextToken: Optional[str] = None
