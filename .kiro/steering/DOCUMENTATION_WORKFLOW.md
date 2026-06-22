@@ -235,6 +235,20 @@ VAMS requires Python 3.12.
 6. **Tables**: Use for comparisons, feature lists, field references
 7. **Never reference other AWS solutions** by name
 8. **Match the surrounding page's level of detail and form**: When adding to an existing page, mirror its density and structure. If the section uses descriptive prose, describe how the behavior works rather than introducing "requirement"/"must" line-item checklists. Reserve upgrade/migration framing for the upgrade and revision-history pages; do not narrate "upgrades" on conceptual or architecture pages.
+9. **Use present-tense framing — describe current behavior, not history**: Document what VAMS does **now**. Do not reference past behavior, version-relative changes, or how something used to work. Avoid phrasings such as "previously", "earlier releases", "no longer", "now defaults to", "used to", "as of version X", "prior to vX", "matches the historical layout", "changed from … to …", or "this used to". State the current behavior directly and, where relevant, the action the reader should take. The **only** exceptions are the upgrade and revision-history pages, where change/version framing is expected: `deployment/update-the-solution.md` (the migration guide) and `additional/revisions.md` (the document revision history). Everywhere else (overview, concepts, architecture, configuration reference, deployment, user guide, CLI, pipelines, API, developer, troubleshooting) must read as if the current behavior had always been the behavior.
+
+    ```text
+    # WRONG (architecture/config/reference page) — references the past
+    The VPC is no longer auto-enabled. availabilityZoneCount now defaults to 2 (previously 3).
+
+    # CORRECT — states current behavior and the action to take
+    A VPC is required for these features; set app.useGlobalVpc.enabled to true. availabilityZoneCount
+    defaults to 2 and must be 2 or 3.
+
+    # ALLOWED only in update-the-solution.md / revisions.md
+    availabilityZoneCount now defaults to 2 (earlier releases built 3 AZs); on upgrade the unused
+    third AZ subnet is removed.
+    ```
 
 ### **Rule 7: Include Language Tags in All Code Blocks**
 

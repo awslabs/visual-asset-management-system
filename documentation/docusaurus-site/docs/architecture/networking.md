@@ -1,6 +1,6 @@
 # Network Architecture
 
-VAMS supports multiple network deployment configurations to accommodate commercial AWS, AWS GovCloud, . This page describes the network topology for each deployment mode, VPC configuration options, VPC endpoints, and subnet architecture.
+VAMS supports multiple network deployment configurations to accommodate commercial AWS, AWS GovCloud, and the AWS European Sovereign Cloud. This page describes the network topology for each deployment mode, VPC configuration options, VPC endpoints, and subnet architecture.
 
 ## Deployment Modes
 
@@ -80,7 +80,7 @@ In this mode:
 
 ### VPC-Isolated Deployment (GovCloud)
 
-For restricted environments, GovCloud deployments can use full VPC isolation with all AWS service access routed through VPC endpoints and no internet egress.
+For restricted environments, GovCloud and AWS European Sovereign Cloud deployments can use full VPC isolation with all AWS service access routed through VPC endpoints and no internet egress. This full-isolation topology applies when `useGlobalVpc.useForAllLambdas` is `true`, which places every VAMS Lambda function inside the VPC. The GovCloud and European Sovereign Cloud templates set `useForAllLambdas` to `false` by default — only the Lambda functions that require the VPC run inside it — and you set it to `true` when stricter network isolation is needed or the Lambda functions must reach specific VPC network components.
 
 ```mermaid
 graph TD
@@ -153,16 +153,24 @@ Private and public subnets are created when any of the following are enabled:
 -   Splat Toolbox pipeline
 -   Isaac Lab Training pipeline
 -   NVIDIA Cosmos pipeline (Predict, Reason, or Transfer)
+-   NVIDIA Gr00t pipeline
 
 ### Availability Zone Configuration
 
-The number of availability zones is determined by the deployment configuration:
+VAMS provisions a fixed number of Availability Zones for every subnet type it creates. The isolated subnets are always created across this AZ count, and the conditional private and public subnets (when created) use the same count. Keeping the AZ count stable across feature toggles avoids subnet add/remove churn between deployments.
 
-| Condition                                                | AZ Count |
-| -------------------------------------------------------- | -------- |
-| Amazon OpenSearch Service (Provisioned)                  | 3 AZs    |
-| ALB enabled, or all Lambdas in VPC, or RapidPipeline EKS | 2 AZs    |
-| Pipeline-only (no ALB, no all-Lambda VPC)                | 1 AZ     |
+| Condition                               | AZ Count                                    |
+| --------------------------------------- | ------------------------------------------- |
+| Amazon OpenSearch Service (Provisioned) | `availabilityZoneCount` (2 or 3, default 2) |
+| All other configurations (baseline)     | 2 AZs                                       |
+
+When Amazon OpenSearch Service (Provisioned) is enabled, the AZ count follows `openSearch.useProvisioned.availabilityZoneCount` (`2` or `3`, default `2`), with one data node per zone. At `2` the domain runs zone-aware **without** Standby (two data nodes, single index copy). At `3` the domain runs as **Multi-AZ with Standby** (three data nodes, and the asset/file indexes are created with two replicas so each has three copies, which Standby requires). Set it to `2` for Regions or partitions that expose only two Availability Zones, such as the AWS European Sovereign Cloud Region `eusc-de-east-1`; the configuration validation rejects an `availabilityZoneCount` greater than `2` for that Region.
+
+:::warning[Enabling Standby on an existing domain]
+Multi-AZ with Standby requires every index to have copies in a multiple of three. VAMS creates the indexes with the correct replica count for the chosen Availability Zone count, but a **3-AZ Standby domain must be created fresh** — switching an existing 2-AZ (single-copy) domain to `availabilityZoneCount: 3` in place is rejected by Amazon OpenSearch Service, because the domain configuration is validated against the existing indexes before their replica count can change. To move an existing domain to 3-AZ Standby, deploy with OpenSearch disabled to remove the domain, then re-enable it with `availabilityZoneCount: 3` to create a fresh domain, and run the reindex tool to repopulate it.
+:::
+
+The number of primary shards per index is set by `openSearch.useProvisioned.numberOfShards` (default `1`). As a sizing guideline, an index expected to exceed roughly 60 GB — about 3 million asset or file records for VAMS — should use more than one shard. Like the replica count, the shard count is fixed at index creation: changing it requires re-creating the index (disable and re-enable OpenSearch, then reindex); existing indexes are not re-sharded in place.
 
 ### External VPC Import
 

@@ -45,6 +45,8 @@
             },
             "useProvisioned": {
                 "enabled": false,
+                "availabilityZoneCount": 2,
+                "numberOfShards": 1,
                 "dataNodeInstanceType": "r6g.large.search",
                 "masterNodeInstanceType": "r6g.large.search",
                 "ebsInstanceNodeSizeGb": 120

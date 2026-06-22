@@ -2,7 +2,7 @@
     "name": "vams",
     "env": {
         "account": null,
-        "region": null,
+        "region": "eusc-de-east-1",
         "loadContextIgnoreVPCStacks": false
     },
     "app": {
@@ -18,7 +18,7 @@
             "useCustomBootstrapRoles": false,
             "useCustomVamsStackRoles": false
         },
-        "useFips": true,
+        "useFips": false,
         "useWaf": true,
         "addStackCloudTrailLogs": true,
         "useKmsCmkEncryption": {
@@ -61,7 +61,7 @@
             "usePublicSubnet": false,
             "addAlbS3SpecialVpcEndpoint": true,
             "domainHost": "vams1.example.com",
-            "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
+            "certificateArn": "arn:aws-eusc:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null
         },
         "useCloudFront": {
@@ -107,12 +107,12 @@
             "useRapidPipeline": {
                 "useEcs": {
                     "enabled": false,
-                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.eu/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
                     "autoRegisterWithVAMS": true
                 },
                 "useEks": {
                     "enabled": false,
-                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.eu/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
                     "autoRegisterWithVAMS": true,
                     "eksClusterVersion": "1.31",
                     "nodeInstanceType": "m5.2xlarge",
@@ -132,7 +132,7 @@
             },
             "useModelOps": {
                 "enabled": false,
-                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.eu/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
                 "autoRegisterWithVAMS": true
             },
             "useIsaacLabTraining": {

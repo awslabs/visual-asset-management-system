@@ -294,6 +294,8 @@ The migration requires `dynamodb:Scan` on source tables, `dynamodb:BatchWriteIte
 
 -   New OpenSearch index names: `vams-assets-v3` and `vams-files-v3`. The new mapping adds a `geo_MD_location` field of type `geo_shape` that powers the new geospatial search filter and map view. The previous v2 indexes are abandoned and remain in OpenSearch until you delete them manually.
 -   Provisioned OpenSearch domains are upgraded from engine version 2.7 to 3.5. Serverless collections are unaffected.
+-   The VPC is no longer enabled automatically. If a feature that requires a VPC (ALB, OpenSearch Provisioned, or any container-based pipeline) is enabled while `app.useGlobalVpc.enabled` is `false`, the deployment now fails configuration validation with an error that lists the offending features, rather than silently turning the VPC on. See [VPC is now required for certain features](#vpc-is-now-required-for-certain-features).
+-   Provisioned OpenSearch `availabilityZoneCount` now defaults to `2`, and the VPC is built with exactly that many Availability Zones. Earlier releases always built the VPC across 3 Availability Zones for provisioned OpenSearch even though the domain only used 2, so on upgrade the previously-unused third AZ subnet is removed (a VPC downgrade). See [OpenSearch Provisioned Availability Zone count downgrade](#opensearch-provisioned-availability-zone-count-downgrade).
 
 **Required migration steps:**
 
@@ -357,19 +359,42 @@ If `cdk deploy` fails on the OpenSearch domain version upgrade, recover by deplo
 This recovery path discards only the OpenSearch indexes; all source data lives in DynamoDB and S3, and the reindex restores the full search corpus. For details and other troubleshooting steps, see the [v2.5 to v2.6 migration README](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/deploymentDataMigration/v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_README.md).
 :::
 
+#### VPC is now required for certain features
+
+In earlier releases, enabling a feature that needs a VPC while `app.useGlobalVpc.enabled` was `false` silently turned the VPC on. In v2.6 this is a configuration error instead: the deployment fails and lists the features that require a VPC. The VPC-requiring features are ALB (`useAlb`), OpenSearch Provisioned (`openSearch.useProvisioned`), and the container-based pipelines (Potree viewer, 3D preview thumbnail, GenAI labeling, Gaussian splatting, RapidPipeline ECS/EKS, ModelOps, Isaac Lab, NVIDIA Cosmos, NVIDIA Gr00t).
+
+If your existing `config.json` relied on the old implicit behavior, update it before deploying v2.6: set `app.useGlobalVpc.enabled` to `true` (the value the deployment was effectively using all along), or disable the listed features. No infrastructure changes result from setting the flag to the value that was already in effect — this is a configuration-file correction only.
+
+#### OpenSearch Provisioned Availability Zone count downgrade
+
+In v2.6, provisioned OpenSearch adds `app.openSearch.useProvisioned.availabilityZoneCount` (default `2`), and the VPC is built with exactly that many Availability Zones. Earlier releases always built the VPC across **3** Availability Zones for provisioned OpenSearch, even though the OpenSearch domain itself only ever used **2** of them — the third AZ's subnet was created but unused. v2.6 now provisions 2 Availability Zones by default (or 3 only when you set `availabilityZoneCount` to `3`) and uses them consistently.
+
+On upgrade, this is a **VPC downgrade**: the previously-unused third Availability Zone's subnet is removed. Removing a subnet can fail in AWS CloudFormation when the subnet still holds elastic network interfaces — in this case the shared interface VPC endpoints placed across the isolated subnets, and the VPC-attached Lambda (Hyperplane) ENIs created when `app.useGlobalVpc.useForAllLambdas` is `true`. The OpenSearch domain itself does not change AZ count (it was already on 2), so the failure is specifically about deleting the orphaned third-AZ subnet.
+
+You have two options:
+
+-   **Keep the existing 3-AZ VPC layout (no change):** set `app.openSearch.useProvisioned.availabilityZoneCount` to `3` in `config.json` before deploying v2.6. The VPC is unchanged and the upgrade proceeds normally.
+-   **Move to the 2-AZ layout (default):** because the third AZ's subnet must be deleted, follow the staged drain-and-redeploy procedure so the elastic network interfaces release first. Turn off the VPC and all VPC-associated components, deploy to release the ENIs, manually clear any orphaned ENIs / subnets / VPC resources that still fail to delete, then redeploy with the 2-AZ settings and reindex. The full step-by-step is documented in [Subnet or VPC Resource Deletion Failures](../troubleshooting/common-issues.md) — set `availabilityZoneCount` to `2` when you re-enable OpenSearch in that procedure. No asset data is lost: search data is rebuilt from the authoritative DynamoDB tables and S3 buckets by the reindex.
+
+:::warning[Plan the Availability Zone choice before first v2.6 deploy]
+Decide on `availabilityZoneCount` (`2` or `3`) before upgrading. Setting it to `3` preserves the existing VPC with no teardown. Accepting the default of `2` removes a subnet and may require the manual VPC teardown above if elastic network interfaces have not finished detaching.
+:::
+
 ## Breaking changes checklist
 
 Use this checklist to determine if additional actions are needed after updating.
 
-| Change type                       | Versions affected                          | Action required                                                                     |
-| --------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------- |
-| DynamoDB table schema change      | v2.3 to v2.4, v2.4 to v2.5                 | Run version-specific migration scripts.                                             |
-| Amazon OpenSearch Service reindex | v2.2 to v2.3, v2.3 to v2.4, v2.5 to v2.6   | Run reindex script or set `reindexOnCdkDeploy: true`.                               |
-| OpenSearch engine version upgrade | v2.5 to v2.6 (provisioned only, 2.7 → 3.5) | Redeploy with OpenSearch disabled then re-enabled if the in-place upgrade fails.    |
-| Permission constraint migration   | v2.3 to v2.4, v2.4 to v2.5                 | Run constraint migration script if custom constraints exist.                        |
-| API Gateway authorizer change     | v2.2 to v2.3                               | Reset authorizer cache after deployment.                                            |
-| Pipeline CDK construct rename     | v2.2 to v2.3                               | Deploy without pipelines, then redeploy with pipelines enabled.                     |
-| Website framework change          | v2.4 to v2.5                               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`. |
+| Change type                       | Versions affected                          | Action required                                                                                                      |
+| --------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| DynamoDB table schema change      | v2.3 to v2.4, v2.4 to v2.5                 | Run version-specific migration scripts.                                                                              |
+| Amazon OpenSearch Service reindex | v2.2 to v2.3, v2.3 to v2.4, v2.5 to v2.6   | Run reindex script or set `reindexOnCdkDeploy: true`.                                                                |
+| OpenSearch engine version upgrade | v2.5 to v2.6 (provisioned only, 2.7 → 3.5) | Redeploy with OpenSearch disabled then re-enabled if the in-place upgrade fails.                                     |
+| VPC no longer auto-enabled        | v2.5 to v2.6                               | Set `app.useGlobalVpc.enabled: true` (or disable VPC-requiring features) if validation fails.                        |
+| OpenSearch AZ count VPC downgrade | v2.5 to v2.6 (provisioned only)            | Set `availabilityZoneCount: 3` to keep the existing VPC, or follow the drain-and-redeploy teardown to move to 2 AZs. |
+| Permission constraint migration   | v2.3 to v2.4, v2.4 to v2.5                 | Run constraint migration script if custom constraints exist.                                                         |
+| API Gateway authorizer change     | v2.2 to v2.3                               | Reset authorizer cache after deployment.                                                                             |
+| Pipeline CDK construct rename     | v2.2 to v2.3                               | Deploy without pipelines, then redeploy with pipelines enabled.                                                      |
+| Website framework change          | v2.4 to v2.5                               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`.                                  |
 
 ## Rollback guidance
 

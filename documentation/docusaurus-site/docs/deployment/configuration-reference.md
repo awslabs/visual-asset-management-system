@@ -94,6 +94,10 @@ kms:CreateGrant
 | `app.govCloud.enabled`      | boolean | `false` | Enables AWS GovCloud deployment mode. Enforces: VPC must be enabled, Amazon CloudFront must be disabled, Amazon Location Service must be disabled. |
 | `app.govCloud.il6Compliant` | boolean | `false` | Reserved for future use. Not yet fully implemented.                                                                                                |
 
+:::note[AWS European Sovereign Cloud]
+For now, also set `app.govCloud.enabled = true` when deploying to the AWS European Sovereign Cloud (Region `eusc-de-east-1`). The European Sovereign Cloud is a separate, isolated partition (`aws-eusc`) with the same constraints that the GovCloud mode already enforces — VPC required, no Amazon CloudFront (use the ALB web deployment), and no Amazon Location Service — so the existing GovCloud guardrails apply. A dedicated EU Sovereign Cloud deployment mode may be introduced in a future release; until then, the GovCloud flag is the supported way to enable these constraints, and the [`config.template.eusovereign.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.eusovereign.json) template sets it accordingly.
+:::
+
 ### IAM role customization (`app.iamRoleConfig`)
 
 These options support environments that restrict or centrally manage AWS Identity and Access Management (IAM) role creation. Both default to `false`, and when both are `false` VAMS manages all IAM roles itself (the recommended default). Each flag toggles whether VAMS reads its corresponding mappings from the separate `infra/config/policy/iamRoleConfig.json` file, keeping the long role ARNs and construct-path maps out of the main configuration.
@@ -130,17 +134,20 @@ The following table shows which VPC resources are created based on enabled featu
 
 #### Subnet Requirements
 
-| Feature / Pipeline                                   | Private Subnets            | Public Subnets | Min AZs | Notes                           |
-| ---------------------------------------------------- | -------------------------- | -------------- | ------- | ------------------------------- |
-| ALB (`useAlb.enabled`)                               | Yes (if `usePublicSubnet`) | Yes            | 2       | Public subnets for ALB          |
-| RapidPipeline ECS (`useRapidPipeline.useEcs`)        | Yes                        | Yes            | 2       | Batch compute                   |
-| RapidPipeline EKS (`useRapidPipeline.useEks`)        | Yes                        | Yes            | 2       | EKS cluster                     |
-| ModelOps (`useModelOps`)                             | Yes                        | Yes            | 1       | Batch compute                   |
-| Gaussian Splatting (`useSplatToolbox`)               | Yes                        | Yes            | 1       | Batch compute                   |
-| Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 1       | Batch compute + CodeBuild       |
-| NVIDIA Cosmos (`useNvidiaCosmos`)                    | Yes                        | Yes            | 1       | Batch compute + EFS + CodeBuild |
-| OpenSearch Provisioned (`openSearch.useProvisioned`) | No                         | No             | 3       | Requires 3 AZs for cluster      |
-| All other features                                   | Isolated only              | No             | 1       | Lambda VPC endpoints            |
+VAMS provisions every subnet type across a fixed Availability Zone count (a baseline of 2) so that toggling individual features does not add or remove subnets between deployments. Amazon OpenSearch Service (Provisioned) sets the count from `availabilityZoneCount` (2 or 3).
+
+| Feature / Pipeline                                   | Private Subnets            | Public Subnets | Min AZs                          | Notes                           |
+| ---------------------------------------------------- | -------------------------- | -------------- | -------------------------------- | ------------------------------- |
+| ALB (`useAlb.enabled`)                               | Yes (if `usePublicSubnet`) | Yes            | 2                                | Public subnets for ALB          |
+| RapidPipeline ECS (`useRapidPipeline.useEcs`)        | Yes                        | Yes            | 2                                | Batch compute                   |
+| RapidPipeline EKS (`useRapidPipeline.useEks`)        | Yes                        | Yes            | 2                                | EKS cluster                     |
+| ModelOps (`useModelOps`)                             | Yes                        | Yes            | 2                                | Batch compute                   |
+| Gaussian Splatting (`useSplatToolbox`)               | Yes                        | Yes            | 2                                | Batch compute                   |
+| Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 2                                | Batch compute + CodeBuild       |
+| NVIDIA Cosmos (`useNvidiaCosmos`)                    | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
+| NVIDIA Gr00t (`useNvidiaGr00t`)                      | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
+| OpenSearch Provisioned (`openSearch.useProvisioned`) | No                         | No             | `availabilityZoneCount` (2 or 3) | Zone-aware Multi-AZ domain      |
+| All other features                                   | Isolated only              | No             | 2                                | Lambda VPC endpoints            |
 
 #### VPC Interface Endpoints
 
@@ -179,14 +186,16 @@ Only one Amazon ECS interface endpoint can exist per VPC when private DNS is ena
 
 ## Amazon OpenSearch Service (`app.openSearch`)
 
-| Field                                                  | Type    | Default            | Description                                                                                                                                                                                                                                                                                           |
-| ------------------------------------------------------ | ------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.openSearch.useServerless.enabled`                 | boolean | `false`            | Deploys Amazon OpenSearch Serverless for pay-per-use search capability.                                                                                                                                                                                                                               |
-| `app.openSearch.useProvisioned.enabled`                | boolean | `false`            | Deploys a provisioned Amazon OpenSearch Service domain. Requires VPC with 3+ Availability Zones.                                                                                                                                                                                                      |
-| `app.openSearch.useProvisioned.dataNodeInstanceType`   | string  | `r6g.large.search` | Instance type for the 2 data nodes in the provisioned domain.                                                                                                                                                                                                                                         |
-| `app.openSearch.useProvisioned.masterNodeInstanceType` | string  | `r6g.large.search` | Instance type for the 3 dedicated master nodes.                                                                                                                                                                                                                                                       |
-| `app.openSearch.useProvisioned.ebsInstanceNodeSizeGb`  | number  | `120`              | Amazon EBS volume size in GB per data node.                                                                                                                                                                                                                                                           |
-| `app.openSearch.reindexOnCdkDeploy`                    | boolean | `false`            | Triggers automatic reindexing of all assets and files during deployment via a CloudFormation custom resource. **Important:** Enable only for a second deployment after initial deployment or version upgrade, then set back to `false`. Can be overridden with CDK context `reindexOnCdkDeploy=true`. |
+| Field                                                  | Type    | Default            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------------ | ------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.openSearch.useServerless.enabled`                 | boolean | `false`            | Deploys Amazon OpenSearch Serverless for pay-per-use search capability.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `app.openSearch.useProvisioned.enabled`                | boolean | `false`            | Deploys a provisioned Amazon OpenSearch Service domain. Requires a VPC with at least `availabilityZoneCount` Availability Zones.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `app.openSearch.useProvisioned.availabilityZoneCount`  | number  | `2`                | Number of Availability Zones the zone-aware provisioned domain and its VPC subnets span (one data node per zone). Must be `2` or `3`. At `2` the domain runs Multi-AZ **without** Standby; at `3` it runs Multi-AZ **with** Standby (the asset/file indexes are created with two replicas to give the multiple-of-three copies Standby requires). Switching an existing domain to `3` in place is rejected by the service — a 3-AZ Standby domain must be created fresh (disable and re-enable OpenSearch, then reindex). Keep `2` for Regions or partitions that expose only two Availability Zones, such as the AWS European Sovereign Cloud Region `eusc-de-east-1`. |
+| `app.openSearch.useProvisioned.numberOfShards`         | number  | `1`                | Number of primary shards per provisioned OpenSearch index (asset and file). Must be an integer of `1` or greater. Defaults to `1`. Increase for large indexes — as a guideline, an index expected to exceed roughly 60 GB (about 3 million asset or file records for VAMS) should use more than one shard. Changing this value requires re-creating the index: disable and re-enable OpenSearch (or otherwise recreate the domain), then reindex. Existing indexes are not re-sharded in place.                                                                                                                                                                         |
+| `app.openSearch.useProvisioned.dataNodeInstanceType`   | string  | `r6g.large.search` | Instance type for the data nodes in the provisioned domain (one data node per Availability Zone by default).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `app.openSearch.useProvisioned.masterNodeInstanceType` | string  | `r6g.large.search` | Instance type for the 3 dedicated master nodes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `app.openSearch.useProvisioned.ebsInstanceNodeSizeGb`  | number  | `120`              | Amazon EBS volume size in GB per data node.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `app.openSearch.reindexOnCdkDeploy`                    | boolean | `false`            | Triggers automatic reindexing of all assets and files during deployment via a CloudFormation custom resource. **Important:** Enable only for a second deployment after initial deployment or version upgrade, then set back to `false`. Can be overridden with CDK context `reindexOnCdkDeploy=true`.                                                                                                                                                                                                                                                                                                                                                                   |
 
 :::note[Mutual exclusion]
 You cannot enable both OpenSearch Serverless and OpenSearch Provisioned simultaneously. Enable at most one option, or disable both to deploy without search functionality.
@@ -554,6 +563,7 @@ For complete configuration examples, see the template files in the repository:
 
 -   **Commercial:** [`infra/config/config.template.commercial.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.commercial.json)
 -   **GovCloud:** [`infra/config/config.template.govcloud.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.govcloud.json)
+-   **AWS European Sovereign Cloud:** [`infra/config/config.template.eusovereign.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.eusovereign.json)
 
 ### AWS GovCloud deployment
 
@@ -568,7 +578,7 @@ Key differences from the commercial template:
         "govCloud": { "enabled": true, "il6Compliant": false },
         "useGlobalVpc": {
             "enabled": true,
-            "useForAllLambdas": true,
+            "useForAllLambdas": false,
             "addVpcEndpoints": true,
             "vpcCidrRange": "10.1.0.0/16"
         },
@@ -587,8 +597,50 @@ Key differences from the commercial template:
 }
 ```
 
-:::tip[VPC auto-enablement]
-When any container-based pipeline is enabled, the VPC is automatically enabled even if `useGlobalVpc.enabled` is set to `false` in your configuration.
+:::note[Running all Lambda functions inside the VPC]
+The GovCloud template sets `useGlobalVpc.useForAllLambdas` to `false`, so only the AWS Lambda functions that strictly require the VPC run inside it. Set `useGlobalVpc.useForAllLambdas` to `true` to place **all** VAMS Lambda functions inside the VPC (with the required VPC interface endpoints) when stricter network isolation is needed or the Lambda functions must reach specific VPC network components.
+:::
+
+:::warning[VPC is required for some features]
+Some features require a VPC and `app.useGlobalVpc.enabled` must be `true` when they are enabled. If one is enabled while `app.useGlobalVpc.enabled` is `false`, configuration validation fails with an error that lists the offending features; set `app.useGlobalVpc.enabled` to `true` (or disable those features). VPC-requiring features are: ALB deployment (`useAlb`), OpenSearch Provisioned (`openSearch.useProvisioned`), and the container-based pipelines (Potree viewer, 3D preview thumbnail, GenAI labeling, Gaussian splatting, RapidPipeline ECS/EKS, ModelOps, Isaac Lab, NVIDIA Cosmos, NVIDIA Gr00t).
+:::
+
+### AWS European Sovereign Cloud deployment
+
+The AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`) is a separate, isolated partition. For now, deploy to it using the GovCloud guardrails: set `app.govCloud.enabled = true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service). The European Sovereign Cloud Region currently exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`.
+
+Key differences from the commercial template (see [`config.template.eusovereign.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.eusovereign.json)):
+
+```json
+{
+    "env": { "region": "eusc-de-east-1" },
+    "app": {
+        "useWaf": true,
+        "useKmsCmkEncryption": { "enabled": true },
+        "govCloud": { "enabled": true, "il6Compliant": false },
+        "useGlobalVpc": {
+            "enabled": true,
+            "useForAllLambdas": false,
+            "addVpcEndpoints": true,
+            "vpcCidrRange": "10.1.0.0/16"
+        },
+        "openSearch": {
+            "useProvisioned": { "enabled": true, "availabilityZoneCount": 2 }
+        },
+        "useLocationService": { "enabled": false },
+        "useAlb": {
+            "enabled": true,
+            "usePublicSubnet": false,
+            "domainHost": "vams.example.eu",
+            "certificateArn": "arn:aws-eusc:acm:REGION:ACCOUNT:certificate/ID"
+        },
+        "useCloudFront": { "enabled": false }
+    }
+}
+```
+
+:::note[Running all Lambda functions inside the VPC]
+The European Sovereign Cloud template sets `useGlobalVpc.useForAllLambdas` to `false`, so only the AWS Lambda functions that strictly require the VPC run inside it. Set `useGlobalVpc.useForAllLambdas` to `true` to place **all** VAMS Lambda functions inside the VPC (with the required VPC interface endpoints) when stricter network isolation is needed or the Lambda functions must reach specific VPC network components.
 :::
 
 ## Additional configuration files

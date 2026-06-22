@@ -55,6 +55,8 @@ const createMockConfig = (): Config.Config => {
                 },
                 useProvisioned: {
                     enabled: false,
+                    availabilityZoneCount: 3,
+                    numberOfShards: 1,
                     dataNodeInstanceType: "r6g.large.search",
                     masterNodeInstanceType: "r6g.large.search",
                     ebsInstanceNodeSizeGb: 120,

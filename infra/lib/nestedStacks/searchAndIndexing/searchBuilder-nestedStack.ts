@@ -264,6 +264,8 @@ export function searchBuilder(
             ebsVolumeSize: config.app.openSearch.useProvisioned.ebsInstanceNodeSizeGb
                 ? config.app.openSearch.useProvisioned.ebsInstanceNodeSizeGb
                 : undefined,
+            availabilityZoneCount: config.app.openSearch.useProvisioned.availabilityZoneCount,
+            numberOfShards: config.app.openSearch.useProvisioned.numberOfShards,
         });
 
         const osEndpointOutput = new cdk.CfnOutput(

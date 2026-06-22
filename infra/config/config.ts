@@ -146,6 +146,18 @@ export function getConfig(app: cdk.App): Config {
         config.app.openSearch.useProvisioned.enabled = false;
     }
 
+    //Number of Availability Zones the provisioned OpenSearch domain (and its VPC subnets) spread across.
+    //Defaults to 2; set to 3 for a 3-AZ domain, or keep 2 for regions/partitions that expose only 2 AZs (e.g. EU Sovereign Cloud).
+    if (config.app.openSearch.useProvisioned.availabilityZoneCount == undefined) {
+        config.app.openSearch.useProvisioned.availabilityZoneCount = 2;
+    }
+
+    //Number of primary shards per provisioned OpenSearch index. Defaults to 1. Increase for large indexes (roughly >60 GB / ~3M asset or file records). Changing this
+    //requires re-creating the index (disable/re-enable OpenSearch, then reindex).
+    if (config.app.openSearch.useProvisioned.numberOfShards == undefined) {
+        config.app.openSearch.useProvisioned.numberOfShards = 1;
+    }
+
     if (config.app.openSearch.reindexOnCdkDeploy == undefined) {
         config.app.openSearch.reindexOnCdkDeploy = false;
     }
@@ -526,28 +538,41 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    //If using ALB, data pipelines , or opensearch provisioned, make sure Global VPC is on as this needs to be in a VPC
-    if (
-        config.app.useAlb.enabled ||
-        config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
-        config.app.pipelines.useSplatToolbox.enabled ||
-        config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
-        config.app.pipelines.useRapidPipeline.useEcs.enabled ||
-        config.app.pipelines.useRapidPipeline.useEks.enabled ||
-        config.app.pipelines.useModelOps.enabled ||
-        config.app.pipelines.useIsaacLabTraining.enabled ||
-        config.app.pipelines.usePreview3dThumbnail.enabled ||
-        config.app.pipelines.useNvidiaCosmos.enabled ||
-        config.app.pipelines.useNvidiaGr00t.enabled ||
-        config.app.openSearch.useProvisioned.enabled
-    ) {
-        if (!config.app.useGlobalVpc.enabled) {
-            console.warn(
-                "Configuration Warning: Due to ALB, Use-Case Pipelines, or OpenSearch Provisioned being enabled, auto-enabling Use Global VPC flag"
-            );
-        }
+    //Features that require a VPC. If any are enabled, useGlobalVpc.enabled must be true — we do not
+    //auto-enable the VPC, because silently turning it on hides a significant deployment-topology
+    //change from the operator. Collect the offending features and fail with an explicit error.
+    const vpcRequiringFeatures: string[] = [];
+    if (config.app.useAlb.enabled) vpcRequiringFeatures.push("useAlb");
+    if (config.app.openSearch.useProvisioned.enabled)
+        vpcRequiringFeatures.push("openSearch.useProvisioned");
+    if (config.app.pipelines.usePreviewPcPotreeViewer.enabled)
+        vpcRequiringFeatures.push("pipelines.usePreviewPcPotreeViewer");
+    if (config.app.pipelines.useSplatToolbox.enabled)
+        vpcRequiringFeatures.push("pipelines.useSplatToolbox");
+    if (config.app.pipelines.useGenAiMetadata3dLabeling.enabled)
+        vpcRequiringFeatures.push("pipelines.useGenAiMetadata3dLabeling");
+    if (config.app.pipelines.useRapidPipeline.useEcs.enabled)
+        vpcRequiringFeatures.push("pipelines.useRapidPipeline.useEcs");
+    if (config.app.pipelines.useRapidPipeline.useEks.enabled)
+        vpcRequiringFeatures.push("pipelines.useRapidPipeline.useEks");
+    if (config.app.pipelines.useModelOps.enabled)
+        vpcRequiringFeatures.push("pipelines.useModelOps");
+    if (config.app.pipelines.useIsaacLabTraining.enabled)
+        vpcRequiringFeatures.push("pipelines.useIsaacLabTraining");
+    if (config.app.pipelines.usePreview3dThumbnail.enabled)
+        vpcRequiringFeatures.push("pipelines.usePreview3dThumbnail");
+    if (config.app.pipelines.useNvidiaCosmos.enabled)
+        vpcRequiringFeatures.push("pipelines.useNvidiaCosmos");
+    if (config.app.pipelines.useNvidiaGr00t.enabled)
+        vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
 
-        config.app.useGlobalVpc.enabled = true;
+    if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
+        throw new Error(
+            "Configuration Error: app.useGlobalVpc.enabled must be true because the following " +
+                "enabled feature(s) require a VPC: " +
+                vpcRequiringFeatures.join(", ") +
+                ". Set app.useGlobalVpc.enabled to true, or disable these features."
+        );
     }
 
     // Cosmos Predict/Transfer validation
@@ -890,6 +915,41 @@ export function getConfig(app: cdk.App): Config {
         throw new Error("Configuration Error: Must specify either none or one openSearch method!");
     }
 
+    //OpenSearch provisioned only supports a zone-aware domain spread across 2 or 3 Availability Zones.
+    if (
+        config.app.openSearch.useProvisioned.enabled &&
+        config.app.openSearch.useProvisioned.availabilityZoneCount != 2 &&
+        config.app.openSearch.useProvisioned.availabilityZoneCount != 3
+    ) {
+        throw new Error(
+            "Configuration Error: openSearch.useProvisioned.availabilityZoneCount must be either 2 or 3."
+        );
+    }
+
+    //OpenSearch provisioned shard count must be a positive integer.
+    if (
+        config.app.openSearch.useProvisioned.enabled &&
+        (!Number.isInteger(config.app.openSearch.useProvisioned.numberOfShards) ||
+            config.app.openSearch.useProvisioned.numberOfShards < 1)
+    ) {
+        throw new Error(
+            "Configuration Error: openSearch.useProvisioned.numberOfShards must be an integer of 1 or greater."
+        );
+    }
+
+    //The EU Sovereign Cloud (Germany) region eusc-de-east-1 currently exposes only 2 Availability Zones,
+    //so a provisioned OpenSearch domain there cannot be spread across 3 AZs.
+    if (
+        config.app.openSearch.useProvisioned.enabled &&
+        config.env.region == "eusc-de-east-1" &&
+        config.app.openSearch.useProvisioned.availabilityZoneCount > 2
+    ) {
+        throw new Error(
+            "Configuration Error: Region eusc-de-east-1 (EU Sovereign Cloud) only supports up to 2 Availability Zones. " +
+                "Set openSearch.useProvisioned.availabilityZoneCount to 2 when deploying OpenSearch provisioned to this region."
+        );
+    }
+
     //Error check for reindexOnDeploy - requires OpenSearch to be enabled
     if (
         config.app.openSearch.reindexOnCdkDeploy &&
@@ -1191,6 +1251,8 @@ export interface ConfigPublic {
             };
             useProvisioned: {
                 enabled: boolean;
+                availabilityZoneCount: number;
+                numberOfShards: number;
                 dataNodeInstanceType: string;
                 masterNodeInstanceType: string;
                 ebsInstanceNodeSizeGb: number;

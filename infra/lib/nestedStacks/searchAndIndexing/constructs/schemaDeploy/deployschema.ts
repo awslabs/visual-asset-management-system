@@ -44,7 +44,11 @@ const setEndpointSSM = async (paramName: string, value: string | undefined) => {
  * Get the OpenSearch index mapping schema for dual-index system with flat object fields
  * This schema uses flat_object type for metadata (MD_) and attributes (AB_) to prevent field explosion
  */
-const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
+const getDualIndexMappingSchema = (
+    indexType: "asset" | "file",
+    numberOfReplicas: number,
+    numberOfShards: number
+) => {
     const baseMapping = {
         mappings: {
             dynamic_templates: [
@@ -117,8 +121,8 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
             } as any,
         },
         settings: {
-            number_of_shards: 1,
-            number_of_replicas: 0,
+            number_of_shards: numberOfShards,
+            number_of_replicas: numberOfReplicas,
             analysis: {
                 analyzer: {
                     default: {
@@ -196,6 +200,11 @@ export const handler: Handler = async function (event: any) {
     const endpointSSMParam = event?.ResourceProperties?.endpointSSMParam;
     const assetIndexNameSSMParam = event?.ResourceProperties?.assetIndexNameSSMParam;
     const fileIndexNameSSMParam = event?.ResourceProperties?.fileIndexNameSSMParam;
+    // Index replica count. Defaults to 0 (single copy) when not provided (e.g. serverless). A 3-AZ
+    // provisioned domain with Multi-AZ with Standby passes 2 (3 copies) to meet the multiple-of-3 rule.
+    const numberOfReplicas = Number(event?.ResourceProperties?.numberOfReplicas ?? 0);
+    // Primary shard count. Defaults to 1 when not provided (e.g. serverless).
+    const numberOfShards = Number(event?.ResourceProperties?.numberOfShards ?? 1);
 
     // Determine deployment type and extract endpoint
     const isServerless = event?.ResourceProperties?.collectionEndpoint !== undefined;
@@ -281,7 +290,11 @@ export const handler: Handler = async function (event: any) {
             }
 
             // Create index with appropriate schema
-            const indexSchema = getDualIndexMappingSchema(indexInfo.type as "asset" | "file");
+            const indexSchema = getDualIndexMappingSchema(
+                indexInfo.type as "asset" | "file",
+                numberOfReplicas,
+                numberOfShards
+            );
 
             console.log(
                 `Creating ${indexInfo.type} index ${indexInfo.name} with schema:`,

@@ -171,7 +171,7 @@ Point clouds exceeding 20 million points are automatically downsampled for rende
 
 ### VPC
 
-This pipeline runs on AWS Batch with AWS Fargate. Enabling it automatically enables the global VPC and creates the necessary VPC endpoints for AWS Batch, Amazon ECR, and Amazon ECR Docker.
+This pipeline runs on AWS Batch with AWS Fargate and requires the global VPC. Set `app.useGlobalVpc.enabled` to `true` when enabling this pipeline — deployment fails with a configuration error otherwise (the VPC is not enabled automatically). With the VPC enabled, the VPC builder creates the necessary VPC endpoints for AWS Batch, Amazon ECR, and Amazon ECR Docker.
 
 ### Container Image
 

@@ -128,7 +128,7 @@ When `autoRegisterWithVAMS` is enabled, the CDK deployment creates a custom reso
 
 ### VPC and Network Requirements
 
-Pipelines that use AWS Batch (Fargate or GPU) require a VPC. When any VPC-requiring pipeline is enabled, VAMS automatically enables the global VPC configuration (`app.useGlobalVpc.enabled`) and the VPC builder provisions the subnets, security groups, and VPC interface endpoints that each enabled pipeline needs.
+Pipelines that use AWS Batch (Fargate or GPU) require a VPC. When any VPC-requiring pipeline is enabled, `app.useGlobalVpc.enabled` must be set to `true` — VAMS does not enable it automatically, and configuration validation fails with an error listing the offending features if it is left `false`. With the VPC enabled, the VPC builder provisions the subnets, security groups, and VPC interface endpoints that each enabled pipeline needs.
 
 This chart is the single source of truth for per-pipeline networking requirements. The [Network Architecture](../architecture/networking.md) page references it rather than duplicating the list, so when a pipeline is added or changed, only this table needs updating.
 
