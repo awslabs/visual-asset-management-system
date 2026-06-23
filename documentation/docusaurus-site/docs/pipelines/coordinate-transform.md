@@ -101,6 +101,38 @@ The pipeline accepts transform parameters that control the coordinate reprojecti
 | `onMismatch`           | string  | No       | `warn`  | Action on CRS mismatch: `error`, `warn`, or `skip`                       |
 | `compressLaz`          | boolean | No       | `true`  | Whether to compress LAZ output                                           |
 
+### Supported CRS Formats
+
+The `sourceCrs` and `targetCrs` parameters accept the following coordinate reference system formats. The pipeline resolves them in priority order:
+
+| Format | Syntax | Example | Notes |
+| :----- | :----- | :------ | :---- |
+| Custom named grid | Grid name string | `local+sizewell` | Matched against `custom_grids` in pipeline config. Source CRS only. |
+| EPSG code | `EPSG:<numeric_code>` | `EPSG:27700`, `EPSG:4326` | Standard EPSG registry codes |
+| PROJ string | Starts with `+proj` | `+proj=lcc +lat_1=33 +lat_2=45 +datum=NAD83 +units=m` | Full PROJ.4 projection definition |
+| Well-Known Text (WKT) | OGC WKT string | `GEOGCS["WGS 84",DATUM["WGS_1984",...]]` | Fallback — any string not matching the above is parsed as WKT |
+
+:::note[Resolution Order]
+The pipeline checks CRS strings in this order: custom named grid → EPSG code → PROJ string → WKT. The first successful match is used.
+:::
+
+#### Custom Named Grids
+
+Custom grids allow you to define local or site-specific coordinate systems using a friendly name. Each grid maps a name to a PROJ string definition. Custom grids are configured in the pipeline's `custom_grids` parameter:
+
+```json
+{
+    "custom_grids": [
+        {
+            "name": "local+sizewell",
+            "definition": "+proj=tmerc +lat_0=52.2 +lon_0=1.6 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+        }
+    ]
+}
+```
+
+Custom grid names are only supported for `sourceCrs`. For `targetCrs`, use EPSG codes, PROJ strings, or WKT.
+
 ### Example Input Parameters
 
 ```json
@@ -111,6 +143,25 @@ The pipeline accepts transform parameters that control the coordinate reprojecti
     "applyScaleCorrection": true
 }
 ```
+
+### Projection Scale Factors and Local Scale Factor (LSF)
+
+Many national mapping projections — such as OSGB36 (`EPSG:27700`) which uses a Secant Transverse Mercator — have a local scale factor (LSF) that varies by position. In the case of OSGB36, the central meridian has a scale factor of 0.9996012717 and the two secant lines (approximately 180 km apart) have a scale factor of exactly 1.0. Between and beyond these lines the LSF transitions from less than 1.0 to greater than 1.0 depending on distance from the central meridian.
+
+**The pipeline handles this automatically.** When you specify a well-defined CRS such as `EPSG:27700`, the underlying pyproj transformation applies the full rigorous inverse projection mathematics. This correctly accounts for the position-dependent LSF at every point in the cloud regardless of its grid location. You do **not** need to look up the local scale factor (for example, from NRG LSF or Grid InQuest) and supply it manually.
+
+```json
+{
+    "sourceCrs": "EPSG:27700",
+    "targetCrs": "EPSG:4326"
+}
+```
+
+This is sufficient to correctly transform point clouds captured anywhere in the UK — the varying scale factor across the OSGB36 grid is handled by the CRS definition itself.
+
+:::tip[When to use sourceScaleFactor / targetScaleFactor]
+The `sourceScaleFactor` and `targetScaleFactor` parameters apply a **uniform** post-transformation multiplier to X and Y coordinates. They are intended for compensating additional scale offsets in local site grids or scan data that are not part of the standard CRS definition — not for handling the inherent projection scale variation of well-defined coordinate systems like OSGB36 or UTM zones.
+:::
 
 ## Asset Metadata Overrides
 
