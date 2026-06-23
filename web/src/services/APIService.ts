@@ -100,6 +100,25 @@ export const fetchApiRoutes = async () => {
 };
 
 /**
+ * Fetch the constraint object types (with their valid fields), criteria operators,
+ * permissions, and permission types. Used by the constraints editor to drive
+ * object-type, field, operator, permission, and permission-type options.
+ * @returns {Promise<[boolean, any]>}
+ */
+export const fetchConstraintPermissionObjects = async () => {
+    try {
+        const response: any = await apiClient.get(`auth/constraints/permissionObjects`, {});
+        if (response.message) {
+            return [true, response.message];
+        }
+        return [true, response];
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
  * Fetch the API routes (and methods) the current user is authorized to call.
  * Cached by the auth flow (see FedAuth/Auth.tsx) and periodically renewed.
  * @returns {Promise<[boolean, any]>}

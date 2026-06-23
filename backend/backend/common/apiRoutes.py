@@ -407,6 +407,9 @@ API_AUTH_CONSTRAINT_BY_ID = ApiRoute(
     "/auth/constraints/{constraintId}", (GET, POST, PUT, DELETE), "auth"
 )
 API_AUTH_CONSTRAINTS_TEMPLATE_IMPORT = ApiRoute("/auth/constraintsTemplateImport", (POST,), "auth")
+API_AUTH_CONSTRAINT_PERMISSION_OBJECTS = ApiRoute(
+    "/auth/constraints/permissionObjects", (GET,), "auth"
+)
 API_AUTH_ROUTES = ApiRoute("/auth/routes", (POST,), "auth")
 API_AUTH_ROUTES_API = ApiRoute("/auth/routes/api", (GET,), "auth")
 API_AUTH_ROUTES_API_ALLOWED = ApiRoute("/auth/routes/api/allowed", (GET,), "auth")
@@ -427,6 +430,7 @@ AUTH_ROUTES: Tuple[ApiRoute, ...] = (
     API_AUTH_CONSTRAINTS,
     API_AUTH_CONSTRAINT_BY_ID,
     API_AUTH_CONSTRAINTS_TEMPLATE_IMPORT,
+    API_AUTH_CONSTRAINT_PERMISSION_OBJECTS,
     API_AUTH_ROUTES,
     API_AUTH_ROUTES_API,
     API_AUTH_ROUTES_API_ALLOWED,

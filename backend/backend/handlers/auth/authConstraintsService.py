@@ -17,8 +17,13 @@ from common.constants import (
     ALLOWED_CONSTRAINT_PERMISSIONS,
     ALLOWED_CONSTRAINT_PERMISSION_TYPES,
     ALLOWED_CONSTRAINT_OBJECT_TYPES,
-    ALLOWED_CONSTRAINT_OPERATORS
+    ALLOWED_CONSTRAINT_OPERATORS,
+    CONSTRAINT_OBJECT_TYPE_FIELDS,
+    CONSTRAINT_OPERATOR_LABELS,
+    CONSTRAINT_PERMISSION_LABELS,
+    CONSTRAINT_PERMISSION_TYPE_LABELS,
 )
+from common.apiRoutes import API_AUTH_CONSTRAINT_PERMISSION_OBJECTS
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -32,7 +37,8 @@ from models.common import (
 )
 from models.roleConstraints import (
     GetConstraintsRequestModel, CreateConstraintRequestModel,
-    ConstraintResponseModel, ConstraintOperationResponseModel
+    ConstraintResponseModel, ConstraintOperationResponseModel,
+    GetConstraintPermissionObjectsResponseModel,
 )
 
 # Configure AWS clients with retry configuration
@@ -458,15 +464,42 @@ def delete_constraint(constraint_id, claims_and_roles):
 # Request Handlers
 #######################
 
+def get_constraint_permission_objects(event):
+    """Return the constraint permission objects: object types (with their valid
+    fields), operators, permissions, and permission types."""
+    object_types = [
+        {
+            "label": CONSTRAINT_OBJECT_TYPE_FIELDS[object_type]["label"],
+            "value": object_type,
+            "fields": CONSTRAINT_OBJECT_TYPE_FIELDS[object_type]["fields"],
+        }
+        for object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES
+        if object_type in CONSTRAINT_OBJECT_TYPE_FIELDS
+    ]
+    response_model = GetConstraintPermissionObjectsResponseModel(
+        objectTypes=object_types,
+        operators=CONSTRAINT_OPERATOR_LABELS,
+        permissions=CONSTRAINT_PERMISSION_LABELS,
+        permissionTypes=CONSTRAINT_PERMISSION_TYPE_LABELS,
+    )
+    return success(body=response_model.dict())
+
+
 def handle_get_request(event):
     """Handle GET requests for constraints
-    
+
     Args:
         event: API Gateway event
-        
+
     Returns:
         APIGatewayProxyResponseV2 response
     """
+    path = event['requestContext']['http']['path']
+    # The permissionObjects listing must be matched before the constraint list / by-id
+    # logic, since /auth/constraints/permissionObjects also matches the {constraintId} template.
+    if API_AUTH_CONSTRAINT_PERMISSION_OBJECTS.matches(path):
+        return get_constraint_permission_objects(event)
+
     path_parameters = event.get('pathParameters', {})
     query_parameters = event.get('queryStringParameters', {}) or {}
     

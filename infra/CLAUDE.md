@@ -87,7 +87,7 @@ infra/
       apiLambda/
         apigatewayv2-amplify-nestedStack.ts  # API Gateway V2 HttpApi + Lambda authorizer
         apiBuilder-nestedStack.ts            # Primary API routes + Lambda wiring (asset, database, metadata, auth, pipeline, workflow, etc.)
-        apiBuilder2-nestedStack.ts           # Secondary API stack: self-contained domains moved to free ApiBuilder headroom (currently Tags, Tag Types)
+        apiBuilder2-nestedStack.ts           # Secondary API stack: self-contained domains moved to free ApiBuilder headroom (currently Tags, Tag Types, Auth Constraints)
         lambdaLayersBuilder-nestedStack.ts   # Lambda layer construction
         constructs/
           apigatewayv2-lambda-construct.ts       # Route attachment helper
@@ -164,7 +164,7 @@ CoreVAMSStack (root)
   |     |     +-- ApiGatewayV2Amplify (API Gateway + authorizer)
   |     |     |     |
   |     |     |     +-- ApiBuilder (primary API route Lambda wiring; includes pipeline + workflow)
-  |     |     |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types; depends on ApiBuilder)
+  |     |     |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints; depends on ApiBuilder)
   |     |     |     +-- StaticWeb (CloudFront or ALB hosting)
   |     |     |     +-- SearchBuilder (OpenSearch)
   |     |     |     +-- PipelineBuilder (all use-case pipelines)

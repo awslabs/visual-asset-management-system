@@ -876,6 +876,29 @@ paths:
                                 $ref: '#/components/schemas/error'
             security:
             -   DefaultCognitoAuthorizer: []
+    /auth/constraints/permissionObjects:
+        get:
+            tags:
+                - auth
+            summary: "List constraint permission objects"
+            description: >-
+                Returns the master list of constraint object types (with the fields valid
+                on each), the criteria operators, the permissions (HTTP actions), and the
+                permission types. Used by the constraints editor and CLI to drive
+                objectType, field, operator, permission, and permissionType selection.
+            responses:
+                "200":
+                    description: Constraint object types, operators, permissions, and permission types
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getConstraintPermissionObjectsResponse"
+                "403":
+                    description: Forbidden
+                "500":
+                    description: Internal server error
+            security:
+                - DefaultCognitoAuthorizer: []
     /auth/routes/api/allowed:
         get:
             summary: "List the API routes the current user is authorized to call."
@@ -10865,6 +10888,64 @@ components:
                 userId: "user@example.com"
                 operation: "create"
                 timestamp: "2024-01-15T10:30:00.000Z"
+        constraintObjectTypeField:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        constraintObjectType:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+                fields:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintObjectTypeField"
+        constraintOperator:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        constraintPermission:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        constraintPermissionType:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        getConstraintPermissionObjectsResponse:
+            type: object
+            properties:
+                objectTypes:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintObjectType"
+                operators:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintOperator"
+                permissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintPermission"
+                permissionTypes:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintPermissionType"
     parameters:
       maxItemsParam:
         name: maxItems

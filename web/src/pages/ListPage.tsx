@@ -120,8 +120,8 @@ export default function ListPage(props) {
                         </TextContent>
                     </div>
                 </Grid>
-                <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
-                    {error && (
+                {error && (
+                    <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
                         <Alert
                             type="error"
                             dismissible
@@ -134,7 +134,9 @@ export default function ListPage(props) {
                         >
                             {error}
                         </Alert>
-                    )}
+                    </Grid>
+                )}
+                <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
                     <TableList
                         allItems={allItems}
                         loading={loading}

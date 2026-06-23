@@ -4127,6 +4127,40 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to list allowed API routes: {e}")
 
+    def list_constraint_permission_objects(self) -> Dict[str, Any]:
+        """
+        List the constraint permission objects (object types with their valid
+        fields, operators, permissions, and permission types) using the
+        /auth/constraints/permissionObjects GET endpoint.
+
+        Returns:
+            API response data: {objectTypes: [{label, value, fields: [{label, value}]}],
+            operators: [{label, value}], permissions: [{label, value}], permissionTypes: [{label, value}]}
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_CONSTRAINT_PERMISSION_OBJECTS
+
+        try:
+            response = self.get(API_AUTH_CONSTRAINT_PERMISSION_OBJECTS, include_auth=True)
+            result = response.json()
+
+            # Backend wraps response in "message" field for backward compatibility
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list constraint permission objects: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list constraint permission objects: {e}")
+
     def get_constraint(self, constraint_id: str) -> Dict[str, Any]:
         """
         Get a specific constraint using the /auth/constraints/{constraintId} GET endpoint.

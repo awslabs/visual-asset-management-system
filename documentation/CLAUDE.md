@@ -106,19 +106,28 @@ npm run build
 
 ## When to Update Documentation
 
-| Change Type             | Documentation to Update                                                                        |
-| ----------------------- | ---------------------------------------------------------------------------------------------- |
-| New API endpoint        | `api/` relevant page, `VAMS_API.yaml`, `cli/command-reference.md` (if CLI updated)             |
-| New config option       | `deployment/configuration-reference.md`                                                        |
-| New pipeline            | `pipelines/` new page + `pipelines/overview.md` table + `overview/features.md` + `sidebars.ts` |
-| New viewer plugin       | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`, `overview/features.md`          |
-| New DynamoDB table      | `architecture/aws-resources.md`, `architecture/data-model.md`                                  |
-| Permission model change | `concepts/permissions-model.md`, `user-guide/permissions.md`                                   |
-| New CLI command         | `cli/command-reference.md`, `cli/automation.md` (if new patterns)                              |
-| UI navigation change    | `user-guide/web-interface.md`, `user-guide/getting-started.md`                                 |
-| Breaking change         | `additional/revisions.md`, `deployment/update-the-solution.md`                                 |
-| New feature             | `overview/features.md`, relevant user guide page                                               |
-| New sidebar page        | `sidebars.ts` — add the page to the appropriate category                                       |
+| Change Type                                      | Documentation to Update                                                                                                                                                                                                                                               |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New or changed API endpoint (incl. path renames) | **Both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md` for `/auth/*`) — these are two separate sources of truth and both must be kept in sync. Also `cli/command-reference.md` if the CLI changed. |
+| New config option                                | `deployment/configuration-reference.md`                                                                                                                                                                                                                               |
+| New pipeline                                     | `pipelines/` new page + `pipelines/overview.md` table + `overview/features.md` + `sidebars.ts`                                                                                                                                                                        |
+| New viewer plugin                                | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`, `overview/features.md`                                                                                                                                                                                 |
+| New DynamoDB table                               | `architecture/aws-resources.md`, `architecture/data-model.md`                                                                                                                                                                                                         |
+| Permission model change                          | `concepts/permissions-model.md`, `user-guide/permissions.md`                                                                                                                                                                                                          |
+| New CLI command                                  | `cli/command-reference.md`, `cli/automation.md` (if new patterns)                                                                                                                                                                                                     |
+| UI navigation change                             | `user-guide/web-interface.md`, `user-guide/getting-started.md`                                                                                                                                                                                                        |
+| Breaking change                                  | `additional/revisions.md`, `deployment/update-the-solution.md`                                                                                                                                                                                                        |
+| New feature                                      | `overview/features.md`, relevant user guide page                                                                                                                                                                                                                      |
+| New sidebar page                                 | `sidebars.ts` — add the page to the appropriate category                                                                                                                                                                                                              |
+
+:::warning[API changes live in two places]
+The VAMS API is documented in **two** independent sources that must always be updated together:
+
+1. **`documentation/VAMS_API.yaml`** — the OpenAPI specification (paths + component schemas).
+2. **`documentation/docusaurus-site/docs/api/<domain>.md`** — the human-readable Docusaurus reference page (e.g. `api/auth.md`, `api/assets.md`).
+
+When you add, remove, rename, or change the request/response shape of an endpoint, update **both**. Updating only the YAML (or only the Markdown) leaves the documentation inconsistent.
+:::
 
 ---
 

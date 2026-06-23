@@ -21,7 +21,7 @@ export const ConstraintsListDefinition = new ListDefinition({
             return [result[0], result[1] || "", ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message, error?.response?.data?.message];
+            return [false, error?.message || "Failed to delete constraint", error?.message];
         }
     },
     columnDefinitions: [

@@ -221,6 +221,51 @@ The request body should contain the full constraint template JSON. See the permi
 
 ---
 
+### List constraint permission objects
+
+Retrieves the master mapping used when authoring constraints: the object types (with the fields valid on each), the criteria operators, the permissions (HTTP actions), and the permission types. The constraints editor and CLI use this as the authoritative source for `objectType`, criteria `field`, `operator`, `permission`, and `permissionType` values.
+
+```
+GET /auth/constraints/permissionObjects
+```
+
+#### Response
+
+```json
+{
+    "message": {
+        "objectTypes": [
+            {
+                "label": "Asset",
+                "value": "asset",
+                "fields": [
+                    { "label": "Database ID", "value": "databaseId" },
+                    { "label": "Asset Name", "value": "assetName" },
+                    { "label": "Asset Type", "value": "assetType" },
+                    { "label": "Tags", "value": "tags" }
+                ]
+            }
+        ],
+        "operators": [{ "label": "Equals", "value": "equals" }],
+        "permissions": [{ "label": "View/GET", "value": "GET" }],
+        "permissionTypes": [{ "label": "Allow", "value": "allow" }]
+    }
+}
+```
+
+:::note[Authoritative field matrix]
+A constraint criterion whose `field` is not valid for its `objectType` is rejected at create/update and template import, and out-of-matrix or deprecated fields are ignored during authorization evaluation.
+:::
+
+#### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
+
+---
+
 ## API route listing
 
 These endpoints expose the deployment's API route surface from the master route definitions. They are useful when authoring API authorization constraints (`route__path` values) and for discovering which endpoints a user can call.

@@ -77,23 +77,8 @@ async function search(overrides: any, { dispatch, state }: SearchPropertyFilterP
         });
         // Show error toast notification
         if (typeof window !== "undefined") {
-            // Extract error message from various possible locations
-            let errorMessage = "An error occurred while searching";
-
-            if (e?.response?.data?.message) {
-                errorMessage = e.response.data.message;
-            } else if (e?.response?.message) {
-                errorMessage = e.response.message;
-            } else if (e?.message) {
-                errorMessage = e.message;
-            } else if (typeof e?.response?.data === "string") {
-                try {
-                    const parsed = JSON.parse(e.response.data);
-                    errorMessage = parsed.message || errorMessage;
-                } catch {
-                    errorMessage = e.response.data;
-                }
-            }
+            // The apiClient throws an ApiError carrying the backend message in `.message`.
+            const errorMessage = e?.message || "An error occurred while searching";
 
             // Dispatch a custom event that can be caught by a toast manager
             window.dispatchEvent(

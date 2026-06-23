@@ -16,6 +16,10 @@ import {
     buildTagTypeService,
     buildCreateTagTypeFunction,
 } from "../../lambdaBuilder/tagTypeFunctions";
+import {
+    buildAuthConstraintsFunction,
+    buildAuthConstraintsTemplateFunction,
+} from "../../lambdaBuilder/authFunctions";
 import { attachFunctionToApi } from "./apiBuilder-nestedStack";
 import * as Config from "../../../config/config";
 
@@ -121,6 +125,56 @@ export class ApiBuilder2NestedStack extends NestedStack {
         attachFunctionToApi(this, createTagTypeFunction, {
             routePath: "/tag-types",
             method: apigateway.HttpMethod.PUT,
+            api: api,
+        });
+
+        // Auth constraints service and its routes (relocated here from ApiBuilder to keep
+        // the primary stack under the CFN per-stack resource limit).
+        const authConstraintsService = buildAuthConstraintsFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        // permissionObjects must be registered before the {constraintId} route so the
+        // literal path is not captured by the {constraintId} template.
+        attachFunctionToApi(this, authConstraintsService, {
+            routePath: "/auth/constraints/permissionObjects",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+        attachFunctionToApi(this, authConstraintsService, {
+            routePath: "/auth/constraints",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+        const constraintMethods = [
+            apigateway.HttpMethod.GET,
+            apigateway.HttpMethod.POST,
+            apigateway.HttpMethod.PUT,
+            apigateway.HttpMethod.DELETE,
+        ];
+        for (let i = 0; i < constraintMethods.length; i++) {
+            attachFunctionToApi(this, authConstraintsService, {
+                routePath: "/auth/constraints/{constraintId}",
+                method: constraintMethods[i],
+                api: api,
+            });
+        }
+
+        const authConstraintsTemplateService = buildAuthConstraintsTemplateFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, authConstraintsTemplateService, {
+            routePath: "/auth/constraintsTemplateImport",
+            method: apigateway.HttpMethod.POST,
             api: api,
         });
 

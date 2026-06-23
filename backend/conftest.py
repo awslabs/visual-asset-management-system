@@ -94,7 +94,12 @@ def setup_mock_imports():
     validators_module = import_module_from_path('common.validators', os.path.join(mocks_base_path, 'common', 'validators.py'))
     sys.modules['common.validators'] = validators_module
     
-    constants_module = import_module_from_path('common.constants', os.path.join(mocks_base_path, 'common', 'constants.py'))
+    # constants is pure data with no AWS dependencies, so load the real module
+    # (single source of truth) rather than a duplicate mock copy.
+    constants_module = import_module_from_path(
+        'common.constants',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'constants.py')
+    )
     sys.modules['common.constants'] = constants_module
     
     dynamodb_module = import_module_from_path('common.dynamodb', os.path.join(mocks_base_path, 'common', 'dynamodb.py'))

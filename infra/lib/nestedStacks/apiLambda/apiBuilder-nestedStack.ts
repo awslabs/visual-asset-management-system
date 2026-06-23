@@ -1107,24 +1107,9 @@ export class ApiBuilderNestedStack extends NestedStack {
             subnets
         );
 
-        attachFunctionToApi(this, authFunctions.authConstraintsService, {
-            routePath: "/auth/constraints",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        for (let i = 0; i < methods.length; i++) {
-            attachFunctionToApi(this, authFunctions.authConstraintsService, {
-                routePath: "/auth/constraints/{constraintId}",
-                method: methods[i],
-                api: api,
-            });
-        }
-
-        attachFunctionToApi(this, authFunctions.authConstraintsTemplateService, {
-            routePath: "/auth/constraintsTemplateImport",
-            method: apigateway.HttpMethod.POST,
-            api: api,
-        });
+        // NOTE: the auth constraints service and its routes (/auth/constraints,
+        // /auth/constraints/{constraintId}, /auth/constraints/permissionObjects, and
+        // /auth/constraintsTemplateImport) are wired in apiBuilder2-nestedStack.ts.
 
         attachFunctionToApi(this, authFunctions.routes, {
             routePath: "/auth/routes",

@@ -171,21 +171,23 @@ Workflow event (assetId, databaseId, paths, ...)
 
 These are the critical patterns that span multiple directories. **Every developer must understand these.**
 
-### **Pattern 1: Adding a New API Endpoint (4-5 files)**
+### **Pattern 1: Adding a New API Endpoint (multiple files)**
 
 Adding a new API endpoint requires coordinated changes across multiple components:
 
-| Step                      | File                                                         | What to do                                                                          |
-| ------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| 1. Master route (backend) | `backend/backend/common/apiRoutes.py`                        | Define the `ApiRoute` constant AND add it to the appropriate category group array   |
-| 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`             | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()` |
-| 3. Pydantic model         | `backend/backend/models/{domain}.py`                         | Define request/response models (Pydantic **v1**)                                    |
-| 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`               | Build Lambda with env vars, permissions, VPC config                                 |
-| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Attach Lambda to API Gateway route                                                  |
-| 6. Frontend service       | `web/src/services/APIService.ts`                             | Add API call method                                                                 |
-| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                  | Add CLI command (if applicable)                                                     |
+| Step                      | File                                                          | What to do                                                                                                       |
+| ------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| 1. Master route (backend) | `backend/backend/common/apiRoutes.py`                         | Define the `ApiRoute` constant AND add it to the appropriate category group array                                |
+| 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()`                              |
+| 3. Pydantic model         | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic **v1**)                                                                 |
+| 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with env vars, permissions, VPC config                                                              |
+| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route (prefer `apiBuilder2`; `apiBuilder` is near the CFN per-stack resource limit) |
+| 6. Frontend service       | `web/src/services/APIService.ts`                              | Add API call method                                                                                              |
+| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command (if applicable)                                                                                  |
+| 8. OpenAPI spec (docs)    | `documentation/VAMS_API.yaml`                                 | Add/update the path and its component schemas                                                                    |
+| 9. API reference (docs)   | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add/update the human-readable endpoint reference (e.g. `api/auth.md` for `/auth/*`)                              |
 
-**Never** add an endpoint without updating all required files. A handler without a route is dead code. A route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a route missing there is invisible to constraint authoring and the CLI.
+**Never** add an endpoint without updating all required files. A handler without a route is dead code. A route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a route missing there is invisible to constraint authoring and the CLI. **API documentation lives in two places — the OpenAPI `VAMS_API.yaml` AND the Docusaurus `api/{domain}.md` reference page — and both must be updated together** (a path rename or response-shape change must land in both).
 
 ### **Pattern 2: Two-Tier Authorization**
 

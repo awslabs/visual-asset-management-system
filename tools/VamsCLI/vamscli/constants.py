@@ -83,6 +83,7 @@ API_ROLE_BY_ID = "/roles/{roleId}"
 API_CONSTRAINTS = "/auth/constraints"
 API_CONSTRAINT_BY_ID = "/auth/constraints/{constraintId}"
 API_CONSTRAINTS_TEMPLATE_IMPORT = "/auth/constraintsTemplateImport"
+API_AUTH_CONSTRAINT_PERMISSION_OBJECTS = "/auth/constraints/permissionObjects"
 
 # Auth Routes API Endpoints
 API_AUTH_ROUTES_API = "/auth/routes/api"

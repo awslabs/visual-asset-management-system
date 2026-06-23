@@ -18,18 +18,9 @@ import {
  * Extract user-friendly error message from API response
  */
 const extractErrorMessage = (error: any): string => {
-    // Check for response data message (backend validation errors)
-    if (error?.response?.data?.message) {
-        return error.response.data.message;
-    }
-
-    // Check for response message
-    if (error?.response?.message) {
-        return error.response.message;
-    }
-
-    // Check for direct message
-    if (error?.message) {
+    // The apiClient throws an ApiError carrying the backend message (already extracted
+    // from the {"message": "..."} response body) in `.message`.
+    if (error?.message && typeof error.message === "string") {
         return error.message;
     }
 

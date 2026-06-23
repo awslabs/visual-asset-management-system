@@ -111,6 +111,8 @@ Each object type supports specific constraint fields that can be used in criteri
 | `role`           | `roleName`                                                          | Role management.                                    |
 | `userRole`       | `roleName`, `userId`                                                | User-to-role assignment management.                 |
 
+This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
+
 ## Constraint criteria operators
 
 Criteria conditions use operators to match field values. All operators use regular expression matching internally. Criteria values are auto-escaped before being passed to the Casbin policy engine.

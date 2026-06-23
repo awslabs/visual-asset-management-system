@@ -10,6 +10,8 @@ For an introduction to how the authorization system works, see [Permissions Mode
 
 The following patterns cover the most common access configurations. VAMS provides pre-built permission templates for each of these patterns.
 
+The valid fields per object type, the criteria operators, the permissions, and the permission types can be retrieved from `GET /auth/constraints/permissionObjects` or `vamscli role constraint permission-objects`. This is the same mapping the backend validates constraints against.
+
 ### Database administrator
 
 Full access to a single database including asset CRUD, pipeline and workflow management, metadata schema management, and the ability to update or delete the database itself. Cannot create new databases.

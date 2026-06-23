@@ -377,8 +377,11 @@ def validate_pipelines(workflow, claims_and_roles):
 
         allowed = False
         if pipeline_state:
-            # Check if the current user has permissions to POST the pipeline (Tier 2).
-            # pipeline_state is the stored pipeline record, which carries object__type.
+            # Add Casbin Enforcer to check if the current user has permissions to POST the pipeline (Tier 2):
+            pipeline_state.update({
+                "object__type": "pipeline"
+            })
+
             if len(claims_and_roles["tokens"]) > 0:
                 casbin_enforcer = CasbinEnforcer(claims_and_roles)
                 if casbin_enforcer.enforce(pipeline_state, "POST"):
