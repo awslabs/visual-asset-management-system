@@ -312,6 +312,13 @@ aws opensearchserverless list-collections \
 aws opensearchserverless delete-collection \
     --id <COLLECTION_ID>
 
+# Delete the collection group (created with a "cg" name prefix for both CLASSIC and NEXTGEN generations)
+aws opensearchserverless list-collection-groups \
+    --query "collectionGroupSummaries[?contains(name, 'cg')]"
+
+aws opensearchserverless delete-collection-group \
+    --name <COLLECTION_GROUP_NAME>
+
 # Delete associated security policies and access policies
 aws opensearchserverless list-security-policies --type encryption \
     --query "securityPolicySummaries[?contains(name, '<STACK_NAME>')]"
@@ -322,6 +329,10 @@ aws opensearchserverless delete-security-policy \
 aws opensearchserverless delete-security-policy \
     --name <POLICY_NAME> --type network
 ```
+
+:::note
+A collection group is created for every Serverless deployment (its generation is `CLASSIC` or `NEXTGEN`, set by `openSearch.useServerless.nextGen`). Delete the collection before the collection group. All of these resources use a `DESTROY` removal policy, so AWS CloudFormation deletes them automatically on stack teardown; the commands above are a fallback for resources orphaned by a failed delete.
+:::
 
 ### OpenSearch Provisioned
 

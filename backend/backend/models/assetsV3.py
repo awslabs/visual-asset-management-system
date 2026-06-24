@@ -364,6 +364,7 @@ class AssetFileItemModel(BaseModel, extra='ignore'):
     size: Optional[int] = None
     dateCreatedCurrentVersion: str
     versionId: Optional[str] = None  # S3 version ID (None in basic mode)
+    etag: Optional[str] = None  # S3 ETag of the current version
     storageClass: Optional[str] = None  # To identify archived files
     isArchived: bool = False  # Computed field based on metadata
     currentAssetVersionFileVersionMismatch: Optional[bool] = False  # Indicates if file version doesn't match asset version

@@ -180,6 +180,41 @@ const getDualIndexMappingSchema = (
     return baseMapping;
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Poll the OpenSearch endpoint until it responds, to absorb the propagation/cold-start delay of a
+ * freshly-created collection or VPC endpoint. Retries with linear backoff for up to ~11 minutes (well within
+ * the function's timeout), then throws so the failure surfaces rather than hanging on the first index call.
+ */
+const waitForEndpointReady = async (client: Client): Promise<void> => {
+    const maxAttempts = 60;
+    const delayMs = 10000;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            // A lightweight call that requires the data plane to be serving. indices.exists on a sentinel
+            // index returns quickly (true/false) once the endpoint is reachable and warm.
+            await client.indices.exists({ index: "vams-readiness-probe" });
+            console.log(`OpenSearch endpoint reachable after ${attempt} attempt(s)`);
+            return;
+        } catch (error) {
+            lastError = error;
+            console.log(
+                `OpenSearch endpoint not ready yet (attempt ${attempt}/${maxAttempts}): ${error}`
+            );
+            if (attempt < maxAttempts) {
+                await sleep(delayMs);
+            }
+        }
+    }
+
+    throw new Error(
+        `OpenSearch endpoint did not become reachable after ${maxAttempts} attempts: ${lastError}`
+    );
+};
+
 export const handler: Handler = async function (event: any) {
     console.log("the event ", event);
 
@@ -232,18 +267,40 @@ export const handler: Handler = async function (event: any) {
     console.log("File Index Name", fileIndexName);
     console.log("EndpointSSMParam", endpointSSMParam);
 
-    // Set SSM parameters
-    setEndpointSSM(endpointSSMParam, endpoint);
+    // Set SSM parameters (awaited so the parameters are written before the function returns)
+    await setEndpointSSM(endpointSSMParam, endpoint);
 
     // Set index name parameters
     if (assetIndexNameSSMParam && assetIndexName) {
-        setIndexNameSSM(assetIndexNameSSMParam, assetIndexName);
+        await setIndexNameSSM(assetIndexNameSSMParam, assetIndexName);
     }
     if (fileIndexNameSSMParam && fileIndexName) {
-        setIndexNameSSM(fileIndexNameSSMParam, fileIndexName);
+        await setIndexNameSSM(fileIndexNameSSMParam, fileIndexName);
     }
 
-    // Initialize OpenSearch client with appropriate service type
+    // In deferred mode the data-plane VPC endpoint and network access policy have not been created (private
+    // NEXTGEN with addVpcEndpoints=false), so the collection is not reachable. The SSM parameters above are
+    // written so the runtime Lambdas are configured, but index creation is skipped and the custom resource
+    // succeeds. The operator creates the standard aoss-data endpoint and network policy, then reindexes.
+    const deferIndexCreation = event?.ResourceProperties?.deferIndexCreation === "true";
+    if (deferIndexCreation) {
+        console.log(
+            "deferIndexCreation=true: VPC endpoint/network policy not yet created. Wrote SSM parameters " +
+                "and skipped index creation. Create the endpoint and network policy, then reindex."
+        );
+        return {
+            StackId: event.StackId,
+            RequestId: event.RequestId,
+            LogicalResourceId: event.LogicalResourceId,
+            PhysicalResourceId: event.PhysicalResourceId,
+            Status: "SUCCESS",
+            Reason: "Deferred: wrote SSM parameters, skipped index creation (VPC endpoint pending manual creation)",
+        };
+    }
+
+    // Initialize OpenSearch client with appropriate service type. Use a short per-request timeout so a
+    // not-yet-reachable endpoint fails fast and is retried by the readiness loop below, rather than hanging
+    // for the client default (30s) on a single call.
     const client = new Client({
         ...AwsSigv4Signer({
             region: process.env["AWS_REGION"] ?? "us-east-1",
@@ -254,7 +311,14 @@ export const handler: Handler = async function (event: any) {
             },
         }),
         node: endpoint,
+        requestTimeout: 10000,
+        maxRetries: 1,
     });
+
+    // A freshly created collection (and, for a private collection, its VPC endpoint and DNS) can take
+    // several minutes to become reachable, and a NEXTGEN scale-to-zero collection adds a 10-30s cold start on
+    // the first request. Poll with backoff until the cluster responds before attempting index operations.
+    await waitForEndpointReady(client);
 
     console.log("established opensearch client connection");
 

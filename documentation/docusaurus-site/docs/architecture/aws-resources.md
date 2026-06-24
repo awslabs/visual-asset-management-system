@@ -146,12 +146,12 @@ VAMS creates Step Functions state machines dynamically for each workflow definit
 
 ## Amazon OpenSearch Service
 
-| Configuration     | Serverless                                         | Provisioned                         |
-| ----------------- | -------------------------------------------------- | ----------------------------------- |
-| **Deployment**    | OpenSearch Serverless collection                   | OpenSearch Service domain (v3.5)    |
-| **Indexes**       | Asset index + File index (dual-index architecture) | Asset index + File index            |
-| **Access**        | IAM-based access policies                          | VPC-based access (3 AZ)             |
-| **Configuration** | `openSearch.useServerless.enabled`                 | `openSearch.useProvisioned.enabled` |
+| Configuration     | Serverless                                                                                                                             | Provisioned                         |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Deployment**    | OpenSearch Serverless collection in a collection group with configurable OCU capacity (the group generation is `CLASSIC` or `NEXTGEN`) | OpenSearch Service domain (v3.5)    |
+| **Indexes**       | Asset index + File index (dual-index architecture)                                                                                     | Asset index + File index            |
+| **Access**        | IAM-based access policies; public or VPC-endpoint-private network access (`allowPublic`)                                               | VPC-based access (2 or 3 AZ)        |
+| **Configuration** | `openSearch.useServerless.enabled`                                                                                                     | `openSearch.useProvisioned.enabled` |
 
 :::info[No OpenSearch Mode]
 Both OpenSearch modes can be disabled. When neither is enabled, the `NOOPENSEARCH` feature flag is set and search functionality is unavailable in the UI.

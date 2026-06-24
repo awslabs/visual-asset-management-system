@@ -47,12 +47,16 @@ export function buildSearchFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
-                : undefined, //Use VPC when provisioned OS or flag to use for all lambdas
+                : undefined, //Use VPC for provisioned OS, a private (non-public) serverless collection, or the use-for-all-lambdas flag
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
@@ -110,12 +114,16 @@ export function buildFileIndexingFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
                 : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
@@ -180,12 +188,16 @@ export function buildAssetIndexingFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
                 : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
@@ -342,12 +354,16 @@ export function buildReindexerFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
                 : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 

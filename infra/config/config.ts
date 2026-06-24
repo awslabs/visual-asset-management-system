@@ -118,6 +118,12 @@ export function getConfig(app: cdk.App): Config {
             false)
     );
 
+    config.app.openSearch.useServerless.deployDeferredIndexSchema = <boolean>(
+        (app.node.tryGetContext("deployDeferredIndexSchema") ||
+            config.app.openSearch.useServerless.deployDeferredIndexSchema ||
+            false)
+    );
+
     //OpenSearch Variables - Dual Index Configuration
     config.openSearchAssetIndexName = "vams-assets-v3";
     config.openSearchFileIndexName = "vams-files-v3";
@@ -140,6 +146,50 @@ export function getConfig(app: cdk.App): Config {
     //Note: usually added for backwards compatabibility of an old config file that hasn't had the newest elements added
     if (config.app.openSearch.useServerless.enabled == undefined) {
         config.app.openSearch.useServerless.enabled = false;
+    }
+
+    //Generation of the OpenSearch Serverless collection group: true uses NEXTGEN (supports scale-to-zero),
+    //false uses CLASSIC. Defaults to NEXTGEN for commercial partitions and CLASSIC for GovCloud/EU Sovereign
+    //Cloud, where the next-generation generation is not yet available.
+    if (config.app.openSearch.useServerless.nextGen == undefined) {
+        config.app.openSearch.useServerless.nextGen = !(config.app.govCloud.enabled === true);
+    }
+
+    //Whether the Serverless collection accepts public network access. Defaults to true; set to false to
+    //place the collection behind a VPC endpoint (recommended for production).
+    if (config.app.openSearch.useServerless.allowPublic == undefined) {
+        config.app.openSearch.useServerless.allowPublic = true;
+    }
+
+    //Whether the collection group uses standby replicas for cross-AZ redundancy. NEXTGEN collection groups
+    //require standby replicas, so this defaults to the value of nextGen (enabled for NEXTGEN, disabled for
+    //CLASSIC, where it favors lower cost and can be enabled for production high availability).
+    if (config.app.openSearch.useServerless.enableStandbyReplicas == undefined) {
+        config.app.openSearch.useServerless.enableStandbyReplicas =
+            config.app.openSearch.useServerless.nextGen;
+    }
+
+    //OCU capacity bounds for the collection group. Allowed OCU values are 0, 2, 4, 8, 16, or any multiple of
+    //16. minIndexing/minSearch default to 2; maxIndexing/maxSearch default to 16.
+    if (config.app.openSearch.useServerless.minIndexingOcu == undefined) {
+        config.app.openSearch.useServerless.minIndexingOcu = 2;
+    }
+    if (config.app.openSearch.useServerless.maxIndexingOcu == undefined) {
+        config.app.openSearch.useServerless.maxIndexingOcu = 16;
+    }
+    if (config.app.openSearch.useServerless.minSearchOcu == undefined) {
+        config.app.openSearch.useServerless.minSearchOcu = 2;
+    }
+    if (config.app.openSearch.useServerless.maxSearchOcu == undefined) {
+        config.app.openSearch.useServerless.maxSearchOcu = 16;
+    }
+
+    //When a private next-gen deployment was made with addVpcEndpoints=false, VAMS deferred creating the index
+    //schema (the collection was not reachable). After the operator manually creates the VPC endpoint and
+    //network policy, set this to true for one deployment to run the schema-deploy and create the indexes; then
+    //set it back to false. Ignored when the endpoint is created by VAMS (addVpcEndpoints=true).
+    if (config.app.openSearch.useServerless.deployDeferredIndexSchema == undefined) {
+        config.app.openSearch.useServerless.deployDeferredIndexSchema = false;
     }
 
     if (config.app.openSearch.useProvisioned.enabled == undefined) {
@@ -545,6 +595,11 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.useAlb.enabled) vpcRequiringFeatures.push("useAlb");
     if (config.app.openSearch.useProvisioned.enabled)
         vpcRequiringFeatures.push("openSearch.useProvisioned");
+    if (
+        config.app.openSearch.useServerless.enabled &&
+        !config.app.openSearch.useServerless.allowPublic
+    )
+        vpcRequiringFeatures.push("openSearch.useServerless (allowPublic=false)");
     if (config.app.pipelines.usePreviewPcPotreeViewer.enabled)
         vpcRequiringFeatures.push("pipelines.usePreviewPcPotreeViewer");
     if (config.app.pipelines.useSplatToolbox.enabled)
@@ -915,6 +970,156 @@ export function getConfig(app: cdk.App): Config {
         throw new Error("Configuration Error: Must specify either none or one openSearch method!");
     }
 
+    //Next-gen Serverless is not yet supported in GovCloud or the EU Sovereign Cloud. Block the combination
+    //so the configuration fails fast rather than at deploy time.
+    if (
+        config.app.openSearch.useServerless.enabled &&
+        config.app.openSearch.useServerless.nextGen &&
+        config.app.govCloud.enabled
+    ) {
+        throw new Error(
+            "Configuration Error: openSearch.useServerless.nextGen is not supported when app.govCloud.enabled " +
+                "is true (GovCloud and EU Sovereign Cloud). Set openSearch.useServerless.nextGen to false for these partitions."
+        );
+    }
+
+    //NEXTGEN collection groups require standby replicas — OpenSearch Serverless rejects a NEXTGEN group with
+    //StandbyReplicas=DISABLED. Fail fast rather than at deploy time.
+    if (
+        config.app.openSearch.useServerless.enabled &&
+        config.app.openSearch.useServerless.nextGen &&
+        !config.app.openSearch.useServerless.enableStandbyReplicas
+    ) {
+        throw new Error(
+            "Configuration Error: openSearch.useServerless.nextGen requires openSearch.useServerless.enableStandbyReplicas " +
+                "to be true. NEXTGEN OpenSearch Serverless collection groups do not support disabled standby replicas."
+        );
+    }
+
+    //Scale-to-zero (a minimum OCU of 0) is only available on next-gen Serverless. Classic Serverless cannot
+    //scale indexing or search capacity down to 0.
+    if (
+        config.app.openSearch.useServerless.enabled &&
+        !config.app.openSearch.useServerless.nextGen &&
+        (config.app.openSearch.useServerless.minIndexingOcu === 0 ||
+            config.app.openSearch.useServerless.minSearchOcu === 0)
+    ) {
+        throw new Error(
+            "Configuration Error: a minimum OCU of 0 (scale-to-zero) requires next-gen Serverless. " +
+                "Set openSearch.useServerless.nextGen to true, or set minIndexingOcu and minSearchOcu to 1 or greater."
+        );
+    }
+
+    //OCU bounds must be non-negative integers, each maximum must be at least 1, and each maximum must be >= its minimum.
+    {
+        const ocuFields: { name: string; value: number }[] = [
+            { name: "minIndexingOcu", value: config.app.openSearch.useServerless.minIndexingOcu },
+            { name: "maxIndexingOcu", value: config.app.openSearch.useServerless.maxIndexingOcu },
+            { name: "minSearchOcu", value: config.app.openSearch.useServerless.minSearchOcu },
+            { name: "maxSearchOcu", value: config.app.openSearch.useServerless.maxSearchOcu },
+        ];
+        if (config.app.openSearch.useServerless.enabled) {
+            for (const f of ocuFields) {
+                if (!Number.isInteger(f.value) || f.value < 0) {
+                    throw new Error(
+                        `Configuration Error: openSearch.useServerless.${f.name} must be a non-negative integer.`
+                    );
+                }
+                //OpenSearch Serverless only accepts specific OCU values: 0, 2, 4, 8, 16, or any multiple of 16.
+                const isAllowedOcu =
+                    f.value === 0 ||
+                    f.value === 2 ||
+                    f.value === 4 ||
+                    f.value === 8 ||
+                    (f.value >= 16 && f.value % 16 === 0);
+                if (!isAllowedOcu) {
+                    throw new Error(
+                        `Configuration Error: openSearch.useServerless.${f.name} must be one of 0, 2, 4, 8, 16, or any multiple of 16.`
+                    );
+                }
+            }
+            if (config.app.openSearch.useServerless.maxIndexingOcu < 1) {
+                throw new Error(
+                    "Configuration Error: openSearch.useServerless.maxIndexingOcu must be 1 or greater."
+                );
+            }
+            if (config.app.openSearch.useServerless.maxSearchOcu < 1) {
+                throw new Error(
+                    "Configuration Error: openSearch.useServerless.maxSearchOcu must be 1 or greater."
+                );
+            }
+            if (
+                config.app.openSearch.useServerless.maxIndexingOcu <
+                config.app.openSearch.useServerless.minIndexingOcu
+            ) {
+                throw new Error(
+                    "Configuration Error: openSearch.useServerless.maxIndexingOcu must be greater than or equal to minIndexingOcu."
+                );
+            }
+            if (
+                config.app.openSearch.useServerless.maxSearchOcu <
+                config.app.openSearch.useServerless.minSearchOcu
+            ) {
+                throw new Error(
+                    "Configuration Error: openSearch.useServerless.maxSearchOcu must be greater than or equal to minSearchOcu."
+                );
+            }
+        }
+    }
+
+    //A private (non-public) Serverless collection is reachable only through a VPC endpoint, so it requires a
+    //VPC. Only the OpenSearch-facing Lambdas (search and indexers) are placed in the VPC — useForAllLambdas is
+    //not required. The vpcRequiringFeatures check above already fails when useGlobalVpc.enabled is false for a
+    //private collection, mirroring the provisioned-OpenSearch behavior.
+
+    //A deployment that places all Lambdas in the VPC (useGlobalVpc.enabled + useForAllLambdas) is fully
+    //network-isolated, so a public Serverless collection is contradictory — the collection must be private.
+    if (
+        config.app.openSearch.useServerless.enabled &&
+        config.app.openSearch.useServerless.allowPublic &&
+        config.app.useGlobalVpc.enabled &&
+        config.app.useGlobalVpc.useForAllLambdas
+    ) {
+        throw new Error(
+            "Configuration Error: a deployment with app.useGlobalVpc.enabled and app.useGlobalVpc.useForAllLambdas " +
+                "set to true (all Lambdas behind the VPC) cannot use a public OpenSearch Serverless collection. " +
+                "Set openSearch.useServerless.allowPublic to false to place the collection behind a VPC endpoint."
+        );
+    }
+
+    //Public Serverless in GovCloud/EU Sovereign Cloud is allowed but not recommended.
+    if (
+        config.app.openSearch.useServerless.enabled &&
+        config.app.openSearch.useServerless.allowPublic &&
+        config.app.govCloud.enabled
+    ) {
+        console.warn(
+            "Configuration Warning: a public OpenSearch Serverless collection (openSearch.useServerless.allowPublic=true) " +
+                "is not recommended for GovCloud or EU Sovereign Cloud deployments. Consider setting allowPublic to false."
+        );
+    }
+
+    //A private NEXTGEN Serverless collection is reached through a standard EC2 interface VPC endpoint
+    //(com.amazonaws.{region}.aoss-data). Like every other EC2 interface endpoint, VAMS only creates it when
+    //useGlobalVpc.addVpcEndpoints is true. When it is false, VAMS skips both the endpoint and the collection's
+    //VPC network access policy, and the operator must create them manually after deployment. Warn so this is
+    //not a surprise. (CLASSIC uses the OpenSearch Serverless-managed endpoint, which is not governed by
+    //addVpcEndpoints and is always created for a private collection.)
+    if (
+        config.app.openSearch.useServerless.enabled &&
+        !config.app.openSearch.useServerless.allowPublic &&
+        config.app.openSearch.useServerless.nextGen &&
+        !config.app.useGlobalVpc.addVpcEndpoints
+    ) {
+        console.warn(
+            "Configuration Warning: a private next-gen OpenSearch Serverless collection (allowPublic=false, nextGen=true) " +
+                "with app.useGlobalVpc.addVpcEndpoints=false will deploy WITHOUT its data-plane VPC endpoint and network " +
+                "access policy. VAMS writes the OpenSearch SSM parameters and skips index creation; you must create the " +
+                "standard com.amazonaws.{region}.aoss-data interface endpoint and a matching network access policy " +
+                "(with that endpoint id in SourceVPCEs) manually, then reindex. See the OpenSearch developer guide."
+        );
+    }
+
     //OpenSearch provisioned only supports a zone-aware domain spread across 2 or 3 Availability Zones.
     if (
         config.app.openSearch.useProvisioned.enabled &&
@@ -1248,6 +1453,14 @@ export interface ConfigPublic {
         openSearch: {
             useServerless: {
                 enabled: boolean;
+                nextGen: boolean;
+                allowPublic: boolean;
+                enableStandbyReplicas: boolean;
+                minIndexingOcu: number;
+                maxIndexingOcu: number;
+                minSearchOcu: number;
+                maxSearchOcu: number;
+                deployDeferredIndexSchema: boolean;
             };
             useProvisioned: {
                 enabled: boolean;

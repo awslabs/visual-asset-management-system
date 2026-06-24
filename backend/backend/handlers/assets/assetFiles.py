@@ -1052,22 +1052,22 @@ def process_preview_files(
 
 def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False) -> Dict:
     """Get detailed metadata for an S3 object
-    
+
     Args:
         bucket: The S3 bucket
         key: The S3 object key
         include_versions: Whether to include version history
-        
+
     Returns:
         Dictionary containing object metadata and versions if requested
-        
+
     Raises:
         VAMSGeneralErrorResponse: If object not found or error retrieving metadata
     """
     try:
         # Get object metadata
         response = s3_client.head_object(Bucket=bucket, Key=key)
-        
+
         # Extract basic metadata
         result = {
             'fileName': os.path.basename(key),
@@ -1301,10 +1301,12 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                 'dateCreatedCurrentVersion': obj['LastModified'].isoformat(),
                 'storageClass': obj.get('StorageClass', 'STANDARD')
             }
-            
-            # Add size for non-folders
+
+            # ETag comes straight from the S3 list response, so it is populated in
+            # both basic and full modes.
             if not is_folder:
                 item['size'] = obj['Size']
+                item['etag'] = obj.get('ETag', '').strip('"') or None
             
             if basic_mode:
                 # Basic mode: Skip expensive head_object calls
@@ -1421,10 +1423,11 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                             'isArchived': True
                         }
                         
-                        # Add size if we found a version
+                        # Add size and ETag if we found a version
                         if latest_version:
                             item['size'] = latest_version.get('Size', 0)
-                        
+                            item['etag'] = latest_version.get('ETag', '').strip('"') or None
+
                         # Add to results
                         result["items"].append(item)
                         existing_keys.add(key)
@@ -3434,6 +3437,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                 'dateCreatedCurrentVersion': file_info.get('lastModified', ''),
                 'storageClass': 'STANDARD',
                 'versionId': file_info.get('versionId'),
+                'etag': (file_info.get('etag') or '').strip('"') or None,
                 'isArchived': False,
                 'primaryType': None,
                 'previewFile': "",
@@ -3494,8 +3498,10 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
             # Check if this file is in the version snapshot
             if relative_key in versioned_file_lookup:
                 version_info = versioned_file_lookup[relative_key]
-                # Overlay saved versionId from the version snapshot
+                # Overlay saved versionId and ETag from the version snapshot so they
+                # reflect the requested version rather than the current S3 object.
                 s3_item['versionId'] = version_info.get('versionId')
+                s3_item['etag'] = (version_info.get('etag') or '').strip('"') or None
                 s3_item['currentAssetVersionFileVersionMismatch'] = None
                 file_items.append(AssetFileItemModel(**s3_item))
                 base_files[s3_item['key']] = len(file_items) - 1
@@ -3552,6 +3558,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                             'dateCreatedCurrentVersion': version_info.get('lastModified', ''),
                             'storageClass': 'STANDARD',
                             'versionId': version_info.get('versionId'),
+                            'etag': (version_info.get('etag') or '').strip('"') or None,
                             'isArchived': False,
                             'isPermanentlyDeleted': True,
                             'primaryType': None,

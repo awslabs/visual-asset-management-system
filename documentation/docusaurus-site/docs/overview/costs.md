@@ -65,14 +65,14 @@ The following tables provide approximate monthly cost estimates based on three d
 
 ### Search Services (Choose One or None)
 
-| AWS Service                       | Monthly Cost (Commercial) | Monthly Cost (GovCloud) | Notes                                                                           |
-| --------------------------------- | ------------------------- | ----------------------- | ------------------------------------------------------------------------------- |
-| **Amazon OpenSearch Serverless**  | ~$703.20                  | N/A                     | 2 index OCUs + 2 search OCUs minimum. 100 GB data included.                     |
-| **Amazon OpenSearch Provisioned** | ~$743.66                  | ~$915.52                | 3 data nodes (r6g.large.search) + 3 master nodes (r6g.large.search), 240 GB EBS |
-| **No Amazon OpenSearch**          | $0.00                     | $0.00                   | Search features disabled. Asset browsing and management remain functional.      |
+| AWS Service                       | Monthly Cost (Commercial) | Monthly Cost (GovCloud) | Notes                                                                                                                                                                                             |
+| --------------------------------- | ------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Amazon OpenSearch Serverless**  | $0 -- ~$703.20            | N/A                     | Next-generation Serverless scales to zero OCUs when idle (cost approaches $0 between uses); a minimum of 2 index + 2 search OCUs applies when minimums are held above zero. 100 GB data included. |
+| **Amazon OpenSearch Provisioned** | ~$743.66                  | ~$915.52                | 3 data nodes (r6g.large.search) + 3 master nodes (r6g.large.search), 240 GB EBS                                                                                                                   |
+| **No Amazon OpenSearch**          | $0.00                     | $0.00                   | Search features disabled. Asset browsing and management remain functional.                                                                                                                        |
 
 :::info[Amazon OpenSearch Serverless Minimum]
-Amazon OpenSearch Serverless has a minimum charge of 2 index OCUs and 2 search OCUs, which runs continuously. This is the largest fixed cost in most VAMS deployments. Consider disabling Amazon OpenSearch if full-text search is not required for your use case.
+Classic Serverless and any deployment that holds minimum OCUs above zero carry a continuous charge of at least 2 index OCUs and 2 search OCUs, which is the largest fixed cost in most VAMS deployments. Next-generation Serverless can set `minIndexingOcu` and `minSearchOcu` to `0` so the collection scales to zero when idle, reducing the standing cost to near zero between uses. The trade-off is a cold start of about 10–20 seconds on the first request after roughly 10 minutes of inactivity. Consider disabling Amazon OpenSearch entirely if full-text search is not required for your use case.
 :::
 
 ### Web Distribution (Choose One)

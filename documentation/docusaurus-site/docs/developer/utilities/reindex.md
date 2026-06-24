@@ -121,7 +121,7 @@ python reindex_utility.py --mode direct --operation both \
 The bulk reindex (touch-and-delete) only uses Amazon DynamoDB and AWS Systems Manager and works from a local machine outside the VPC. `--clear-indexes` is different — it connects to the OpenSearch endpoint directly:
 
 -   **Provisioned** domains are always inside the VPC, so their endpoint is not reachable from a local machine. Direct mode **rejects** `--clear-indexes` when `--opensearch-type` is `provisioned`.
--   **Serverless** collections are only VPC-restricted when the deployment uses a VPC endpoint (`useForAllLambdas` plus VPC endpoints). Direct mode allows `--clear-indexes` for serverless but warns, because it will fail against a VPC-restricted collection.
+-   **Serverless** collections are VPC-restricted when the collection is private (`openSearch.useServerless.allowPublic = false`), which routes access through a VPC endpoint. Direct mode allows `--clear-indexes` for serverless but warns, because it will fail against a VPC-restricted (private) collection.
 
 To clear and rebuild a provisioned (or VPC-restricted serverless) domain, clear the indexes in **lambda mode** (which runs inside the VPC) with a small `--limit` so it does only the clear, then run the bulk reindex in **direct mode** without `--clear-indexes`:
 

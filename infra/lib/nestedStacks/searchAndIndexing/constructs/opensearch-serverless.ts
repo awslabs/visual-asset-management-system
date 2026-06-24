@@ -17,7 +17,10 @@ import { generateUniqueNameHash } from "../../../helper/security";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { aws_opensearchserverless as opensearchserverless } from "aws-cdk-lib";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../../../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    suppressCdkNagLambda,
+} from "../../../helper/security";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import * as njslambda from "aws-cdk-lib/aws-lambda-nodejs";
 import { IAMArn } from "../../../helper/service-helper";
@@ -36,8 +39,21 @@ export class OpensearchServerlessConstruct extends Construct {
     collectionArn: string;
     config: Config.Config;
     useVPCEndpoint: boolean;
-    vpcEndpointAOSS: cdk.aws_opensearchserverless.CfnVpcEndpoint;
-    vpcEndpointAOSSSecurityGroup: ec2.SecurityGroup;
+    //Whether VAMS itself creates the data-plane VPC endpoint, its security group, and the VPC network
+    //access policy. True for a private CLASSIC collection (the managed endpoint is an OpenSearch Serverless
+    //resource, not an EC2 interface endpoint) and for a private NEXTGEN collection only when
+    //useGlobalVpc.addVpcEndpoints is true. False (deferred) for a private NEXTGEN collection when
+    //addVpcEndpoints is false — the operator creates the standard EC2 aoss-data endpoint and the network
+    //policy manually after deployment.
+    createEndpointResources: boolean;
+    //The data-plane VPC endpoint differs by generation: NEXTGEN uses a standard EC2 interface endpoint
+    //(service com.amazonaws.{region}.aoss-data) for the on.aws collection hostname; CLASSIC uses the
+    //OpenSearch Serverless-managed endpoint for the aoss.amazonaws.com hostname.
+    vpcEndpointAOSS?: cdk.aws_opensearchserverless.CfnVpcEndpoint;
+    vpcEndpointAOSSStandard?: ec2.InterfaceVpcEndpoint;
+    vpcEndpointAOSSId?: string;
+    vpcEndpointAOSSDependable?: Construct;
+    vpcEndpointAOSSSecurityGroup?: ec2.SecurityGroup;
 
     constructor(parent: Construct, name: string, props: OpensearchServerlessConstructProps) {
         super(parent, name);
@@ -53,18 +69,50 @@ export class OpensearchServerlessConstruct extends Construct {
         ).toLowerCase();
         this.config = props.config;
 
-        this.useVPCEndpoint =
-            props.config.app.useGlobalVpc.enabled &&
-            props.config.app.useGlobalVpc.useForAllLambdas &&
-            props.config.app.useGlobalVpc.addVpcEndpoints;
+        const useServerless = props.config.app.openSearch.useServerless;
+        const standbyReplicas = useServerless.enableStandbyReplicas ? "ENABLED" : "DISABLED";
 
-        //Create Open Search VPC endpoint if we are using a VPC for all our lambda functions
-        //Note: Ignoring addVpcEndpoint configuration on purpose as this is required to create to attach to a collection network security policy. must create at this juncture
-        if (this.useVPCEndpoint) {
-            const subNetIDsVPCe = props.vpc.selectSubnets({
-                subnets: props.subnets,
-            }).subnetIds;
+        //A private (non-public) collection is reachable only through a VPC endpoint. Config validation
+        //guarantees that allowPublic=false implies useGlobalVpc.enabled is true, so the VPC and its subnets
+        //are available here (only the OpenSearch-facing Lambdas are placed in the VPC; useForAllLambdas is
+        //not required).
+        this.useVPCEndpoint = !useServerless.allowPublic;
 
+        //The NEXTGEN data-plane endpoint is a standard EC2 interface endpoint, so it follows the global
+        //useGlobalVpc.addVpcEndpoints setting like every other EC2 interface endpoint VAMS creates. When that
+        //is false for a private NEXTGEN collection, VAMS does NOT create the endpoint or the VPC network
+        //access policy — the operator creates the standard com.amazonaws.{region}.aoss-data interface endpoint
+        //and the matching network policy manually after deployment (see the OpenSearch developer guide).
+        //CLASSIC uses the OpenSearch Serverless-managed endpoint (not an EC2 interface endpoint), so it is not
+        //governed by addVpcEndpoints and is always created for a private collection.
+        this.createEndpointResources =
+            this.useVPCEndpoint &&
+            (!useServerless.nextGen || props.config.app.useGlobalVpc.addVpcEndpoints);
+
+        //"Deferred VPC setup" = a private NEXTGEN collection where VAMS does not create the endpoint/policy
+        //(addVpcEndpoints=false). VAMS NEVER auto-creates the endpoint or network policy in this case — that is
+        //always manual. The deployDeferredIndexSchema flag does NOT change that; it only controls whether the
+        //schema-deploy custom resource attempts index creation against the operator-created endpoint. When
+        //addVpcEndpoints=true the deployment is not deferred, so the flag is ignored and the schema is always
+        //deployed normally.
+        const deferVpcSetup = this.useVPCEndpoint && !this.createEndpointResources;
+        const deferIndexCreation = deferVpcSetup && !useServerless.deployDeferredIndexSchema;
+        //Run schema-deploy in the VPC whenever it will actually talk to a private collection endpoint: either
+        //VAMS created the endpoint, or the operator created it manually and we are now deploying the deferred
+        //schema. For a public collection the function stays outside the VPC.
+        const schemaDeployInVpc =
+            this.createEndpointResources || (deferVpcSetup && !deferIndexCreation);
+
+        //Create the data-plane VPC endpoint when the collection is private and VAMS owns endpoint creation.
+        //The endpoint is required to attach to the collection network security policy. The endpoint type
+        //depends on the collection generation:
+        // - NEXTGEN collections expose an on.aws hostname (collection-id.aoss.{region}.on.aws) reached through a
+        //   standard EC2 PrivateLink interface endpoint (service com.amazonaws.{region}.aoss-data, private DNS).
+        // - CLASSIC collections expose an aoss.amazonaws.com hostname reached through the OpenSearch
+        //   Serverless-managed endpoint, which provisions its own Route 53 private hosted zone.
+        //(https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-vpc.html,
+        // https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-collection-endpoints.html)
+        if (this.createEndpointResources) {
             const aossVPCESecurityGroup = new ec2.SecurityGroup(this, "AossVPCESecurityGroup", {
                 vpc: props.vpc,
                 allowAllOutbound: true, //allows all output on endpoint to the service
@@ -78,28 +126,55 @@ export class OpensearchServerlessConstruct extends Construct {
             );
             this.vpcEndpointAOSSSecurityGroup = aossVPCESecurityGroup;
 
-            //Add VPC Endpoint here instead of global VPC as it's directly needed to configure AOSS
-            //(https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-network.html, https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-vpc.html, https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_opensearchserverless.CfnVpcEndpoint.html)
-            const cfnVpcEndpoint = new opensearchserverless.CfnVpcEndpoint(
-                this,
-                "AOSSCfnVpcEndpoint",
-                {
-                    name:
-                        "aossendpoint" +
-                        generateUniqueNameHash(
-                            props.config.env.coreStackName,
-                            props.config.env.account,
-                            "AOSSCfnVpcEndpoint",
-                            10
-                        ).toLowerCase(),
-                    subnetIds: subNetIDsVPCe,
-                    vpcId: props.vpc.vpcId,
-                    securityGroupIds: [aossVPCESecurityGroup.securityGroupId],
-                }
-            );
+            if (useServerless.nextGen) {
+                //Standard interface endpoint for NextGen on.aws collection hostnames. The service name is
+                //com.amazonaws.{region}.aoss-data; build it partition-aware via InterfaceVpcEndpointAwsService
+                //(it substitutes the region and the partition-correct DNS prefix). Private DNS supplies
+                //resolution for the *.aoss.{region}.on.aws hostnames.
+                const standardVpcEndpoint = new ec2.InterfaceVpcEndpoint(
+                    this,
+                    "AOSSDataVpcEndpoint",
+                    {
+                        vpc: props.vpc,
+                        service: new ec2.InterfaceVpcEndpointAwsService(
+                            "aoss-data",
+                            "com.amazonaws",
+                            443
+                        ),
+                        subnets: { subnets: props.subnets },
+                        securityGroups: [aossVPCESecurityGroup],
+                        privateDnsEnabled: true,
+                    }
+                );
+                standardVpcEndpoint.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
+                this.vpcEndpointAOSSStandard = standardVpcEndpoint;
+                this.vpcEndpointAOSSId = standardVpcEndpoint.vpcEndpointId;
+                this.vpcEndpointAOSSDependable = standardVpcEndpoint;
+            } else {
+                //OpenSearch Serverless-managed endpoint for CLASSIC aoss.amazonaws.com collection hostnames.
+                const cfnVpcEndpoint = new opensearchserverless.CfnVpcEndpoint(
+                    this,
+                    "AOSSCfnVpcEndpoint",
+                    {
+                        name:
+                            "aossendpoint" +
+                            generateUniqueNameHash(
+                                props.config.env.coreStackName,
+                                props.config.env.account,
+                                "AOSSCfnVpcEndpoint",
+                                10
+                            ).toLowerCase(),
+                        subnetIds: props.vpc.selectSubnets({ subnets: props.subnets }).subnetIds,
+                        vpcId: props.vpc.vpcId,
+                        securityGroupIds: [aossVPCESecurityGroup.securityGroupId],
+                    }
+                );
 
-            cfnVpcEndpoint.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
-            this.vpcEndpointAOSS = cfnVpcEndpoint;
+                cfnVpcEndpoint.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
+                this.vpcEndpointAOSS = cfnVpcEndpoint;
+                this.vpcEndpointAOSSId = cfnVpcEndpoint.ref;
+                this.vpcEndpointAOSSDependable = cfnVpcEndpoint;
+            }
         }
 
         const schemaDeploy = new njslambda.NodejsFunction(
@@ -112,9 +187,16 @@ export class OpensearchServerlessConstruct extends Construct {
                     externalModules: ["aws-sdk"],
                 },
                 runtime: LAMBDA_NODE_RUNTIME,
-                timeout: cdk.Duration.seconds(30),
-                vpc: this.useVPCEndpoint ? props.vpc : undefined,
-                vpcSubnets: this.useVPCEndpoint ? { subnets: props.subnets } : undefined,
+                //A freshly created collection (and, for a private collection, its VPC endpoint) can take
+                //several minutes to become reachable, and a NEXTGEN scale-to-zero collection adds a 10-30s
+                //cold start on the first request. The handler polls with backoff, so allow ample time.
+                timeout: cdk.Duration.minutes(14),
+                //Run in the VPC when the function will talk to a private collection endpoint — either VAMS
+                //created the endpoint, or the operator created it manually and deployDeferredIndexSchema=true
+                //is now deploying the deferred schema. In the deferred-and-not-yet-deploying case the function
+                //runs outside the VPC and only writes SSM parameters.
+                vpc: schemaDeployInVpc ? props.vpc : undefined,
+                vpcSubnets: schemaDeployInVpc ? { subnets: props.subnets } : undefined,
                 //Note: This schema deploy resource must run in the VPC in order to communicate with the AOSS and associated VPC Endpoint.
             }
         );
@@ -124,15 +206,47 @@ export class OpensearchServerlessConstruct extends Construct {
             props.storageResources.encryption.kmsKey
         );
 
+        //Apply the standard per-Lambda IAM4/IAM5 suppressions. Required because a private collection runs this
+        //function in the VPC, which attaches the AWSLambdaVPCAccessExecutionRole managed policy.
+        suppressCdkNagLambda(schemaDeploy);
+
         const principalsForAOSS = [...props.principalArn, schemaDeploy.role?.roleArn];
 
         const accessPolicy = this._grantCollectionAccess(principalsForAOSS);
         this.grantVPCeAccess(schemaDeploy);
 
+        //Create a collection group and associate the collection with it. The collection group manages OCU
+        //capacity limits and standby replicas for the collection. The group's generation (CLASSIC or NEXTGEN)
+        //determines the OpenSearch Serverless behavior — NEXTGEN supports scale-to-zero capacity.
+        const collectionGroupName = (
+            "cg" +
+            generateUniqueNameHash(
+                props.config.env.coreStackName,
+                props.config.env.account,
+                "AOSSCollectionGroup",
+                24
+            )
+        ).toLowerCase();
+        const collectionGroup = new aoss.CfnCollectionGroup(this, "OSCollectionGroup", {
+            name: collectionGroupName,
+            generation: useServerless.nextGen ? "NEXTGEN" : "CLASSIC",
+            standbyReplicas: standbyReplicas,
+            capacityLimits: {
+                minIndexingCapacityInOcu: useServerless.minIndexingOcu,
+                maxIndexingCapacityInOcu: useServerless.maxIndexingOcu,
+                minSearchCapacityInOcu: useServerless.minSearchOcu,
+                maxSearchCapacityInOcu: useServerless.maxSearchOcu,
+            },
+        });
+
         const collection = new aoss.CfnCollection(this, "OSCollection", {
             name: this.collectionUid,
             type: "SEARCH",
+            //The collection inherits OCU capacity limits and standby replicas from its collection group.
+            collectionGroupName: collectionGroupName,
         });
+
+        collection.addDependency(collectionGroup);
 
         this.collectionArn = collection.attrArn;
 
@@ -157,35 +271,50 @@ export class OpensearchServerlessConstruct extends Construct {
             type: "encryption",
         });
 
-        const networkPolicy = [
-            {
-                Rules: [
-                    { ResourceType: "collection", Resource: [`collection/${collection.name}`] },
-                    { ResourceType: "dashboard", Resource: [`collection/${collection.name}`] },
-                ],
-                AllowFromPublic: !this.useVPCEndpoint,
-                SourceVPCEs: this.useVPCEndpoint ? [this.vpcEndpointAOSS.ref] : undefined,
-            },
-        ];
+        //When the NEXTGEN endpoint is deferred (private + addVpcEndpoints=false), VAMS does not create the
+        //network access policy either — the operator creates both the standard aoss-data endpoint and a
+        //matching network policy (with that endpoint's id in SourceVPCEs) manually after deployment. This is
+        //independent of deployDeferredIndexSchema, which only governs index creation, not endpoint/policy
+        //creation.
+        let networkPolicyCfn: aoss.CfnSecurityPolicy | undefined;
+        if (!deferVpcSetup) {
+            const networkPolicy = [
+                {
+                    Rules: [
+                        {
+                            ResourceType: "collection",
+                            Resource: [`collection/${collection.name}`],
+                        },
+                        {
+                            ResourceType: "dashboard",
+                            Resource: [`collection/${collection.name}`],
+                        },
+                    ],
+                    AllowFromPublic: useServerless.allowPublic,
+                    SourceVPCEs: this.useVPCEndpoint ? [this.vpcEndpointAOSSId] : undefined,
+                },
+            ];
 
-        const networkPolicyCfn = new aoss.CfnSecurityPolicy(this, "OSNetworkPolicy", {
-            name: (
-                `np` +
-                generateUniqueNameHash(
-                    props.config.env.coreStackName,
-                    props.config.env.account,
-                    "OSNetworkPolicy",
-                    20
-                )
-            ).toLowerCase(),
-            policy: JSON.stringify(networkPolicy),
-            type: "network",
-        });
+            networkPolicyCfn = new aoss.CfnSecurityPolicy(this, "OSNetworkPolicy", {
+                name: (
+                    `np` +
+                    generateUniqueNameHash(
+                        props.config.env.coreStackName,
+                        props.config.env.account,
+                        "OSNetworkPolicy",
+                        20
+                    )
+                ).toLowerCase(),
+                policy: JSON.stringify(networkPolicy),
+                type: "network",
+            });
 
-        if (this.useVPCEndpoint) networkPolicyCfn.node.addDependency(this.vpcEndpointAOSS);
+            if (this.useVPCEndpoint && this.vpcEndpointAOSSDependable)
+                networkPolicyCfn.node.addDependency(this.vpcEndpointAOSSDependable);
+        }
 
         collection.addDependency(encryptionPolicyCfn);
-        collection.addDependency(networkPolicyCfn);
+        if (networkPolicyCfn) collection.addDependency(networkPolicyCfn);
 
         schemaDeploy.addToRolePolicy(
             new cdk.aws_iam.PolicyStatement({
@@ -210,9 +339,11 @@ export class OpensearchServerlessConstruct extends Construct {
         schemaDeployProvider.node.addDependency(collection);
         schemaDeployProvider.node.addDependency(accessPolicy);
 
-        if (this.useVPCEndpoint) {
+        if (this.createEndpointResources && this.vpcEndpointAOSSSecurityGroup) {
             schemaDeployProvider.node.addDependency(this.vpcEndpointAOSSSecurityGroup);
-            schemaDeployProvider.node.addDependency(this.vpcEndpointAOSS);
+        }
+        if (this.createEndpointResources && this.vpcEndpointAOSSDependable) {
+            schemaDeployProvider.node.addDependency(this.vpcEndpointAOSSDependable);
         }
 
         new CustomResource(this, "DeploySSMIndexSchema", {
@@ -224,6 +355,11 @@ export class OpensearchServerlessConstruct extends Construct {
                 collectionEndpoint: collection.attrCollectionEndpoint,
                 assetIndexName: props.config.openSearchAssetIndexName,
                 fileIndexName: props.config.openSearchFileIndexName,
+                //In deferred mode the VPC endpoint and network policy do not exist yet, so the collection is
+                //not reachable. The handler still writes the SSM parameters but skips index creation so the
+                //deployment completes. After the operator manually creates the endpoint + network policy, a
+                //deployment with deployDeferredIndexSchema=true clears this flag so the schema is created.
+                deferIndexCreation: deferIndexCreation ? "true" : "false",
                 version: "2",
                 Timestamp: Date.now().toString(), //Used to check index deployment every CDK deployment
             },
@@ -239,7 +375,7 @@ export class OpensearchServerlessConstruct extends Construct {
             },
         ]);
 
-        if (this.useVPCEndpoint) {
+        if (this.createEndpointResources && this.vpcEndpointAOSSSecurityGroup) {
             //Nag Supressions
             NagSuppressions.addResourceSuppressions(this.vpcEndpointAOSSSecurityGroup, [
                 {
@@ -313,8 +449,10 @@ export class OpensearchServerlessConstruct extends Construct {
     }
 
     public grantVPCeAccess(lambdaFunction: lambda.Function) {
-        //Add rules to VPC endpoints if we created it
-        if (this.useVPCEndpoint) {
+        //Add ingress to the AOSS VPC endpoint security group for this Lambda, but only when VAMS created the
+        //endpoint and its security group. In deferred mode (private NEXTGEN with addVpcEndpoints=false) the
+        //operator-created endpoint's security group must grant this access manually.
+        if (this.createEndpointResources && this.vpcEndpointAOSSSecurityGroup) {
             this.vpcEndpointAOSSSecurityGroup.connections.allowFrom(
                 lambdaFunction,
                 ec2.Port.tcp(443)

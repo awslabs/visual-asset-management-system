@@ -233,6 +233,35 @@ In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3
 -   Its endpoint policy restricts access to the specific web-app Amazon S3 bucket (`s3:Get*`, `s3:List*`), and a Lambda-backed custom resource registers the endpoint's network interface IPs as ALB targets.
     :::
 
+### OpenSearch Serverless Interface Endpoint
+
+A **private** Amazon OpenSearch Serverless collection (`openSearch.useServerless.allowPublic = false`) is reached only through a VPC endpoint into which the OpenSearch-facing Lambda functions (search and indexers) connect. The endpoint is created by the OpenSearch Serverless construct (not the VPC builder) and is placed in the isolated subnets across two Availability Zones.
+
+The endpoint **type is determined by the collection generation**, because the two generations expose different collection endpoint hostnames:
+
+| Generation                       | Collection hostname                           | VPC endpoint                                                                                                                                    |
+| -------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Next-generation (`nextGen=true`) | `{collection-id}.aoss.{region}.on.aws`        | Standard AWS PrivateLink interface endpoint (`ec2.InterfaceVpcEndpoint`, service `com.amazonaws.{region}.aoss-data`), `privateDnsEnabled: true` |
+| Classic (`nextGen=false`)        | `{collection-id}.{region}.aoss.amazonaws.com` | Amazon OpenSearch Serverless-managed endpoint (`CfnVpcEndpoint`), which provisions its own Amazon Route 53 private hosted zone                  |
+
+VAMS creates the correct endpoint type for the configured generation. The in-VPC Lambda functions connect over private DNS on port 443 using SigV4 signing with service name `aoss`. The endpoint's id is added to the collection's network access policy (`SourceVPCEs`).
+
+The next-generation endpoint is a standard Amazon EC2 interface endpoint, so it follows the global `useGlobalVpc.addVpcEndpoints` setting like every other interface endpoint. The classic managed endpoint is an Amazon OpenSearch Serverless resource rather than an Amazon EC2 interface endpoint, so it is **not** governed by `addVpcEndpoints` and is always created for a private classic collection.
+
+| Generation | `addVpcEndpoints` | VAMS creates endpoint + network policy?          |
+| ---------- | ----------------- | ------------------------------------------------ |
+| NextGen    | `true`            | Yes                                              |
+| NextGen    | `false`           | **No** — deferred to manual creation             |
+| Classic    | `true` or `false` | Yes (managed endpoint, not governed by the flag) |
+
+:::warning[Private next-gen with `addVpcEndpoints=false`]
+When a private next-generation collection is deployed with `useGlobalVpc.addVpcEndpoints = false`, VAMS does **not** create the `aoss-data` interface endpoint or the collection's VPC network access policy — both must be created manually after deployment. The deployment still succeeds (the OpenSearch SSM parameters are written and index creation is skipped). For the step-by-step procedure to create the endpoint, tie it to the collection through a network access policy, deploy the deferred index schema, and populate the indexes, see [OpenSearch — deferred next-gen setup](../developer/opensearch.md#deferred-next-gen-setup-manual-vpc-endpoint).
+:::
+
+:::info[Dedicated security group]
+When VAMS creates the OpenSearch Serverless VPC endpoint, it uses its own security group (separate from the common VPC endpoint security group described below), allowing inbound HTTPS (port 443) from the VPC CIDR. Each OpenSearch-facing Lambda's security group is additionally granted inbound access on the endpoint.
+:::
+
 ### Pipeline Interface Endpoints
 
 VPC-requiring pipelines (AWS Batch Fargate and GPU pipelines) create their own interface endpoints — a shared set of **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** whenever any AWS Batch pipeline is enabled, plus additional per-pipeline endpoints (Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry, Amazon EFS, Amazon Bedrock Runtime, Amazon Rekognition) depending on which pipelines are enabled.
@@ -269,7 +298,7 @@ When VAMS creates a managed VPC, VPC flow logs are automatically enabled:
 
 ## DNS Configuration
 
-All interface VPC endpoints are created with `privateDnsEnabled: true`. This allows Lambda functions and containers within the VPC to use standard AWS service hostnames (e.g., `dynamodb.us-east-1.amazonaws.com`) without custom DNS configuration. The VPC endpoint private DNS automatically resolves these hostnames to the endpoint's private IP addresses.
+Interface VPC endpoints are created with `privateDnsEnabled: true`. This allows Lambda functions and containers within the VPC to use standard AWS service hostnames (e.g., `dynamodb.us-east-1.amazonaws.com`) without custom DNS configuration. The VPC endpoint private DNS automatically resolves these hostnames to the endpoint's private IP addresses. The same applies to the standard OpenSearch Serverless next-generation endpoint, which resolves the `*.aoss.{region}.on.aws` collection hostnames through private DNS. The two exceptions are the ALB Amazon S3 interface endpoint (created with `privateDnsEnabled: false`) and the OpenSearch Serverless-managed Classic endpoint, which provisions its own Amazon Route 53 private hosted zone for the `*.aoss.amazonaws.com` collection hostnames rather than using the standard private-DNS toggle.
 
 VAMS VPCs are created with:
 

@@ -41,7 +41,15 @@
         },
         "openSearch": {
             "useServerless": {
-                "enabled": false
+                "enabled": false,
+                "nextGen": false,
+                "allowPublic": false,
+                "enableStandbyReplicas": false,
+                "minIndexingOcu": 2,
+                "maxIndexingOcu": 16,
+                "minSearchOcu": 2,
+                "maxSearchOcu": 16,
+                "deployDeferredIndexSchema": false
             },
             "useProvisioned": {
                 "enabled": true,

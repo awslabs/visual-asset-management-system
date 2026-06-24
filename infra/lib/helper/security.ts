@@ -135,7 +135,9 @@ export function globalLambdaEnvironmentsAndPermissions(
         config.app.authProvider.useCognito.enabled &&
         !(
             (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            config.app.openSearch.useProvisioned.enabled
+            config.app.openSearch.useProvisioned.enabled ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
         )
     ) {
         lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "TRUE");

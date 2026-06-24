@@ -292,7 +292,7 @@ The `ConfigPublic` interface (~200 lines in `config/config.ts`) defines all depl
 -   `env`: account, region, partition, coreStackName
 -   `app.assetBuckets`: createNewBucket, defaultNewBucketSyncDatabaseId, externalAssetBuckets
 -   `app.useGlobalVpc`: enabled, useForAllLambdas, addVpcEndpoints, optionalExternalVpcId, vpcCidrRange
--   `app.openSearch`: useServerless, useProvisioned, reindexOnCdkDeploy
+-   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
 -   `app.pipelines`: useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
@@ -562,6 +562,22 @@ When `config.app.govCloud.il6Compliant = true`:
 -   EventSourceMapping tags removed via `addPropertyDeletionOverride` (some resources don't support tags in GovCloud)
 -   VPC endpoints conditional on feature flags
 -   ALB deployment instead of CloudFront for static web hosting
+
+---
+
+## OpenSearch Serverless Connectivity
+
+A **private** OpenSearch Serverless collection (`app.openSearch.useServerless.allowPublic = false`) is reached only through a VPC endpoint, and the endpoint **type is selected by the collection generation** because the two generations expose different endpoint hostnames:
+
+-   **NEXTGEN** (`nextGen = true`) — endpoint hostname is `\{collection-id\}.aoss.\{region\}.on.aws`. Reached through a **standard EC2 interface endpoint** (`ec2.InterfaceVpcEndpoint`, service `com.amazonaws.\{region\}.aoss-data`, `privateDnsEnabled: true`). Built partition-aware via `new ec2.InterfaceVpcEndpointAwsService("aoss-data", "com.amazonaws", 443)`.
+-   **CLASSIC** (`nextGen = false`) — endpoint hostname is `\{collection-id\}.\{region\}.aoss.amazonaws.com`. Reached through the OpenSearch Serverless-managed endpoint (`opensearchserverless.CfnVpcEndpoint`), which provisions its own Route 53 private hosted zone.
+
+The chosen endpoint's id populates the network policy `SourceVPCEs`. Only the OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, and the schema-deploy custom resource) run in the VPC — `useForAllLambdas` is not required for a private collection. The schema-deploy custom resource Lambda uses a long timeout (14 min) and a readiness poll because a freshly created collection/endpoint, plus a NEXTGEN scale-to-zero cold start (10–30s), can take minutes to become reachable. Backend Lambdas sign with SigV4 service name `aoss` when `OPENSEARCH_TYPE=serverless`.
+
+**`addVpcEndpoints` gating (NEXTGEN only).** The NEXTGEN endpoint is a standard EC2 interface endpoint, so it follows `useGlobalVpc.addVpcEndpoints` like every other interface endpoint. The construct computes `createEndpointResources = useVPCEndpoint && (!nextGen || addVpcEndpoints)`:
+
+-   When `createEndpointResources` is true, VAMS creates the endpoint, its security group, and the VPC network access policy, and runs the schema-deploy function in the VPC.
+-   When it is false (private NEXTGEN + `addVpcEndpoints = false`, the **deferred** case), VAMS skips the endpoint **and** the network policy. The schema-deploy custom resource runs **outside** the VPC, writes the SSM parameters, and skips index creation (the `DeploySSMIndexSchema` custom resource passes `deferIndexCreation: "true"`, which the handler honors by returning success without creating indexes). The operator creates the `aoss-data` endpoint and a matching network policy manually. To then create the index mappings, set `app.openSearch.useServerless.deployDeferredIndexSchema = true` for one deployment (also overridable via CDK context) — the construct computes `deferIndexCreation = deferVpcSetup && !deployDeferredIndexSchema` and `schemaDeployInVpc = createEndpointResources || (deferVpcSetup && !deferIndexCreation)`, so the schema-deploy function runs in the VPC against the operator endpoint and creates the (idempotent) indexes. Then reindex. The flag is ignored when `addVpcEndpoints = true` (nothing is deferred). CLASSIC's managed endpoint is not an EC2 interface endpoint, so it is not governed by `addVpcEndpoints` and is always created for a private collection. See `documentation/docusaurus-site/docs/developer/opensearch.md`.
 
 ---
 

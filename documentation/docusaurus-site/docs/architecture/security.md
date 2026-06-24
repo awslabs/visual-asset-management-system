@@ -225,6 +225,16 @@ The following fields can be used in ABAC policy rules:
 
 Roles can require MFA verification. When a role has `mfaRequired=True`, it is only active when the user's authentication claims include `mfaEnabled=True`. This provides an additional security layer for privileged operations.
 
+The MFA check requires Lambda functions to call Amazon Cognito to verify a user's MFA status. Amazon Cognito does not currently offer a VPC interface endpoint, so a Lambda function running in a VPC isolated subnet cannot reach Amazon Cognito to perform this check. To avoid authorization failures in these topologies, VAMS disables the Cognito MFA check (sets the `COGNITO_AUTH_ENABLED` Lambda environment variable to `FALSE`) whenever Amazon Cognito is enabled **and** any of the following place VAMS Lambda functions in the VPC:
+
+-   `app.useGlobalVpc.enabled` and `app.useGlobalVpc.useForAllLambdas` are both `true` (all Lambda functions run in the VPC), or
+-   `app.openSearch.useProvisioned.enabled` is `true` (a provisioned domain places the OpenSearch-facing Lambda functions in the VPC), or
+-   `app.openSearch.useServerless.enabled` is `true` and `app.openSearch.useServerless.allowPublic` is `false` (a private Serverless collection places the OpenSearch-facing Lambda functions in the VPC).
+
+:::warning[MFA-aware roles are not enforced in VPC-isolated deployments]
+In any of the scenarios above, the Cognito MFA check is disabled and `mfaRequired` on a role has no effect — you cannot restrict roles behind MFA. Roles continue to apply based on their other constraints, but the `mfaEnabled` claim is not evaluated. This limitation exists because Amazon Cognito has no VPC interface endpoint for in-VPC Lambda functions to call. If MFA-gated roles are required, use a deployment topology that keeps the authorization Lambda functions out of the VPC (for example, a public Serverless collection, or no provisioned domain, with `useForAllLambdas` disabled).
+:::
+
 ### Policy Caching
 
 The Casbin enforcer caches user policies with a 60-second TTL per user. This reduces Amazon DynamoDB reads while ensuring policy changes propagate within one minute.

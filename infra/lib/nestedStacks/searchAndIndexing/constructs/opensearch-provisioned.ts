@@ -222,7 +222,9 @@ export class OpensearchProvisionedConstruct extends Construct {
                     externalModules: ["aws-sdk"],
                 },
                 runtime: LAMBDA_NODE_RUNTIME,
-                timeout: cdk.Duration.seconds(30),
+                //A freshly created domain can take several minutes to become reachable. The handler polls with
+                //backoff, so allow ample time rather than failing on the first index call.
+                timeout: cdk.Duration.minutes(14),
                 vpc: props.vpc,
                 vpcSubnets: { subnets: props.subnets },
                 //Note: This schema deploy resource must run in the VPC in order to communicate with the AOS provisioned running in the VPC.
@@ -275,6 +277,9 @@ export class OpensearchProvisionedConstruct extends Construct {
                 numberOfReplicas: numberOfReplicas,
                 //Primary shard count per index. Default 1; increase for large indexes.
                 numberOfShards: numberOfShards,
+                //A provisioned domain is always created in the VPC and reachable by the schema-deploy
+                //function, so index creation is never deferred (only private next-gen Serverless can defer).
+                deferIndexCreation: "false",
                 version: "3",
                 Timestamp: Date.now().toString(), //Used to check index deployment every CDK deployment
             },

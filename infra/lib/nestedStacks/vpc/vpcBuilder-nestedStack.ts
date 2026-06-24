@@ -41,9 +41,12 @@ export class VPCBuilderNestedStack extends NestedStack {
         //Baseline - 2AZ - any subnet type is created across at least 2 AZs for resiliency and to
         //keep the synthesized subnet set stable across feature toggles (avoids subnet add/remove churn).
         //OpenSearchProvisioned - configurable (2 or 3) - Private Subnet (Each)
+        //OpenSearchServerless (non-public) - 2 AZs - the AOSS VPC endpoint is placed across 2 AZs for high availability.
         if (props.config.app.openSearch.useProvisioned.enabled) {
             this.azCount = props.config.app.openSearch.useProvisioned.availabilityZoneCount;
         } else {
+            //2 AZs covers the baseline as well as a non-public Serverless collection, whose VPC endpoint
+            //requires at least 2 Availability Zones.
             this.azCount = 2;
         }
 

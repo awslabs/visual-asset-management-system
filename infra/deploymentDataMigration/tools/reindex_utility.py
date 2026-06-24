@@ -605,17 +605,18 @@ Notes:
                 "  python reindex_utility.py --mode direct --operation both ...   (no --clear-indexes)"
             )
 
-        # Serverless collections are only VPC-restricted when the deployment uses a VPC endpoint
-        # (useForAllLambdas + addVpcEndpoints). The script cannot detect that from these inputs, so
-        # warn rather than block: clearing works for a publicly reachable collection but will fail
-        # (hang/timeout) for a VPC-restricted one — use lambda mode in that case.
+        # Serverless collections are VPC-restricted when the collection is private
+        # (openSearch.useServerless.allowPublic = false), which routes access through a VPC endpoint.
+        # The script cannot detect that from these inputs, so warn rather than block: clearing works
+        # for a public collection but will fail (hang/timeout) for a private one — use lambda mode in
+        # that case.
         if args.clear_indexes and args.opensearch_type == 'serverless':
             logger.warning(
                 "Clearing indexes in direct mode connects to the OpenSearch Serverless collection "
-                "endpoint directly. If the collection is VPC-restricted (deployed with "
-                "useForAllLambdas and VPC endpoints), this will not be reachable from a local "
-                "machine — clear the indexes in lambda mode instead, then run direct mode without "
-                "--clear-indexes."
+                "endpoint directly. If the collection is private (deployed with "
+                "openSearch.useServerless.allowPublic = false), it is reachable only through its VPC "
+                "endpoint and not from a local machine — clear the indexes in lambda mode instead, "
+                "then run direct mode without --clear-indexes."
             )
 
         # The reindexer handler reads its configuration from these environment variables.

@@ -8575,6 +8575,10 @@ components:
                 versionId:
                     type: string
                     description: "S3 version ID"
+                etag:
+                    type: string
+                    description: "S3 ETag of the file's current version. Present for non-folder objects in both basic and full mode; null for folders."
+                    nullable: true
                 isArchived:
                     type: boolean
                     description: "Whether the file is archived (soft deleted)"
