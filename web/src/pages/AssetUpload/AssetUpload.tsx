@@ -56,6 +56,9 @@ import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUpload
 import localforage from "localforage";
 import { fetchTags, fetchtagTypes } from "../../services/APIService";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import { appCache } from "../../services/appCache";
+import { fetchComplianceSchemas, bindSchemaToAsset } from "../../services/ComplianceService";
+import type { SelectProps } from "@cloudscape-design/components";
 import { TagType } from "../Tag/TagType.interface";
 import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
 import Alert from "@cloudscape-design/components/alert";
@@ -100,6 +103,7 @@ export class AssetDetail {
     };
     key?: string;
     isDistributable?: boolean;
+    complianceSchemaName?: string;
     specifiedPipelines?: string[];
     previewLocation?: {
         Key?: string;
@@ -213,6 +217,11 @@ type UpdateAssetIsMultiFile = {
     payload: boolean;
 };
 
+type UpdateAssetComplianceSchema = {
+    type: "UPDATE_ASSET_COMPLIANCE_SCHEMA";
+    payload: string | undefined;
+};
+
 type AssetDetailAction =
     | UpdateAssetIdAction
     | UpdateAssetDatabaseAction
@@ -231,7 +240,8 @@ type AssetDetailAction =
     | UpdateAssetFiles
     | UpdateAssetName
     | UpdateAssetKey
-    | UpdateAssetIsMultiFile;
+    | UpdateAssetIsMultiFile
+    | UpdateAssetComplianceSchema;
 
 const assetDetailReducer = (
     assetDetailState: AssetDetail,
@@ -333,6 +343,11 @@ const assetDetailReducer = (
                 ...assetDetailState,
                 isMultiFile: assetDetailAction.payload,
             };
+        case "UPDATE_ASSET_COMPLIANCE_SCHEMA":
+            return {
+                ...assetDetailState,
+                complianceSchemaName: assetDetailAction.payload,
+            };
         default:
             return assetDetailState;
     }
@@ -407,6 +422,28 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
     }>({});
     const [tagsValid, setTagsValid] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
+
+    // Compliance schema binding
+    const appConfig = appCache.getItem("config");
+    const isFMMEnabled = appConfig?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
+    const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
+    const [loadingSchemas, setLoadingSchemas] = useState(false);
+
+    useEffect(() => {
+        if (!isFMMEnabled) return;
+        const loadSchemas = async () => {
+            setLoadingSchemas(true);
+            const [success, result] = await fetchComplianceSchemas();
+            if (success && Array.isArray(result)) {
+                setSchemaOptions(
+                    result.map((s) => ({ label: s.schemaName, value: s.schemaName, description: s.description }))
+                );
+            }
+            setLoadingSchemas(false);
+        };
+        loadSchemas();
+    }, [isFMMEnabled]);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -547,6 +584,31 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                         data-testid="database-selector"
                     />
                 </FormField>
+
+                {isFMMEnabled && (
+                    <FormField
+                        label="Compliance Schema"
+                        description="Override the database-level compliance schema for this asset. Leave empty to inherit from the database."
+                        constraintText="Optional. Asset-level binding overrides database-level."
+                    >
+                        <Select
+                            selectedOption={selectedSchema}
+                            onChange={({ detail }) => {
+                                setSelectedSchema(detail.selectedOption);
+                                assetDetailDispatch({
+                                    type: "UPDATE_ASSET_COMPLIANCE_SCHEMA",
+                                    payload: detail.selectedOption.value || undefined,
+                                });
+                            }}
+                            options={schemaOptions}
+                            placeholder="Inherit from database"
+                            loadingText="Loading schemas"
+                            statusType={loadingSchemas ? "loading" : "finished"}
+                            filteringType="auto"
+                            data-testid="asset-compliance-schema"
+                        />
+                    </FormField>
+                )}
 
                 <FormField
                     label={
@@ -1544,8 +1606,19 @@ const UploadForm = () => {
                         assetDetail={assetDetailState}
                         metadata={metadata}
                         fileItems={fileUploadTableItems}
-                        onComplete={(response) => {
+                        onComplete={async (response) => {
                             console.log("Upload completed:", response);
+                            if (
+                                assetDetailState.complianceSchemaName &&
+                                assetDetailState.databaseId &&
+                                response.assetId
+                            ) {
+                                await bindSchemaToAsset(
+                                    assetDetailState.databaseId,
+                                    response.assetId,
+                                    assetDetailState.complianceSchemaName
+                                );
+                            }
                             // Remove window beforeunload handler
                             window.onbeforeunload = null;
                         }}

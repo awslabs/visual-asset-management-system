@@ -35,6 +35,7 @@ class CreateWorkflowRequestModel(BaseModel, extra='ignore'):
     description: str = Field(..., min_length=4, max_length=256)
     specifiedPipelines: SpecifiedPipelines
     autoTriggerOnFileExtensionsUpload: Optional[str] = ""
+    isSystem: Optional[bool] = False
 
     @root_validator
     def validate_fields(cls, values):
@@ -108,6 +109,7 @@ class WorkflowResponseModel(BaseModel, extra='ignore'):
     specifiedPipelines: Optional[SpecifiedPipelines] = None
     workflow_arn: Optional[str] = None
     autoTriggerOnFileExtensionsUpload: Optional[str] = ""
+    isSystem: Optional[bool] = False
     dateCreated: Optional[str] = None
     dateModified: Optional[str] = None
 

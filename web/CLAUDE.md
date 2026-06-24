@@ -6,7 +6,7 @@ This is the frontend-specific Claude Code steering document for the VAMS (Visual
 
 ## 1. Architecture Overview
 
-VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application built with Vite. All source files in `src/` are `.ts`/`.tsx` (only remaining `.js` files are Jest mocks in `src/__mocks__/`).
+VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application built with Vite. All source files in `src/` have been converted to `.ts`/`.tsx` (the only remaining `.js` files are Jest mocks in `src/__mocks__/`).
 
 **Primary UI library:** AWS Cloudscape Design System (`@cloudscape-design/components ^3.0.196`).
 
@@ -18,7 +18,7 @@ VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application b
 -   React Context API + useReducer for shared state
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
--   Plugin-based 3D viewer architecture (see `src/visualizerPlugin/CLAUDE.md`)
+-   Plugin-based 3D viewer architecture (17 viewer plugins)
 -   React.lazy + Suspense for route-level code splitting
 
 ---
@@ -30,7 +30,17 @@ VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application b
 ```
 web/
   package.json              # npm, React 17, Vite scripts
-  customInstalls/           # Per-viewer custom install scripts (one dir per viewer)
+  customInstalls/           # Viewer plugin custom install scripts
+    babylonjs/
+    cesium/
+    needletools-usd-viewer/
+    online3dviewer/
+    playcanvas/
+    potree/
+    threejs/
+    utility/
+    veerum/
+    vntana/
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
     routes.tsx              # Centralized route table, React.lazy, permission filtering
@@ -41,74 +51,162 @@ web/
     reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
 
-    FedAuth/Auth.tsx        # Dual-mode auth orchestrator (Cognito OR External OAuth2)
-    authenticator/          # Cognito Authenticator UI components (Header, Footer, SignIn*)
+    FedAuth/                # Authentication orchestrator
+      Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
 
-    services/               # API and data services (ONLY files that may import apiClient)
+    authenticator/          # Cognito Authenticator UI components
+      Header.tsx
+      Footer.tsx
+      SignInHeader.tsx
+      SignInFooter.tsx
+
+    services/               # API and data services
       APIService.ts         # Main API service (~900+ lines, 40+ exports)
       AssetUploadService.ts # S3 multipart upload logic
-      AssetVersionService.ts  # updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
+      AssetVersionService.ts  # Includes updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
       FileOperationsService.ts
-      MetadataService.ts
-      MetadataSchemaService.ts
-      apiClient.ts          # Custom fetch-based client, injects auth headers
-      appCache.ts           # Replaces Amplify Cache for runtime config
+      MetadataService.ts    # Metadata CRUD operations
+      MetadataSchemaService.ts  # Schema management
+      ComplianceService.ts  # FMM compliance: schemas, evaluation, quarantine, cascades, audit, bindings
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
       WorkflowContext.ts     # NOTE: typo is intentional, do NOT rename
 
-    components/             # Domain/feature components (organized by domain)
-      asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
-        versions/             # Asset version management (list, comparison, edit/archive modals)
-      common/ containers/ createupdate/ filemanager/ form/
-      interactive/            # Map/geospatial components
-      list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
-      search/                 # ModernSearchContainer.tsx - main search UI
-      searchSmall/ selectors/
-      single/                 # Single-entity views (ViewPipeline, ViewFile, AssetIngestion)
+    components/             # Domain/feature components
+      asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
+        versions/           # Asset version management
+          AssetVersionManager.tsx
+          AssetVersionList.tsx
+          AssetVersionComparison.tsx
+          components/
+            EditVersionModal.tsx      # Edit version alias/comment
+            ArchiveVersionModal.tsx   # Archive/unarchive version
+      common/               # Shared components
+      containers/
+      createupdate/         # Workflow create/update
+      filemanager/          # File tree and file operations
+      form/
+      interactive/          # Map/geospatial components
+      list/
+      loading/              # Loading screens and spinners
+      metadata/
+      metadataSchema/
+      metadataV2/
+      modals/
+      search/               # ModernSearchContainer.tsx - main search UI
+      searchSmall/
+      selectors/
+      single/               # Single-entity views (ViewPipeline, ViewFile, AssetIngestion)
       table/
 
     pages/                  # Thin page wrappers composing components
-      AssetDownload.tsx AssetUpload/ Assets.tsx
-      auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
-      CommentListPage.tsx Databases.tsx Executions.tsx
-      LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      Pipelines.tsx           # Pipeline list; create/edit forms show conditional fields for
-                              # SQS (sqsQueueUrl) and EventBridge (busArn, source, detailType)
-                              # based on pipelineExecutionType. Non-callback SQS/EventBridge
-                              # pipelines display a fire-and-forget alert.
-      search/                 # SearchPage.tsx
-      Subscription/ Tag/ Workflows.tsx
+      AssetDownload.tsx
+      AssetUpload/          # Upload page and modify uploads
+      Assets.tsx
+      auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys
+        ApiKeys.tsx           # API key list page
+        CreateApiKey.tsx      # Create API key modal
+        UpdateApiKey.tsx      # Update API key modal
+      CommentListPage.tsx
+      ComplianceSchemas.tsx     # FMM: schema CRUD with Monaco editor
+      ComplianceQuarantine.tsx  # FMM: quarantined assets list, release/exception
+      ComplianceCascades.tsx    # FMM: cascade approval queue
+      ComplianceAuditLog.tsx    # FMM: audit log viewer with event type filter
+      DatabaseCompliance.tsx    # FMM: per-database compliance overview + evaluate all
+      Databases.tsx
+      Executions.tsx
+      LandingPage.tsx
+      ListPage.tsx
+      ListPageNoDatabase.tsx
+      MetadataSchema.tsx
+      Pipelines.tsx         # Pipeline list; create/edit forms show conditional fields
+                            #   for SQS (sqsQueueUrl) and EventBridge (busArn, source,
+                            #   detailType) based on pipelineExecutionType selection.
+                            #   Non-callback SQS/EventBridge pipelines display a
+                            #   fire-and-forget alert (no files/previews/metadata returned).
+      search/               # SearchPage.tsx
+      Subscription/
+      Tag/
+      Workflows.tsx
 
-    visualizerPlugin/       # 3D/media viewer plugin system — see CLAUDE.md there
-      index.ts README.md
-      config/viewerConfig.json  # Plugin configuration
-      core/                     # PluginRegistry.ts, StylesheetManager.ts, types.ts
-      components/               # Shared viewer UI components
-      viewers/                  # Individual viewer plugins + manifest.ts
+    visualizerPlugin/       # 3D/media viewer plugin system
+      index.ts              # Public API
+      README.md             # Plugin development docs
+      config/
+        viewerConfig.json   # Plugin configuration (17 viewers)
+      core/
+        PluginRegistry.ts   # Singleton registry (manages all viewers)
+        StylesheetManager.ts
+        types.ts
+      components/           # Shared viewer UI components
+      viewers/              # Individual viewer plugins
+        manifest.ts         # Webpack static analysis manifest
+        AudioViewerPlugin/
+        BabylonJSGaussianSplatViewerPlugin/
+        CesiumViewerPlugin/
+        ColumnarViewerPlugin/
+        GameLiftStreamViewerPlugin/
+        HTMLViewerPlugin/
+        ImageViewerPlugin/
+        NeedleUSDViewerPlugin/
+        Online3dViewerPlugin/
+        PDFViewerPlugin/
+        PlayCanvasGaussianSplatViewerPlugin/
+        PotreeViewerPlugin/
+        TextViewerPlugin/
+        ThreeJSViewerPlugin/
+        VeerumViewerPlugin/
+        VideoViewerPlugin/
+        VntanaViewerPlugin/
       test/
 
     common/                 # Shared utilities and helpers
-      apply-mode.ts clipboard.ts columnDefinitionsHelper.ts common-components.tsx
-      constants/ createPropertyStorage.ts External.tsx GlobalHeader.tsx helpers/
-      i18nStrings.ts localStorage.ts property-filter/ typeUtils.ts utils/
+      apply-mode.ts
+      clipboard.ts
+      columnDefinitionsHelper.ts
+      common-components.tsx
+      constants/
+      createPropertyStorage.ts
+      External.tsx
+      GlobalHeader.tsx
+      helpers/
+      i18nStrings.ts
+      localStorage.ts
+      property-filter/
+      typeUtils.ts
+      utils/
 
-    constants/uploadLimits.ts
+    constants/
+      uploadLimits.ts
+
     external/               # External library integrations
-    layout/Navigation.tsx   # Left sidebar navigation
+
+    layout/
+      Navigation.tsx        # Left sidebar navigation
 
     utils/
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
       fileExtensionValidation.ts
       fileHandleCompat.ts
 
-    styles/                 # Global styles (7-1 SCSS architecture)
+    styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
-      index.scss base.scss dashboard.scss form.scss header.scss landing-page.scss
-      onboarding.scss wizard.scss
-      abstracts/ base/ components/ layout/ pages/ utilities/
+      abstracts/
+      base/
+      base.scss
+      components/
+      dashboard.scss
+      form.scss
+      header.scss
+      index.scss
+      landing-page.scss
+      layout/
+      onboarding.scss
+      pages/
+      utilities/
+      wizard.scss
 
     resources/              # Static assets (images, logos)
     @types/                 # Custom TypeScript declarations
@@ -141,7 +239,7 @@ import Button from "@cloudscape-design/components/button";
 import Table from "@cloudscape-design/components/table";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 
-// INCORRECT (barrel import — bundles entire library)
+// INCORRECT -- never import from the barrel export
 import { Button, Table } from "@cloudscape-design/components";
 ```
 
@@ -156,8 +254,11 @@ All API calls MUST go through service-layer files in `src/services/`. Components
 import { fetchAssets, deleteAsset } from "../../services/APIService";
 const result = await fetchAssets({ databaseId });
 
-// INCORRECT — direct apiClient/fetch/axios in a component
+// INCORRECT — never import apiClient in components or pages
 import { apiClient } from "../../services/apiClient";
+const response = await apiClient.get(`database/${databaseId}/assets`);
+
+// INCORRECT — never use fetch or axios directly
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
@@ -169,6 +270,7 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `ComplianceService.ts` — FMM compliance (schemas, evaluation, quarantine, cascades, audit, bindings)
 
 When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern.
 
@@ -180,7 +282,7 @@ npm install
 npm run start
 npm run build
 
-# INCORRECT — NEVER use yarn
+# INCORRECT -- NEVER use yarn
 yarn install
 ```
 
@@ -193,8 +295,8 @@ All routing uses `HashRouter`, meaning URLs are `/#/path`. When constructing int
 <Link to="/databases/mydb/assets">Assets</Link>;
 navigate("/databases/mydb/assets");
 
-// INCORRECT - hand-built hash URL for React Router (only OK for full-page redirect)
-window.location.href = "/#/databases/mydb/assets";
+// INCORRECT - never construct hash URLs manually for React Router
+window.location.href = "/#/databases/mydb/assets"; // Only use for full-page redirect
 ```
 
 ### Rule 7: Lazy Load All Pages
@@ -205,7 +307,7 @@ Every page component in `routes.tsx` MUST be lazy-loaded:
 // CORRECT
 const MyNewPage = React.lazy(() => import("./pages/MyNewPage"));
 
-// INCORRECT — eager import defeats route-level code splitting
+// INCORRECT
 import MyNewPage from "./pages/MyNewPage";
 ```
 
@@ -261,14 +363,15 @@ Key patterns to follow:
 // CORRECT -- always check the boolean flag
 const result = await fetchAssets({ databaseId });
 if (result === false || result[0] === false) {
+    // Handle error
     setError(result ? result[1] : "Unknown error");
     return;
 }
 const data = result[1]; // or result for non-tuple responses
 
-// INCORRECT — assumes success, crashes on error tuple
+// INCORRECT -- never assume success
 const data = await fetchAssets({ databaseId });
-setAssets(data);
+setAssets(data); // Will crash if API returns error tuple
 ```
 
 ### 4.3 Pagination Pattern
@@ -338,19 +441,22 @@ const header = await getDualAuthorizationHeader();
 ```
 /api/amplify-config  -->  Amplify.configure() (v6)  -->  Auth.tsx decides mode
                                                            |
-                     +-----------------+-----------------+
-                     |                                   |
-                Cognito Flow                    External OAuth2 Flow
-        (aws-amplify/auth: fetchAuthSession,   (Custom TokenProvider +
-         getCurrentUser, signInWithRedirect,    @badgateway/oauth2-client)
-         signOut)
-                     |                                   |
-                     +-----------------+-----------------+
-                                       |
-                          getDualValidAccessToken()
-                          getDualAuthorizationHeader()
-                                       |
-                      API calls via apiClient (auth header injected)
+                    +---------+----------+
+                    |                    |
+              Cognito Flow      External OAuth2 Flow
+              (Amplify v6 Auth:     (Custom TokenProvider +
+               fetchAuthSession,     @badgateway/oauth2-client)
+               getCurrentUser,
+               signInWithRedirect,
+               signOut)
+                    |                    |
+                    +--------+-----------+
+                             |
+                   getDualValidAccessToken()
+                   getDualAuthorizationHeader()
+                             |
+                    API calls via apiClient
+                    (apiClient injects auth header automatically)
 ```
 
 **Amplify v6 migration notes:**
@@ -387,6 +493,7 @@ This codebase uses NO global state library. State is managed through:
 
 ```typescript
 // CORRECT -- follow the existing context pattern
+// In context file:
 import { createContext, useReducer } from "react";
 
 export interface MyAction {
@@ -425,16 +532,16 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 
 ### 7.1 Component Organization
 
--   **Pages** (`src/pages/`) — thin wrappers composing components, lazy-loaded in routes
--   **Components** (`src/components/`) — organized by domain/feature
--   **Layout** (`src/layout/`) — Navigation shell components
--   **Common** (`src/common/`) — shared utilities, helpers, column definitions
+-   **Pages** (`src/pages/`) -- thin wrappers that compose components, lazy-loaded in routes
+-   **Components** (`src/components/`) -- organized by domain/feature
+-   **Layout** (`src/layout/`) -- Navigation shell components
+-   **Common** (`src/common/`) -- shared utilities, helpers, column definitions
 
 ### 7.2 Component Template (New Feature Component)
 
 ```tsx
 /*
- * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -462,6 +569,7 @@ const MyComponent: React.FC<MyComponentProps> = ({ databaseId }) => {
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
+            // Use APIService functions
             const result = await someApiCall({ databaseId: effectiveDbId });
             if (result === false || result[0] === false) {
                 setError(result ? result[1] : "Failed to load data");
@@ -485,7 +593,11 @@ const MyComponent: React.FC<MyComponentProps> = ({ databaseId }) => {
             <Table
                 loading={loading}
                 items={items}
-                columnDefinitions={[]}
+                columnDefinitions={
+                    [
+                        // column definitions
+                    ]
+                }
                 empty={
                     <Box textAlign="center" color="inherit">
                         <b>No items</b>
@@ -503,7 +615,7 @@ export default MyComponent;
 
 ```tsx
 /*
- * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -546,15 +658,132 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 ## 8. Viewer Plugin System
 
-The 3D/media viewer system is a plugin-based architecture under `src/visualizerPlugin/`:
+### 8.1 Architecture
 
--   **PluginRegistry** singleton at `visualizerPlugin/core/PluginRegistry.ts` manages all viewers
--   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json`
--   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports
--   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, Three.js CAD formats); the SuperSplat Editor is iframe-embedded under `public/viewers/supersplat/`
--   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`
+The 3D/media viewer system uses a plugin-based architecture:
 
-For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
+-   **PluginRegistry** (`src/visualizerPlugin/core/PluginRegistry.ts`) -- Singleton that manages all viewer plugins
+-   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for all 17 plugins
+-   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports
+-   **StylesheetManager** -- Per-plugin CSS lifecycle management
+
+### 8.2 Current Viewers (17 plugins)
+
+| ID                                 | Name                      | Category | Extensions                                                                                                                                                                    | Status                             |
+| ---------------------------------- | ------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `online3d-viewer`                  | Online 3D Viewer          | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                                                                  | enabled                            |
+| `potree-viewer`                    | Potree Viewer             | 3d       | .e57, .las, .laz, .ply                                                                                                                                                        | enabled                            |
+| `image-viewer`                     | Image Viewer              | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                                                                 | enabled                            |
+| `html-viewer`                      | HTML Viewer               | document | .html                                                                                                                                                                         | enabled                            |
+| `video-viewer`                     | Video Player              | media    | .mp4, .webm, .mov, .avi, .mkv, .flv, .wmv, .m4v                                                                                                                               | enabled                            |
+| `audio-viewer`                     | Audio Player              | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                                                           | enabled                            |
+| `columnar-viewer`                  | Columnar Data Viewer      | data     | .rds, .fcs, .csv                                                                                                                                                              | enabled                            |
+| `pdf-viewer`                       | PDF Viewer                | document | .pdf                                                                                                                                                                          | enabled                            |
+| `cesium-viewer`                    | Cesium 3D Tileset         | 3d       | .json                                                                                                                                                                         | enabled (requires ALLOWUNSAFEEVAL) |
+| `text-viewer`                      | Text Viewer               | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .parquet (plaintext only), etc.                                                                                                 | enabled                            |
+| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat  | 3d       | .ply, .spz                                                                                                                                                                    | enabled                            |
+| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat | 3d       | .ply, .sog                                                                                                                                                                    | enabled                            |
+| `vntana-viewer`                    | VNTANA 3D Viewer          | 3d       | .glb                                                                                                                                                                          | **disabled** (licensed)            |
+| `veerum-viewer`                    | VEERUM 3D Viewer          | 3d       | .e57, .las, .laz, .ply, .json                                                                                                                                                 | **disabled** (licensed)            |
+| `needletools-usd-viewer`           | Needle USD Viewer         | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                                                     | enabled                            |
+| `threejs-viewer`                   | Three.js Viewer           | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep                                                                                              | enabled                            |
+| `physna-viewer`                    | Physna Viewer             | 3d       | .step, .stp, .iges, .igs, .stl, .obj, .3ds, .ply, .sldprt, .sldasm, .prt, .par, .catpart, .catproduct, .x_t, .x_b, .sat, .jt, .3mf, .fbx, .dae, .dwg, .dxf, .ifc, .gltf, .glb | enabled (requires PHYSNA_ADDON)    |
+| `preview-viewer`                   | Preview Viewer            | preview  | \* (wildcard)                                                                                                                                                                 | enabled                            |
+
+### 8.3 Adding a New Viewer Plugin
+
+**Step 1:** Create the viewer directory:
+
+```
+src/visualizerPlugin/viewers/MyViewerPlugin/
+  MyViewerComponent.tsx     # The React component
+  dependencies.ts           # Optional: dependency loader
+  MyViewer.module.css       # Optional: scoped styles
+```
+
+**Step 2:** Create the component implementing `ViewerPluginProps`:
+
+```tsx
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useEffect, useRef } from "react";
+import { ViewerPluginProps } from "../../core/types";
+
+const MyViewerComponent: React.FC<ViewerPluginProps> = ({
+    asset,
+    files,
+    databaseId,
+    onFullscreen,
+    viewerConfig,
+}) => {
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        // Initialize viewer
+        return () => {
+            // Cleanup on unmount
+        };
+    }, []);
+
+    return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
+};
+
+export default MyViewerComponent;
+```
+
+**Step 3:** Add to `manifest.ts`:
+
+```typescript
+export const VIEWER_COMPONENTS = {
+    // ... existing entries
+    "./viewers/MyViewerPlugin/MyViewerComponent": "./MyViewerPlugin/MyViewerComponent",
+};
+```
+
+**Step 4:** Add to `viewerConfig.json`:
+
+```json
+{
+    "id": "my-viewer",
+    "name": "My Viewer",
+    "description": "Description of the viewer",
+    "componentPath": "./viewers/MyViewerPlugin/MyViewerComponent",
+    "supportedExtensions": [".xyz"],
+    "supportsMultiFile": false,
+    "canFullscreen": true,
+    "priority": 1,
+    "dependencies": [],
+    "loadStrategy": "lazy",
+    "category": "3d",
+    "enabled": true
+}
+```
+
+**Step 5:** If the viewer has external dependencies, create a custom install script in `web/customInstalls/myviewer/` and add it to the `postinstall` chain in `package.json`.
+
+### 8.4 Plugin Config Fields
+
+| Field                        | Type              | Description                                          |
+| ---------------------------- | ----------------- | ---------------------------------------------------- |
+| `id`                         | string            | Unique plugin identifier                             |
+| `componentPath`              | string            | Path for manifest lookup                             |
+| `dependencyManager`          | string?           | Path to dependency loader module                     |
+| `dependencyManagerClass`     | string?           | Class name in dependency module                      |
+| `dependencyManagerMethod`    | string?           | Load method name                                     |
+| `dependencyCleanupMethod`    | string?           | Cleanup method name                                  |
+| `supportedExtensions`        | string[]          | File extensions this viewer handles                  |
+| `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
+| `canFullscreen`              | boolean           | Supports fullscreen mode                             |
+| `priority`                   | number            | Lower = preferred when multiple viewers match        |
+| `loadStrategy`               | "lazy" \| "eager" | When to load the component                           |
+| `category`                   | string            | Viewer category (3d, media, document, data, preview) |
+| `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
+| `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
+| `enabled`                    | boolean           | Whether the plugin is active                         |
+| `customParameters`           | object?           | Viewer-specific configuration                        |
 
 ---
 
@@ -602,7 +831,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for CesiumJS (uses eval)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -680,7 +909,7 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
     color: awsui.$color-text-body-default;
 }
 
-// INCORRECT — hardcoded colors/spacing that Cloudscape provides
+// INCORRECT -- don't hardcode colors/spacing that Cloudscape provides
 .my-container {
     padding: 20px;
     color: #16191f;
@@ -693,11 +922,10 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 
 ### 11.1 Test Setup
 
--   **Framework:** Jest 30 (`jsdom` environment via `jest-environment-jsdom`), `@testing-library/react`
--   **Config:** `web/jest.config.js`; jest-dom matchers registered via `setupFilesAfterEnv` -> `src/setupTests.ts`
+-   **Framework:** Vitest, `@testing-library/react`
 -   **Cloudscape preset:** `@cloudscape-design/jest-preset` (transforms Cloudscape CSS/JS)
--   **Coverage thresholds:** Very low (~1%, set in `jest.config.js`) — raise as coverage grows
--   **Run tests:** `npm test` (with coverage) or `npx jest` for a faster run
+-   **Coverage thresholds:** Very low (branches: 6%, functions: 11%, lines: 11%, statements: 10%)
+-   **Run tests:** `npm test`
 
 ### 11.2 Test File Conventions
 
@@ -709,7 +937,7 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 
 ```tsx
 /*
- * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -758,9 +986,8 @@ describe("MyComponent", () => {
 ### 11.4 Jest Configuration Notes
 
 -   Axios requires special mapping: `"^axios$": "axios/dist/axios.js"`
--   Cloudscape components need custom transformers (configured in `jest.config.js`)
--   `transformIgnorePatterns` must stay a SINGLE pattern: a file matching ANY ignore pattern is excluded from transformation, so every ESM package that needs transforming (Cloudscape, d3-\*, internmap, react-leaflet, axios) must be exempted in one combined negative lookahead
--   Jest 30 removed deprecated matcher aliases (`toBeCalled`, `toBeCalledWith`, ...) — use the `toHaveBeenCalled*` forms
+-   Cloudscape components need custom transformers (configured in `package.json`)
+-   Some `transformIgnorePatterns` are required for d3, axios, Cloudscape
 
 ---
 
@@ -802,24 +1029,53 @@ Before modifying any code:
 
 ### 12.5 Post-change Checklist
 
-After modifying code, verify: no new TypeScript errors (`npm run build`), no broken imports, Cloudscape imported from subpaths (Rule 2), API calls go through `src/services/` (Rule 3), new routes are lazy-loaded in `routeTable` (Rule 7), and user-visible entity names use `Synonyms` (section 9.4).
+After modifying code:
+
+-   [ ] No new TypeScript errors (`npm run build` or check IDE)
+-   [ ] No broken imports (check relative paths carefully)
+-   [ ] Cloudscape components imported from subpaths (not barrel exports)
+-   [ ] API calls go through service-layer files (`src/services/`), NOT direct `apiClient` imports in components
+-   [ ] New routes added to `routeTable` in `routes.tsx` with `React.lazy`
+-   [ ] No hardcoded strings where `Synonyms` should be used
 
 ---
 
 ## 13. Anti-Patterns
 
-These extend the Critical Rules above. Where a rule already covers the anti-pattern in section 3, only the one-line reminder is repeated here.
-
--   **Cloudscape barrel imports** — see Rule 2. Always import from the subpath.
--   **`apiClient` / raw `fetch` / `axios` in components or pages** — see Rule 3. Only files in `src/services/` may import `apiClient`.
--   **`BrowserRouter`** — see Rule 6. The app uses `HashRouter`.
--   **Eagerly importing page components in `routes.tsx`** — see Rule 7. All pages must be `React.lazy`-loaded.
--   **yarn** — see Rule 4. npm only.
-
-### 13.1 Do NOT Use Amplify Cache
+### 13.1 Do NOT Import Cloudscape from Barrel Export
 
 ```typescript
-// INCORRECT — Amplify Cache is no longer used
+// INCORRECT -- causes entire library to be bundled
+import { Button, Table, Header } from "@cloudscape-design/components";
+
+// CORRECT -- tree-shakeable individual imports
+import Button from "@cloudscape-design/components/button";
+import Table from "@cloudscape-design/components/table";
+import Header from "@cloudscape-design/components/header";
+```
+
+### 13.2 Do NOT Import apiClient in Components/Pages
+
+```typescript
+// INCORRECT -- components/pages must never import apiClient directly
+import { apiClient } from "../../services/apiClient";
+const response = await apiClient.get("databases");
+
+// INCORRECT -- never use raw fetch/axios either
+const response = await fetch("/api/databases");
+const response = await axios.get("/api/databases");
+
+// CORRECT -- import from a service file
+import { fetchDatabases } from "../../services/APIService";
+const result = await fetchDatabases();
+```
+
+Only service files in `src/services/` may import `apiClient`.
+
+### 13.2.1 Do NOT Use Amplify Cache
+
+```typescript
+// INCORRECT -- Amplify Cache is no longer used
 import { Cache } from "aws-amplify";
 Cache.setItem("config", data);
 
@@ -828,14 +1084,41 @@ import { appCache } from "../services/appCache";
 appCache.setItem("config", data);
 ```
 
-### 13.2 Do NOT Add Global State Libraries
-
-No Redux, Zustand, MobX, Recoil, or Jotai. Use React Context + `useReducer` (see section 6.2) for shared state.
-
-### 13.3 Do NOT Bypass the Auth Token Utilities
+### 13.3 Do NOT Add Global State Libraries
 
 ```typescript
-// INCORRECT — manually getting tokens
+// INCORRECT -- no Redux, Zustand, MobX, Recoil, Jotai
+import { createStore } from "redux";
+import create from "zustand";
+
+// CORRECT -- use React Context + useReducer
+const MyContext = createContext<MyContextType | undefined>(undefined);
+```
+
+### 13.4 Do NOT Use BrowserRouter
+
+```typescript
+// INCORRECT -- the app uses HashRouter
+import { BrowserRouter } from "react-router-dom";
+
+// CORRECT
+import { HashRouter } from "react-router-dom";
+```
+
+### 13.5 Do NOT Eagerly Import Page Components
+
+```typescript
+// INCORRECT -- defeats code splitting
+import SearchPage from "./pages/search/SearchPage";
+
+// CORRECT -- lazy load for route-level splitting
+const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
+```
+
+### 13.6 Do NOT Bypass the Auth Token Utilities
+
+```typescript
+// INCORRECT -- manually getting tokens
 const session = await AmplifyAuth.currentSession();
 const token = session.getAccessToken().getJwtToken();
 
@@ -844,19 +1127,18 @@ import { getDualValidAccessToken } from "../utils/authTokenUtils";
 const token = await getDualValidAccessToken();
 ```
 
-### 13.4 Do NOT Hardcode Display Names
+### 13.7 Do NOT Hardcode Display Names
 
 ```typescript
-// INCORRECT — hardcoded user-visible entity names
+// INCORRECT
 <Header>Assets</Header>
+<p>Select a Database</p>
 
 // CORRECT -- use Synonyms for customizable display names
 import Synonyms from "../../synonyms";
 <Header>{Synonyms.Assets}</Header>
 <p>Select a {Synonyms.Database}</p>
 ```
-
-See section 9.4 for the full Synonyms rules.
 
 ---
 
@@ -876,7 +1158,7 @@ See section 9.4 for the full Synonyms rules.
 | `maplibre-gl`                   | ^5.8.0               | Map rendering               |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                 |
 | `papaparse`                     | ^5.4.1               | CSV parsing                 |
-| `dompurify`                     | ^3.4.11              | HTML sanitization           |
+| `dompurify`                     | ^2.3.6               | HTML sanitization           |
 | `sanitize-html`                 | ^2.11.0              | HTML sanitization           |
 | `@dnd-kit/core`                 | ^6.3.1               | Drag and drop               |
 
@@ -975,7 +1257,7 @@ export const myServiceFunction = async ({ databaseId }) => {
 
 ### Adding a new viewer plugin
 
-See `src/visualizerPlugin/CLAUDE.md`.
+Follow the complete steps in section 8.3.
 
 ### Adding a new context
 

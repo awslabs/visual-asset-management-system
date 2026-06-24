@@ -27,6 +27,7 @@ import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBui
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
 import { AddonBuilderNestedStack } from "./nestedStacks/addon/addonBuilder-nestedStack";
+import { FMMBuilderNestedStack } from "./nestedStacks/fmm/fmmBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
 import { LogRetentionAspect } from "./aspects/log-retention.aspect";
 import * as s3AssetBuckets from "./helper/s3AssetBuckets";
@@ -382,6 +383,25 @@ export class CoreVAMSStack extends cdk.Stack {
                             "ALB DNS Endpoint to use for primary domain host DNS routing to static web site",
                     });
                 }
+            }
+
+            if (props.config.app.federatedModelManagement.enabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.FMM);
+
+                const fmmBuilderNestedStack = new FMMBuilderNestedStack(
+                    this,
+                    "FMMBuilder",
+                    {
+                        config: props.config,
+                        storageResources: storageResourcesNestedStack.storageResources,
+                        lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                        vpc: this.vpc,
+                        subnets: this.subnetsIsolated,
+                        registry: apiRouteRegistry,
+                    }
+                );
+                fmmBuilderNestedStack.addDependency(storageResourcesNestedStack);
+                fmmBuilderNestedStack.addDependency(resourceNamesNestedStack);
             }
 
             //Write final output configurations (pulling forward from nested stacks)

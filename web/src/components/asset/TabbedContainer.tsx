@@ -8,6 +8,8 @@ import { Container, Header, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
 import Synonyms from "../../synonyms";
+import { appCache } from "../../services/appCache";
+import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
@@ -15,6 +17,7 @@ const AssetLinksTab = React.lazy(() => import("./tabs/AssetLinksTab"));
 const WorkflowTab = React.lazy(() => import("./tabs/WorkflowTab"));
 const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
+const ComplianceTab = React.lazy(() => import("./tabs/ComplianceTab"));
 
 interface TabbedContainerProps {
     assetName: string;
@@ -40,6 +43,9 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     assetVersionId,
     onSelectedPathChange,
 }) => {
+    const config = appCache.getItem("config");
+    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
     const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
@@ -151,6 +157,27 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                     </Suspense>
                                 ),
                             },
+                            ...(isFMMEnabled
+                                ? [
+                                      {
+                                          id: "compliance",
+                                          label: "Compliance",
+                                          content: (
+                                              <Suspense
+                                                  fallback={
+                                                      <LoadingSpinner text="Loading Compliance..." />
+                                                  }
+                                              >
+                                                  <ComplianceTab
+                                                      databaseId={databaseId}
+                                                      assetId={assetId}
+                                                      isActive={activeTabId === "compliance"}
+                                                  />
+                                              </Suspense>
+                                          ),
+                                      },
+                                  ]
+                                : []),
                         ]}
                     />
                 </div>

@@ -492,6 +492,18 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`Api
 | `app.metadataSchema.autoLoadDefaultAssetSchema`      | boolean | `true`  | Creates a GLOBAL schema named `defaultAsset` with a Location field (LLA - Latitude/Longitude/Altitude).                                                                             |
 | `app.metadataSchema.autoLoadDefaultAssetFileSchema`  | boolean | `true`  | Creates a GLOBAL schema named `defaultAssetFile3dModel` with a `Polygon_Count` field and file type restrictions for common 3D formats (.glb, .usd, .obj, .fbx, .gltf, .stl, .usdz). |
 
+## Federated Model Management (`app.federatedModelManagement`)
+
+Controls the Federated Model Management (FMM) compliance feature. When enabled, VAMS deploys compliance schema management, automated evaluation, quarantine management, cascade execution, and audit logging capabilities under the `/compliance/*` API routes.
+
+| Field            | Type    | Default | Description                                                                                                         |
+| ---------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `app.federatedModelManagement.enabled` | boolean | `false` | Enables FMM compliance management. Deploys five Amazon DynamoDB tables, six AWS Lambda functions, and the compliance API routes. |
+| `app.federatedModelManagement.autoLoadDefaultSchema` | boolean | `true` | When FMM is enabled, deploys a default compliance schema (`default-compliance-schema`) requiring name, owner, and classification fields. Set to `false` to skip. |
+| `app.federatedModelManagement.quarantineBlocksDownload` | boolean | `false` | When `true`, quarantined assets cannot be downloaded unless the asset has an active exception or the requesting user holds the `compliance_admin` role. When `false` (default), quarantine is informational only — the UI displays a warning but downloads proceed normally. |
+
+See [Compliance (Federated Model Management)](../concepts/compliance.md) for a full description of the feature.
+
 ## Processing pipelines (`app.pipelines`)
 
 :::note[Implemented by]

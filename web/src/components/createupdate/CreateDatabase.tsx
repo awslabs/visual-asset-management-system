@@ -19,6 +19,9 @@ import {
 } from "@cloudscape-design/components";
 import { useState, useEffect } from "react";
 import { createDatabase, updateDatabase, fetchBuckets } from "../../services/APIService";
+import { fetchComplianceSchemas, bindSchemaToDatabase, unbindSchemaFromDatabase, getDatabaseBindings } from "../../services/ComplianceService";
+import { appCache } from "../../services/appCache";
+import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import Synonyms from "../../synonyms";
 
 interface CreateDatabaseProps {
@@ -143,6 +146,44 @@ export default function CreateDatabase({
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
 
+    // Compliance schema binding
+    const config = appCache.getItem("config");
+    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
+    const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
+    const [loadingSchemas, setLoadingSchemas] = useState(false);
+
+    const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
+
+    // Fetch compliance schemas when FMM is enabled
+    useEffect(() => {
+        if (!isFMMEnabled) return;
+        const loadSchemas = async () => {
+            setLoadingSchemas(true);
+            const [success, result] = await fetchComplianceSchemas();
+            if (success && Array.isArray(result)) {
+                setSchemaOptions(
+                    result.map((s) => ({ label: s.schemaName, value: s.schemaName, description: s.description }))
+                );
+            }
+            setLoadingSchemas(false);
+        };
+        loadSchemas();
+    }, [isFMMEnabled]);
+
+    // Load current schema binding when editing
+    useEffect(() => {
+        if (!isFMMEnabled || !initState?.databaseId) return;
+        const loadBinding = async () => {
+            const [success, result] = await getDatabaseBindings(initState.databaseId);
+            if (success && typeof result !== "string" && result.databaseSchema) {
+                setSelectedSchema({ label: result.databaseSchema, value: result.databaseSchema });
+                setInitialSchemaValue(result.databaseSchema);
+            }
+        };
+        loadBinding();
+    }, [isFMMEnabled, initState?.databaseId]);
+
     // Fetch buckets when component loads
     useEffect(() => {
         const loadBuckets = async () => {
@@ -232,8 +273,20 @@ export default function CreateDatabase({
                                       });
 
                                 apiCall
-                                    .then((res) => {
+                                    .then(async (res) => {
                                         if (res && res[0]) {
+                                            if (isFMMEnabled) {
+                                                if (selectedSchema?.value) {
+                                                    if (selectedSchema.value !== initialSchemaValue) {
+                                                        await bindSchemaToDatabase(
+                                                            formState.databaseId,
+                                                            selectedSchema.value
+                                                        );
+                                                    }
+                                                } else if (initialSchemaValue) {
+                                                    await unbindSchemaFromDatabase(formState.databaseId);
+                                                }
+                                            }
                                             setOpen(false);
                                             setReload(true);
                                         } else {
@@ -383,6 +436,25 @@ export default function CreateDatabase({
                                 data-testid="database-file-extensions"
                             />
                         </FormField>
+                        {isFMMEnabled && (
+                            <FormField
+                                label="Compliance Schema"
+                                description="Bind a compliance schema to this database. All assets in the database will inherit this schema unless overridden at the asset level."
+                                constraintText="Optional. Schema can be changed later."
+                            >
+                                <Select
+                                    selectedOption={selectedSchema}
+                                    onChange={({ detail }) => setSelectedSchema(detail.selectedOption?.value ? detail.selectedOption : null)}
+                                    options={[{ label: "None (no compliance schema)", value: "" }, ...schemaOptions]}
+                                    placeholder="Select a compliance schema"
+                                    loadingText="Loading schemas"
+                                    statusType={loadingSchemas ? "loading" : "finished"}
+                                    disabled={inProgress}
+                                    filteringType="auto"
+                                    data-testid="database-compliance-schema"
+                                />
+                            </FormField>
+                        )}
                     </SpaceBetween>
                 </Form>
             </form>

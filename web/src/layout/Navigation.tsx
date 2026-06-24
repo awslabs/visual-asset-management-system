@@ -9,6 +9,8 @@ import { SideNavigation, Spinner } from "@cloudscape-design/components";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
+import { appCache } from "../services/appCache";
+import { featuresEnabled } from "../common/constants/featuresEnabled";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
     href: "/",
@@ -111,6 +113,9 @@ export function Navigation({
     onFollowHandler?: any;
     user: any;
 }) {
+    const appConfig = appCache.getItem("config");
+    const isFMMEnabled = appConfig?.featuresEnabled?.includes(featuresEnabled.FMM);
+
     const filteredNavItems = [
         {
             type: "link",
@@ -148,6 +153,36 @@ export function Navigation({
                 },
             ],
         },
+        ...(isFMMEnabled
+            ? [
+                  {
+                      type: "section",
+                      text: "Compliance",
+                      items: [
+                          {
+                              type: "link",
+                              text: "Compliance Schemas",
+                              href: "#/compliance/schemas/",
+                          },
+                          {
+                              type: "link",
+                              text: "Quarantine",
+                              href: "#/compliance/quarantine/",
+                          },
+                          {
+                              type: "link",
+                              text: "Cascade Approvals",
+                              href: "#/compliance/cascades/",
+                          },
+                          {
+                              type: "link",
+                              text: "Audit Log",
+                              href: "#/compliance/audit/",
+                          },
+                      ],
+                  },
+              ]
+            : []),
         {
             type: "section",
             text: "Admin - Auth",

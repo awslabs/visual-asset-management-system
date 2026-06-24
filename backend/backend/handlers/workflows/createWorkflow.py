@@ -515,6 +515,9 @@ def create_workflow(payload, claims_and_roles):
         else:
             Item['autoTriggerOnFileExtensionsUpload'] = ''
 
+        # Persist isSystem flag
+        Item['isSystem'] = payload.get('isSystem', False)
+
         # Preserve dateCreated for updates
         if existing_workflow:
             Item['dateCreated'] = existing_workflow.get('dateCreated', json.dumps(dtNow))
@@ -636,6 +639,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             "object__type": "workflow",
             'databaseId': body['databaseId'],
             'workflowId': body['workflowId'],
+            'isSystem': body.get('isSystem', False),
         }
         workflow_allowed = False
         if len(claims_and_roles["tokens"]) > 0:

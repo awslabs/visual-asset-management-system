@@ -232,6 +232,7 @@ PERMISSION_CONSTRAINT_FIELDS = {
             "pipelineId": "",
             "pipelineType": "",
             "pipelineExecutionType": "",
+            "isSystem": False,
 
             "workflowId": "",
 

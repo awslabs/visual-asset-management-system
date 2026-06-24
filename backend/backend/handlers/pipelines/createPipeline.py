@@ -232,6 +232,7 @@ def upload_pipeline(request_model, claims_and_roles, event):
         "pipelineId": request_model.pipelineId,
         "pipelineType": request_model.pipelineType,
         "pipelineExecutionType": request_model.pipelineExecutionType,
+        "isSystem": request_model.isSystem,
     }
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
@@ -307,7 +308,8 @@ def upload_pipeline(request_model, claims_and_roles, event):
         'object__type': 'pipeline',
         'waitForCallback': request_model.waitForCallback,
         'userProvidedResource': json.dumps(user_resource.dict()),
-        'enabled': True
+        'enabled': True,
+        'isSystem': request_model.isSystem or False,
     }
 
     # Set callback parameters if waitForCallback is enabled

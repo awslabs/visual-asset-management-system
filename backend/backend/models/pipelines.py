@@ -44,6 +44,7 @@ class CreatePipelineRequestModel(BaseModel, extra='ignore'):
     inputParameters: Optional[str] = None
     updateAssociatedWorkflows: bool = False
     enabled: Optional[bool] = True
+    isSystem: Optional[bool] = False
 
     @root_validator
     def validate_fields(cls, values):
@@ -184,6 +185,7 @@ class PipelineResponseModel(BaseModel, extra='ignore'):
     eventBridgeDetailType: Optional[str] = None  # Extracted from userProvidedResource for EventBridge
     inputParameters: Optional[str] = None
     enabled: Optional[bool] = True
+    isSystem: Optional[bool] = False
     dateCreated: Optional[str] = None
     dateUpdated: Optional[str] = None  # Matches DynamoDB field name
 

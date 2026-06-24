@@ -18,7 +18,7 @@ import Synonyms from "../../../synonyms";
  * @param {string} options.mapStyleUrl - Map style URL for thumbnails
  */
 export const createDatabaseListDefinition = (options: any = {}) => {
-    const { onMetadataClick, showMapThumbnails, MapThumbnailComponent, mapStyleUrl } = options;
+    const { onMetadataClick, showMapThumbnails, MapThumbnailComponent, mapStyleUrl, showCompliance } = options;
 
     const columnDefinitions = [
         new ColumnDefinition({
@@ -94,6 +94,24 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         );
     }
 
+    if (showCompliance) {
+        columnDefinitions.push(
+            new ColumnDefinition({
+                id: "compliance",
+                header: "Compliance",
+                cellWrapper: (props) => {
+                    const { item } = props;
+                    return (
+                        <Link href={`#/databases/${item.databaseId}/compliance`}>
+                            Compliance
+                        </Link>
+                    );
+                },
+                sortingField: undefined,
+            })
+        );
+    }
+
     columnDefinitions.push(
         new ColumnDefinition({
             id: "restrictMetadataOutsideSchemas",
@@ -133,6 +151,7 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         "description",
         "assetCount",
         "metadata",
+        ...(showCompliance ? ["compliance"] : []),
         "restrictMetadataOutsideSchemas",
         "restrictFileUploadsToExtensions",
         "bucketName",

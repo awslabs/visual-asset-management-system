@@ -621,6 +621,21 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // Initialize FMM configuration if undefined (backward compatibility)
+    if (config.app.federatedModelManagement == undefined) {
+        config.app.federatedModelManagement = {
+            enabled: false,
+            autoLoadDefaultSchema: true,
+            quarantineBlocksDownload: false,
+        };
+    }
+    if (config.app.federatedModelManagement.autoLoadDefaultSchema == undefined) {
+        config.app.federatedModelManagement.autoLoadDefaultSchema = true;
+    }
+    if (config.app.federatedModelManagement.quarantineBlocksDownload == undefined) {
+        config.app.federatedModelManagement.quarantineBlocksDownload = false;
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -2296,6 +2311,11 @@ export interface ConfigPublic {
             autoLoadDefaultDatabaseSchema: boolean;
             autoLoadDefaultAssetSchema: boolean;
             autoLoadDefaultAssetFileSchema: boolean;
+        };
+        federatedModelManagement: {
+            enabled: boolean;
+            autoLoadDefaultSchema: boolean;
+            quarantineBlocksDownload: boolean;
         };
     };
 }

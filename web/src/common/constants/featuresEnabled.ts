@@ -8,6 +8,7 @@ export const featuresEnabled = {
     NOOPENSEARCH: "NOOPENSEARCH",
     ALLOWUNSAFEEVAL: "ALLOWUNSAFEEVAL",
     CLOUDFRONTDEPLOY: "CLOUDFRONTDEPLOY",
+    FMM: "FMM",
 };
 
 /**

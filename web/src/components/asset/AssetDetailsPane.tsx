@@ -16,6 +16,7 @@ import {
     Popover,
     Icon,
     Spinner,
+    Badge,
 } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import {
@@ -24,11 +25,14 @@ import {
     unsubscribeFromAsset,
     downloadAsset,
 } from "../../services/APIService";
+import { fetchComplianceState, ComplianceState } from "../../services/ComplianceService";
 import PreviewModal from "../filemanager/components/PreviewModal";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
+import { appCache } from "../../services/appCache";
+import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -57,6 +61,21 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const [subscribed, setSubscribed] = useState<boolean>(false);
     const [isSubscribing, setIsSubscribing] = useState<boolean>(false);
     const [userName, setUserName] = useState<string>("");
+
+    // FMM compliance badge state
+    const config = appCache.getItem("config");
+    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const [complianceBadge, setComplianceBadge] = useState<ComplianceState | null>(null);
+
+    useEffect(() => {
+        if (isFMMEnabled && asset?.assetId && databaseId) {
+            fetchComplianceState(databaseId, asset.assetId).then(([success, result]) => {
+                if (success && typeof result !== "string") {
+                    setComplianceBadge(result);
+                }
+            });
+        }
+    }, [isFMMEnabled, asset?.assetId, databaseId]);
 
     // Asset preview thumbnail state
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
@@ -229,9 +248,33 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             </SpaceBetween>
                         }
                     >
-                        <span style={{ fontSize: "1.2em" }}>
-                            {asset?.assetName || `${Synonyms.Asset} Details`}
-                        </span>
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <span style={{ fontSize: "1.2em" }}>
+                                {asset?.assetName || `${Synonyms.Asset} Details`}
+                            </span>
+                            {isFMMEnabled && complianceBadge && (
+                                <Badge
+                                    color={
+                                        complianceBadge.state === "compliant"
+                                            ? "green"
+                                            : complianceBadge.state === "non_compliant" ||
+                                                complianceBadge.state === "quarantined"
+                                              ? "red"
+                                              : "grey"
+                                    }
+                                >
+                                    {complianceBadge.state === "compliant"
+                                        ? "Compliant"
+                                        : complianceBadge.state === "non_compliant"
+                                          ? "Non-Compliant"
+                                          : complianceBadge.state === "quarantined"
+                                            ? "Quarantined"
+                                            : complianceBadge.state === "pending_evaluation"
+                                              ? "Pending"
+                                              : "Unknown"}
+                                </Badge>
+                            )}
+                        </SpaceBetween>
                     </Header>
                 }
             >

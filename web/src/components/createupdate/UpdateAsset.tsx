@@ -1,4 +1,4 @@
-import { Modal, Select, SpaceBetween, Multiselect } from "@cloudscape-design/components";
+import { Modal, Select, SelectProps, SpaceBetween, Multiselect } from "@cloudscape-design/components";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
@@ -8,6 +8,9 @@ import { useEffect, useState } from "react";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { fetchTags, fetchtagTypes, updateAsset } from "../../services/APIService";
+import { fetchComplianceSchemas, bindSchemaToAsset, unbindSchemaFromAsset } from "../../services/ComplianceService";
+import { appCache } from "../../services/appCache";
+import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { TagType } from "../../pages/Tag/TagType.interface";
 import {
     validateRequiredTagTypeSelected,
@@ -74,6 +77,13 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [isValid, setIsValid] = useState(true);
     const [isFormTouched, setIsFormTouched] = useState(false);
     const [inProgress, setInProgress] = useState(false);
+
+    // Compliance schema binding
+    const config = appCache.getItem("config");
+    const isFMMEnabled = config?.featuresEnabled?.includes(featuresEnabled.FMM);
+    const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
+    const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
+    const [loadingSchemas, setLoadingSchemas] = useState(false);
 
     if (complete) {
         props.onComplete();
@@ -183,6 +193,21 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     }, []);
 
     useEffect(() => {
+        if (!isFMMEnabled) return;
+        const loadSchemas = async () => {
+            setLoadingSchemas(true);
+            const [success, result] = await fetchComplianceSchemas();
+            if (success && Array.isArray(result)) {
+                setSchemaOptions(
+                    result.map((s) => ({ label: s.schemaName, value: s.schemaName, description: s.description }))
+                );
+            }
+            setLoadingSchemas(false);
+        };
+        loadSchemas();
+    }, [isFMMEnabled]);
+
+    useEffect(() => {
         // Form Validation Error Check
         const validation = {
             assetName: validateNonZeroLengthTextAsYouType(assetDetail.assetName),
@@ -221,10 +246,24 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         </Button>
                         <Button
                             variant="primary"
-                            onClick={() => {
+                            onClick={async () => {
                                 setInProgress(true);
                                 setIsFormTouched(true);
-                                update(assetDetail, setError, setComplete, isValid);
+                                await update(assetDetail, setError, setComplete, isValid);
+                                if (isFMMEnabled && isValid && assetDetail.databaseId && assetDetail.assetId) {
+                                    if (selectedSchema?.value) {
+                                        await bindSchemaToAsset(
+                                            assetDetail.databaseId,
+                                            assetDetail.assetId,
+                                            selectedSchema.value
+                                        );
+                                    } else if (selectedSchema === null) {
+                                        await unbindSchemaFromAsset(
+                                            assetDetail.databaseId,
+                                            assetDetail.assetId
+                                        );
+                                    }
+                                }
                             }}
                             disabled={(inProgress && !error.isError) || !isValid}
                         >
@@ -315,6 +354,27 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         }}
                     />
                 </FormField>
+                {isFMMEnabled && (
+                    <FormField
+                        label="Compliance Schema"
+                        description="Override the database-level compliance schema for this asset. Clear to inherit from the database."
+                        constraintText="Optional. Asset-level binding overrides database-level."
+                    >
+                        <Select
+                            selectedOption={selectedSchema}
+                            onChange={({ detail }) => {
+                                setSelectedSchema(detail.selectedOption);
+                                setIsFormTouched(true);
+                            }}
+                            options={schemaOptions}
+                            placeholder="Inherit from database"
+                            loadingText="Loading schemas"
+                            statusType={loadingSchemas ? "loading" : "finished"}
+                            filteringType="auto"
+                            data-testid="asset-compliance-schema"
+                        />
+                    </FormField>
+                )}
                 {error.isError && (
                     <ProgressBar
                         value={0}

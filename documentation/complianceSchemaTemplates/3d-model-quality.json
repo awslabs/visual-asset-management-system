@@ -1,0 +1,56 @@
+{
+    "metadata": {
+        "name": "3D Model Quality Schema",
+        "description": "Quality gate schema for 3D model assets. Ensures polygon budgets, LOD requirements, and coordinate system documentation are met before assets are approved for use.",
+        "version": "1.0.0"
+    },
+    "schemaName": "3d-model-quality",
+    "description": "Quality requirements for 3D model assets including polygon limits, LOD levels, and coordinate system.",
+    "schemaBody": {
+        "type": "object",
+        "required": ["polygon_count", "coordinate_system", "units"],
+        "properties": {
+            "polygon_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50000000,
+                "description": "Total polygon count for the model"
+            },
+            "coordinate_system": {
+                "type": "string",
+                "enum": ["wgs84", "utm", "local", "enu", "ecef"],
+                "description": "Coordinate reference system used by the model"
+            },
+            "units": {
+                "type": "string",
+                "enum": ["meters", "centimeters", "millimeters", "feet", "inches"],
+                "description": "Unit of measurement for model geometry"
+            },
+            "lod_levels": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "description": "Number of Level of Detail variants provided"
+            },
+            "texture_resolution_max": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 16384,
+                "description": "Maximum texture resolution in pixels (width or height)"
+            },
+            "has_collision_mesh": {
+                "type": "boolean",
+                "description": "Whether a collision/physics mesh is included"
+            },
+            "source_application": {
+                "type": "string",
+                "description": "Application used to create the model (e.g., Blender, Maya, Revit)"
+            },
+            "export_format_version": {
+                "type": "string",
+                "description": "Version of the export format (e.g., glTF 2.0, USD 23.05)"
+            }
+        },
+        "additionalProperties": true
+    }
+}

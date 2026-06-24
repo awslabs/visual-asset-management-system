@@ -109,6 +109,11 @@ export interface storageResources {
         workflowExecutionsStorageTable: dynamodb.Table;
         workflowStorageTable: dynamodb.Table;
         apiKeyStorageTable: dynamodb.Table;
+        fmmSchemaStorageTable: dynamodb.Table;
+        fmmAssetComplianceStorageTable: dynamodb.Table;
+        fmmEvaluationStorageTable: dynamodb.Table;
+        fmmCascadeStorageTable: dynamodb.Table;
+        fmmAuditStorageTable: dynamodb.Table;
     };
 }
 
@@ -1706,6 +1711,131 @@ export function storageResourcesBuilder(
         },
     });
 
+    /////////////////////////////////////////////////////////////////////////////
+    // FMM (Federated Model Management) Tables
+    /////////////////////////////////////////////////////////////////////////////
+
+    const fmmSchemaStorageTable = new dynamodb.Table(scope, "FMMSchemaStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "internalVersion",
+            type: dynamodb.AttributeType.NUMBER,
+        },
+    });
+
+    const fmmAssetComplianceStorageTable = new dynamodb.Table(
+        scope,
+        "FMMAssetComplianceStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "databaseId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "assetId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    fmmAssetComplianceStorageTable.addGlobalSecondaryIndex({
+        indexName: "SchemaNameIndex",
+        partitionKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "complianceState",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const fmmEvaluationStorageTable = new dynamodb.Table(
+        scope,
+        "FMMEvaluationStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "evaluationId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    fmmEvaluationStorageTable.addGlobalSecondaryIndex({
+        indexName: "AssetIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "evaluatedAt",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const fmmCascadeStorageTable = new dynamodb.Table(scope, "FMMCascadeStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "cascadeId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    fmmCascadeStorageTable.addGlobalSecondaryIndex({
+        indexName: "StateIndex",
+        partitionKey: {
+            name: "state",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "createdAt",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const fmmAuditStorageTable = new dynamodb.Table(scope, "FMMAuditStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "entryId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    fmmAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "AssetIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    fmmAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "EventTypeIndex",
+        partitionKey: {
+            name: "eventType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     ///DEPRECATED TABLES
 
     //Build storage resources object
@@ -1764,6 +1894,11 @@ export function storageResourcesBuilder(
             userRolesStorageTable: userRolesStorageTable,
             userStorageTable: userStorageTable,
             apiKeyStorageTable: apiKeyStorageTable,
+            fmmSchemaStorageTable: fmmSchemaStorageTable,
+            fmmAssetComplianceStorageTable: fmmAssetComplianceStorageTable,
+            fmmEvaluationStorageTable: fmmEvaluationStorageTable,
+            fmmCascadeStorageTable: fmmCascadeStorageTable,
+            fmmAuditStorageTable: fmmAuditStorageTable,
         },
     };
 

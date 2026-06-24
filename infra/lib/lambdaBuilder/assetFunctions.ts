@@ -326,6 +326,12 @@ export function buildDownloadAssetFunction(
         environment: {
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            ...(config.app.federatedModelManagement?.enabled &&
+                config.app.federatedModelManagement?.quarantineBlocksDownload && {
+                    FMM_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+                    FMM_ASSET_COMPLIANCE_STORAGE_TABLE_NAME:
+                        storageResources.dynamo.fmmAssetComplianceStorageTable.tableName,
+                }),
         },
     });
 
@@ -333,6 +339,13 @@ export function buildDownloadAssetFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+
+    if (
+        config.app.federatedModelManagement?.enabled &&
+        config.app.federatedModelManagement?.quarantineBlocksDownload
+    ) {
+        storageResources.dynamo.fmmAssetComplianceStorageTable.grantReadData(fun);
+    }
 
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
