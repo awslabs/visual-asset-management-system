@@ -6,6 +6,7 @@
 import { useState, useCallback, useReducer, useEffect } from "react";
 import { SearchFilters, SearchQuery, SearchResponse, SearchResult, MetadataFilter } from "../types";
 import Synonyms from "../../../synonyms";
+import { FileInfo } from "../../../visualizerPlugin/core/types";
 
 interface SearchState {
     query: string;
@@ -26,6 +27,8 @@ interface SearchState {
     selectedItems: SearchResult[];
     columnNames: string[];
     initialResult: boolean;
+    viewerSelectMode: boolean;
+    viewerSelection: FileInfo[];
 }
 
 type SearchAction =
@@ -40,7 +43,12 @@ type SearchAction =
     | { type: "SET_RESULT"; payload: SearchResponse }
     | { type: "SET_SELECTED_ITEMS"; payload: SearchResult[] }
     | { type: "CLEAR_SEARCH" }
-    | { type: "RESET_PAGINATION" };
+    | { type: "RESET_PAGINATION" }
+    | { type: "ENTER_VIEWER_SELECT_MODE" }
+    | { type: "EXIT_VIEWER_SELECT_MODE" }
+    | { type: "ADD_TO_VIEWER_SELECTION"; payload: FileInfo[] }
+    | { type: "REMOVE_FROM_VIEWER_SELECTION"; payload: string }
+    | { type: "CLEAR_VIEWER_SELECTION" };
 
 const initialState: SearchState = {
     query: "",
@@ -63,6 +71,8 @@ const initialState: SearchState = {
     selectedItems: [],
     columnNames: [],
     initialResult: false,
+    viewerSelectMode: false,
+    viewerSelection: [],
 };
 
 function searchReducer(state: SearchState, action: SearchAction): SearchState {
@@ -168,6 +178,27 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
                 ...state,
                 pagination: { ...state.pagination, from: 0 },
             };
+
+        case "ENTER_VIEWER_SELECT_MODE":
+            return { ...state, viewerSelectMode: true };
+
+        case "EXIT_VIEWER_SELECT_MODE":
+            return { ...state, viewerSelectMode: false, viewerSelection: [] };
+
+        case "ADD_TO_VIEWER_SELECTION": {
+            const existingKeys = new Set(state.viewerSelection.map((f) => f.key));
+            const additions = action.payload.filter((f) => !existingKeys.has(f.key));
+            return { ...state, viewerSelection: [...state.viewerSelection, ...additions] };
+        }
+
+        case "REMOVE_FROM_VIEWER_SELECTION":
+            return {
+                ...state,
+                viewerSelection: state.viewerSelection.filter((f) => f.key !== action.payload),
+            };
+
+        case "CLEAR_VIEWER_SELECTION":
+            return { ...state, viewerSelection: [] };
 
         default:
             return state;
@@ -280,6 +311,26 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         dispatch({ type: "RESET_PAGINATION" });
     }, []);
 
+    const enterViewerSelectMode = useCallback(() => {
+        dispatch({ type: "ENTER_VIEWER_SELECT_MODE" });
+    }, []);
+
+    const exitViewerSelectMode = useCallback(() => {
+        dispatch({ type: "EXIT_VIEWER_SELECT_MODE" });
+    }, []);
+
+    const addToViewerSelection = useCallback((files: FileInfo[]) => {
+        dispatch({ type: "ADD_TO_VIEWER_SELECTION", payload: files });
+    }, []);
+
+    const removeFromViewerSelection = useCallback((key: string) => {
+        dispatch({ type: "REMOVE_FROM_VIEWER_SELECTION", payload: key });
+    }, []);
+
+    const clearViewerSelection = useCallback(() => {
+        dispatch({ type: "CLEAR_VIEWER_SELECTION" });
+    }, []);
+
     // Build search query object
     const buildSearchQuery = useCallback(
         (overridePagination?: { from: number; size: number }): SearchQuery => {
@@ -327,6 +378,11 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         setSelectedItems,
         clearSearch,
         resetPagination,
+        enterViewerSelectMode,
+        exitViewerSelectMode,
+        addToViewerSelection,
+        removeFromViewerSelection,
+        clearViewerSelection,
 
         // Computed values
         buildSearchQuery,
