@@ -1,0 +1,109 @@
+# Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+import boto3
+import json
+import datetime
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service="OpenPipeline-CoordinateTransform")
+
+sfn = boto3.client(
+    'stepfunctions',
+    region_name=os.environ["AWS_REGION"]
+)
+
+STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
+ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
+
+
+def abort_external_workflow(error, task_token):
+    if (task_token != None and task_token != ""):
+        logger.error(f"Aborting external task: {task_token}")
+        sfn.send_task_failure(
+            taskToken=task_token,
+            error='Pipeline Failure: ' + error,
+            cause='See AWS cloudwatch logs for error cause.'
+        )
+
+
+def lambda_handler(event, context):
+    """
+    OpenPipeline - Coordinate Transform
+    Starts StepFunctions State Machine for coordinate transformation processing.
+    """
+
+    logger.info(f"Event: {event}")
+
+    # Get optional metadata/parameters
+    input_Metadata = event.get('inputMetadata', '')
+    input_Parameters = event.get('inputParameters', '')
+    external_sfn_task_token = event.get('sfnExternalTaskToken', '')
+
+    input_s3_asset_files_uri = event['inputS3AssetFilePath']
+    output_s3_asset_files_uri = event['outputS3AssetFilesPath']
+    output_s3_asset_preview_uri = event.get('outputS3AssetPreviewPath', '')
+    output_s3_asset_metadata_uri = event.get('outputS3AssetMetadataPath', '')
+    inputOutput_s3_assetAuxiliary_files_uri = event.get('inputOutputS3AssetAuxiliaryFilesPath', '')
+
+    # Folder check
+    if input_s3_asset_files_uri.endswith("/"):
+        abort_external_workflow("Input S3 URI cannot be a folder", external_sfn_task_token)
+        return {
+            'statusCode': 400,
+            'body': {"message": "Input S3 URI cannot be a folder"}
+        }
+
+    # Validate file extension
+    file_root, extension = os.path.splitext(input_s3_asset_files_uri)
+
+    if not extension or extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS:
+        abort_external_workflow("Pipeline cannot process file type provided", external_sfn_task_token)
+        return {
+            'statusCode': 400,
+            'body': {"message": f"Pipeline cannot process file type: {extension}"}
+        }
+
+    # Generate job name
+    job_name = f"CoordXform_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    # State machine input
+    sfn_input = {
+        "jobName": job_name,
+        "inputS3AssetFilePath": input_s3_asset_files_uri,
+        "outputS3AssetFilesPath": output_s3_asset_files_uri,
+        "outputS3AssetPreviewPath": output_s3_asset_preview_uri,
+        "outputS3AssetMetadataPath": output_s3_asset_metadata_uri,
+        "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
+        "assetId": event.get('assetId', ''),
+        "databaseId": event.get('databaseId', ''),
+        "inputMetadata": input_Metadata,
+        "inputParameters": input_Parameters,
+        "externalSfnTaskToken": external_sfn_task_token,
+    }
+
+    try:
+        logger.info(f"Starting SFN: {STATE_MACHINE_ARN}")
+        sfn_response = sfn.start_execution(
+            stateMachineArn=STATE_MACHINE_ARN,
+            name=job_name,
+            input=json.dumps(sfn_input)
+        )
+
+        sfn_response["startDate"] = sfn_response["startDate"].strftime('%m-%d-%Y %H:%M:%S')
+
+        return {
+            'statusCode': 200,
+            'body': {
+                "message": "Starting Coordinate Transform Pipeline",
+                "execution": sfn_response
+            }
+        }
+    except Exception as e:
+        logger.exception(e)
+        abort_external_workflow("Internal Server Error", external_sfn_task_token)
+        return {
+            'statusCode': 500,
+            'body': {"message": "Internal Server Error"}
+        }

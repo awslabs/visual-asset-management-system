@@ -96,6 +96,12 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
+            "useConversionCoordinateTransform": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
+            },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,

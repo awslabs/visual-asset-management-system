@@ -391,6 +391,15 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = false;
     }
 
+    if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
+        config.app.pipelines.useConversionCoordinateTransform = {
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: false,
+            autoRegisterAutoTriggerOnFileUpload: false,
+        };
+    }
+
     if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
         config.app.authProvider.useExternalOAuthIdp.enabled = false;
     }
@@ -620,6 +629,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useNvidiaCosmos");
     if (config.app.pipelines.useNvidiaGr00t.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
+    if (config.app.pipelines.useConversionCoordinateTransform.enabled)
+        vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -1642,6 +1653,12 @@ export interface ConfigPublic {
             };
             useConversionCadMeshMetadataExtraction: {
                 enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+            };
+            useConversionCoordinateTransform: {
+                enabled: boolean;
+                useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
             };

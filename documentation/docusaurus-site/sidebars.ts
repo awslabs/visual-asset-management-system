@@ -108,6 +108,7 @@ const sidebars: SidebarsConfig = {
                         "pipelines/3d-thumbnail",
                         "pipelines/3d-conversion",
                         "pipelines/cad-mesh-extraction",
+                        "pipelines/coordinate-transform",
                         "pipelines/gaussian-splatting",
                         "pipelines/genai-labeling",
                         "pipelines/nvidia-isaac-lab",

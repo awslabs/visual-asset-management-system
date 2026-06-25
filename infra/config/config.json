@@ -83,7 +83,7 @@
         },
         "pipelines": {
             "useConversion3dBasic": {
-                "enabled": true,
+                "enabled": false,
                 "autoRegisterWithVAMS": true
             },
             "usePreview3dThumbnail": {
@@ -95,6 +95,12 @@
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
+            },
+            "useConversionCoordinateTransform": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
