@@ -713,15 +713,15 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                 cell: (e: any) => {
                     if (name === "metadata") {
                         const { metadata, attributes } = extractMetadata(e);
-                        console.log("[MetadataDebug] Extracted data:", {
-                            metadata,
-                            attributes,
-                            allKeys: Object.keys(e).filter(
-                                (k) =>
-                                    k.toUpperCase().startsWith("MD_") ||
-                                    k.toUpperCase().startsWith("AB_")
-                            ),
-                        });
+                        // console.log("[MetadataDebug] Extracted data:", {
+                        //     metadata,
+                        //     attributes,
+                        //     allKeys: Object.keys(e).filter(
+                        //         (k) =>
+                        //             k.toUpperCase().startsWith("MD_") ||
+                        //             k.toUpperCase().startsWith("AB_")
+                        //     ),
+                        // });
                         return <MetadataPopover metadata={metadata} attributes={attributes} />;
                     }
                     return columnRender(e, name, e[name], navigate, isFileMode);

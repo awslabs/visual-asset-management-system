@@ -141,7 +141,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                     setLoading(true);
                     setError(false);
                     setPreviewKey(null);
-                    console.log(`[Cache MISS] File details for ${fileName}`);
+                    //console.log(`[Cache MISS] File details for ${fileName}`);
                     const [success, fileInfo] = await fetchFileInfo({
                         databaseId,
                         assetId,
@@ -213,7 +213,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                 }
 
                 // Cache miss - download the preview image
-                console.log(`[Cache MISS] Preview image for ${fileName}`);
+                //console.log(`[Cache MISS] Preview image for ${fileName}`);
                 const response = await downloadAsset({
                     databaseId,
                     assetId,
@@ -237,11 +237,11 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                             { dataUrl: imageDataUrl },
                             imageSize
                         );
-                        console.log(
-                            `[Cache SET] Preview image for ${fileName} (${(
-                                imageSize / 1024
-                            ).toFixed(2)} KB)`
-                        );
+                        // console.log(
+                        //     `[Cache SET] Preview image for ${fileName} (${(
+                        //         imageSize / 1024
+                        //     ).toFixed(2)} KB)`
+                        // );
                     }
                 } else {
                     setError(true);

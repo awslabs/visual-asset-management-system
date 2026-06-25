@@ -63,7 +63,7 @@ export const fetchMetadata = async (
             queryStringParameters: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         });
 
-        console.log(`[apiHelpers] fetchMetadata response for ${entityType}:`, response);
+        //console.log(`[apiHelpers] fetchMetadata response for ${entityType}:`, response);
 
         // Handle different response formats
         if (response && typeof response === "object") {

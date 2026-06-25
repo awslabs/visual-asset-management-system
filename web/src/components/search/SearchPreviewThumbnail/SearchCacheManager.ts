@@ -60,7 +60,7 @@ class SearchCacheManager {
         this.previewCache = new Map();
         this.previewCacheSize = 0;
 
-        console.log("[SearchCacheManager] Initialized");
+        //console.log("[SearchCacheManager] Initialized");
     }
 
     // ==================== Asset Cache Methods ====================
@@ -73,7 +73,7 @@ class SearchCacheManager {
         const entry = this.assetCache.get(key);
 
         if (!entry) {
-            console.log(`[Cache CHECK] Asset key: ${key} - NOT FOUND in cache`);
+            //console.log(`[Cache CHECK] Asset key: ${key} - NOT FOUND in cache`);
             return null;
         }
 
@@ -81,14 +81,14 @@ class SearchCacheManager {
         const now = Date.now();
         const age = now - entry.timestamp;
         if (age > this.ASSET_TTL_MS) {
-            console.log(
-                `[Cache CHECK] Asset key: ${key} - EXPIRED (age: ${age}ms, TTL: ${this.ASSET_TTL_MS}ms)`
-            );
+            // console.log(
+            //     `[Cache CHECK] Asset key: ${key} - EXPIRED (age: ${age}ms, TTL: ${this.ASSET_TTL_MS}ms)`
+            // );
             this.assetCache.delete(key);
             return null;
         }
 
-        console.log(`[Cache CHECK] Asset key: ${key} - FOUND (age: ${age}ms)`);
+        //console.log(`[Cache CHECK] Asset key: ${key} - FOUND (age: ${age}ms)`);
 
         // Update last accessed time (for LRU)
         entry.lastAccessed = now;
@@ -113,9 +113,9 @@ class SearchCacheManager {
             lastAccessed: now,
         });
 
-        console.log(
-            `[Cache SET] Asset details for key: ${key}, cache size: ${this.assetCache.size}`
-        );
+        // console.log(
+        //     `[Cache SET] Asset details for key: ${key}, cache size: ${this.assetCache.size}`
+        // );
     }
 
     // ==================== File Cache Methods ====================
@@ -161,7 +161,7 @@ class SearchCacheManager {
             lastAccessed: now,
         });
 
-        console.log(`[Cache SET] File details for key: ${key}, cache size: ${this.fileCache.size}`);
+        //console.log(`[Cache SET] File details for key: ${key}, cache size: ${this.fileCache.size}`);
     }
 
     // ==================== Preview Cache Methods ====================
@@ -279,7 +279,7 @@ class SearchCacheManager {
         this.previewCache.clear();
         this.previewCacheSize = 0;
 
-        console.log("[SearchCacheManager] All caches cleared");
+        //console.log("[SearchCacheManager] All caches cleared");
     }
 
     /**
@@ -314,9 +314,9 @@ let instance: SearchCacheManager | null = null;
 function getInstance(): SearchCacheManager {
     if (!instance) {
         instance = new SearchCacheManager();
-        console.log("[SearchCacheManager] Creating NEW singleton instance");
+        //console.log("[SearchCacheManager] Creating NEW singleton instance");
     } else {
-        console.log("[SearchCacheManager] Reusing existing singleton instance");
+        //console.log("[SearchCacheManager] Reusing existing singleton instance");
     }
     return instance;
 }
