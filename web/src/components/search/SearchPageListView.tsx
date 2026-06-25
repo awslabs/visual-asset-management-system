@@ -39,6 +39,9 @@ import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
+import FileViewerModal from "../filemanager/modals/FileViewerModal";
+import { FileInfo } from "../../visualizerPlugin/core/types";
+import { searchRowToFileInfo, isViewableExtension } from "./utils/searchRowToFileInfo";
 
 let tagTypes: any;
 
@@ -527,6 +530,18 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
         assetName?: string;
         downloadType?: "assetPreview" | "assetFile";
     }>({});
+    const [viewerFiles, setViewerFiles] = useState<FileInfo[]>([]);
+    const [showViewerModal, setShowViewerModal] = useState(false);
+
+    const openViewer = (files: FileInfo[]) => {
+        const viewable = files.filter((f) => !!f.key);
+        if (viewable.length === 0) {
+            onShowToast?.("Nothing to preview", "No selected files can be visualized");
+            return;
+        }
+        setViewerFiles(viewable);
+        setShowViewerModal(true);
+    };
 
     useEffect(() => {
         fetchtagTypes().then((res) => {
@@ -778,21 +793,34 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     id: "preview",
                     header: "Preview",
                     cell: (item: any) => (
-                        <FilePreviewThumbnailCell
-                            assetId={item.str_assetid}
-                            databaseId={item.str_databaseid}
-                            fileKey={item.str_key}
-                            fileName={item.str_key?.split("/").pop() || item.str_key || ""}
-                            fileSize={item.num_filesize || item.num_size}
-                            onOpenFullPreview={(url, fileName, previewKey, downloadType) =>
-                                handleOpenPreview(url, fileName, previewKey, downloadType, item)
-                            }
-                            previewFileKey={
-                                item.str_previewfilekey !== undefined
-                                    ? item.str_previewfilekey
-                                    : undefined
-                            }
-                        />
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <FilePreviewThumbnailCell
+                                assetId={item.str_assetid}
+                                databaseId={item.str_databaseid}
+                                fileKey={item.str_key}
+                                fileName={item.str_key?.split("/").pop() || item.str_key || ""}
+                                fileSize={item.num_filesize || item.num_size}
+                                onOpenFullPreview={(url, fileName, previewKey, downloadType) =>
+                                    handleOpenPreview(url, fileName, previewKey, downloadType, item)
+                                }
+                                previewFileKey={
+                                    item.str_previewfilekey !== undefined
+                                        ? item.str_previewfilekey
+                                        : undefined
+                                }
+                            />
+                            {isViewableExtension(item.str_fileext) && (
+                                <Button
+                                    variant="icon"
+                                    iconName="view-full"
+                                    ariaLabel={`Preview ${item.str_key}`}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        openViewer([searchRowToFileInfo(item)]);
+                                    }}
+                                />
+                            )}
+                        </SpaceBetween>
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
@@ -963,9 +991,21 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                 type: "set-selected-items",
                                 selectedItems: detail.selectedItems,
                             });
+                            if (isFileMode && state?.viewerSelectMode) {
+                                const additions = detail.selectedItems
+                                    .filter((r: any) => isViewableExtension(r.str_fileext))
+                                    .map((r: any) => searchRowToFileInfo(r));
+                                state.addToViewerSelection(additions);
+                            }
                         }
                     }}
-                    selectionType={state?.filters._rectype.value === "asset" ? "multi" : undefined}
+                    selectionType={
+                        state?.filters._rectype.value === "asset"
+                            ? "multi"
+                            : isFileMode && state?.viewerSelectMode
+                            ? "multi"
+                            : undefined
+                    }
                     trackBy="_id"
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
@@ -1104,6 +1144,31 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                             Create {Synonyms.Asset}
                                         </Button>
                                     </SpaceBetween>
+                                ) : isFileMode ? (
+                                    !state.viewerSelectMode ? (
+                                        <Button onClick={() => state.enterViewerSelectMode()}>
+                                            Multi-select to view
+                                        </Button>
+                                    ) : (
+                                        <SpaceBetween direction="horizontal" size="xs">
+                                            <Button
+                                                variant="primary"
+                                                disabled={!state.viewerSelection?.length}
+                                                onClick={() => openViewer(state.viewerSelection)}
+                                            >
+                                                View Selected ({state.viewerSelection?.length || 0})
+                                            </Button>
+                                            <Button
+                                                disabled={!state.viewerSelection?.length}
+                                                onClick={() => state.clearViewerSelection()}
+                                            >
+                                                Clear selection
+                                            </Button>
+                                            <Button onClick={() => state.exitViewerSelectMode()}>
+                                                Exit
+                                            </Button>
+                                        </SpaceBetween>
+                                    )
                                 ) : null
                             }
                         />
@@ -1176,6 +1241,19 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                 assetName={previewAsset.assetName || ""}
                 downloadType={previewAsset.downloadType}
             />
+
+            {showViewerModal && viewerFiles.length > 0 && (
+                <FileViewerModal
+                    visible={showViewerModal}
+                    files={viewerFiles}
+                    databaseId={viewerFiles[0].databaseId || ""}
+                    assetId={viewerFiles[0].assetId || ""}
+                    onDismiss={() => {
+                        setShowViewerModal(false);
+                        setViewerFiles([]);
+                    }}
+                />
+            )}
         </>
     );
 }
